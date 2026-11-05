@@ -1,15 +1,10 @@
-# Mergelight review workflow. Copy to .github/workflows/mergelight.yml.
+# Mergelight review. Copy to .github/workflows/mergelight.yml.
 # Setup: https://github.com/mergelightai/mergelight/blob/main/docs/github-action.md
 name: Mergelight
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-  pull_request_review:
-    types: [submitted]
-  schedule:
-    - cron: "17 4 */3 * *" # every third day: keeps the Codex login fresh
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -20,7 +15,6 @@ jobs:
   review:
     # Forks get no secrets, and drafts aren't ready for review.
     if: >
-      github.event_name == 'pull_request' &&
       !github.event.pull_request.draft &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
@@ -29,24 +23,6 @@ jobs:
     concurrency:
       group: mergelight-pr-${{ github.event.pull_request.number }}
       cancel-in-progress: true
-    steps:
-      - uses: mergelightai/mergelight@v0
-        with:
-          codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}
-          secrets-token: ${{ secrets.MERGELIGHT_SECRETS_TOKEN }}
-
-  # A human approved: a "needs a human" check turns green.
-  approve:
-    if: github.event_name == 'pull_request_review' && github.event.review.state == 'approved'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: mergelightai/mergelight@v0
-
-  refresh-login:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    concurrency:
-      group: mergelight-refresh-login
     steps:
       - uses: mergelightai/mergelight@v0
         with:
