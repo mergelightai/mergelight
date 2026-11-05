@@ -1,0 +1,140 @@
+name: Mergelight
+description: AI code review on the ChatGPT plan you already pay for. Tells you which problems are worth fixing.
+author: Mergelight
+branding:
+  icon: git-merge
+  color: green
+
+inputs:
+  codex-auth-json:
+    description: >
+      Contents of ~/.codex/auth.json from a ChatGPT login, stored as a secret.
+      OpenAI allows this for private repositories only.
+    required: false
+  openai-api-key:
+    description: An OpenAI API key, billed per use. Works on public repositories too.
+    required: false
+  secrets-token:
+    description: >
+      A token that can update this repository's secrets (fine-grained, "Secrets: read and write").
+      Codex refreshes a ChatGPT login about every 8 days. With this token the refreshed login is
+      saved back to the secret, so the next run can still log in.
+    required: false
+  auth-secret-name:
+    description: Name of the secret that holds the ChatGPT login.
+    default: CODEX_AUTH_JSON
+  model:
+    description: Codex model to review with. Defaults to Codex's own default.
+    required: false
+  effort:
+    description: "Reasoning effort: low, medium or high."
+    required: false
+  codex-version:
+    description: Version of the Codex CLI to install.
+    default: "0.166.0"
+  github-token:
+    description: Token for posting comments and checks. Needs pull-requests and checks write.
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+
+    - name: Build Mergelight
+      shell: bash
+      working-directory: ${{ github.action_path }}/packages/mergelight
+      run: npm ci --no-audit --no-fund --loglevel=error && npm run build --silent
+
+    # A human approved the PR: turn a "needs a human" check green. No Codex needed.
+    - name: Approve the check
+      if: github.event_name == 'pull_request_review' && github.event.review.state == 'approved'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR: ${{ github.event.pull_request.number }}
+        BY: ${{ github.event.review.user.login }}
+      run: node "$GITHUB_ACTION_PATH/packages/mergelight/dist/cli.js" approve "$GITHUB_REPOSITORY#$PR" --by "$BY"
+
+    - name: Install Codex
+      if: github.event_name != 'pull_request_review'
+      shell: bash
+      run: npm install -g "@openai/codex@${{ inputs.codex-version }}" --no-audit --no-fund --loglevel=error
+
+    - name: Log in to Codex
+      if: github.event_name != 'pull_request_review'
+      shell: bash
+      env:
+        AUTH_JSON: ${{ inputs.codex-auth-json }}
+        API_KEY: ${{ inputs.openai-api-key }}
+        REPO_PRIVATE: ${{ github.event.repository.private }}
+      run: |
+        set -euo pipefail
+        export CODEX_HOME="$RUNNER_TEMP/codex-home"
+        mkdir -p -m 700 "$CODEX_HOME"
+        echo "CODEX_HOME=$CODEX_HOME" >> "$GITHUB_ENV"
+        if [ -n "$AUTH_JSON" ]; then
+          if [ "$REPO_PRIVATE" != "true" ]; then
+            echo "::error::A ChatGPT login is for private repositories only, by OpenAI's rules for Codex in CI. Use openai-api-key on public repositories."
+            exit 1
+          fi
+          printf 'cli_auth_credentials_store = "file"\n' > "$CODEX_HOME/config.toml"
+          printf '%s' "$AUTH_JSON" > "$CODEX_HOME/auth.json"
+          chmod 600 "$CODEX_HOME/auth.json"
+          sha256sum "$CODEX_HOME/auth.json" | cut -d' ' -f1 > "$RUNNER_TEMP/codex-auth.sha256"
+        elif [ -n "$API_KEY" ]; then
+          printf '%s' "$API_KEY" | codex login --with-api-key
+        else
+          echo "::error::Set codex-auth-json (a ChatGPT login, private repositories) or openai-api-key."
+          exit 1
+        fi
+
+    # Scheduled or manual run: just use the login once, so Codex refreshes it if it's due and the
+    # step below saves it. Keeps reviews from having to refresh it themselves.
+    - name: Keep the Codex login fresh
+      if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+      shell: bash
+      run: codex exec --skip-git-repo-check --sandbox read-only --ephemeral "Reply with the single word OK." > /dev/null
+
+    - name: Review
+      if: github.event_name == 'pull_request' || github.event_name == 'pull_request_target'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR: ${{ github.event.pull_request.number }}
+        MODEL: ${{ inputs.model }}
+        EFFORT: ${{ inputs.effort }}
+      run: |
+        set -euo pipefail
+        args=(review "$GITHUB_REPOSITORY#$PR" --post --out "$RUNNER_TEMP/mergelight-review.json")
+        [ -n "$MODEL" ] && args+=(--model "$MODEL")
+        [ -n "$EFFORT" ] && args+=(--effort "$EFFORT")
+        node "$GITHUB_ACTION_PATH/packages/mergelight/dist/cli.js" "${args[@]}"
+
+    # Codex may have refreshed the login during the run. Save the new one, or the next run
+    # starts from tokens that no longer work.
+    - name: Save the refreshed Codex login
+      if: always() && github.event_name != 'pull_request_review' && inputs.codex-auth-json != ''
+      shell: bash
+      env:
+        SECRETS_TOKEN: ${{ inputs.secrets-token }}
+        SECRET_NAME: ${{ inputs.auth-secret-name }}
+      run: |
+        set -euo pipefail
+        auth="$CODEX_HOME/auth.json"
+        [ -f "$auth" ] || exit 0
+        if [ "$(sha256sum "$auth" | cut -d' ' -f1)" = "$(cat "$RUNNER_TEMP/codex-auth.sha256" 2>/dev/null)" ]; then
+          echo "The Codex login didn't change."
+        elif [ -n "$SECRETS_TOKEN" ]; then
+          GH_TOKEN="$SECRETS_TOKEN" gh secret set "$SECRET_NAME" --repo "$GITHUB_REPOSITORY" < "$auth"
+          echo "Saved the refreshed Codex login to $SECRET_NAME."
+        else
+          echo "::warning::Codex refreshed its login, but secrets-token isn't set, so the new login wasn't saved and the next run may fail to log in. Add secrets-token, or run 'codex login' again and update $SECRET_NAME."
+        fi
+
+    - name: Clean up the Codex login
+      if: always() && github.event_name != 'pull_request_review'
+      shell: bash
+      run: rm -rf "$RUNNER_TEMP/codex-home" "$RUNNER_TEMP/codex-auth.sha256"

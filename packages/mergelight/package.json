@@ -11,7 +11,8 @@
   ],
   "scripts": {
     "build": "tsc -p .",
-    "dev": "tsc -p . --watch"
+    "dev": "tsc -p . --watch",
+    "test": "tsc -p . && node --test test/*.test.mjs"
   },
   "engines": {
     "node": ">=20"
