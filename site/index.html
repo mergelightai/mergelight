@@ -11,7 +11,10 @@
 <meta property="og:url" content="https://mergelight.dev">
 <meta property="og:title" content="Mergelight">
 <meta property="og:description" content="AI code review on the Claude or ChatGPT plan you already pay for.">
-<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32">
+<link rel="icon" href="/icon-192.png" type="image/png" sizes="192x192">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta property="og:image" content="https://mergelight.dev/icon-192.png">
 <link rel="preload" href="/fonts/Geist-Variable.woff2" as="font" type="font/woff2" crossorigin>
 <style>
   @font-face {
@@ -81,7 +84,7 @@
     letter-spacing: -0.01em;
   }
 
-  header svg { width: 24px; height: 24px; flex: none; }
+  header img { width: 32px; height: 32px; flex: none; display: block; }
 
   main {
     display: grid;
@@ -159,7 +162,7 @@
   .visual svg { display: block; width: 100%; height: auto; overflow: visible; }
 
   .rail { fill: none; stroke: var(--rail); stroke-width: 2; stroke-linecap: round; }
-  .branch, .mark-branch { fill: none; stroke: var(--branch); stroke-width: 2; stroke-linecap: round; }
+  .branch { fill: none; stroke: var(--branch); stroke-width: 2; stroke-linecap: round; }
   .shipped { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round; }
   .commit { fill: var(--bg); stroke-width: 2; }
   .commit.on-rail { stroke: var(--rail); }
@@ -251,11 +254,7 @@
 <body>
 <div class="page">
   <header>
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path class="rail" d="M2.5 16.5H21.5"/>
-      <path class="mark-branch" d="M5.5 16.5C5.5 9 14.5 8.5 16 16.5"/>
-      <circle class="light-core" cx="16" cy="16.5" r="3"/>
-    </svg>
+    <img src="/logo.png" width="32" height="32" alt="">
     <span>Mergelight</span>
   </header>
 
