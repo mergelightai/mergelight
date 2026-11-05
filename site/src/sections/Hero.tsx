@@ -20,13 +20,12 @@ export default function Hero() {
           fadeDistance={1.1}
           followMouse
           mouseInfluence={0.08}
-          noiseAmount={0.05}
+          noiseAmount={0}
           distortion={0.04}
         />
       </div>
       <div className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-28 bg-gradient-to-b from-ink/85 to-transparent" />
       <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(60%_50%_at_75%_65%,rgb(63_232_184/0.09),transparent)]" />
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 -z-10 h-48 bg-gradient-to-b from-transparent to-ink" />
 
       <div className="mx-auto grid w-full max-w-6xl items-center gap-14 px-5 sm:px-8 lg:grid-cols-[1.2fr_0.8fr]">
         <div>

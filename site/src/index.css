@@ -10,7 +10,7 @@
 @theme {
   --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
-  --color-ink: #07060d;
+  --color-ink: #0a0913;
   --color-panel: #0e0c18;
   --color-panel-2: #151225;
   --color-line: rgb(255 255 255 / 0.08);
@@ -42,3 +42,4 @@ body {
 ::selection { background: rgb(184 156 255 / 0.35); }
 
 section[id] { scroll-margin-top: 88px; }
+
