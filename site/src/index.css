@@ -1,0 +1,44 @@
+@import "tailwindcss";
+
+@font-face {
+  font-family: "Geist";
+  src: url("/fonts/Geist-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+@theme {
+  --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+  --color-ink: #07060d;
+  --color-panel: #0e0c18;
+  --color-panel-2: #151225;
+  --color-line: rgb(255 255 255 / 0.08);
+  --color-fg: #eceaf4;
+  --color-muted: #9b98b0;
+  --color-faint: #6b6880;
+  --color-lilac: #b89cff;
+  --color-pink: #f59ee6;
+  --color-peach: #f9a28c;
+  --color-mint: #3fe8b8;
+  --color-bug: #ff6b7a;
+  --color-risk: #f5c451;
+}
+
+html {
+  background: var(--color-ink);
+  color-scheme: dark;
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  color: var(--color-fg);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection { background: rgb(184 156 255 / 0.35); }
+
+section[id] { scroll-margin-top: 88px; }
