@@ -41,3 +41,6 @@ jobs:
           path: site/dist
       - id: deployment
         uses: actions/deploy-pages@v4
+        with:
+          # Pages can be slow to pick up a deployment; the default 10 minutes timed out on Nov 5 2026.
+          timeout: 1200000
