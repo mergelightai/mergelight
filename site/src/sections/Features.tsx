@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { siClaude } from 'simple-icons';
 import MagicBento, { type MagicBentoItem } from '../components/reactbits/MagicBento';
+import { OPENAI_PATH } from '../brandIcons';
 import { Check, Container, SectionHead } from '../ui';
 
 function Thread() {
@@ -36,13 +37,13 @@ function Thread() {
 
 function Checks() {
   return (
-    <div className="flex flex-col gap-2 text-[12.5px]">
+    <div className="flex flex-col gap-1.5 text-[12.5px]">
       {[
         ['review', 'Reviewed 12 files', true],
         ['triage', '1 bug, 2 collapsed', true],
         ['follow-up', 'Waits for your plan', false],
       ].map(([n, d, ok]) => (
-        <p key={n as string} className="flex items-center gap-2 rounded-lg border border-line bg-white/[0.02] px-2.5 py-1.5">
+        <p key={n as string} className="flex items-center gap-2 rounded-lg border border-line bg-white/[0.02] px-2.5 py-1">
           {ok ? <span className="grid size-3.5 place-items-center rounded-full bg-mint text-ink"><Check className="size-2.5" /></span> : <span className="size-3.5 rounded-full border-2 border-faint/50" />}
           <span className="font-medium text-fg">{n as string}</span>
           <span className="truncate text-faint">{d as string}</span>
@@ -70,7 +71,7 @@ function Comment() {
 function Rules() {
   return (
     <div className="flex flex-wrap gap-1.5 text-[12px]">
-      {['Never block on style', 'Migrations are a risk', 'Skip generated files', 'Tests over comments'].map((r) => (
+      {['Ignore style', 'Flag migrations', 'Skip generated', 'Tests first', 'No nitpicks', 'Small PRs'].map((r) => (
         <span key={r} className="rounded-full border border-line bg-white/[0.03] px-2.5 py-1 text-muted">{r}</span>
       ))}
     </div>
@@ -80,15 +81,16 @@ function Rules() {
 function Private() {
   return (
     <div className="flex items-center gap-3">
-      <div className="grid size-12 place-items-center rounded-2xl bg-mint/10 text-mint ring-1 ring-mint/30">
-        <svg viewBox="0 0 24 24" className="size-6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <div className="grid size-14 shrink-0 place-items-center rounded-2xl bg-mint/10 text-mint ring-1 ring-mint/30">
+        <svg viewBox="0 0 24 24" className="size-7" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
           <path d="M12 3 4.5 6v5.5c0 4.5 3.2 8.2 7.5 9.5 4.3-1.3 7.5-5 7.5-9.5V6L12 3Z" />
           <path d="m9 12 2 2 4-4" />
         </svg>
       </div>
-      <div className="text-[12.5px] leading-snug text-muted">
+      <div className="space-y-0.5 text-[13px] leading-snug text-muted">
         <p>Code: <span className="text-fg">your CI</span></p>
         <p>Login: <span className="text-fg">your secrets</span></p>
+        <p>Usage: <span className="text-fg">your plan</span></p>
       </div>
     </div>
   );
@@ -116,7 +118,7 @@ function Plans() {
       )}
       {bar(
         'ChatGPT Pro',
-        <span className="grid size-4 place-items-center rounded-[4px] border border-current/40 font-mono text-[8px]">{'>_'}</span>,
+        <svg viewBox="0 0 24 24" className="size-4" fill="currentColor" aria-hidden="true"><path d={OPENAI_PATH} fillRule="evenodd" /></svg>,
         38,
         'linear-gradient(90deg,#3fe8b8,#b89cff)',
       )}
@@ -182,7 +184,7 @@ export default function Features() {
           lead="And nothing that slows you down. These come with the hosted app."
         />
         <div className="mt-14">
-          <MagicBento items={items} columns={4} rowHeight={small ? 280 : 236} textAutoHide={false} gap={14} radius={22} glowColor="#b89cff" clickEffect enableTilt={false} enableMagnetism={false} />
+          <MagicBento items={items} columns={4} minCellWidth={258} rowHeight={small ? 268 : 250} textAutoHide={false} gap={14} radius={22} glowColor="#b89cff" clickEffect enableTilt={false} enableMagnetism={false} />
         </div>
       </Container>
     </section>

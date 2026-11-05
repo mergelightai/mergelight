@@ -1,45 +1,15 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import type { CSSProperties } from 'react';
 import { Renderer, Program, Mesh, Triangle, Texture, RenderTarget } from 'ogl';
 
-type Pattern = 'bayer' | 'noise' | 'atkinson' | 'floyd' | 'lines';
-type Palette = 'duotone' | 'rgb';
-type Fit = 'contain' | 'cover';
-type Kernel = [number, number, number][];
-type Rgb = [number, number, number];
-
-export interface DitherVeilProps {
-  src?: string;
-  fit?: Fit;
-  pattern?: Pattern;
-  pixelSize?: number;
-  levels?: number;
-  palette?: Palette;
-  inkColor?: string;
-  paperColor?: string;
-  contrast?: number;
-  brightness?: number;
-  revealRadius?: number;
-  softness?: number;
-  linger?: number;
-  rimColor?: string;
-  rim?: number;
-  reverse?: boolean;
-  wander?: boolean;
-  clickBurst?: boolean;
-  className?: string;
-  style?: CSSProperties;
-}
-
-type Settings = Required<Omit<DitherVeilProps, 'src' | 'className' | 'style'>>;
+import './DitherVeil.css';
 
 const DEFAULT_SRC = 'https://images.unsplash.com/photo-1737071371043-761e02b1ef95?q=80&w=1400&auto=format&fit=crop';
 
-const ORDERED: Record<string, number> = { bayer: 0, noise: 1, lines: 2 };
+const ORDERED = { bayer: 0, noise: 1, lines: 2 };
 
-const KERNELS: Record<string, Kernel> = {
+const KERNELS = {
   atkinson: [
     [1, 0, 1 / 8],
     [2, 0, 1 / 8],
@@ -62,25 +32,25 @@ const BURST_SECONDS = 1.2;
 const HOLD = 1.6;
 const INTRO_MS = 1100;
 
-const hexToRgb = (hex: string): Rgb => {
+const hexToRgb = hex => {
   let h = String(hex || '').replace('#', '');
   if (h.length === 3) h = h.replace(/./g, c => c + c);
   const n = parseInt(h.slice(0, 6), 16);
   return Number.isNaN(n) ? [0, 0, 0] : [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
 };
 
-const fitScale = (w: number, h: number, iw: number, ih: number, contain: boolean): [number, number] => {
+const fitScale = (w, h, iw, ih, contain) => {
   const ratio = w / h / (iw / ih);
   if (contain) return ratio > 1 ? [ratio, 1] : [1, 1 / ratio];
   return ratio > 1 ? [1, 1 / ratio] : [ratio, 1];
 };
 
-const wanderAt = (t: number, w: number, h: number): [number, number] => [
+const wanderAt = (t, w, h) => [
   w * (0.5 + 0.33 * Math.sin(t * 0.53) + 0.08 * Math.sin(t * 1.31 + 0.6)),
   h * (0.5 + 0.28 * Math.sin(t * 0.71 + 1.1) + 0.07 * Math.cos(t * 1.57))
 ];
 
-const measureEdge = (context: CanvasRenderingContext2D, image: HTMLImageElement): { matte: Rgb; plain: boolean } => {
+const measureEdge = (context, image) => {
   const size = 32;
   context.canvas.width = size;
   context.canvas.height = size;
@@ -100,33 +70,33 @@ const measureEdge = (context: CanvasRenderingContext2D, image: HTMLImageElement)
       count++;
     }
   }
-  const matte: Rgb = [sum[0] / count, sum[1] / count, sum[2] / count];
+  const matte = [sum[0] / count, sum[1] / count, sum[2] / count];
   const spread =
     matte.reduce((total, mean, c) => total + Math.sqrt(Math.max(0, squares[c] / count - mean * mean)), 0) / 3;
   return { matte, plain: spread < 0.06 };
 };
 
-let blueNoise: Uint8Array | null = null;
+let blueNoise = null;
 
-const getBlueNoise = (): Uint8Array => {
+const getBlueNoise = () => {
   if (blueNoise) return blueNoise;
   const size = 64;
   const n = size * size;
   const wrap = size - 1;
-  const taps: number[] = [];
+  const taps = [];
   for (let dy = -6; dy <= 6; dy++) {
     for (let dx = -6; dx <= 6; dx++) taps.push(dx, dy, Math.exp(-(dx * dx + dy * dy) / 4.5));
   }
   const energy = new Float32Array(n);
   const on = new Uint8Array(n);
-  const splat = (i: number, sign: number) => {
+  const splat = (i, sign) => {
     const x = i % size;
     const y = (i - x) / size;
     for (let k = 0; k < taps.length; k += 3) {
       energy[((y + taps[k + 1]) & wrap) * size + ((x + taps[k]) & wrap)] += sign * taps[k + 2];
     }
   };
-  const find = (state: number, highest: boolean) => {
+  const find = (state, highest) => {
     let best = 0;
     let value = highest ? -Infinity : Infinity;
     for (let i = 0; i < n; i++) {
@@ -189,15 +159,7 @@ const getBlueNoise = (): Uint8Array => {
   return data;
 };
 
-const diffuse = (
-  pixels: Uint8ClampedArray,
-  cols: number,
-  rows: number,
-  kernel: Kernel,
-  levels: number,
-  rgb: boolean,
-  grade: (v: number) => number
-): Uint8Array => {
+const diffuse = (pixels, cols, rows, kernel, levels, rgb, grade) => {
   const channels = rgb ? 3 : 1;
   const values = new Float32Array(cols * rows * channels);
   for (let i = 0; i < cols * rows; i++) {
@@ -427,10 +389,10 @@ const DitherVeil = ({
   clickBurst = true,
   className = '',
   style
-}: DitherVeilProps) => {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const settingsRef = useRef<Settings | null>(null);
-  const wakeRef = useRef<() => void>(() => {});
+}) => {
+  const containerRef = useRef(null);
+  const settingsRef = useRef(null);
+  const wakeRef = useRef(() => {});
 
   useEffect(() => {
     settingsRef.current = {
@@ -468,7 +430,6 @@ const DitherVeil = ({
     canvas.style.height = '100%';
     container.appendChild(canvas);
 
-    const gl2 = gl as WebGL2RenderingContext;
     const floatMask = renderer.isWebgl2 && !!renderer.getExtension('EXT_color_buffer_float');
     const geometry = new Triangle(gl);
 
@@ -486,17 +447,17 @@ const DitherVeil = ({
     const noiseTexture = dataTexture();
     const diffusedTexture = dataTexture();
 
-    const createMask = (w: number, h: number) =>
+    const createMask = (w, h) =>
       new RenderTarget(gl, {
         width: w,
         height: h,
         depth: false,
-        type: floatMask ? gl2.HALF_FLOAT : gl.UNSIGNED_BYTE,
-        internalFormat: floatMask ? gl2.RGBA16F : gl.RGBA,
+        type: floatMask ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE,
+        internalFormat: floatMask ? gl.RGBA16F : gl.RGBA,
         minFilter: gl.LINEAR,
         magFilter: gl.LINEAR
       });
-    const destroyMask = (target: RenderTarget) => {
+    const destroyMask = target => {
       gl.deleteFramebuffer(target.buffer);
       gl.deleteTexture(target.texture.texture);
     };
@@ -540,7 +501,7 @@ const DitherVeil = ({
       uBursts: { value: Array.from({ length: MAX_BURSTS * 4 }, () => 0) },
       uBurstWidth: { value: 60 }
     };
-    const program = (fragment: string, uniforms: Record<string, { value: unknown }>) =>
+    const program = (fragment, uniforms) =>
       new Program(gl, { vertex, fragment, uniforms, depthTest: false, depthWrite: false });
     const maskMesh = new Mesh(gl, { geometry, program: program(maskFragment, maskUniforms) });
     const viewMesh = new Mesh(gl, { geometry, program: program(viewFragment, viewUniforms) });
@@ -548,7 +509,7 @@ const DitherVeil = ({
     const sampler = document.createElement('canvas');
     const samplerContext = sampler.getContext('2d', { willReadFrequently: true });
 
-    let image: HTMLImageElement | null = null;
+    let image = null;
     let introStart = 0;
     let diffusedKey = '';
     let diffusionBlocked = false;
@@ -562,7 +523,7 @@ const DitherVeil = ({
     let drift = 0;
     const pointer = { x: 0, y: 0, inside: false, fresh: true, placed: false };
     const brush = { x: 0, y: 0, px: 0, py: 0 };
-    const bursts: { x: number; y: number; start: number }[] = [];
+    const bursts = [];
 
     const layout = () => {
       width = Math.max(1, container.clientWidth);
@@ -583,7 +544,7 @@ const DitherVeil = ({
       }
     };
 
-    const updateDiffusion = (cell: number, s: Settings) => {
+    const updateDiffusion = (cell, s) => {
       if (!image || !samplerContext) return;
       const cols = Math.ceil(canvas.width / cell);
       const rows = Math.ceil(canvas.height / cell);
@@ -632,7 +593,7 @@ const DitherVeil = ({
           ((y1 - y0) / sh) * rows
         );
       }
-      const grade = (v: number) => Math.pow(Math.min(1, Math.max(0, (v - 0.5) * s.contrast + 0.5 + s.brightness)), 1.6);
+      const grade = v => Math.pow(Math.min(1, Math.max(0, (v - 0.5) * s.contrast + 0.5 + s.brightness)), 1.6);
       const pixels = samplerContext.getImageData(0, 0, cols, rows).data;
       diffusedTexture.image = diffuse(pixels, cols, rows, KERNELS[s.pattern], s.levels, s.palette === 'rgb', grade);
       diffusedTexture.width = cols;
@@ -640,7 +601,7 @@ const DitherVeil = ({
       diffusedTexture.needsUpdate = true;
     };
 
-    const frame = (now: number) => {
+    const frame = now => {
       raf = 0;
       const s = settingsRef.current;
       if (!s) return;
@@ -781,13 +742,13 @@ const DitherVeil = ({
     };
     img.src = src;
 
-    const locate = (e: PointerEvent) => {
+    const locate = e => {
       const rect = container.getBoundingClientRect();
       pointer.x = e.clientX - rect.left;
       pointer.y = e.clientY - rect.top;
       pointer.placed = true;
     };
-    const onMove = (e: PointerEvent) => {
+    const onMove = e => {
       locate(e);
       if (!pointer.inside) {
         pointer.inside = true;
@@ -799,7 +760,7 @@ const DitherVeil = ({
       pointer.inside = false;
       wake();
     };
-    const onDown = (e: PointerEvent) => {
+    const onDown = e => {
       onMove(e);
       if (!settingsRef.current?.clickBurst || (e.pointerType === 'mouse' && e.button !== 0)) return;
       bursts.push({ x: pointer.x, y: pointer.y, start: performance.now() });
@@ -841,13 +802,7 @@ const DitherVeil = ({
     };
   }, [src]);
 
-  return (
-    <div
-      ref={containerRef}
-      className={`relative w-full h-full overflow-hidden touch-pan-y ${className}`.trim()}
-      style={style}
-    />
-  );
+  return <div ref={containerRef} className={`dither-veil ${className}`.trim()} style={style} />;
 };
 
 export default DitherVeil;

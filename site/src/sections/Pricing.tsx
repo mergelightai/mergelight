@@ -1,5 +1,5 @@
 import CountUp from '../components/reactbits/CountUp';
-import BorderGlow from '../components/reactbits/BorderGlow';
+import PixelCard from '../components/reactbits/PixelCard';
 import { EARLY, GITHUB } from '../links';
 import { Check, Container, GitHubIcon, SectionHead } from '../ui';
 
@@ -38,7 +38,18 @@ export default function Pricing() {
         />
 
         <div className="mx-auto mt-14 grid max-w-4xl gap-6 md:grid-cols-2">
-          <div className="flex flex-col rounded-[20px] border border-line bg-panel p-8">
+          <PixelCard
+            colors={['#2e2850', '#41387c', '#6a5bb5']}
+            gap={7}
+            speed={30}
+            origin="pointer"
+            glowColor="#b89cff"
+            glow={0.15}
+            opacity={0.42}
+            radius={20}
+            noFocus
+            className="flex h-full w-full flex-col p-8"
+          >
             <p className="text-lg font-semibold">Self-host</p>
             <p className="mt-1 text-sm text-muted">The open source engine</p>
             <p className="mt-7 flex items-baseline gap-2">
@@ -54,15 +65,19 @@ export default function Pricing() {
                 <GitHubIcon /> Star on GitHub
               </a>
             </div>
-          </div>
+          </PixelCard>
 
-          <BorderGlow
-            backgroundColor="#110e1d"
-            borderRadius={20}
-            glowColor="160 80 60"
-            colors={['#3fe8b8', '#b89cff', '#f9a28c']}
-            animated
-            className="w-full"
+          <PixelCard
+            colors={['#134236', '#1d6a56', '#2a9a7a']}
+            gap={7}
+            speed={30}
+            origin="pointer"
+            glowColor="#3fe8b8"
+            glow={0.18}
+            opacity={0.42}
+            radius={20}
+            noFocus
+            className="h-full w-full shadow-[0_30px_80px_-40px_rgb(63_232_184/0.45)] ring-1 ring-mint/30"
           >
             <div className="flex h-full flex-col p-8">
               <div className="flex items-center justify-between">
@@ -84,7 +99,7 @@ export default function Pricing() {
                 Get early access
               </a>
             </div>
-          </BorderGlow>
+          </PixelCard>
         </div>
       </Container>
     </section>

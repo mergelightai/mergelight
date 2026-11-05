@@ -48,6 +48,8 @@ export interface MagicBentoItem {
 export interface MagicBentoProps {
   items?: MagicBentoItem[];
   columns?: number;
+  /** Drop to fewer columns when a cell would be narrower than this. */
+  minCellWidth?: number;
   rowHeight?: number;
   gap?: number;
   radius?: number;
@@ -72,6 +74,7 @@ export interface MagicBentoProps {
 interface Settings {
   items: MagicBentoItem[];
   columns: number;
+  minCell: number;
   gap: number;
   enableBorderGlow: boolean;
   enableSpotlight: boolean;
@@ -186,7 +189,7 @@ const STARS_CLASS = 'pointer-events-none absolute inset-0 z-[1] block h-full w-f
 const RIM_CLASS =
   'pointer-events-none absolute inset-0 z-[3] rounded-[inherit] [box-shadow:inset_0_0_0_1px_var(--mb-edge),inset_0_1px_0_var(--mb-highlight)]';
 const BORDER_CLASS = 'pointer-events-none absolute inset-0 z-[4] box-border rounded-[inherit] p-px';
-const CONTENT_CLASS = 'relative z-[2] box-border flex min-h-0 flex-1 flex-col gap-3 p-[var(--mb-pad)]';
+const CONTENT_CLASS = 'relative z-[2] box-border flex min-h-0 flex-1 flex-col gap-4 p-[var(--mb-pad)]';
 const HEADER_CLASS =
   'flex min-w-0 items-center gap-2 text-[12px] leading-4 font-medium text-[color:var(--mb-muted)] [[data-image]_&]:text-[rgba(244,244,245,0.72)]';
 const ICON_CLASS =
@@ -746,6 +749,7 @@ const nameOf = (animation: Animation) => (animation as CSSAnimation).animationNa
 const MagicBento = ({
   items = DEFAULT_ITEMS,
   columns = 4,
+  minCellWidth = MIN_CELL,
   rowHeight = 200,
   gap = 12,
   radius = 20,
@@ -778,6 +782,7 @@ const MagicBento = ({
   const settings: Settings = {
     items,
     columns: Math.max(1, Math.round(columns)),
+    minCell: Math.max(1, minCellWidth),
     gap: Math.max(0, gap),
     enableBorderGlow,
     enableSpotlight,
@@ -1176,7 +1181,7 @@ const MagicBento = ({
       const s = settingsRef.current;
       const width = root.clientWidth;
       const cell = (count: number) => (width - s.gap * (count - 1)) / count;
-      const next = cell(s.columns) >= MIN_CELL ? s.columns : s.columns >= 2 && cell(2) >= MIN_PAIR ? 2 : 1;
+      const next = cell(s.columns) >= s.minCell ? s.columns : s.columns >= 2 && cell(2) >= MIN_PAIR ? 2 : 1;
       setCols(next);
       dirty = true;
       wake();

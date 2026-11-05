@@ -8,6 +8,7 @@ import Agent from './sections/Agent';
 import How from './sections/How';
 import Features from './sections/Features';
 import Pricing from './sections/Pricing';
+import Compare from './sections/Compare';
 import Manifesto from './sections/Manifesto';
 import Footer from './sections/Footer';
 
@@ -25,6 +26,7 @@ export default function App() {
           <How />
           <Features />
           <Pricing />
+          <Compare />
           <Manifesto />
         </main>
         <Footer />

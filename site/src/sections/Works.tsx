@@ -1,11 +1,12 @@
 import { siClaude, siCursor, siGithub, siGithubactions, siModelcontextprotocol } from 'simple-icons';
 import LogoLoop from '../components/reactbits/LogoLoop';
+import { CODEX_PATH } from '../brandIcons';
 
-type Tool = { name: string; path?: string; hex?: string; glyph?: string };
+type Tool = { name: string; path?: string; hex?: string; glyph?: string; evenodd?: boolean };
 
 const tools: Tool[] = [
   { name: 'Claude Code', path: siClaude.path, hex: '#D97757' },
-  { name: 'Codex', glyph: '>_' },
+  { name: 'Codex', path: CODEX_PATH, hex: '#ffffff', evenodd: true },
   { name: 'Cursor', path: siCursor.path, hex: '#ffffff' },
   { name: 'GitHub', path: siGithub.path, hex: '#ffffff' },
   { name: 'GitHub Actions', path: siGithubactions.path, hex: '#2088FF' },
@@ -18,7 +19,7 @@ function ToolMark({ t }: { t: Tool }) {
     <span className="group flex items-center gap-3 whitespace-nowrap text-muted transition-colors duration-300 hover:text-fg">
       {t.path ? (
         <svg viewBox="0 0 24 24" aria-hidden="true" className="size-7 fill-current transition-colors duration-300" style={{ ['--brand' as string]: t.hex }}>
-          <path d={t.path} className="group-hover:fill-[var(--brand)]" />
+          <path d={t.path} fillRule={t.evenodd ? 'evenodd' : undefined} clipRule={t.evenodd ? 'evenodd' : undefined} className="group-hover:fill-[var(--brand)]" />
         </svg>
       ) : (
         <svg viewBox="0 0 24 24" aria-hidden="true" className="size-7">

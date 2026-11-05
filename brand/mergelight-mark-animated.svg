@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="Mergelight">
+<title>Mergelight</title>
+<defs>
+
+  <linearGradient id="ml-base" gradientUnits="userSpaceOnUse" x1="150" y1="0" x2="875" y2="0">
+    <stop offset="0" stop-color="#a943ea"/><stop offset=".12" stop-color="#7569ee"/>
+    <stop offset=".34" stop-color="#c08aff"/><stop offset=".5" stop-color="#f99ce8"/>
+    <stop offset=".62" stop-color="#fb8a7f"/><stop offset=".86" stop-color="#f7806a"/>
+    <stop offset="1" stop-color="#ffa48a"/>
+  </linearGradient>
+  <radialGradient id="ml-teal" gradientUnits="userSpaceOnUse" cx="511.5" cy="723" r="250">
+    <stop offset="0" stop-color="#3ff0c8" stop-opacity="1"/><stop offset=".55" stop-color="#3ff0c8" stop-opacity=".62"/><stop offset=".8" stop-color="#3ff0c8" stop-opacity=".2"/>
+    <stop offset="1" stop-color="#3fe8c0" stop-opacity="0"/>
+  </radialGradient>
+  <radialGradient id="ml-merge"><stop offset="0" stop-color="#ffb2f4" stop-opacity=".75"/><stop offset=".6" stop-color="#e9a2ff" stop-opacity=".3"/><stop offset="1" stop-color="#e9a2ff" stop-opacity="0"/></radialGradient>
+  <radialGradient id="ml-orb" cx=".42" cy=".3" r=".75">
+    <stop offset="0" stop-color="#b6fff0"/><stop offset=".32" stop-color="#7cf0d6"/>
+    <stop offset=".72" stop-color="#38d9b2"/><stop offset="1" stop-color="#1ec79d"/>
+  </radialGradient>
+  <radialGradient id="ml-rim" gradientUnits="userSpaceOnUse" cx="511.5" cy="815" r="70">
+    <stop offset="0" stop-color="#00ffd2" stop-opacity=".9"/><stop offset="1" stop-color="#00ffd2" stop-opacity="0"/>
+  </radialGradient>
+  <filter id="ml-shade" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024" color-interpolation-filters="sRGB">
+    <feGaussianBlur in="SourceAlpha" stdDeviation="24"/>
+    <feOffset dx="0" dy="-12" result="b"/>
+    <feComposite in="SourceAlpha" in2="b" operator="arithmetic" k2="1" k3="-1" result="edge"/>
+    <feFlood flood-color="#170a30" flood-opacity=".7"/>
+    <feComposite in2="edge" operator="in" result="shade"/>
+    <feMerge><feMergeNode in="SourceGraphic"/><feMergeNode in="shade"/></feMerge>
+  </filter>
+  <filter id="ml-soft" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024"><feGaussianBlur stdDeviation="16"/></filter>
+  <filter id="ml-soft2" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024"><feGaussianBlur stdDeviation="24"/></filter>
+  <linearGradient id="ml-hl" gradientUnits="userSpaceOnUse" x1="0" y1="250" x2="0" y2="440">
+    <stop offset="0" stop-color="#ffc2f8" stop-opacity=".8"/><stop offset=".5" stop-color="#ffc8ee" stop-opacity=".3"/><stop offset="1" stop-color="#ffd9f3" stop-opacity="0"/>
+  </linearGradient>
+  <mask id="ml-tube" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+    <g fill="none" stroke="#fff" stroke-width="145" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M225.5 728.5 V390 A74.5 74.5 0 0 1 300 315.5 C340 315.5 377.5 339 396 380 L446 490 C462 525 485 541 512 541"/><path d="M 797.5 728.5 V 390 A 74.5 74.5 0 0 0 723 315.5 C 683 315.5 645.5 339 627 380 L 577 490 C 561 525 538 541 511 541"/>
+    </g>
+  </mask>
+  <clipPath id="ml-orbclip"><circle cx="511.5" cy="723" r="78"/></clipPath>
+
+  <mask id="ml-reveal" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+    <g fill="none" stroke="#fff" stroke-width="153" stroke-linecap="round" stroke-linejoin="round">
+      <path class="ml-draw" pathLength="1" d="M225.5 728.5 V390 A74.5 74.5 0 0 1 300 315.5 C340 315.5 377.5 339 396 380 L446 490 C462 525 485 541 512 541"/><path class="ml-draw" pathLength="1" d="M 797.5 728.5 V 390 A 74.5 74.5 0 0 0 723 315.5 C 683 315.5 645.5 339 627 380 L 577 490 C 561 525 538 541 511 541"/>
+    </g>
+  </mask>
+  <radialGradient id="ml-flashg"><stop offset="0" stop-color="#fff"/><stop offset=".4" stop-color="#ffd6f4" stop-opacity=".7"/><stop offset="1" stop-color="#ffd6f4" stop-opacity="0"/></radialGradient>
+</defs>
+
+  <style>
+    .ml-draw { stroke-dasharray: 1 2; stroke-dashoffset: 0; animation: ml-draw 1.15s cubic-bezier(.65,0,.35,1) .15s both; }
+    @keyframes ml-draw { from { stroke-dashoffset: 1.02; } to { stroke-dashoffset: 0; } }
+    .ml-flash { transform-box: fill-box; transform-origin: center; animation: ml-flash .7s ease-out 1.15s both; }
+    @keyframes ml-flash { 0% { opacity: 0; transform: scale(.3); } 25% { opacity: .9; transform: scale(.7); } 100% { opacity: 0; transform: scale(1.5); } }
+    .ml-orb { transform-box: fill-box; transform-origin: center; animation: ml-drop .75s cubic-bezier(.3,1.35,.5,1) 1.2s both; }
+    @keyframes ml-drop { 0% { opacity: 0; transform: translateY(-182px) scale(.2); } 15% { opacity: 1; } 100% { opacity: 1; transform: none; } }
+    .ml-glow { animation: ml-glow-in .7s ease-out 1.5s both, ml-breathe 2.8s ease-in-out 2.2s infinite alternate; }
+    @keyframes ml-glow-in { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes ml-breathe { from { opacity: 1; } to { opacity: .55; } }
+    @media (prefers-reduced-motion: reduce) { .ml-draw, .ml-flash, .ml-orb, .ml-glow { animation: none; } .ml-flash { opacity: 0; } }
+  </style>
+
+  <g mask="url(#ml-reveal)">
+    <g filter="url(#ml-shade)">
+      <g fill="none" stroke="url(#ml-base)" stroke-width="145" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M225.5 728.5 V390 A74.5 74.5 0 0 1 300 315.5 C340 315.5 377.5 339 396 380 L446 490 C462 525 485 541 512 541"/><path d="M 797.5 728.5 V 390 A 74.5 74.5 0 0 0 723 315.5 C 683 315.5 645.5 339 627 380 L 577 490 C 561 525 538 541 511 541"/>
+      </g>
+    </g>
+    <g mask="url(#ml-tube)">
+            <rect x="0" y="0" width="1024" height="1024" fill="url(#ml-teal)"/>
+      <path d="M225.5 740 V380" transform="translate(44 0)" fill="none" stroke="#2a1656" stroke-opacity="0.5" stroke-width="64" stroke-linecap="round" stroke-linejoin="round" filter="url(#ml-soft2)"/>
+      <path d="M797.5 740 V380" transform="translate(-44 0)" fill="none" stroke="#4a1f2c" stroke-opacity="0.45" stroke-width="64" stroke-linecap="round" stroke-linejoin="round" filter="url(#ml-soft2)"/>
+      <path d="M396 380 L446 490 C462 525 485 541 512 541" transform="translate(-36 30)" fill="none" stroke="#3ff0c8" stroke-opacity="0.55" stroke-width="46" stroke-linecap="round" stroke-linejoin="round" filter="url(#ml-soft)"/>
+      <path d="M627 380 L577 490 C561 525 538 541 511 541" transform="translate(30 34)" fill="none" stroke="#5a2236" stroke-opacity="0.35" stroke-width="46" stroke-linecap="round" stroke-linejoin="round" filter="url(#ml-soft2)"/>
+      <path d="M225.5 728.5 V390 A74.5 74.5 0 0 1 300 315.5 C340 315.5 377.5 339 396 380 L446 490 C462 525 485 541 512 541" transform="translate(-46 0)" fill="none" stroke="#ea6dff" stroke-opacity="0.55" stroke-width="54" stroke-linecap="round" stroke-linejoin="round" filter="url(#ml-soft)"/>
+      <path d="M 797.5 728.5 V 390 A 74.5 74.5 0 0 0 723 315.5 C 683 315.5 645.5 339 627 380 L 577 490 C 561 525 538 541 511 541" transform="translate(46 0)" fill="none" stroke="#ffc2a6" stroke-opacity="0.7" stroke-width="54" stroke-linecap="round" stroke-linejoin="round" filter="url(#ml-soft)"/>
+      <path d="M225.5 728.5 V390 A74.5 74.5 0 0 1 300 315.5 C340 315.5 377.5 339 396 380 L446 490 C462 525 485 541 512 541" transform="translate(-6 -38)" fill="none" stroke="url(#ml-hl)" stroke-opacity="1" stroke-width="70" stroke-linecap="round" stroke-linejoin="round" filter="url(#ml-soft)"/>
+      <path d="M 797.5 728.5 V 390 A 74.5 74.5 0 0 0 723 315.5 C 683 315.5 645.5 339 627 380 L 577 490 C 561 525 538 541 511 541" transform="translate(6 -38)" fill="none" stroke="url(#ml-hl)" stroke-opacity="1" stroke-width="70" stroke-linecap="round" stroke-linejoin="round" filter="url(#ml-soft)"/>
+      <ellipse cx="511.5" cy="492" rx="86" ry="62" fill="url(#ml-merge)"/>
+    </g>
+  </g>
+<circle class="ml-flash" cx="511.5" cy="541" r="110" fill="url(#ml-flashg)"/>
+
+  <g class="ml-orb">
+    <circle cx="511.5" cy="723" r="78" fill="url(#ml-orb)"/>
+    <circle cx="511.5" cy="723" r="78" fill="url(#ml-rim)" clip-path="url(#ml-orbclip)"/>
+    <ellipse cx="489.5" cy="689" rx="30" ry="18" fill="#fff" opacity=".22" filter="url(#ml-soft)"/>
+  </g>
+</svg>
