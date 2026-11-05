@@ -48,11 +48,13 @@ gh secret set MERGELIGHT_SECRETS_TOKEN --repo owner/repo
 
 Without it, reviews work until the first refresh, then the login has to be redone by hand.
 
-**4. Add the workflow.** Copy [`examples/mergelight.yml`](../examples/mergelight.yml) to `.github/workflows/mergelight.yml`. It:
+**4. Add the workflows.** Copy the three files in [`examples/`](../examples) to `.github/workflows/`:
 
-- reviews every non-draft PR from this repository, and cancels an older review of the same PR when you push again,
-- turns a 🟡 check green when someone approves the PR,
-- uses the login every third day so it stays fresh.
+- [`mergelight.yml`](../examples/mergelight.yml) reviews every non-draft PR from this repository, and cancels an older review of the same PR when you push again.
+- [`mergelight-approve.yml`](../examples/mergelight-approve.yml) turns a 🟡 check green when someone approves the PR.
+- [`mergelight-refresh.yml`](../examples/mergelight-refresh.yml) uses the login every third day so it stays fresh.
+
+They're separate files so a PR's merge box only shows the review, not skipped jobs.
 
 **5. Optional: make it required.** In branch protection or a ruleset, require the **Mergelight** check. 🔴 then blocks the merge, and 🟡 waits for an approval.
 
@@ -72,6 +74,7 @@ Without it, reviews work until the first refresh, then the login has to be redon
 ## Good to know
 
 - **Forks:** PRs from forks get no secrets, so the example workflow skips them.
+- **Self-hosted Linux runners:** Codex's sandbox needs unprivileged user namespaces. On GitHub-hosted runners the Action enables them; on your own runners, allow them ahead of time (on Ubuntu 24.04: `kernel.apparmor_restrict_unprivileged_userns=0`). Without them Codex can't read the code, and the review fails instead of guessing from the diff.
 - **Time:** a review takes about 4 to 15 minutes depending on the size of the PR, around 7 for a typical one.
 - **Same finding, next push:** findings already posted aren't posted again. A Mergelight thread is resolved when its code changed and the finding is gone.
 - **Your code:** the review runs inside your own GitHub Actions runner with your own Codex login. Nothing is sent to Mergelight.

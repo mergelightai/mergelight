@@ -7,6 +7,11 @@ import type { ModelOptions, ModelResult } from "./index.js";
 export type CodexOptions = ModelOptions;
 export type CodexResult = ModelResult;
 
+/** Codex's Linux sandbox (bubblewrap) can't start, so every command fails. */
+export class SandboxError extends Error {}
+
+const SANDBOX_FAILURE = /bwrap:|user namespace|new namespace|RTM_NEWADDR|uid map|sandbox.*(denied|not permitted)/i;
+
 function codexHome(): string {
   return process.env.CODEX_HOME ?? join(homedir(), ".codex");
 }
@@ -67,6 +72,9 @@ export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
   args.push("-");
 
   let commands = 0;
+  let completed = 0;
+  let sandboxFailures = 0;
+  let firstSandboxError = "";
   let usage: CodexResult["usage"] = null;
   let buffer = "";
   const onStdout = (chunk: string) => {
@@ -79,12 +87,20 @@ export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
       try {
         const event = JSON.parse(line) as {
           type?: string;
-          item?: { type?: string; command?: string };
+          item?: { type?: string; command?: string; exit_code?: number | null; aggregated_output?: string };
           usage?: { input_tokens?: number; output_tokens?: number };
         };
         if (event.type === "item.started" && event.item?.type === "command_execution") {
           commands++;
           opts.onCommand?.(event.item.command ?? "");
+        }
+        if (event.type === "item.completed" && event.item?.type === "command_execution") {
+          completed++;
+          const output = event.item.aggregated_output ?? "";
+          if (event.item.exit_code !== 0 && SANDBOX_FAILURE.test(output)) {
+            sandboxFailures++;
+            firstSandboxError ||= output.split("\n").find((l) => SANDBOX_FAILURE.test(l))?.trim() ?? "";
+          }
         }
         if (event.type === "turn.completed" && event.usage) {
           usage = {
@@ -111,6 +127,13 @@ export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
     if (result.code !== 0) {
       const tail = (result.stderr || result.stdout).trim().split("\n").slice(-6).join("\n");
       throw new Error(`Codex exited with code ${result.code}.${opts.logFile ? ` Log: ${opts.logFile}` : ""}\n${tail}`);
+    }
+    // Without a working sandbox Codex can't read the code and reviews the diff blind.
+    // Better to fail loudly than to post a review that only looks at the diff.
+    if (completed > 0 && sandboxFailures === completed) {
+      throw new SandboxError(
+        `Codex couldn't run commands in its sandbox on this machine, so it can't read the code (${firstSandboxError || "every command failed"}). On Linux this usually means unprivileged user namespaces are blocked; see docs/github-action.md.`,
+      );
     }
     let raw: string;
     try {
