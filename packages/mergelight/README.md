@@ -13,7 +13,7 @@ How likely a problem is and how bad it is are rated separately, so a small probl
 
 ## Status
 
-Early. It runs locally only and doesn't post to GitHub yet.
+Early. It runs locally, and posts to GitHub through the [GitHub Action](../../docs/github-action.md) or `--post`.
 
 ## Requirements
 
@@ -42,8 +42,15 @@ Other ways to name the pull request: `owner/repo#123`, or just `123` inside a cl
 | `--verify-with <name>` | Who checks the findings: `claude` (default when Claude Code is installed) or `codex` |
 | `--verify-model <name>` | Model for the checker, like `claude-opus-5-5` (default for Claude: `opus`) |
 | `--keep` | Keep the temporary checkout |
+| `--post` | Post the review to the PR: inline findings, one summary comment and a **Mergelight** check |
+| `--dry-run` | With `--post`, `post` or `approve`: print what would be posted and change nothing |
 
-The exit code is `2` when the review finds a bug that blocks the merge, `1` on errors and `0` otherwise.
+Two more commands, used by the GitHub Action:
+
+- `node dist/cli.js post review.json` posts a review saved with `--out`.
+- `node dist/cli.js approve owner/repo#123 --by login` turns a 🟡 "needs a human" check green after someone approves the PR. A 🔴 check stays red.
+
+The exit code is `2` when the review finds a bug that blocks the merge, `1` on errors and `0` otherwise. With `--post` it is `0` unless the review fails, since the check carries the verdict.
 
 ## How it works
 
