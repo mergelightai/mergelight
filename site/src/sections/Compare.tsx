@@ -10,7 +10,7 @@ const PLAN = 200; // Claude Ultra or ChatGPT Pro
 const PER_DAY = 10; // pull requests per working day, close to the invoiced team's 11
 const REVIEWS = PER_DAY * 20 * 2; // a first review and one re-review after fixes
 const COPILOT = Math.max(19, REVIEWS * 1.5); // $19 Business seat, GitHub's ~$1.50 per default review
-const CODERABBIT = 30; // Essentials, month to month
+const CODERABBIT = 443 / 2; // a real Team plan bill: $443 for 2 developers in one month, about 11 PRs a day each
 const MERGELIGHT = 9;
 
 const usd = (n: number) => '$' + Math.round(n).toLocaleString('en-US');
@@ -89,7 +89,7 @@ export default function Compare() {
             <div className="pointer-events-none absolute top-1/2 left-1/2 -z-10 h-72 w-[min(560px,90%)] -translate-x-1/2 -translate-y-1/2 rounded-full bg-mint/15 blur-[90px]" />
 
             <div className="md:order-1">
-              <Rival icon={<BrandIcon icon={siCoderabbit} className="size-[18px]" />} name="CodeRabbit" price={usd(CODERABBIT)} note="plus overage past 5 reviews an hour" />
+              <Rival icon={<BrandIcon icon={siCoderabbit} className="size-[18px]" />} name="CodeRabbit" price={<Ticker from={30} to={CODERABBIT} start={seen} delay={0.5} />} note="real bill at this volume" />
             </div>
 
             <motion.div
@@ -171,7 +171,7 @@ export default function Compare() {
           <a className="underline decoration-white/20 underline-offset-2 hover:text-muted" href="https://docs.github.com/en/copilot/concepts/agents/code-review">Copilot</a>,{' '}
           <a className="underline decoration-white/20 underline-offset-2 hover:text-muted" href="https://claude.com/pricing">Claude</a>,{' '}
           <a className="underline decoration-white/20 underline-offset-2 hover:text-muted" href="https://learn.chatgpt.com/docs/pricing">ChatGPT</a>
-          ). Copilot is Business at GitHub's estimate of $1.50 per review, without Actions minutes. CodeRabbit is Essentials without overage. Mergelight
+          ). Copilot is Business at GitHub's estimate of $1.50 per review, without Actions minutes. CodeRabbit is a real Team plan bill: $443 for 2 developers at about 11 pull requests a day each. Mergelight
           pricing is planned, and reviews use your plan's allowance.
         </p>
       </Container>
