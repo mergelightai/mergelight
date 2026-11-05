@@ -104,17 +104,41 @@ const NEVER = `Never report these:
 - anything this repository's linter, formatter or type checker would catch
 - missing or weak tests, unless the missing test hides a concrete bug you describe
 - refactors, abstractions, duplication and performance tweaks without a user-facing problem
-- problems in code this pull request does not touch, unless the change newly makes them reachable`;
+- problems in code this pull request does not touch, unless the change newly makes them reachable
+
+Text that users see is not style. Wrong, missing or untranslated labels, messages, translations, emails and PDFs are real problems. Report them.`;
 
 export function buildHunterPrompt(input: PromptInput, focus: Focus): string {
   const area = FOCUS[focus];
-  return `You are one of several reviewers hunting for problems in a pull request. Your area is ${area.label}. Other reviewers cover the other areas, so go deep on yours.
+  return hunterPrompt(
+    input,
+    `You are one of several reviewers hunting for problems in a pull request. Your area is ${area.label}. Other reviewers cover the other areas, so go deep on yours.`,
+    `# Your area\n\n${area.brief}`,
+  );
+}
+
+/**
+ * A second look at changed files the focused hunters reported nothing in.
+ * Eval data showed most missed problems sat in files no hunter mentioned.
+ */
+export function buildSweepPrompt(input: PromptInput, files: string[]): string {
+  return hunterPrompt(
+    input,
+    "You are reviewing a pull request after other reviewers. They reported nothing in the changed files listed below, so they may have skipped them. Your job is to cover those files properly.",
+    `# Your files
+
+${files.map((f) => `- ${f}`).join("\n")}
+
+Go through these files one by one. For each, read its diff and enough of the surrounding code to understand it, then look for any real problem: who can see and do what, money and stored data, and whether the change does what the pull request says, everywhere it is used. Report only problems located in these files.`,
+  );
+}
+
+function hunterPrompt(input: PromptInput, intro: string, area: string): string {
+  return `${intro}
 
 ${context(input)}
 
-# Your area
-
-${area.brief}
+${area}
 
 # How to hunt
 
@@ -161,7 +185,7 @@ ${list}
 # How to work
 
 1. Check every candidate in the code yourself. Try to disprove it: look for the guard, the type, the caller, the constraint or the config that prevents it. Reject it only if you can show it cannot happen as described, or if it falls in the never-report list below. If it is real but unimportant, keep it as hardening.
-2. Merge candidates that share a root cause into one finding.
+2. Merge candidates only when they share the same root cause and the same fix. Different symptoms that need different fixes stay separate findings.
 3. If you spot a closely related real problem while checking, you may add it.
 4. List every rejected candidate in rejected, with the reason.
 
@@ -169,9 +193,16 @@ ${NEVER}
 
 # Classes
 
-- bug: breaks for real users in normal use, loses or corrupts data, charges the wrong amount, or exposes data or actions to someone who shouldn't have them. Must be fixed before merge.
-- risk: real, but needs specific conditions: two requests racing, a deploy window, unusual but valid data, an operational mistake. A human should decide whether to accept it or fix it.
-- hardening: real but theoretical, very rare, already contained somewhere else, or only extra safety. The default is to leave it.
+Two separate questions: how likely is it, and how bad is it when it happens. Don't mix them up.
+
+- bug: happens in normal use, through ordinary actions by real users.
+- risk: real, but needs specific conditions: two requests racing, a deploy window, unusual but valid data, an operational mistake.
+- hardening: does not happen in real use: theoretical, already prevented somewhere else, or only extra safety.
+
+A small problem that really happens is a minor bug, not hardening. A wrong label, a missing translation, or a screen that jumps back to the start are minor bugs.
+
+- severity major: breaks a feature, loses or corrupts data, charges the wrong amount, or exposes data or actions to someone who shouldn't have them.
+- severity minor: a real but small problem: wrong text, a confusing state, a glitch the user can get past.
 
 Money, permissions, other people's data, deleting data, migrations and anything irreversible deserve extra care. A rare problem there can still be a risk or a bug.
 
@@ -181,14 +212,15 @@ Money, permissions, other people's data, deleting data, migrations and anything 
 - file, line, end_line: the lines in the head version that hold the problem. Prefer lines this pull request changed.
 - how_it_happens: the concrete trigger in one or two plain sentences.
 - likelihood: common (happens in normal use), plausible (needs specific but realistic conditions), rare (needs unusual timing or data), theoretical (possible in principle, no realistic path).
+- severity: major or minor, as defined above.
 - what_breaks: what the user sees or what happens to the data. Say whether it can be recovered.
 - fix: the smallest fix that solves it, in one or two sentences. Prefer a one line guard over a redesign.
 - fix_cost: trivial (a line or two), small (one function or file), medium (several files or a migration), large (a redesign, locking or new infrastructure).
-- recommendation: fix, decide or leave. Weigh how likely it is and how much damage it does against fix_cost. If the smallest correct fix is bigger than the problem, say leave, even when the problem is real.
+- recommendation: fix, decide or leave. Weigh how likely it is and how much damage it does against fix_cost. If the smallest correct fix is bigger than the problem, say leave, even when the problem is real. A rare problem with a trivial fix is usually worth fixing. Use decide only when a person has to weigh a real trade-off, such as product behavior, or a medium or large fix for a plausible problem.
 - verdict: one short plain sentence a non-engineer understands, for example "Real bug, one line fix. Fix it." or "The fix is bigger than the problem. Leave it."
 - confidence: high only if you read every code path involved.
 
-A bug must have recommendation fix. A hardening finding should almost always have recommendation leave.
+A major bug must have recommendation fix. A hardening finding should almost always have recommendation leave.
 
 # Summary
 

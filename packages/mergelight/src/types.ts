@@ -12,6 +12,9 @@ export type Recommendation = "fix" | "decide" | "leave";
 
 export type Confidence = "high" | "medium" | "low";
 
+/** How much damage it does when it happens. Separate from how likely it is. */
+export type Severity = "major" | "minor";
+
 /** One finding exactly as the model returns it (see schema.ts). */
 export interface ModelFinding {
   class: FindingClass;
@@ -21,6 +24,7 @@ export interface ModelFinding {
   end_line: number;
   how_it_happens: string;
   likelihood: Likelihood;
+  severity: Severity;
   what_breaks: string;
   fix: string;
   fix_cost: FixCost;
