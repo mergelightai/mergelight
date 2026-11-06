@@ -4,7 +4,7 @@ import type { Mark } from "./handled.js";
 import { encodeState, type ReviewState } from "./state.js";
 
 export const SUMMARY_MARKER = "<!-- mergelight:summary -->";
-const PENDING_MARKER = "<!-- mergelight:pending -->";
+export const PENDING_MARKER = "<!-- mergelight:pending -->";
 export const findingMarker = (id: string) => `<!-- mergelight:finding id=${id} -->`;
 export const FINDING_MARKER_RE = /<!-- mergelight:finding id=([a-f0-9]+) -->/;
 

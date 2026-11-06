@@ -27,4 +27,6 @@ jobs:
     steps:
       - uses: mergelightai/mergelight@v0
         with:
+          # Neither set yet? The first pull request shows a link to connect ChatGPT.
           codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}

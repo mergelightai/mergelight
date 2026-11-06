@@ -93,7 +93,7 @@ export interface PublishResult {
  * checks, so a personal `gh` login gets a 403 on any repository. That doesn't sink
  * a review, since the comments carry it. Every other error still throws.
  */
-async function writeCheck(api: GitHub, id: number | null | undefined, headSha: string, body: object, log?: (line: string) => void): Promise<CheckRun | null> {
+export async function writeCheck(api: GitHub, id: number | null | undefined, headSha: string, body: object, log?: (line: string) => void): Promise<CheckRun | null> {
   try {
     if (id) return await api.write<CheckRun>("PATCH", `check-runs/${id}`, body);
     return await api.write<CheckRun>("POST", "check-runs", { name: CHECK_NAME, head_sha: headSha, ...body });

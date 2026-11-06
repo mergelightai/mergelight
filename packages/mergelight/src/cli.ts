@@ -7,6 +7,7 @@ import { GitHub } from "./publish/api.js";
 import { approveCheck, failCheck, failSummary, previousFindings, publishReview, startCheck, startSummary } from "./publish/publish.js";
 import { renderTerminal } from "./render.js";
 import { reviewPullRequest } from "./review.js";
+import { askForApp, connect, githubConnect } from "./connect.js";
 import { realDeps, setup } from "./setup.js";
 import type { Review } from "./types.js";
 
@@ -18,6 +19,7 @@ Usage
   mergelight approve <pr> --by <login>   Turn a "needs a human" check green after approval
   mergelight mcp                         Run the MCP server, so your coding agent can read findings
   mergelight setup <owner/repo>          Set up the GitHub Action on a repository
+  mergelight connect <pr>                In the Action: connect ChatGPT from the pull request
 
   <pr> is a pull request URL, owner/repo#123, or a number inside a clone.
 
@@ -41,6 +43,7 @@ Options
   --skip-branches <a,b> For setup: don't review pull requests from these branches
   --relogin             For setup: log in to Codex again
   --yes                 For setup: don't stop to ask whether the app is installed
+  --no-save             For connect: there's nowhere to save a login, so ask for the app instead
   -h, --help            Show this help
 
 Reviews run on your own logged-in Codex CLI, and Claude Code if you check with it.
@@ -97,6 +100,7 @@ async function main(): Promise<number> {
       "skip-branches": { type: "string" },
       relogin: { type: "boolean" },
       yes: { type: "boolean" },
+      "no-save": { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -132,7 +136,7 @@ async function main(): Promise<number> {
     await serve();
     return 0;
   }
-  if (!["review", "post", "approve"].includes(command) || !target) {
+  if (!["review", "post", "approve", "connect"].includes(command) || !target) {
     process.stderr.write(HELP);
     return 1;
   }
@@ -152,6 +156,22 @@ async function main(): Promise<number> {
   }
 
   const ref = parsePrRef(target, values.repo ?? (await currentRepo()));
+
+  if (command === "connect") {
+    try {
+      const api = new GitHub(ref.owner, ref.repo, { log });
+      const { headSha } = await fetchPullRequest(ref);
+      if (values["no-save"]) {
+        await askForApp(api, ref.number, headSha);
+        log("Install the Mergelight AI app: without it there's nowhere to save the ChatGPT login.");
+        return 1;
+      }
+      return await connect(githubConnect(api, ref.number, headSha, log));
+    } catch (err) {
+      log(`mergelight: ${err instanceof Error ? err.message : String(err)}`);
+      return 1;
+    }
+  }
 
   if (command === "approve") {
     if (!values.by) {
