@@ -431,6 +431,7 @@ test("marks move a finding out of the work list, and a later review can bring a 
   assert.equal(handled.cccccccccc.handled.still_reported, undefined, "no review has read it yet");
   assert.equal(handled.dddddddddd.handled.still_reported, true, "the review read it and still reports it");
   assert.match(out.next, /1 marked fixed, waiting/);
+  assert.match(out.next, /Tell the user: the review read why 1 marked won't fix and still reports it/);
 });
 
 test("a mark from someone who can't write to the repository doesn't count", async () => {

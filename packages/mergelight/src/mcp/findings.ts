@@ -78,7 +78,7 @@ export function reviewStatus(check: CheckRun | undefined, hasState: boolean, upT
 }
 
 /** One line on what to do next, so an agent without the skill still gets it right. */
-export function nextStep(status: ReviewStatus, reviewedSha: string | undefined, findings: Record<Tier, unknown[]>, pending: number): string {
+export function nextStep(status: ReviewStatus, reviewedSha: string | undefined, findings: Record<Tier, unknown[]>, pending: number, disputed = 0): string {
   const old = reviewedSha?.slice(0, 7);
   if (!reviewedSha) {
     if (status === "reviewing") return "A review is running. It usually takes 2 to 15 minutes. Tell the user and check again later.";
@@ -102,7 +102,9 @@ export function nextStep(status: ReviewStatus, reviewedSha: string | undefined, 
   const todo = steps.length ? `Next: ${steps.join(", ")}.` : "Nothing to do here.";
   const after = fix ? " Run the project's own tests before pushing, then mark what you fixed." : "";
   const wait = pending ? ` ${pending} marked fixed, waiting for the next review to check.` : "";
-  return `${before}${todo}${after}${wait}`;
+  // These can hold the check at red after everything else is fixed, so the user needs to hear about them.
+  const tell = disputed ? ` Tell the user: the review read why ${disputed} marked won't fix and still reports it.` : "";
+  return `${before}${todo}${after}${wait}${tell}`;
 }
 
 export async function listFindings(args: { pr?: unknown; tier?: unknown }) {
@@ -129,6 +131,7 @@ export async function listFindings(args: { pr?: unknown; tier?: unknown }) {
   }
   findings.post.sort((a, b) => (a.rank ?? 9) - (b.rank ?? 9));
   const pending = handled.filter((f) => f.state === "fix_pending").length;
+  const disputed = handled.filter((f) => f.handled?.still_reported).length;
 
   return {
     pr: `${ref.owner}/${ref.repo}#${ref.number}`,
@@ -143,7 +146,7 @@ export async function listFindings(args: { pr?: unknown; tier?: unknown }) {
       up_to_date: upToDate,
       check: check ? { status: check.status, conclusion: check.conclusion, title: check.output.title, started_at: check.started_at } : undefined,
     },
-    next: nextStep(status, last?.sha, findings, pending),
+    next: nextStep(status, last?.sha, findings, pending, disputed),
     findings: args.tier ? { [args.tier as Tier]: findings[args.tier as Tier] } : findings,
     handled,
     gone,
