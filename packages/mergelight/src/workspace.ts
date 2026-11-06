@@ -78,6 +78,8 @@ export interface Workspace {
   diff: string;
   diffStat: string;
   diffTruncated: boolean;
+  /** Changed files (lockfiles and generated files left out), with lines added and removed. */
+  changedFiles: { path: string; added: number; removed: number }[];
   cleanup: () => Promise<void>;
 }
 
@@ -132,6 +134,14 @@ export async function prepareWorkspace(pr: PullRequest, at?: string): Promise<Wo
     const diffArgs = ["--no-color", "--no-ext-diff", "--find-renames", range, "--", ...EXCLUDES];
     const diff = (await git(["diff", "-U5", ...diffArgs], mirror)).stdout;
     const diffStat = (await git(["diff", "--stat=200,150", ...diffArgs], mirror)).stdout.trim();
+    const changedFiles = (await git(["diff", "--numstat", "--no-renames", ...diffArgs.filter((a) => a !== "--find-renames")], mirror)).stdout
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => {
+        const [added, removed, path] = line.split("\t");
+        return { path: path ?? "", added: Number(added) || 0, removed: Number(removed) || 0 };
+      });
 
     const dir = mkdtempSync(join(tmpdir(), `mergelight-${pr.repo}-${pr.number}-`));
     await git(["worktree", "add", "--quiet", "--detach", dir, headSha], mirror);
@@ -143,6 +153,7 @@ export async function prepareWorkspace(pr: PullRequest, at?: string): Promise<Wo
       diff,
       diffStat,
       diffTruncated: diff.length > MAX_INLINE_DIFF,
+      changedFiles,
       cleanup: async () => {
         await run("git", ["-C", mirror, "worktree", "remove", "--force", dir]);
         rmSync(dir, { recursive: true, force: true });

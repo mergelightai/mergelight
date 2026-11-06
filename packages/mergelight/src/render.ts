@@ -43,7 +43,7 @@ function full(f: Finding, dot: string, label: string): string {
   const pad = "            ";
   return [
     `${dot} ${bold(label)}  ${bold(f.title)}`,
-    `   ${dim(where(f))}  ${dim(`${f.likelihood} · fix ${f.fix_cost} · ${f.confidence} confidence`)}`,
+    `   ${dim(where(f))}  ${dim(`${f.likelihood} · ${f.severity} · fix ${f.fix_cost}`)}`,
     `   How     ${wrap(f.how_it_happens, pad)}`,
     `   Breaks  ${wrap(f.what_breaks, pad)}`,
     `   Fix     ${wrap(f.fix, pad)}`,
@@ -53,21 +53,26 @@ function full(f: Finding, dot: string, label: string): string {
 
 export function renderTerminal(r: Review): string {
   const light = LIGHT[r.light];
-  const bugs = r.findings.filter((f) => f.tier === "post" && f.class === "bug");
-  const risks = r.findings.filter((f) => f.tier === "post" && f.class === "risk");
+  const posted = r.findings.filter((f) => f.tier === "post");
+  const bugs = posted.filter((f) => f.class === "bug" && f.severity !== "minor");
+  const minor = posted.filter((f) => f.class === "bug" && f.severity === "minor");
+  const risks = posted.filter((f) => f.class === "risk");
+  const small = posted.filter((f) => f.class === "hardening");
   const decisions = r.findings.filter((f) => f.tier === "decision");
   const hardening = r.findings.filter((f) => f.tier === "hardening");
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
   const counts = [
-    `${bugs.length} bug${bugs.length === 1 ? "" : "s"}`,
-    `${risks.length} risk${risks.length === 1 ? "" : "s"}`,
-    `${decisions.length} decision${decisions.length === 1 ? "" : "s"}`,
+    plural(bugs.length, "bug"),
+    plural(minor.length, "minor bug"),
+    plural(risks.length, "risk"),
+    plural(decisions.length, "decision"),
     `${hardening.length} hardening`,
   ].join(", ");
 
   const out: string[] = [];
   out.push(`${bold("Mergelight")} ${dim("·")} ${r.pr.owner}/${r.pr.repo}#${r.pr.number} ${dim("·")} ${r.pr.title}`);
   out.push(
-    `${light.dot} ${light.color(bold(light.label))}  ${dim(`(${counts})`)}  ${dim(`· codex ${r.provider.model ?? ""} · ${duration(r.stats.duration_ms)} · ${r.pr.head_sha.slice(0, 7)}`)}`,
+    `${light.dot} ${light.color(bold(light.label))}  ${dim(`(${counts})`)}  ${dim(`· codex ${r.provider.model ?? ""} ${r.provider.effort ?? ""} · ${duration(r.stats.duration_ms)} · ${r.pr.head_sha.slice(0, 7)}`)}`,
   );
   const checked = r.trace.candidates.length;
   out.push(dim(`Checked ${checked} candidate${checked === 1 ? "" : "s"}, rejected ${r.trace.rejected.length}${r.trace.failed_hunters.length ? `, hunters failed: ${r.trace.failed_hunters.join(", ")}` : ""}`));
@@ -76,6 +81,8 @@ export function renderTerminal(r: Review): string {
 
   for (const f of bugs) out.push("", full(f, "🔴", "Bug"));
   for (const f of risks) out.push("", full(f, "🟡", "Risk"));
+  for (const f of minor) out.push("", full(f, "🟠", "Minor bug"));
+  for (const f of small) out.push("", full(f, "⚪", "Small fix"));
 
   if (decisions.length) {
     out.push("", bold(`Your call (${decisions.length})`));

@@ -140,7 +140,7 @@ async function judge({ number, at }) {
       cwd: wt,
       prompt: prompt(pr, at, finalHead, items, laterDiff),
       schema,
-      logFile: join(cache, "logs", `judge-${owner}-${name}-${number}.log`),
+      logFile: join(cache, "logs", `judge-${owner}-${name}${values.tag ? `-${values.tag}` : ""}-${number}.log`),
     });
     writeFileSync(out, JSON.stringify({ number, at, final_head: finalHead, items, verdicts: result.output.items }, null, 2));
     console.error(`#${number} judged ${items.length} comments in ${Math.round((Date.now() - started) / 1000)}s`);

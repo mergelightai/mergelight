@@ -28,7 +28,7 @@ const [owner, name] = repoArg.split("/");
 const dir = join(process.env.MERGELIGHT_CACHE ?? join(homedir(), ".cache", "mergelight"), "eval", `${owner}-${name}`);
 const selection = JSON.parse(readFileSync(join(dir, values.selection), "utf8"));
 
-// MP is Mergelight counting only what it posts as its own comment (bugs and likely risks).
+// MP is Mergelight counting only what it posts as its own comment (what the verifier says to fix).
 const REVIEWERS = { CR: "CodeRabbit", CP: "Copilot", ML: "Mergelight, everything", MP: "Mergelight, posted only" };
 const stats = Object.fromEntries(
   Object.keys(REVIEWERS).map((k) => [k, { comments: 0, fixed: 0, issues_found: 0, fixed_issues_found: 0, only_one: 0 }]),

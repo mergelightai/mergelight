@@ -18,7 +18,7 @@ Options
   --json                Print the review as JSON
   --out <file>          Also write the JSON review to a file
   --model <name>        Codex model (default: your Codex config)
-  --effort <level>      Reasoning effort: low, medium, high
+  --effort <level>      Reasoning effort: low, medium, high (default: high)
   --keep                Keep the temporary checkout
   -h, --help            Show this help
 
@@ -62,11 +62,11 @@ async function main(): Promise<number> {
     process.stderr.write(`\r\x1b[2K${line.slice(0, (process.stderr.columns ?? 100) - 1)}`);
   };
   const ticker = tty ? setInterval(draw, 1000) : undefined;
-  const onProgress = (message: string) => {
+  const onProgress = (message: string, transient?: boolean) => {
     if (tty) {
       last = message;
       draw();
-    } else if (!message.startsWith("Reviewing with Codex:")) {
+    } else if (!transient) {
       process.stderr.write(`${message}\n`);
     }
   };

@@ -1,4 +1,4 @@
-import { runOk } from "./run.js";
+import { CommandError, runOk } from "./run.js";
 import type { PullRequest } from "./types.js";
 
 export interface PrRef {
@@ -52,9 +52,21 @@ interface ApiPull {
   changed_files: number;
 }
 
+/** gh api, retried a few times when GitHub answers with a 5xx or the network drops. */
+async function ghApi(path: string): Promise<string> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return (await runOk("gh", ["api", path])).stdout;
+    } catch (err) {
+      const transient = err instanceof CommandError && /HTTP 5\d\d|timeout|connection reset|EOF/i.test(err.message);
+      if (!transient || attempt === 4) throw err;
+      await new Promise((r) => setTimeout(r, 2000 * attempt));
+    }
+  }
+}
+
 export async function fetchPullRequest(ref: PrRef): Promise<PullRequest> {
-  const { stdout } = await runOk("gh", ["api", `repos/${ref.owner}/${ref.repo}/pulls/${ref.number}`]);
-  const pull = JSON.parse(stdout) as ApiPull;
+  const pull = JSON.parse(await ghApi(`repos/${ref.owner}/${ref.repo}/pulls/${ref.number}`)) as ApiPull;
   return {
     owner: ref.owner,
     repo: ref.repo,

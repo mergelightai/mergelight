@@ -2,7 +2,15 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fetchPullRequest, type PrRef } from "./github.js";
-import { buildHunterPrompt, buildVerifierPrompt, FOCUS, type Candidate, type Focus, type PromptInput } from "./prompt.js";
+import {
+  buildHunterPrompt,
+  buildSweepPrompt,
+  buildVerifierPrompt,
+  FOCUS,
+  type Candidate,
+  type Focus,
+  type PromptInput,
+} from "./prompt.js";
 import { runCodex } from "./providers/codex.js";
 import { candidateSchema, reviewSchema } from "./schema.js";
 import type { Finding, Light, ModelFinding, ModelReview, Review, Tier } from "./types.js";
@@ -12,10 +20,12 @@ export interface ReviewOptions {
   /** Review this commit of the PR instead of its latest one. */
   at?: string;
   model?: string;
+  /** Reasoning effort for every Codex run. Defaults to high, whatever the user's Codex config says. */
   effort?: string;
   /** Keep the temporary checkout for inspection. */
   keep?: boolean;
-  onProgress?: (message: string) => void;
+  /** Progress messages. transient ones (the command the agent is running) are only worth showing live. */
+  onProgress?: (message: string, transient?: boolean) => void;
 }
 
 /**
@@ -37,29 +47,45 @@ function fingerprint(dir: string, f: ModelFinding): string {
 }
 
 /**
- * Only bugs and likely risks worth fixing get their own comment. Everything
- * else is either a one-line decision in the summary or collapsed. Tuned on
- * eval data: rare risks and "decide" risks were rarely fixed by real teams.
+ * The verifier's recommendation decides where a finding shows up: fix gets its
+ * own comment, decide becomes a line in the summary, leave is collapsed.
+ * (An earlier rule also demanded common or plausible likelihood for risks. In
+ * the eval it threw away rare problems with one-line fixes that teams fixed.)
  */
 export function tierOf(f: ModelFinding): Tier {
-  if (f.class === "hardening") return "hardening";
-  if (f.class === "bug") return "post";
-  if (f.recommendation === "fix" && (f.likelihood === "common" || f.likelihood === "plausible")) return "post";
-  return "decision";
+  if (f.recommendation === "fix") return "post";
+  if (f.recommendation === "decide") return "decision";
+  return "hardening";
 }
 
-/** Red if a bug must be fixed, yellow if anything is posted or needs a decision, green otherwise. */
+/** Red if a major bug must be fixed, yellow if anything else is posted or needs a decision, green otherwise. */
 export function mergeLight(findings: Finding[]): Light {
-  if (findings.some((f) => f.class === "bug" && f.recommendation === "fix")) return "red";
-  if (findings.some((f) => f.tier !== "hardening" && f.recommendation !== "leave")) return "yellow";
+  if (findings.some((f) => f.class === "bug" && f.severity !== "minor" && f.recommendation === "fix")) return "red";
+  if (findings.some((f) => f.tier !== "hardening")) return "yellow";
   return "green";
+}
+
+/** Tests and docs aren't swept: missing tests are never reported, and docs rarely hold real problems. */
+const SKIP_SWEEP = /(^|\/)(test|tests|__tests__|e2e|docs?)\/|\.(spec|test)\.[cm]?[jt]sx?$|\.(md|mdx|txt)$/i;
+const SWEEP_CHUNK = 12;
+const SWEEP_MAX_RUNS = 3;
+
+function normalizePath(p: string): string {
+  return p.replace(/^\.\//, "").replace(/^\/+/, "");
 }
 
 const ORDER = { bug: 0, risk: 1, hardening: 2 } as const;
 
+/**
+ * High, not the Codex default. In the eval, gpt-6.1-sol (whose own default is
+ * low) found 41 of 51 fixed problems at high, 32 at medium and 29 at low.
+ */
+export const DEFAULT_EFFORT = "high";
+
 export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): Promise<Review> {
   const started = Date.now();
   const progress = opts.onProgress ?? (() => {});
+  const effort = opts.effort ?? DEFAULT_EFFORT;
 
   progress(`Reading ${ref.owner}/${ref.repo}#${ref.number}`);
   const pr = await fetchPullRequest(ref);
@@ -90,7 +116,7 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
           prompt: buildHunterPrompt(input, focus),
           schema: candidateSchema,
           model: opts.model,
-          effort: opts.effort,
+          effort,
           logFile: log(`hunt-${focus}`),
         });
         done++;
@@ -98,13 +124,45 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
         return { focus, candidates: (result.output as { candidates: Candidate[] }).candidates, model: result.model };
       }),
     );
-    const failed = focuses.filter((_, i) => hunts[i]!.status === "rejected");
+    const failed: string[] = focuses.filter((_, i) => hunts[i]!.status === "rejected");
     if (failed.length === focuses.length) {
       throw (hunts[0] as PromiseRejectedResult).reason;
     }
-    const found = hunts.flatMap((h) =>
-      h.status === "fulfilled" ? h.value.candidates.map((c) => ({ ...c, focus: h.value.focus })) : [],
+    const found: (Candidate & { focus: string })[] = hunts.flatMap((h) =>
+      h.status === "fulfilled" ? h.value.candidates.map((c) => ({ ...c, focus: h.value.focus as string })) : [],
     );
+
+    // Step 1b: sweep changed files no hunter reported anything in.
+    const covered = new Set(found.map((c) => normalizePath(c.file)));
+    const uncovered = ws.changedFiles
+      .filter((f) => f.added > 0 && !covered.has(f.path) && !SKIP_SWEEP.test(f.path))
+      .sort((a, b) => b.added - a.added)
+      .slice(0, SWEEP_CHUNK * SWEEP_MAX_RUNS)
+      .map((f) => f.path);
+    if (uncovered.length) {
+      const chunks: string[][] = [];
+      for (let i = 0; i < uncovered.length; i += SWEEP_CHUNK) chunks.push(uncovered.slice(i, i + SWEEP_CHUNK));
+      progress(`Sweeping ${uncovered.length} file${uncovered.length === 1 ? "" : "s"} the hunters didn't mention`);
+      const sweeps = await Promise.allSettled(
+        chunks.map((files, i) =>
+          runCodex({
+            cwd: ws.dir,
+            prompt: buildSweepPrompt(input, files),
+            schema: candidateSchema,
+            model: opts.model,
+            effort,
+            logFile: log(`sweep-${i + 1}`),
+          }),
+        ),
+      );
+      sweeps.forEach((s, i) => {
+        if (s.status === "fulfilled") {
+          for (const c of (s.value.output as { candidates: Candidate[] }).candidates) found.push({ ...c, focus: "sweep" });
+        } else {
+          failed.push(`sweep-${i + 1}`);
+        }
+      });
+    }
 
     // Step 2: the verifier tries to disprove each candidate and sorts the rest.
     progress(`Checking ${found.length} candidate${found.length === 1 ? "" : "s"}`);
@@ -113,9 +171,9 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
       prompt: buildVerifierPrompt(input, found),
       schema: reviewSchema,
       model: opts.model,
-      effort: opts.effort,
+      effort,
       logFile: log("verify"),
-      onCommand: (cmd) => progress(`Checking ${found.length} candidates: ${cmd.replace(/\s+/g, " ").slice(0, 80)}`),
+      onCommand: (cmd) => progress(`Checking ${found.length} candidates: ${cmd.replace(/\s+/g, " ").slice(0, 80)}`, true),
     });
 
     const model = verdict.output as ModelReview;
@@ -134,7 +192,7 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
         base_sha: ws.mergeBase,
         head_sha: ws.headSha,
       },
-      provider: { name: "codex", model: verdict.model },
+      provider: { name: "codex", model: verdict.model, effort },
       light: mergeLight(findings),
       summary: model.summary,
       findings,
