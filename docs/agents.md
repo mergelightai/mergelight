@@ -95,7 +95,7 @@ It also says whether the review is up to date with the latest commit, whether a 
 A finding with an inline comment gets a reply in its thread. The rest share one comment on the pull request.
 
 - **`fixed`** only works once something was pushed since the review. The thread stays open until the next review has checked the code. If the finding is gone it closes as usual. If the review still finds it, the finding comes back as `still_found`, because a mark is a claim, not proof.
-- **`wont_fix`** resolves the thread and hands your reason to the next review. It won't raise the finding again, and moves it to "The team decided not to fix" in the summary, unless it's a major bug that still stands, the reason is wrong on the facts, or the code got worse.
+- **`wont_fix`** resolves the thread and hands your reason to the next review. It won't raise the finding again, and moves it to "Handled" in the summary, unless it's a major bug that still stands, the reason is wrong on the facts, or the code got worse.
 
 A mark never changes the check. Only the next review does, so no agent can talk a 🔴 check green: a major bug stays red until it's fixed or the verifier agrees it can't happen.
 
