@@ -66,6 +66,7 @@ export default function Setup() {
   const [pr, setPr] = useState<SetupPr | null>(null);
   const [status, setStatus] = useState<CheckStatus | null>(null);
   const [hasLogin, setHasLogin] = useState(false);
+  const [merged, setMerged] = useState(false);
   const wide = useWide();
 
   const previous = useRef(view);
@@ -118,6 +119,7 @@ export default function Setup() {
     setPr(null);
     setStatus(null);
     setHasLogin(false);
+    setMerged(false);
     setFileOpen(false);
     setAddFailed(null);
     setView('add');
@@ -167,15 +169,18 @@ export default function Setup() {
     });
   }, [view, client, repo, branch, afterAdding]);
 
-  // Following the first review once the pull request exists.
+  // Following the first review and the merge once the pull request exists. A failed read just waits for the next one.
   useEffect(() => {
     if ((view !== 'connect' && view !== 'live') || !client || !repo) return;
     return poll(async () => {
-      const [check, login] = await Promise.all([pr ? client.checkStatus(repo, pr.headSha) : null, client.hasLogin(repo)]);
-      setStatus(check);
+      const check = pr ? await client.checkStatus(repo, pr.headSha).catch(() => null) : null;
+      const login = view === 'connect' || !check ? await client.hasLogin(repo) : true;
+      const done = view === 'live' && pr ? await client.isMerged(repo, pr.number).catch(() => false) : false;
+      if (check) setStatus(check);
       setHasLogin(login);
+      setMerged(done);
       if (view === 'connect' && (login || isReviewing(check))) setView('live');
-      return view === 'live' && isDone(check);
+      return view === 'live' && (done || !pr);
     });
   }, [view, client, repo, pr]);
 
@@ -184,6 +189,7 @@ export default function Setup() {
     setDetails(null);
     setPr(null);
     setStatus(null);
+    setMerged(false);
     setView('repo');
   };
 
@@ -201,7 +207,8 @@ export default function Setup() {
           <img src="/logo.png" alt="" width={24} height={24} className="size-6 rounded-md" />
           Mergelight
         </a>
-        <Rail at={RAIL[view]} />
+        {/* The orb at the end only lights up once reviews are really on. */}
+        <Rail at={view === 'live' && pr && !merged ? 3 : RAIL[view]} />
       </header>
 
       <main className="flex flex-1 justify-center px-4 pb-16 pt-[6vh] sm:pt-[9vh]">
@@ -215,7 +222,7 @@ export default function Setup() {
               )}
               {view === 'finish' && repo && <FinishStep repo={repo} branch={branch} fileUrl={fileUrl} pr={pr} onBack={back.finish!} />}
               {view === 'connect' && repo && <ConnectStep repo={repo} pr={pr} status={status} onBack={back.connect!} onSkip={() => setView('live')} />}
-              {view === 'live' && repo && <LiveStep repo={repo} pr={pr} status={status} hasLogin={hasLogin} onAnother={anotherRepo} />}
+              {view === 'live' && repo && <LiveStep repo={repo} pr={pr} status={status} hasLogin={hasLogin} merged={merged} onAnother={anotherRepo} />}
             </Stage>
             <p className="mt-6 flex items-center justify-center gap-1.5 text-center text-[13px] text-faint">
               <LockIcon className="size-3.5 shrink-0" />
@@ -939,30 +946,78 @@ function ConnectStep({ repo, pr, status, onBack, onSkip }: { repo: Repo; pr: Set
   );
 }
 
-function LiveStep({ repo, pr, status, hasLogin, onAnother }: { repo: Repo; pr: SetupPr | null; status: CheckStatus | null; hasLogin: boolean; onAnother: () => void }) {
-  const name = repo.fullName.split('/')[1]!;
-  const done = isDone(status);
-  const tone = !done ? 'lilac' : status?.conclusion === 'success' ? 'mint' : status?.conclusion === 'failure' ? 'bug' : 'risk';
+/** One point on the way to reviews being on, joined to the next by a thread like the rail up top. */
+function Milestone({ state, title, last = false, children }: { state: 'done' | 'now' | 'next'; title: ReactNode; last?: boolean; children: ReactNode }) {
   return (
-    <div className="py-1 text-center">
-      <motion.div initial={{ scale: 0.94, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={SPRING} className="mx-auto w-fit">
-        <img src="/logo-animated.svg" alt="" width={72} height={72} className="size-[72px] rounded-[18px] shadow-[0_0_0_1px_rgb(255_255_255/0.08),0_14px_40px_-12px_rgb(0_0_0/0.8)]" />
-      </motion.div>
-      <h1 className="mt-4 text-[28px] font-semibold leading-[1.1] tracking-[-0.028em]">Mergelight is on</h1>
-      <p className="mx-auto mt-2 max-w-[330px] text-[15px] leading-relaxed text-muted [text-wrap:pretty]">
-        {pr ? `Merge the pull request, and it reviews new PRs on ${name}.` : `It reviews the next pull request on ${name}.`}
-      </p>
-      {pr && (
-        <a href={pr.url} target="_blank" rel="noreferrer" className={`${WELL} group mt-6 flex items-center justify-between gap-3 px-4 py-3.5 text-left transition-colors hover:bg-white/[0.05]`}>
-          <Pulse tone={tone} still={done}>{done ? plainTitle(status) : status ? 'Reviewing your pull request' : hasLogin ? 'Starting the review' : 'Waiting for the review to start'}</Pulse>
-          <span className="flex shrink-0 items-center gap-1 text-[13px] text-faint transition-colors group-hover:text-muted">
-            #{pr.number} <External />
+    <li aria-current={state === 'now' ? 'step' : undefined} className={`relative flex gap-3.5 ${last ? '' : 'pb-5'}`}>
+      {!last && <span aria-hidden="true" className={`absolute bottom-0 left-[10.5px] top-[26px] w-px ${state === 'done' ? 'bg-lilac/50' : 'bg-white/10'}`} />}
+      <span className="grid size-[22px] shrink-0 place-items-center">
+        {state === 'done' && (
+          <span className="grid size-[22px] place-items-center rounded-full bg-lilac/15 text-lilac">
+            <Check className="size-3.5" />
           </span>
-        </a>
-      )}
-      <button type="button" onClick={onAnother} className={`${BUTTON} mt-3 text-fg shadow-[inset_0_0_0_1px_rgb(255_255_255/0.12)] hover:bg-white/[0.05]`}>
-        Set up another repo
-      </button>
+        )}
+        {state === 'now' && (
+          <span className="relative flex size-2.5">
+            <span className="absolute inset-0 animate-ping rounded-full bg-lilac opacity-60 motion-reduce:hidden" />
+            <span className="relative size-2.5 rounded-full bg-lilac" />
+          </span>
+        )}
+        {state === 'next' && <span className="size-2 rounded-full bg-white/20" />}
+      </span>
+      <div className="min-w-0 flex-1 pt-px">
+        <p className={`text-[14.5px] font-medium leading-[1.4] ${state === 'next' ? 'text-muted' : 'text-fg'}`}>{title}</p>
+        <p className="mt-0.5 text-[13.5px] leading-relaxed text-muted [text-wrap:pretty]">{children}</p>
+      </div>
+    </li>
+  );
+}
+
+function LiveStep({ repo, pr, status, hasLogin, merged, onAnother }: { repo: Repo; pr: SetupPr | null; status: CheckStatus | null; hasLogin: boolean; merged: boolean; onAnother: () => void }) {
+  const name = repo.fullName.split('/')[1]!;
+  const another = (
+    <button type="button" onClick={onAnother} className={`${BUTTON} mt-3 text-fg shadow-[inset_0_0_0_1px_rgb(255_255_255/0.12)] hover:bg-white/[0.05]`}>
+      Set up another repo
+    </button>
+  );
+
+  // Reviews are really on: the file is on the branch, so there's nothing left to do.
+  if (!pr || merged) {
+    return (
+      <div className="py-1 text-center">
+        <motion.div initial={{ scale: 0.94, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={SPRING} className="mx-auto w-fit">
+          <img src="/logo-animated.svg" alt="" width={72} height={72} className="size-[72px] rounded-[18px] shadow-[0_0_0_1px_rgb(255_255_255/0.08),0_14px_40px_-12px_rgb(0_0_0/0.8)]" />
+        </motion.div>
+        <h1 className="mt-4 text-[28px] font-semibold leading-[1.1] tracking-[-0.028em]">Mergelight is on</h1>
+        <p className="mx-auto mt-2 max-w-[340px] text-[15px] leading-relaxed text-muted [text-wrap:pretty]">
+          New PRs on {name} get reviewed by themselves, and the results show up on the PR. You can close this page.
+        </p>
+        <div className="mt-6">{another}</div>
+      </div>
+    );
+  }
+
+  const done = isDone(status);
+  const reviewTitle = done ? 'First review done' : status ? 'First review running' : hasLogin ? 'Starting the first review' : 'Waiting for the first review to start';
+  return (
+    <div>
+      <Heading title="Your PR is open" sub={`Merge it to turn on reviews for ${name}.`} />
+      <ol className="mt-6">
+        <Milestone state="done" title={`PR #${pr.number} opened`}>
+          It adds the one file Mergelight needs.
+        </Milestone>
+        <Milestone state={done ? 'done' : 'now'} title={reviewTitle}>
+          {done ? `${plainTitle(status)}. It reviewed this same PR, so you can see what a review looks like.` : "It's reviewing this same PR, so you can see what a review looks like. It usually takes 2 to 15 minutes."}
+        </Milestone>
+        <Milestone last state={done ? 'now' : 'next'} title="Merge the PR">
+          After that, new PRs on {name} get reviewed by themselves. You can merge any time.
+        </Milestone>
+      </ol>
+      <a href={pr.url} target="_blank" rel="noreferrer" className={`${PRIMARY} mt-6`}>
+        Open PR #{pr.number} <External className="size-4" />
+      </a>
+      {another}
+      <p className="mt-4 text-center text-[13px] leading-relaxed text-faint [text-wrap:pretty]">You can close this page. The review keeps running, and the result shows up on the PR.</p>
     </div>
   );
 }
