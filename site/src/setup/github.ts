@@ -45,9 +45,19 @@ export interface RepoDetails {
   /** Long-lived branches, whose PRs usually don't need a review. */
   skip: string[];
   hasLogin: boolean;
+  /** An API key needs no refreshing, so such a repo doesn't need the refresh workflow. */
+  hasApiKey: boolean;
   /** What's on the base branch already, if anything. */
   installed: Installed | null;
+  /** The refresh workflow on the base branch, if it's there. */
+  refresh: string | null;
   release: Release;
+}
+
+/** A workflow file the setup pull request should end up with. */
+export interface WorkflowFile {
+  name: string;
+  content: string;
 }
 
 const ACTION_USE = /mergelightai\/mergelight@([^\s#]+)(?:[ \t]*#[ \t]*(\S+))?/;
@@ -89,7 +99,7 @@ export interface GitHubClient {
    * Opens a pull request that adds or updates the workflow. A setup pull request that's open already gets
    * brought up to date instead of a second one. Null if the branch already has exactly this file.
    */
-  proposeWorkflow(repo: Repo, branch: string, content: string, release: Release): Promise<SetupPr | null>;
+  proposeWorkflows(repo: Repo, branch: string, files: WorkflowFile[], release: Release): Promise<SetupPr | null>;
   /** The open pull request that adds the workflow, once someone has made it. */
   findSetupPr(repo: Repo): Promise<SetupPr | null>;
   hasWorkflow(repo: Repo, branch: string): Promise<boolean>;
@@ -99,10 +109,12 @@ export interface GitHubClient {
   isMerged(repo: Repo, number: number): Promise<boolean>;
 }
 
-const WORKFLOW_PATH = '.github/workflows/mergelight.yml';
+const WORKFLOWS = '.github/workflows';
+const WORKFLOW_PATH = `${WORKFLOWS}/mergelight.yml`;
+export const REFRESH_FILE = 'mergelight-refresh.yml';
 const SETUP_TITLE = 'Add Mergelight code review';
 const SETUP_BODY = [
-  'Adds the one file [Mergelight](https://mergelight.dev) needs to review your pull requests.',
+  'Adds what [Mergelight](https://mergelight.dev) needs to review your pull requests: the review itself, and a small job that keeps a ChatGPT login fresh.',
   '',
   "It runs in your own GitHub Actions, on your AI plan. This pull request reviews itself, so you can see what you'll get. Merge it to keep reviews on.",
 ].join('\n');
@@ -190,9 +202,9 @@ export function realClient(token: string): GitHubClient {
   };
   const get = <T,>(path: string) => call<T>('GET', path);
   /** The workflow file on a branch, if it's there. Only a missing file counts as missing: any other failure stops whoever asked. */
-  const workflowOn = async (repo: Repo, branch: string): Promise<{ sha: string; content: string } | null> => {
+  const workflowOn = async (repo: Repo, branch: string, name = 'mergelight.yml'): Promise<{ sha: string; content: string } | null> => {
     try {
-      const file = await get<{ sha: string; content: string }>(`/repos/${repo.fullName}/contents/${WORKFLOW_PATH}?ref=${encodeURIComponent(branch)}`);
+      const file = await get<{ sha: string; content: string }>(`/repos/${repo.fullName}/contents/${WORKFLOWS}/${name}?ref=${encodeURIComponent(branch)}`);
       return { sha: file.sha, content: fromBase64(file.content) };
     } catch (err) {
       if (err instanceof GitHubError && err.status === 404) return null;
@@ -219,9 +231,13 @@ export function realClient(token: string): GitHubClient {
     const pull = await openSetupPull(repo);
     return pull && { number: pull.number, url: pull.html_url, headSha: pull.head.sha };
   };
-  const hasLogin = async (repo: Repo) => {
+  const secretNames = async (repo: Repo) => {
     const { secrets } = await get<{ secrets: { name: string }[] }>(`/repos/${repo.fullName}/actions/secrets?per_page=100`).catch(() => ({ secrets: [] as { name: string }[] }));
-    return secrets.some((s) => s.name === 'CODEX_AUTH_JSON' || s.name === 'OPENAI_API_KEY');
+    return secrets.map((s) => s.name);
+  };
+  const hasLogin = async (repo: Repo) => {
+    const names = await secretNames(repo);
+    return names.includes('CODEX_AUTH_JSON') || names.includes('OPENAI_API_KEY');
   };
 
   return {
@@ -238,47 +254,62 @@ export function realClient(token: string): GitHubClient {
       return lists.flat().sort((a, b) => a.fullName.localeCompare(b.fullName));
     },
     details: async (repo) => {
-      const [branches, pulls, login, release] = await Promise.all([
+      const [branches, pulls, secrets, release] = await Promise.all([
         get<{ name: string }[]>(`/repos/${repo.fullName}/branches?per_page=100`),
         get<{ base: { ref: string }; head: { ref: string } }[]>(`/repos/${repo.fullName}/pulls?state=all&per_page=50`).catch(() => []),
-        hasLogin(repo),
+        secretNames(repo),
         latestRelease(),
       ]);
       const names = branches.map((b) => b.name);
       const base = pickBase(pulls.map((p) => ({ base: p.base.ref, head: p.head.ref })), repo.defaultBranch);
-      const onBase = await workflowOn(repo, base);
+      const [onBase, refresh] = await Promise.all([workflowOn(repo, base), workflowOn(repo, base, REFRESH_FILE)]);
       return {
         branches: names.includes(base) ? names : [base, ...names],
         base,
         skip: pickSkip(names),
-        hasLogin: login,
+        hasLogin: secrets.includes('CODEX_AUTH_JSON') || secrets.includes('OPENAI_API_KEY'),
+        hasApiKey: secrets.includes('OPENAI_API_KEY'),
         installed: onBase && readInstalled(onBase.content),
+        refresh: refresh?.content ?? null,
         release,
       };
     },
-    proposeWorkflow: async (repo, branch, content, release) => {
+    proposeWorkflows: async (repo, branch, files, release) => {
       const r = `/repos/${repo.fullName}`;
-      const put = async (head: string, message: string, sha?: string) =>
-        call<{ commit: { sha: string } }>('PUT', `${r}/contents/${WORKFLOW_PATH}`, { message, content: toBase64(content), branch: head, ...(sha ? { sha } : {}) });
+      /** Writes the files that differ on this branch. Returns the last commit, if anything changed. */
+      const write = async (head: string, message: string): Promise<string | null> => {
+        let commit: string | null = null;
+        for (const file of files) {
+          const current = await workflowOn(repo, head, file.name);
+          if (current?.content === file.content) continue;
+          const done = await call<{ commit: { sha: string } }>('PUT', `${r}/contents/${WORKFLOWS}/${file.name}`, {
+            message,
+            content: toBase64(file.content),
+            branch: head,
+            ...(current ? { sha: current.sha } : {}),
+          });
+          commit = done.commit.sha;
+        }
+        return commit;
+      };
 
       // One that's open already gets brought up to date, however old the version it was opened with.
       const open = await openSetupPull(repo);
       if (open) {
-        const onPull = await workflowOn(repo, open.head.ref);
-        if (onPull?.content === content) return { number: open.number, url: open.html_url, headSha: open.head.sha };
-        const updated = await put(open.head.ref, updateTitle(release), onPull?.sha);
-        return { number: open.number, url: open.html_url, headSha: updated.commit.sha };
+        const commit = await write(open.head.ref, updateTitle(release));
+        return { number: open.number, url: open.html_url, headSha: commit ?? open.head.sha };
       }
 
-      const current = await workflowOn(repo, branch);
-      if (current?.content === content) return null;
-      const title = current ? updateTitle(release) : SETUP_TITLE;
+      const onBranch = await Promise.all(files.map((f) => workflowOn(repo, branch, f.name)));
+      if (onBranch.every((current, i) => current?.content === files[i]!.content)) return null;
+      const updating = Boolean(onBranch[0]);
+      const title = updating ? updateTitle(release) : SETUP_TITLE;
       const base = await get<{ object: { sha: string } }>(`${r}/git/ref/heads/${branch.split('/').map(encodeURIComponent).join('/')}`);
       const head = `mergelight-setup-${Date.now().toString(36)}`;
       await call('POST', `${r}/git/refs`, { ref: `refs/heads/${head}`, sha: base.object.sha });
       try {
-        await put(head, title, current?.sha);
-        const pull = await call<{ number: number; html_url: string; head: { sha: string } }>('POST', `${r}/pulls`, { title, head, base: branch, body: current ? updateBody(release) : SETUP_BODY });
+        await write(head, title);
+        const pull = await call<{ number: number; html_url: string; head: { sha: string } }>('POST', `${r}/pulls`, { title, head, base: branch, body: updating ? updateBody(release) : SETUP_BODY });
         return { number: pull.number, url: pull.html_url, headSha: pull.head.sha };
       } catch (err) {
         // Don't leave an empty branch behind in their repo.
@@ -321,20 +352,22 @@ export function mockClient(): GitHubClient {
     details: (r) =>
       later(
         r.fullName === 'acme/docs'
-          ? { branches: ['main'], base: 'main', skip: ['main'], hasLogin: false, installed: null, release }
+          ? { branches: ['main'], base: 'main', skip: ['main'], hasLogin: false, hasApiKey: false, installed: null, refresh: null, release }
           : r.fullName === 'acme/site'
-          ? { branches: ['main', 'feat/new-landing'], base: 'main', skip: ['main'], hasLogin: false, installed: null, release }
+          ? { branches: ['main', 'feat/new-landing'], base: 'main', skip: ['main'], hasLogin: false, hasApiKey: false, installed: null, refresh: null, release }
           : {
               branches: ['main', 'staging', 'development', 'feat/billing-export', 'fix/invoice-rounding'],
               base: 'staging',
               skip: ['main', 'staging', 'development'],
               hasLogin: r.fullName === 'acme/platform' || r.fullName === 'acme/old' || r.fullName === 'acme/behind',
+              hasApiKey: false,
               installed: installedFor(r.fullName),
+              refresh: null,
               release,
             },
       ),
     // acme/site plays an install that hasn't approved the access, to show the way around it.
-    proposeWorkflow: (r) => (r.fullName === 'acme/site' ? Promise.reject(new GitHubError(403)) : new Promise((done) => setTimeout(() => done({ number: 128, url: 'https://github.com/acme/api/pull/128', headSha: 'abc' }), 900))),
+    proposeWorkflows: (r) => (r.fullName === 'acme/site' ? Promise.reject(new GitHubError(403)) : new Promise((done) => setTimeout(() => done({ number: 128, url: 'https://github.com/acme/api/pull/128', headSha: 'abc' }), 900))),
     findSetupPr: () => later(++finds > 1 ? { number: 128, url: 'https://github.com/acme/api/pull/128', headSha: 'abc' } : null),
     hasWorkflow: () => later(false),
     hasLogin: (r) => later(r.fullName === 'acme/platform'),

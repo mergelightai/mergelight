@@ -3,9 +3,10 @@ import * as Select from '@radix-ui/react-select';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type Ref } from 'react';
 import workflowFile from '../../../examples/mergelight.yml?raw';
+import refreshFile from '../../../examples/mergelight-refresh.yml?raw';
 import Ambient from '../sections/Ambient';
 import { Check, GitHubIcon, SURFACE, WELL } from '../ui';
-import { cleanUrl, finishSignIn, GitHubError, INSTALL_URL, mockClient, pinned, realClient, signInUrl, wakeTokenServer, type CheckStatus, type GitHubClient, type Repo, type RepoDetails, type SetupPr } from './github';
+import { cleanUrl, finishSignIn, GitHubError, INSTALL_URL, mockClient, pinned, realClient, REFRESH_FILE, signInUrl, wakeTokenServer, type CheckStatus, type GitHubClient, type Repo, type RepoDetails, type SetupPr, type WorkflowFile } from './github';
 
 const CHATGPT_SECURITY = 'https://chatgpt.com/settings/security';
 const TYPES_MARKER = 'types: [opened, synchronize, reopened, ready_for_review]';
@@ -139,6 +140,17 @@ export default function Setup() {
     if (!details) return workflowFile;
     return pinned(details.installed && updating ? details.installed.content : workflowFor(scope, branch, details.skip), details.release);
   }, [scope, branch, details, updating]);
+  /**
+   * The review, and on a private repo the job that keeps a ChatGPT login fresh. Without that job reviews refresh the
+   * login themselves, and two at once can invalidate it. An API key needs no refreshing, and public repos can't use ChatGPT.
+   */
+  const files = useMemo<WorkflowFile[]>(() => {
+    const list = [{ name: 'mergelight.yml', content: workflow }];
+    if (!details || !repo) return list;
+    if (details.refresh) list.push({ name: REFRESH_FILE, content: pinned(details.refresh, details.release) });
+    else if (repo.isPrivate && !details.hasApiKey) list.push({ name: REFRESH_FILE, content: pinned(refreshFile, details.release) });
+    return list;
+  }, [workflow, details, repo]);
   const fileUrl = repo ? newFileUrl(repo.fullName, branch, workflow) : '#';
   const afterAdding = useCallback(() => setView(hasLogin ? 'live' : 'connect'), [hasLogin]);
 
@@ -149,7 +161,7 @@ export default function Setup() {
     setAddFailed(null);
     setFileOpen(false);
     try {
-      setPr(await client.proposeWorkflow(repo, branch, workflow, details.release));
+      setPr(await client.proposeWorkflows(repo, branch, files, details.release));
       afterAdding();
     } catch (err) {
       setAddFailed(err instanceof GitHubError && (err.status === 403 || err.status === 404) ? 'refused' : 'other');
@@ -225,7 +237,7 @@ export default function Setup() {
               {view === 'welcome' && <Welcome signingIn={signingIn} failed={signInFailed} installed={params.has('installation_id')} />}
               {view === 'repo' && <RepoStep repos={repos} onChoose={choose} failed={signInFailed} />}
               {view === 'add' && repo && (
-                <AddStep repo={repo} details={details} branch={branch} setBranch={setBranch} scope={scope} setScope={setScope} fileOpen={fileOpen} onToggleFile={() => setFileOpen((v) => !v)} adding={adding} failed={addFailed} detailsFailed={detailsFailed} onRetry={() => choose(repo)} updating={updating} onAdd={() => void addToRepo()} fileUrl={fileUrl} onBack={adding ? () => undefined : back.add!} onByHand={() => { setFileOpen(false); setView('finish'); }} onContinue={afterAdding} />
+                <AddStep repo={repo} details={details} fileCount={files.length} branch={branch} setBranch={setBranch} scope={scope} setScope={setScope} fileOpen={fileOpen} onToggleFile={() => setFileOpen((v) => !v)} adding={adding} failed={addFailed} detailsFailed={detailsFailed} onRetry={() => choose(repo)} updating={updating} onAdd={() => void addToRepo()} fileUrl={fileUrl} onBack={adding ? () => undefined : back.add!} onByHand={() => { setFileOpen(false); setView('finish'); }} onContinue={afterAdding} />
               )}
               {view === 'finish' && repo && <FinishStep repo={repo} branch={branch} fileUrl={fileUrl} pr={pr} onBack={back.finish!} />}
               {view === 'connect' && repo && <ConnectStep repo={repo} pr={pr} status={status} onBack={back.connect!} onSkip={() => setView('live')} />}
@@ -237,10 +249,10 @@ export default function Setup() {
             </p>
           </motion.div>
           <AnimatePresence mode="popLayout" initial={false}>
-            {wide && view === 'add' && fileOpen && <FileSide key="file" workflow={workflow} version={details?.release.tag} onClose={() => setFileOpen(false)} />}
+            {wide && view === 'add' && fileOpen && <FileSide key="file" files={files} version={details?.release.tag} onClose={() => setFileOpen(false)} />}
           </AnimatePresence>
         </div>
-        {!wide && <FileSheet open={view === 'add' && fileOpen} workflow={workflow} version={details?.release.tag} onClose={() => setFileOpen(false)} />}
+        {!wide && <FileSheet open={view === 'add' && fileOpen} files={files} version={details?.release.tag} onClose={() => setFileOpen(false)} />}
       </main>
     </div>
   );
@@ -570,6 +582,7 @@ function Choices<T extends string>({ label, options, value, onChange }: { label:
 function AddStep(props: {
   repo: Repo;
   details: RepoDetails | null;
+  fileCount: number;
   branch: string;
   setBranch: (b: string) => void;
   scope: Scope;
@@ -587,7 +600,7 @@ function AddStep(props: {
   onByHand: () => void;
   onContinue: () => void;
 }) {
-  const { repo, details, branch, setBranch, scope, setScope, fileOpen, onToggleFile, adding, failed, detailsFailed, onRetry, updating, onAdd, fileUrl, onBack, onByHand, onContinue } = props;
+  const { repo, details, fileCount, branch, setBranch, scope, setScope, fileOpen, onToggleFile, adding, failed, detailsFailed, onRetry, updating, onAdd, fileUrl, onBack, onByHand, onContinue } = props;
   const name = repo.fullName.split('/')[1]!;
 
   if (detailsFailed) {
@@ -624,7 +637,7 @@ function AddStep(props: {
                 onClick={onToggleFile}
                 className={`h-8 shrink-0 rounded-lg px-2.5 text-[13px] font-medium text-fg outline-none transition-[background-color,transform] duration-100 hover:bg-white/[0.11] focus-visible:ring-2 focus-visible:ring-lilac active:scale-[0.97] ${fileOpen ? 'bg-white/[0.11]' : 'bg-white/[0.07]'}`}
               >
-                {fileOpen ? 'Hide file' : 'View file'}
+                {fileOpen ? (fileCount > 1 ? 'Hide files' : 'Hide file') : fileCount > 1 ? 'View files' : 'View file'}
               </button>
             </span>
           </Fact>
@@ -708,7 +721,7 @@ function AddStep(props: {
                   {pickFileBranch ? (
                     <span className="flex flex-wrap items-center gap-x-2 gap-y-1">Opens a PR into {picker}</span>
                   ) : (
-                    <span className="[text-wrap:pretty]">Needs one small file to run. We open a PR with it, and you decide whether to merge.</span>
+                    <span className="[text-wrap:pretty]">{fileCount > 1 ? 'Needs two small files to run. We open a PR with them, and you decide whether to merge.' : 'Needs one small file to run. We open a PR with it, and you decide whether to merge.'}</span>
                   )}
                   <button
                     type="button"
@@ -716,12 +729,12 @@ function AddStep(props: {
                     onClick={onToggleFile}
                     className={`h-8 shrink-0 rounded-lg px-2.5 text-[13px] font-medium text-fg outline-none transition-[background-color,transform] duration-100 hover:bg-white/[0.11] focus-visible:ring-2 focus-visible:ring-lilac active:scale-[0.97] ${fileOpen ? 'bg-white/[0.11]' : 'bg-white/[0.07]'}`}
                   >
-                    {fileOpen ? 'Hide file' : 'View file'}
+                    {fileOpen ? (fileCount > 1 ? 'Hide files' : 'Hide file') : fileCount > 1 ? 'View files' : 'View file'}
                   </button>
                 </span>
                 {pickFileBranch && (
                   <span className="mt-1 block [text-wrap:pretty]">
-                    It adds one small file needed to run, and you decide whether to merge.{canChoose && ' Merge it into other branches to review PRs there.'}
+                    {fileCount > 1 ? 'It adds two small files needed to run' : 'It adds one small file needed to run'}, and you decide whether to merge.{canChoose && ` Merge ${fileCount > 1 ? 'them' : 'it'} into other branches to review PRs there.`}
                   </span>
                 )}
               </Fact>
@@ -819,29 +832,36 @@ function YamlLine({ text }: { text: string }) {
 }
 
 /** The exact file GitHub will open with, and why it's there. */
-function FileView({ workflow, version, onClose }: { workflow: string; version?: string; onClose: () => void }) {
-  const lines = workflow.trimEnd().split('\n');
+/** What each workflow is for, shown above its lines. */
+const FILE_PURPOSE: Record<string, string> = {
+  'mergelight.yml': 'Runs the review on your pull requests.',
+  [REFRESH_FILE]: "Keeps a ChatGPT login from expiring. Scheduled jobs only run from your default branch, so it starts once it's merged there.",
+};
+
+/** The exact files the pull request will hold, and why they're there. */
+function FileView({ files, version, onClose }: { files: WorkflowFile[]; version?: string; onClose: () => void }) {
+  const all = files.flatMap((f) => f.content.trimEnd().split('\n'));
   // A line that wasn't there before lights up, so a choice on the card is visibly a change in the file.
-  const seen = useRef(new Set(lines));
+  const seen = useRef(new Set(all));
   useEffect(() => {
-    lines.forEach((l) => seen.current.add(l));
+    all.forEach((l) => seen.current.add(l));
   });
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex h-12 shrink-0 items-center justify-between gap-3 pl-5 pr-2.5 shadow-[inset_0_-1px_0_rgb(255_255_255/0.06)]">
         <p className="min-w-0 truncate font-mono text-[12.5px]">
           <span className="text-faint">.github/workflows/</span>
-          <span className="text-fg">mergelight.yml</span>
+          {files.length === 1 && <span className="text-fg">{files[0]!.name}</span>}
         </p>
-        <button type="button" onClick={onClose} aria-label="Close the file" className="grid size-8 shrink-0 place-items-center rounded-lg text-faint outline-none transition-[background-color,color,transform] duration-100 hover:bg-white/[0.06] hover:text-fg focus-visible:ring-2 focus-visible:ring-lilac active:scale-[0.94]">
+        <button type="button" onClick={onClose} aria-label="Close" className="grid size-8 shrink-0 place-items-center rounded-lg text-faint outline-none transition-[background-color,color,transform] duration-100 hover:bg-white/[0.06] hover:text-fg focus-visible:ring-2 focus-visible:ring-lilac active:scale-[0.94]">
           <svg viewBox="0 0 16 16" fill="none" aria-hidden="true" className="size-4">
             <path d="m4.5 4.5 7 7m0-7-7 7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
           </svg>
         </button>
       </div>
       <div className="shrink-0 px-5 py-4">
-        <p className="text-[14.5px] font-medium text-fg [text-wrap:balance]">This file is why your code and AI login never touch Mergelight</p>
-        <p className="mt-1 text-[13.5px] leading-relaxed text-muted [text-wrap:pretty]">Most review tools run on their own servers. Mergelight runs in your GitHub Actions instead, and GitHub needs this file in your repo to do that.</p>
+        <p className="text-[14.5px] font-medium text-fg [text-wrap:balance]">{files.length > 1 ? 'These files are' : 'This file is'} why your code and AI login never touch Mergelight</p>
+        <p className="mt-1 text-[13.5px] leading-relaxed text-muted [text-wrap:pretty]">Most review tools run on their own servers. Mergelight runs in your GitHub Actions instead, and GitHub needs {files.length > 1 ? 'these files' : 'this file'} in your repo to do that.</p>
         <ul className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5 text-[13px] text-muted">
           <li className="flex items-center gap-1.5"><Check className="size-3.5 text-lilac" /> Reads your code</li>
           <li className="flex items-center gap-1.5"><Check className="size-3.5 text-lilac" /> Posts reviews</li>
@@ -849,25 +869,33 @@ function FileView({ workflow, version, onClose }: { workflow: string; version?: 
           {version && <li className="flex items-center gap-1.5"><LockIcon className="size-3.5 text-lilac" /> Locked to {version}</li>}
         </ul>
       </div>
-      <div tabIndex={0} aria-label="The file's contents" className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-black/25 pb-7 pt-3 font-mono text-[12px] leading-[20px] outline-none shadow-[inset_0_1px_0_rgb(255_255_255/0.06)] [mask-image:linear-gradient(to_bottom,black_calc(100%-28px),transparent)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-lilac">
-        {lines.map((line, i) => {
-          const hang = (line.match(/^\s*/)![0].length + 2);
-          return (
-            <div key={`${i}:${line}`} className={`flex pr-4 ${seen.current.has(line) ? '' : 'setup-fresh'}`}>
-              <span aria-hidden="true" className="w-10 shrink-0 select-none pr-3 text-right tabular-nums text-faint/50">{i + 1}</span>
-              <code className="min-w-0 flex-1 whitespace-pre-wrap break-words" style={{ paddingLeft: `${hang}ch`, textIndent: `-${hang}ch` }}>
-                <YamlLine text={line} />
-              </code>
+      <div tabIndex={0} aria-label="The files' contents" className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-black/25 pb-7 font-mono text-[12px] leading-[20px] outline-none shadow-[inset_0_1px_0_rgb(255_255_255/0.06)] [mask-image:linear-gradient(to_bottom,black_calc(100%-28px),transparent)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-lilac">
+        {files.map((file) => (
+          <section key={file.name} className="pt-3">
+            <div className="mb-2 px-5 font-sans">
+              <p className="font-mono text-[12.5px] text-fg">{file.name}</p>
+              <p className="mt-0.5 text-[12.5px] leading-snug text-muted [text-wrap:pretty]">{FILE_PURPOSE[file.name]}</p>
             </div>
-          );
-        })}
+            {file.content.trimEnd().split('\n').map((line, i) => {
+              const hang = line.match(/^\s*/)![0].length + 2;
+              return (
+                <div key={`${i}:${line}`} className={`flex pr-4 ${seen.current.has(line) ? '' : 'setup-fresh'}`}>
+                  <span aria-hidden="true" className="w-10 shrink-0 select-none pr-3 text-right tabular-nums text-faint/50">{i + 1}</span>
+                  <code className="min-w-0 flex-1 whitespace-pre-wrap break-words" style={{ paddingLeft: `${hang}ch`, textIndent: `-${hang}ch` }}>
+                    <YamlLine text={line} />
+                  </code>
+                </div>
+              );
+            })}
+          </section>
+        ))}
       </div>
     </div>
   );
 }
 
 /** Beside the card when there's room. The card moves over to make space, and back when it closes. */
-function FileSide({ workflow, version, onClose, ref }: { workflow: string; version?: string; onClose: () => void; ref?: Ref<HTMLElement> }) {
+function FileSide({ files, version, onClose, ref }: { files: WorkflowFile[]; version?: string; onClose: () => void; ref?: Ref<HTMLElement> }) {
   const reduce = useReducedMotion();
   return (
     <motion.aside
@@ -879,13 +907,13 @@ function FileSide({ workflow, version, onClose, ref }: { workflow: string; versi
       transition={{ ...SPRING, opacity: { duration: 0.2 } }}
       className={`${SURFACE} ml-5 h-[min(720px,calc(100dvh-64px-9vh-40px))] w-[600px] shrink-0 overflow-hidden`}
     >
-      <FileView workflow={workflow} version={version} onClose={onClose} />
+      <FileView files={files} version={version} onClose={onClose} />
     </motion.aside>
   );
 }
 
 /** On a phone or tablet the same thing comes up as a sheet. */
-function FileSheet({ open, workflow, version, onClose }: { open: boolean; workflow: string; version?: string; onClose: () => void }) {
+function FileSheet({ open, files, version, onClose }: { open: boolean; files: WorkflowFile[]; version?: string; onClose: () => void }) {
   const reduce = useReducedMotion();
   const hidden = reduce ? { opacity: 0 } : { y: '100%' };
   return (
@@ -905,7 +933,7 @@ function FileSheet({ open, workflow, version, onClose }: { open: boolean; workfl
                 className="fixed inset-x-0 bottom-0 z-50 h-[88dvh] overflow-hidden rounded-t-[22px] bg-[linear-gradient(180deg,#1a1820_0%,#121116_100%)] pb-[env(safe-area-inset-bottom)] shadow-[inset_0_1px_0_rgb(255_255_255/0.08)] outline-none"
               >
                 <Dialog.Title className="sr-only">The workflow file</Dialog.Title>
-                <FileView workflow={workflow} version={version} onClose={onClose} />
+                <FileView files={files} version={version} onClose={onClose} />
               </motion.div>
             </Dialog.Content>
           </Dialog.Portal>
@@ -1076,7 +1104,7 @@ function LiveStep({ repo, pr, status, hasLogin, merged, updatedTo, onAnother }: 
       <Heading title="Your PR is open" sub={updatedTo ? `Merge it to update Mergelight on ${name}.` : `Merge it to turn on reviews for ${name}.`} />
       <ol className="mt-6">
         <Milestone state="done" title={`PR #${pr.number} opened`}>
-          {updatedTo ? `It moves the workflow to ${updatedTo}.` : 'It adds the one file Mergelight needs.'}
+          {updatedTo ? `It moves the workflow to ${updatedTo}.` : 'It adds what Mergelight needs to run.'}
         </Milestone>
         <Milestone state={done ? 'done' : 'now'} title={reviewTitle}>
           {done ? `${plainTitle(status)}. It reviewed this same PR, so you can see what a review looks like.` : "It's reviewing this same PR, so you can see what a review looks like. It usually takes 2 to 15 minutes."}
