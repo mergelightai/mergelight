@@ -3,8 +3,8 @@ services:
   - type: web
     name: mergelight-token
     runtime: node
-    region: frankfurt
-    plan: 0.5c-512mb
+    region: virginia
+    plan: free # Sleeps when idle. Move to a paid plan before customers depend on it.
     rootDir: packages/token-server
     buildCommand: npm install
     startCommand: node src/server.js

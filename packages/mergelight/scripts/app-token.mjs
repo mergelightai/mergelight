@@ -10,10 +10,11 @@ import { fileURLToPath } from "node:url";
 const AUDIENCE = "mergelight";
 const SETUP_HINT = "Posting as github-actions[bot].";
 
+// A sleeping server can take about a minute to wake up, so the timeout is generous.
 async function fetchWithRetry(fetchImpl, url, init, wait, attempts = 3) {
   for (let attempt = 1; ; attempt++) {
     try {
-      const res = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(20_000) });
+      const res = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(90_000) });
       if (res.status < 500 || attempt === attempts) return res;
     } catch (err) {
       if (attempt === attempts) throw err;
