@@ -136,7 +136,7 @@ async function main(): Promise<number> {
     await serve();
     return 0;
   }
-  if (!["review", "post", "approve"].includes(command) || !target) {
+  if (!["review", "post", "approve", "connect"].includes(command) || !target) {
     process.stderr.write(HELP);
     return 1;
   }
@@ -158,14 +158,19 @@ async function main(): Promise<number> {
   const ref = parsePrRef(target, values.repo ?? (await currentRepo()));
 
   if (command === "connect") {
-    const api = new GitHub(ref.owner, ref.repo, { log });
-    const { headSha } = await fetchPullRequest(ref);
-    if (values["no-save"]) {
-      await askForApp(api, ref.number, headSha);
-      log("Install the Mergelight AI app: without it there's nowhere to save the ChatGPT login.");
+    try {
+      const api = new GitHub(ref.owner, ref.repo, { log });
+      const { headSha } = await fetchPullRequest(ref);
+      if (values["no-save"]) {
+        await askForApp(api, ref.number, headSha);
+        log("Install the Mergelight AI app: without it there's nowhere to save the ChatGPT login.");
+        return 1;
+      }
+      return await connect(githubConnect(api, ref.number, headSha, log));
+    } catch (err) {
+      log(`mergelight: ${err instanceof Error ? err.message : String(err)}`);
       return 1;
     }
-    return connect(githubConnect(api, ref.number, headSha, log));
   }
 
   if (command === "approve") {

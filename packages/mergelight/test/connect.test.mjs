@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { connect, connectBody, connectFailedBody, installAppBody, parseDeviceLogin } from "../dist/connect.js";
 import { isPendingSummary, SUMMARY_MARKER } from "../dist/publish/markdown.js";
 
@@ -91,4 +96,24 @@ test("every comment is the summary, so the review replaces it", () => {
   assert.ok(isPendingSummary(connectBody(login)));
   assert.ok(isPendingSummary(installAppBody()));
   assert.ok(!isPendingSummary(connectFailedBody("x")), "a failure stays until the next push");
+});
+
+test("the CLI really runs connect, instead of printing its help", () => {
+  // A fake gh that fails: reaching it proves the command got past the CLI's own checks.
+  const bin = mkdtempSync(join(tmpdir(), "mergelight-fake-gh-"));
+  try {
+    writeFileSync(join(bin, "gh"), '#!/bin/sh\necho "fake gh was called" >&2\nexit 1\n');
+    chmodSync(join(bin, "gh"), 0o755);
+    const cli = join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "cli.js");
+    const r = spawnSync(process.execPath, [cli, "connect", "acme/widgets#1"], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+    });
+    assert.equal(r.status, 1);
+    assert.doesNotMatch(r.stderr, /Usage/, "printed help instead of running");
+    assert.match(r.stderr, /fake gh was called/);
+    assert.doesNotMatch(r.stderr, /Unhandled|at .*\.js:\d+/, "fails cleanly");
+  } finally {
+    rmSync(bin, { recursive: true, force: true });
+  }
 });
