@@ -535,7 +535,7 @@ test("a huge review still fits in one GitHub comment, with state that reads back
   assert.equal(back.findings[0].title, "Finding 0");
 });
 
-test("the summary shows decisions not to fix apart, and flags what's still reported", () => {
+test("the summary lists decisions not to fix under Handled, with the note and who wrote it, and flags what's still reported", () => {
   const prevState = stateOf([finding({ id: "1111111111", title: "Dropped" }), finding({ id: "2222222222", title: "Plain gone" }), finding({ id: "3333333333", title: "Comes back" }), finding({ id: "4444444444", title: "Argued", tier: "decision", rank: null })]);
   const findings = [finding({ id: "3333333333", title: "Comes back" }), finding({ id: "4444444444", title: "Argued", tier: "decision", rank: null })];
   const state = stateOf(findings, new Map(), prevState, "abcdef1234");
@@ -543,8 +543,8 @@ test("the summary shows decisions not to fix apart, and flags what's still repor
   const marks = new Map([mark("1111111111", "wont_fix", "Only admins <!-- x -->"), mark("3333333333", "fixed", null), mark("4444444444", "wont_fix", "Fine by us")]);
   const review = { pr: { head_sha: "abcdef1234" }, provider: { name: "codex", model: null }, light: "red", summary: "S", findings, stats: { duration_ms: 1 } };
   const body = summaryBody({ review, state, urls: new Map(), marks }, false);
-  assert.ok(body.includes("The team decided not to fix: 1"));
-  assert.match(body, /Dropped `src\/a\.ts:12`: Only admins &lt;!-- x --> \(teammate\)/);
+  assert.ok(body.includes("✅ Handled: 1"));
+  assert.match(body, /Dropped `src\/a\.ts:12`: not fixing\. Only admins &lt;!-- x --> \(teammate\)/);
   assert.ok(body.includes("No longer found since the last review: 1"));
   assert.match(body, /Plain gone/);
   assert.match(body, /Comes back.*marked fixed, still found/);
@@ -590,7 +590,7 @@ test("a review round reads marks: the verifier gets them, and the summary shows 
     const review = { pr: { owner: "o", repo: "r", number: 7, head_sha: PUSHED }, provider: { name: "codex", model: null }, light: "green", summary: "S", findings: [], stats: { duration_ms: 1 } };
     await publishReview(review);
     const summary = writes().find((w) => w.path === "issues/comments/1");
-    assert.ok(summary.body.includes("The team decided not to fix: 1"));
+    assert.ok(summary.body.includes("✅ Handled: 1"));
     assert.ok(summary.body.includes("Only admins (private-member)"));
     assert.ok(summary.body.includes("No longer found since the last review: 1"));
     const state = decodeState(summary.body);
