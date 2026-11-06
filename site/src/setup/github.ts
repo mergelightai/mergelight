@@ -2,6 +2,7 @@
 
 const API = 'https://api.github.com';
 const CLIENT_ID = 'Iv23liM8BL5MwWeDmXHV';
+const ACTION_REPO = 'mergelightai/mergelight';
 const TOKEN_SERVER = 'https://api.mergelight.dev';
 const STATE_KEY = 'mergelight.setup.state';
 /** A sleeping server can take about a minute to wake up, so this is generous. */
@@ -22,6 +23,21 @@ export interface Repo {
   accessUrl: string;
 }
 
+/** A release of the Action. The commit is what gets used, because a tag can be moved. */
+export interface Release {
+  tag: string;
+  sha: string;
+}
+
+/** The workflow a repo already has, and which version of the Action it runs. */
+export interface Installed {
+  /** A commit, or a tag like v0. */
+  ref: string;
+  /** The version noted beside a pinned commit, if there is one. */
+  version: string | null;
+  content: string;
+}
+
 export interface RepoDetails {
   branches: string[];
   /** The branch most recent PRs went to. */
@@ -29,7 +45,21 @@ export interface RepoDetails {
   /** Long-lived branches, whose PRs usually don't need a review. */
   skip: string[];
   hasLogin: boolean;
-  hasWorkflow: boolean;
+  /** What's on the base branch already, if anything. */
+  installed: Installed | null;
+  release: Release;
+}
+
+const ACTION_USE = /mergelightai\/mergelight@([^\s#]+)(?:[ \t]*#[ \t]*(\S+))?/;
+
+export function readInstalled(content: string): Installed | null {
+  const m = content.match(ACTION_USE);
+  return m ? { ref: m[1]!, version: m[2] ?? null, content } : null;
+}
+
+/** Points every use of the Action at this release's commit, and changes nothing else in the file. */
+export function pinned(content: string, release: Release): string {
+  return content.replace(new RegExp(ACTION_USE, 'g'), () => `mergelightai/mergelight@${release.sha} # ${release.tag}`);
 }
 
 export interface SetupPr {
@@ -55,8 +85,11 @@ export class GitHubError extends Error {
 export interface GitHubClient {
   repos(): Promise<Repo[]>;
   details(repo: Repo): Promise<RepoDetails>;
-  /** Opens a pull request that adds the workflow, unless one is open already. Null if the branch already has the file. */
-  addWorkflow(repo: Repo, branch: string, content: string): Promise<SetupPr | null>;
+  /**
+   * Opens a pull request that adds or updates the workflow. A setup pull request that's open already gets
+   * brought up to date instead of a second one. Null if the branch already has exactly this file.
+   */
+  proposeWorkflow(repo: Repo, branch: string, content: string, release: Release): Promise<SetupPr | null>;
   /** The open pull request that adds the workflow, once someone has made it. */
   findSetupPr(repo: Repo): Promise<SetupPr | null>;
   hasWorkflow(repo: Repo, branch: string): Promise<boolean>;
@@ -74,7 +107,12 @@ const SETUP_BODY = [
   "It runs in your own GitHub Actions, on your AI plan. This pull request reviews itself, so you can see what you'll get. Merge it to keep reviews on.",
 ].join('\n');
 
+const updateTitle = (release: Release) => `Update Mergelight to ${release.tag}`;
+const updateBody = (release: Release) =>
+  `Moves the workflow to [${release.tag}](https://github.com/mergelightai/mergelight/releases/tag/${release.tag}), pinned to its exact commit. Nothing else in the file changes. This pull request reviews itself with the new version.`;
+
 const toBase64 = (text: string) => btoa(String.fromCharCode(...new TextEncoder().encode(text)));
+const fromBase64 = (text: string) => new TextDecoder().decode(Uint8Array.from(atob(text.replace(/\s/g, '')), (c) => c.charCodeAt(0)));
 
 function stateValue(): string {
   try {
@@ -151,14 +189,35 @@ export function realClient(token: string): GitHubClient {
     return (res.status === 204 ? undefined : await res.json()) as T;
   };
   const get = <T,>(path: string) => call<T>('GET', path);
-  const hasWorkflow = (repo: Repo, branch: string) => get(`/repos/${repo.fullName}/contents/${WORKFLOW_PATH}?ref=${encodeURIComponent(branch)}`).then(() => true, () => false);
-  const findSetupPr = async (repo: Repo): Promise<SetupPr | null> => {
-    const pulls = await get<{ number: number; html_url: string; head: { sha: string } }[]>(`/repos/${repo.fullName}/pulls?state=open&sort=created&direction=desc&per_page=5`);
+  /** The workflow file on a branch, if it's there. Only a missing file counts as missing: any other failure stops whoever asked. */
+  const workflowOn = async (repo: Repo, branch: string): Promise<{ sha: string; content: string } | null> => {
+    try {
+      const file = await get<{ sha: string; content: string }>(`/repos/${repo.fullName}/contents/${WORKFLOW_PATH}?ref=${encodeURIComponent(branch)}`);
+      return { sha: file.sha, content: fromBase64(file.content) };
+    } catch (err) {
+      if (err instanceof GitHubError && err.status === 404) return null;
+      throw err;
+    }
+  };
+  const hasWorkflow = (repo: Repo, branch: string) => workflowOn(repo, branch).then(Boolean, () => false);
+  const latestRelease = async (): Promise<Release> => {
+    const { tag_name: tag } = await get<{ tag_name: string }>(`/repos/${ACTION_REPO}/releases/latest`);
+    const { sha } = await get<{ sha: string }>(`/repos/${ACTION_REPO}/commits/${encodeURIComponent(tag)}`);
+    return { tag, sha };
+  };
+  const openSetupPull = async (repo: Repo) => {
+    const pulls = await get<{ number: number; html_url: string; head: { sha: string; ref: string; repo: { full_name: string } | null } }[]>(`/repos/${repo.fullName}/pulls?state=open&sort=created&direction=desc&per_page=5`);
     for (const pull of pulls) {
+      // A fork's pull request isn't ours to update.
+      if (pull.head.repo?.full_name !== repo.fullName) continue;
       const files = await get<{ filename: string }[]>(`/repos/${repo.fullName}/pulls/${pull.number}/files?per_page=30`).catch(() => []);
-      if (files.some((f) => f.filename === WORKFLOW_PATH)) return { number: pull.number, url: pull.html_url, headSha: pull.head.sha };
+      if (files.some((f) => f.filename === WORKFLOW_PATH)) return pull;
     }
     return null;
+  };
+  const findSetupPr = async (repo: Repo): Promise<SetupPr | null> => {
+    const pull = await openSetupPull(repo);
+    return pull && { number: pull.number, url: pull.html_url, headSha: pull.head.sha };
   };
   const hasLogin = async (repo: Repo) => {
     const { secrets } = await get<{ secrets: { name: string }[] }>(`/repos/${repo.fullName}/actions/secrets?per_page=100`).catch(() => ({ secrets: [] as { name: string }[] }));
@@ -179,32 +238,47 @@ export function realClient(token: string): GitHubClient {
       return lists.flat().sort((a, b) => a.fullName.localeCompare(b.fullName));
     },
     details: async (repo) => {
-      const [branches, pulls, login] = await Promise.all([
+      const [branches, pulls, login, release] = await Promise.all([
         get<{ name: string }[]>(`/repos/${repo.fullName}/branches?per_page=100`),
         get<{ base: { ref: string }; head: { ref: string } }[]>(`/repos/${repo.fullName}/pulls?state=all&per_page=50`).catch(() => []),
         hasLogin(repo),
+        latestRelease(),
       ]);
       const names = branches.map((b) => b.name);
       const base = pickBase(pulls.map((p) => ({ base: p.base.ref, head: p.head.ref })), repo.defaultBranch);
+      const onBase = await workflowOn(repo, base);
       return {
         branches: names.includes(base) ? names : [base, ...names],
         base,
         skip: pickSkip(names),
         hasLogin: login,
-        hasWorkflow: await hasWorkflow(repo, base),
+        installed: onBase && readInstalled(onBase.content),
+        release,
       };
     },
-    addWorkflow: async (repo, branch, content) => {
-      const existing = await findSetupPr(repo);
-      if (existing) return existing;
-      if (await hasWorkflow(repo, branch)) return null;
+    proposeWorkflow: async (repo, branch, content, release) => {
       const r = `/repos/${repo.fullName}`;
+      const put = async (head: string, message: string, sha?: string) =>
+        call<{ commit: { sha: string } }>('PUT', `${r}/contents/${WORKFLOW_PATH}`, { message, content: toBase64(content), branch: head, ...(sha ? { sha } : {}) });
+
+      // One that's open already gets brought up to date, however old the version it was opened with.
+      const open = await openSetupPull(repo);
+      if (open) {
+        const onPull = await workflowOn(repo, open.head.ref);
+        if (onPull?.content === content) return { number: open.number, url: open.html_url, headSha: open.head.sha };
+        const updated = await put(open.head.ref, updateTitle(release), onPull?.sha);
+        return { number: open.number, url: open.html_url, headSha: updated.commit.sha };
+      }
+
+      const current = await workflowOn(repo, branch);
+      if (current?.content === content) return null;
+      const title = current ? updateTitle(release) : SETUP_TITLE;
       const base = await get<{ object: { sha: string } }>(`${r}/git/ref/heads/${branch.split('/').map(encodeURIComponent).join('/')}`);
       const head = `mergelight-setup-${Date.now().toString(36)}`;
       await call('POST', `${r}/git/refs`, { ref: `refs/heads/${head}`, sha: base.object.sha });
       try {
-        await call('PUT', `${r}/contents/${WORKFLOW_PATH}`, { message: SETUP_TITLE, content: toBase64(content), branch: head });
-        const pull = await call<{ number: number; html_url: string; head: { sha: string } }>('POST', `${r}/pulls`, { title: SETUP_TITLE, head, base: branch, body: SETUP_BODY });
+        await put(head, title, current?.sha);
+        const pull = await call<{ number: number; html_url: string; head: { sha: string } }>('POST', `${r}/pulls`, { title, head, base: branch, body: current ? updateBody(release) : SETUP_BODY });
         return { number: pull.number, url: pull.html_url, headSha: pull.head.sha };
       } catch (err) {
         // Don't leave an empty branch behind in their repo.
@@ -232,24 +306,35 @@ export function mockClient(): GitHubClient {
   let finds = 0;
   let checks = 0;
   const later = <T,>(value: T) => new Promise<T>((r) => setTimeout(() => r(value), 300));
+  const release: Release = { tag: 'v0.2.0', sha: 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0' };
+  const workflowWith = (use: string) => `name: Mergelight\n\njobs:\n  review:\n    steps:\n      - uses: mergelightai/mergelight@${use}\n`;
+  const installedFor = (name: string): Installed | null =>
+    name === 'acme/app'
+      ? readInstalled(workflowWith(`${release.sha} # ${release.tag}`))
+      : name === 'acme/old'
+        ? readInstalled(workflowWith('v0'))
+        : name === 'acme/behind'
+          ? readInstalled(workflowWith('0123456789012345678901234567890123456789 # v0.1.0'))
+          : null;
   return {
-    repos: () => later([repo('api'), repo('app'), repo('docs', false), repo('platform'), repo('site')]),
+    repos: () => later([repo('api'), repo('app'), repo('behind'), repo('docs', false), repo('old'), repo('platform'), repo('site')]),
     details: (r) =>
       later(
         r.fullName === 'acme/docs'
-          ? { branches: ['main'], base: 'main', skip: ['main'], hasLogin: false, hasWorkflow: false }
+          ? { branches: ['main'], base: 'main', skip: ['main'], hasLogin: false, installed: null, release }
           : r.fullName === 'acme/site'
-          ? { branches: ['main', 'feat/new-landing'], base: 'main', skip: ['main'], hasLogin: false, hasWorkflow: false }
+          ? { branches: ['main', 'feat/new-landing'], base: 'main', skip: ['main'], hasLogin: false, installed: null, release }
           : {
               branches: ['main', 'staging', 'development', 'feat/billing-export', 'fix/invoice-rounding'],
               base: 'staging',
               skip: ['main', 'staging', 'development'],
-              hasLogin: r.fullName === 'acme/platform',
-              hasWorkflow: r.fullName === 'acme/app',
+              hasLogin: r.fullName === 'acme/platform' || r.fullName === 'acme/old' || r.fullName === 'acme/behind',
+              installed: installedFor(r.fullName),
+              release,
             },
       ),
     // acme/site plays an install that hasn't approved the access, to show the way around it.
-    addWorkflow: (r) => (r.fullName === 'acme/site' ? Promise.reject(new GitHubError(403)) : new Promise((done) => setTimeout(() => done({ number: 128, url: 'https://github.com/acme/api/pull/128', headSha: 'abc' }), 900))),
+    proposeWorkflow: (r) => (r.fullName === 'acme/site' ? Promise.reject(new GitHubError(403)) : new Promise((done) => setTimeout(() => done({ number: 128, url: 'https://github.com/acme/api/pull/128', headSha: 'abc' }), 900))),
     findSetupPr: () => later(++finds > 1 ? { number: 128, url: 'https://github.com/acme/api/pull/128', headSha: 'abc' } : null),
     hasWorkflow: () => later(false),
     hasLogin: (r) => later(r.fullName === 'acme/platform'),
