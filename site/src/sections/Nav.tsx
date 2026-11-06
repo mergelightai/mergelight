@@ -31,9 +31,15 @@ export default function Nav() {
             <GitHubIcon /> GitHub
           </a>
         </nav>
-        <a href={EARLY} className="rounded-full bg-fg px-4 py-2 text-sm font-medium text-ink transition-colors hover:bg-white">
-          Get early access
-        </a>
+        <div className="flex items-center gap-4">
+          {/* The links above are hidden on a phone, and this one is why someone came. */}
+          <a href={SETUP} className="text-sm text-muted transition-colors hover:text-fg md:hidden">
+            Set up
+          </a>
+          <a href={EARLY} className="rounded-full bg-fg px-4 py-2 text-sm font-medium text-ink transition-colors hover:bg-white">
+            Get early access
+          </a>
+        </div>
       </div>
     </header>
   );

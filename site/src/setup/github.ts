@@ -63,6 +63,7 @@ export interface GitHubClient {
   hasLogin(repo: Repo): Promise<boolean>;
   /** The Mergelight check on this commit, if a review has started. */
   checkStatus(repo: Repo, sha: string): Promise<CheckStatus | null>;
+  isMerged(repo: Repo, number: number): Promise<boolean>;
 }
 
 const WORKFLOW_PATH = '.github/workflows/mergelight.yml';
@@ -219,6 +220,7 @@ export function realClient(token: string): GitHubClient {
       const latest = check_runs[0];
       return latest ? { status: latest.status, conclusion: latest.conclusion, title: latest.output.title } : null;
     },
+    isMerged: async (repo, number) => (await get<{ merged: boolean }>(`/repos/${repo.fullName}/pulls/${number}`)).merged,
   };
 }
 
@@ -258,5 +260,6 @@ export function mockClient(): GitHubClient {
       if (checks < 7) return later({ status: 'in_progress', conclusion: null, title: 'Reviewing' });
       return later({ status: 'completed', conclusion: 'failure', title: '🔴 Blocked: 2 bugs, 1 risk to fix' });
     },
+    isMerged: () => later(checks >= 11),
   };
 }
