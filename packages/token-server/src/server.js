@@ -3,19 +3,39 @@
 // Required environment:
 //   GITHUB_APP_CLIENT_ID     The Mergelight AI app's client id. Public.
 //   GITHUB_APP_PRIVATE_KEY   The app's private key, in PEM. Keep it in the host's secret settings.
+//   GITHUB_APP_CLIENT_SECRET The app's client secret, for "Sign in with GitHub" on the setup page.
+//                            Optional: without it, only sign-in is off.
 //   PORT                     Port to listen on. Render sets it.
 
 import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import { handle } from "./token.js";
 
-/** Only the method, path and Authorization header matter, so nothing else from the request is passed on. */
+/** A sign-in code fits easily in this, and anything larger isn't one. */
+const MAX_BODY = 4096;
+
+async function readBody(req) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > MAX_BODY) throw new Error("body too large");
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
+/** Only the method, path, body and these headers matter, so nothing else from the request is passed on. */
 export function createTokenServer(env, fetchImpl = fetch) {
   const server = createServer(async (req, res) => {
-    req.resume();
     try {
-      const headers = req.headers.authorization ? { authorization: req.headers.authorization } : {};
-      const request = new Request(new URL(req.url ?? "/", "http://token-server"), { method: req.method, headers });
+      const headers = {};
+      for (const name of ["authorization", "origin", "content-type"]) {
+        if (req.headers[name]) headers[name] = req.headers[name];
+      }
+      const hasBody = req.method === "POST";
+      const body = hasBody ? await readBody(req) : undefined;
+      const request = new Request(new URL(req.url ?? "/", "http://token-server"), { method: req.method, headers, body: body?.length ? body : undefined });
       const response = await handle(request, env, fetchImpl);
       res.writeHead(response.status, Object.fromEntries(response.headers));
       res.end(await response.text());

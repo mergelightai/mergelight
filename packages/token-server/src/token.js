@@ -28,6 +28,9 @@ const SCOPES = {
   },
 };
 
+/** The setup page, the only site allowed to sign in through this server. */
+const SITE_ORIGIN = "https://mergelight.dev";
+
 const CLOCK_SKEW_S = 30;
 const JWKS_TTL_MS = 60 * 60_000;
 const JWKS_MIN_REFRESH_MS = 60_000;
@@ -205,16 +208,61 @@ export async function issueToken(claims, env, fetchImpl = fetch, now = Date.now(
   return { token, expires_at, repository: `${owner}/${repo}` };
 }
 
-function respond(status, body) {
+function respond(status, body, headers = {}) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json", "cache-control": "no-store" },
+    headers: { "content-type": "application/json", "cache-control": "no-store", ...headers },
   });
+}
+
+/**
+ * Swaps the code from "Sign in with GitHub" for the person's token, so the setup page can list their
+ * repositories and branches. Only this step needs the app's client secret, which can't live in a web
+ * page. The token goes straight back to the browser, and nothing here stores or logs it.
+ */
+async function signIn(request, env, fetchImpl) {
+  const cors = { "access-control-allow-origin": SITE_ORIGIN, vary: "Origin" };
+  if (request.headers.get("origin") !== SITE_ORIGIN) return respond(403, { error: "origin_not_allowed" });
+  if (request.method === "OPTIONS") {
+    return new Response(null, {
+      status: 204,
+      headers: { ...cors, "access-control-allow-methods": "POST", "access-control-allow-headers": "content-type", "access-control-max-age": "600" },
+    });
+  }
+  if (request.method !== "POST") return respond(405, { error: "method_not_allowed" }, cors);
+  if (!env.GITHUB_APP_CLIENT_SECRET) return respond(503, { error: "sign_in_not_set_up" }, cors);
+
+  let code;
+  try {
+    ({ code } = await request.json());
+  } catch {
+    return respond(400, { error: "bad_request" }, cors);
+  }
+  if (typeof code !== "string" || !/^[\w-]{1,200}$/.test(code)) return respond(400, { error: "bad_request" }, cors);
+
+  const res = await fetchImpl("https://github.com/login/oauth/access_token", {
+    method: "POST",
+    headers: { accept: "application/json", "content-type": "application/json", "user-agent": "mergelight-token-server" },
+    body: JSON.stringify({ client_id: env.GITHUB_APP_CLIENT_ID, client_secret: env.GITHUB_APP_CLIENT_SECRET, code }),
+  });
+  if (!res.ok) return respond(502, { error: "github_error" }, cors);
+  const body = await res.json();
+  // GitHub answers 200 with an error for a used or expired code.
+  if (!body.access_token) return respond(400, { error: "sign_in_failed" }, cors);
+  return respond(200, { token: body.access_token, expires_in: body.expires_in ?? null }, cors);
 }
 
 export async function handle(request, env, fetchImpl = fetch, now = Date.now()) {
   const { pathname, searchParams } = new URL(request.url);
   if (request.method === "GET" && pathname === "/") return respond(200, { service: "mergelight-token-server" });
+  if (pathname === "/sign-in") {
+    try {
+      return await signIn(request, env, fetchImpl);
+    } catch (err) {
+      console.error("sign-in error", err?.name);
+      return respond(500, { error: "server_error" });
+    }
+  }
   if (pathname !== "/token") return respond(404, { error: "not_found" });
   if (request.method !== "POST") return respond(405, { error: "method_not_allowed" });
 

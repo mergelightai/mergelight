@@ -1,13 +1,13 @@
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import approveFile from '../../../examples/mergelight-approve.yml?raw';
 import refreshFile from '../../../examples/mergelight-refresh.yml?raw';
 import workflowFile from '../../../examples/mergelight.yml?raw';
 import { GITHUB } from '../links';
 import Ambient from '../sections/Ambient';
 import { Check, GitHubIcon, SURFACE, WELL } from '../ui';
+import { cleanUrl, finishSignIn, INSTALL_URL, installUrl, mockClient, realClient, signInUrl, type GitHubClient, type Repo, type RepoDetails } from './github';
 
-const INSTALL_URL = 'https://github.com/apps/mergelight-ai/installations/new';
 const CHATGPT_SECURITY = 'https://chatgpt.com/settings/security';
 const SKIP_MARKER = 'github.event.pull_request.head.repo.full_name == github.repository';
 
@@ -55,11 +55,13 @@ const DISABLED = 'pointer-events-none opacity-40';
 const QUIET = 'text-sm text-muted underline-offset-4 transition-colors hover:text-fg hover:underline';
 const FIELD =
   'h-11 w-full rounded-xl bg-black/30 px-3.5 font-mono text-[13px] text-fg shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)] outline-none transition-shadow placeholder:text-faint focus:shadow-[inset_0_0_0_1.5px_var(--color-lilac)]';
+const SELECT = `${FIELD} cursor-pointer appearance-none pr-10 disabled:cursor-wait disabled:text-faint`;
 
 type Mode = 'chatgpt' | 'apikey';
 
 export default function Setup() {
-  const cameBackFromInstall = useMemo(() => new URLSearchParams(window.location.search).has('installation_id'), []);
+  const params = useMemo(() => new URLSearchParams(window.location.search), []);
+  const cameBackFromInstall = params.has('installation_id');
   const [step, setStep] = useState(cameBackFromInstall ? 1 : 0);
   const [repoText, setRepoText] = useState(() => remembered('mergelight.setup.repo', ''));
   const [branch, setBranch] = useState(() => remembered('mergelight.setup.branch', 'main'));
@@ -67,11 +69,76 @@ export default function Setup() {
   const [opened, setOpened] = useState(false);
   const [mode, setMode] = useState<Mode>('chatgpt');
 
+  const [client, setClient] = useState<GitHubClient | null>(() => (import.meta.env.DEV && params.has('mock') ? mockClient() : null));
+  const [signingIn, setSigningIn] = useState(params.has('code'));
+  const [signInFailed, setSignInFailed] = useState(false);
+  const [repos, setRepos] = useState<Repo[] | null>(null);
+  const [details, setDetails] = useState<RepoDetails | null>(null);
+
   const repo = parseRepo(repoText);
   const workflow = useMemo(() => withSkippedBranches(workflowFile, skip), [skip]);
+  const skipped = useMemo(() => skip.split(',').map((b) => b.trim()).filter(Boolean), [skip]);
+  const chosen = repos?.find((r) => r.fullName === repo) ?? null;
+  const accounts = useMemo(() => [...new Set((repos ?? []).map((r) => r.account))], [repos]);
+  // One account: its own settings page. Otherwise GitHub asks which account first.
+  const accessUrl = accounts.length === 1 ? repos![0]!.accessUrl : INSTALL_URL;
 
   useEffect(() => remember('mergelight.setup.repo', repoText), [repoText]);
   useEffect(() => remember('mergelight.setup.branch', branch), [branch]);
+
+  // Coming back from GitHub with a sign-in code.
+  useEffect(() => {
+    if (!params.has('code')) return;
+    finishSignIn(params)
+      .then((token) => {
+        if (token) {
+          setClient(realClient(token));
+          setStep(1);
+        }
+      })
+      .catch(() => setSignInFailed(true))
+      .finally(() => {
+        setSigningIn(false);
+        cleanUrl();
+      });
+  }, [params]);
+
+  const loadRepos = useCallback(() => {
+    if (!client) return;
+    client.repos().then(setRepos, () => setSignInFailed(true));
+  }, [client]);
+
+  useEffect(loadRepos, [loadRepos]);
+
+  // After giving access in another tab, the new repo should just be there.
+  useEffect(() => {
+    window.addEventListener('focus', loadRepos);
+    return () => window.removeEventListener('focus', loadRepos);
+  }, [loadRepos]);
+
+  // Pick up what GitHub knows about the chosen repo.
+  useEffect(() => {
+    setDetails(null);
+    if (!client || !chosen) return;
+    let current = true;
+    client.details(chosen).then(
+      (d) => {
+        if (!current) return;
+        setDetails(d);
+        setBranch(d.base);
+        setSkip(d.skip.join(', '));
+        if (!chosen.isPrivate) setMode('apikey');
+      },
+      () => undefined,
+    );
+    return () => {
+      current = false;
+    };
+    // Only when the repo changes, not when the list refreshes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client, chosen?.fullName]);
+
+  const toggleSkip = (name: string) => setSkip((skipped.includes(name) ? skipped.filter((b) => b !== name) : [...skipped, name]).join(', '));
 
   const pulls = repo ? `https://github.com/${repo}/pulls` : '#';
 
@@ -97,61 +164,150 @@ export default function Setup() {
             <Step n={1} title="Install the app on GitHub" current={step} onOpen={setStep}>
               <p className="text-muted">Pick the repos you want reviewed. You'll come straight back here.</p>
               <div className="mt-5 flex flex-wrap items-center gap-x-5 gap-y-3">
-                <a href={INSTALL_URL} className={PRIMARY}>
+                <a href={installUrl()} className={PRIMARY}>
                   <GitHubIcon /> Install on GitHub
                 </a>
-                <button type="button" className={QUIET} onClick={() => setStep(1)}>
-                  It's already installed
-                </button>
+                <a href={signInUrl()} className={QUIET}>
+                  Already installed? Sign in
+                </a>
               </div>
             </Step>
 
             <Step n={2} title="Add the review workflow" current={step} onOpen={setStep}>
               <p className="text-muted">GitHub opens with the file already filled in. You only commit it.</p>
-              <label className="mt-5 block">
-                <span className="text-[13px] font-medium text-muted">Repository</span>
-                <input
-                  className={`${FIELD} mt-1.5`}
-                  placeholder="owner/repo"
-                  value={repoText}
-                  onChange={(e) => setRepoText(e.target.value)}
-                  autoComplete="off"
-                  spellCheck={false}
-                />
-              </label>
-              {repoText.trim() !== '' && !repo && <p className="mt-2 text-[13px] text-risk">Use owner/repo, or paste the repo's link.</p>}
+              {signingIn && <p className="mt-5 text-sm text-muted">Signing you in...</p>}
+              {signInFailed && <p className="mt-5 text-[13px] text-risk">GitHub sign-in didn't work. You can type the repo instead, or try signing in again.</p>}
 
-              <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                <label className="block">
-                  <span className="text-[13px] font-medium text-muted">Branch most PRs go to</span>
-                  <input className={`${FIELD} mt-1.5`} value={branch} onChange={(e) => setBranch(e.target.value)} autoComplete="off" spellCheck={false} />
-                </label>
-                <label className="block">
-                  <span className="text-[13px] font-medium text-muted">Skip PRs from (optional)</span>
-                  <input className={`${FIELD} mt-1.5`} placeholder="staging, main" value={skip} onChange={(e) => setSkip(e.target.value)} autoComplete="off" spellCheck={false} />
-                </label>
-              </div>
+              {client ? (
+                <>
+                  <label className="mt-5 block">
+                    <span className="text-[13px] font-medium text-muted">Repository</span>
+                    <Dropdown value={chosen?.fullName ?? ''} onChange={setRepoText} disabled={!repos}>
+                      <option value="" disabled>
+                        {repos ? (repos.length ? 'Choose a repository' : 'No repositories yet') : 'Loading your repositories...'}
+                      </option>
+                      {accounts.map((account) => (
+                        <optgroup key={account} label={account}>
+                          {repos!.filter((r) => r.account === account).map((r) => (
+                            <option key={r.fullName} value={r.fullName}>
+                              {r.fullName.split('/')[1]}
+                            </option>
+                          ))}
+                        </optgroup>
+                      ))}
+                    </Dropdown>
+                  </label>
+                  {repos && (
+                    <p className="mt-2 text-[13px] text-muted">
+                      Don't see it?{' '}
+                      <a className="text-fg underline underline-offset-4" target="_blank" rel="noreferrer" href={accessUrl}>
+                        Give Mergelight access
+                      </a>
+                      . It shows up here when you come back.
+                    </p>
+                  )}
+
+                  {details && (
+                    <>
+                      <label className="mt-4 block">
+                        <span className="text-[13px] font-medium text-muted">Branch most PRs go to</span>
+                        <Dropdown value={branch} onChange={setBranch}>
+                          {details.branches.map((b) => (
+                            <option key={b} value={b}>
+                              {b}
+                              {b === details.base ? ' (most of your PRs)' : ''}
+                            </option>
+                          ))}
+                        </Dropdown>
+                      </label>
+                      {details.skip.length > 0 && (
+                        <fieldset className="mt-4">
+                          <legend className="text-[13px] font-medium text-muted">Skip PRs from</legend>
+                          <div className="mt-1.5 flex flex-wrap gap-2">
+                            {details.skip.map((b) => {
+                              const on = skipped.includes(b);
+                              return (
+                                <button
+                                  key={b}
+                                  type="button"
+                                  aria-pressed={on}
+                                  onClick={() => toggleSkip(b)}
+                                  className={`flex h-9 items-center gap-1.5 rounded-full px-3.5 font-mono text-[12.5px] transition-colors ${on ? 'bg-white/[0.12] text-fg' : 'text-faint shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)] hover:text-muted'}`}
+                                >
+                                  {on && <Check className="size-3" />}
+                                  {b}
+                                </button>
+                              );
+                            })}
+                          </div>
+                          <p className="mt-2 text-[13px] text-faint">Merges between these are releases, so they save your quota.</p>
+                        </fieldset>
+                      )}
+                    </>
+                  )}
+                </>
+              ) : (
+                !signingIn && (
+                  <>
+                    <p className="mt-5 text-[13px] text-muted">
+                      <a className="text-fg underline underline-offset-4" href={signInUrl()}>
+                        Sign in with GitHub
+                      </a>{' '}
+                      to pick from a list, or type it here.
+                    </p>
+                    <label className="mt-4 block">
+                      <span className="text-[13px] font-medium text-muted">Repository</span>
+                      <input className={`${FIELD} mt-1.5`} placeholder="owner/repo" value={repoText} onChange={(e) => setRepoText(e.target.value)} autoComplete="off" spellCheck={false} />
+                    </label>
+                    {repoText.trim() !== '' && !repo && <p className="mt-2 text-[13px] text-risk">Use owner/repo, or paste the repo's link.</p>}
+                    <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                      <label className="block">
+                        <span className="text-[13px] font-medium text-muted">Branch most PRs go to</span>
+                        <input className={`${FIELD} mt-1.5`} value={branch} onChange={(e) => setBranch(e.target.value)} autoComplete="off" spellCheck={false} />
+                      </label>
+                      <label className="block">
+                        <span className="text-[13px] font-medium text-muted">Skip PRs from (optional)</span>
+                        <input className={`${FIELD} mt-1.5`} placeholder="staging, main" value={skip} onChange={(e) => setSkip(e.target.value)} autoComplete="off" spellCheck={false} />
+                      </label>
+                    </div>
+                  </>
+                )
+              )}
+
+              {details?.hasWorkflow && (
+                <p className="mt-4 flex items-center gap-1.5 text-[13px] text-mint">
+                  <Check className="size-3.5" /> {repo} already has the workflow on {branch}.
+                </p>
+              )}
 
               <div className="mt-5 flex flex-wrap items-center gap-x-5 gap-y-3">
-                <a
-                  href={repo ? newFileUrl(repo, branch.trim() || 'main', 'mergelight.yml', workflow) : undefined}
-                  target="_blank"
-                  rel="noreferrer"
-                  aria-disabled={!repo}
-                  className={`${PRIMARY} ${repo ? '' : DISABLED}`}
-                  onClick={() => setOpened(true)}
-                >
-                  Open it in GitHub
-                </a>
-                {opened && (
+                {details?.hasWorkflow ? (
+                  <button type="button" className={PRIMARY} onClick={() => setStep(2)}>
+                    Next
+                  </button>
+                ) : (
+                  <a
+                    href={repo ? newFileUrl(repo, branch.trim() || 'main', 'mergelight.yml', workflow) : undefined}
+                    target="_blank"
+                    rel="noreferrer"
+                    aria-disabled={!repo}
+                    className={`${PRIMARY} ${repo ? '' : DISABLED}`}
+                    onClick={() => setOpened(true)}
+                  >
+                    Open it in GitHub
+                  </a>
+                )}
+                {opened && !details?.hasWorkflow && (
                   <button type="button" className={QUIET} onClick={() => setStep(2)}>
                     I've committed it
                   </button>
                 )}
               </div>
-              <p className="mt-4 text-[13px] leading-relaxed text-muted">
-                When you commit, choose <span className="text-fg">Create a new branch</span> and open the pull request. It reviews itself, so you see it working before you merge.
-              </p>
+              {!details?.hasWorkflow && (
+                <p className="mt-4 text-[13px] leading-relaxed text-muted">
+                  When you commit, choose <span className="text-fg">Create a new branch</span> and open the pull request. It reviews itself, so you see it working before you merge.
+                </p>
+              )}
 
               {repo && (
                 <details className="mt-4 text-[13px] text-muted">
@@ -175,6 +331,17 @@ export default function Setup() {
             </Step>
 
             <Step n={3} title="Connect your AI" current={step} onOpen={setStep}>
+              {details?.hasLogin ? (
+                <div>
+                  <p className="flex items-center gap-1.5 text-mint">
+                    <Check className="size-4" /> {repo} is already connected.
+                  </p>
+                  <button type="button" className={`${PRIMARY} mt-5`} onClick={() => setStep(3)}>
+                    Next
+                  </button>
+                </div>
+              ) : (
+              <>
               <div role="tablist" aria-label="How to connect" className="inline-flex rounded-full bg-black/30 p-1 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]">
                 {(
                   [
@@ -188,7 +355,8 @@ export default function Setup() {
                     role="tab"
                     aria-selected={mode === value}
                     onClick={() => setMode(value)}
-                    className={`h-9 rounded-full px-4 text-[13px] font-medium transition-colors ${mode === value ? 'bg-white/[0.12] text-fg' : 'text-muted hover:text-fg'}`}
+                    disabled={value === 'chatgpt' && chosen?.isPrivate === false}
+                    className={`h-9 rounded-full px-4 text-[13px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${mode === value ? 'bg-white/[0.12] text-fg' : 'text-muted hover:text-fg'}`}
                   >
                     {label}
                   </button>
@@ -231,6 +399,8 @@ export default function Setup() {
                   </div>
                 </div>
               )}
+              </>
+              )}
             </Step>
 
             <Orb lit={step >= 3}>
@@ -247,8 +417,9 @@ export default function Setup() {
                       className={QUIET}
                       onClick={() => {
                         setRepoText('');
+                        setSkip('');
                         setOpened(false);
-                        setStep(0);
+                        setStep(client ? 1 : 0);
                       }}
                     >
                       Set up another repo
@@ -264,11 +435,25 @@ export default function Setup() {
 
         <div className="lg:sticky lg:top-8 lg:self-start">
           <p className="mb-3 text-[13px] text-faint">What you'll see on GitHub</p>
-          <Preview step={step} mode={mode} workflow={workflow} />
+          <Preview step={details?.hasLogin && step === 2 ? 3 : step} mode={mode} workflow={workflow} />
           <p className="mt-4 text-[13px] leading-relaxed text-faint">Your login stays in your repo's secrets, and reviews run on your own GitHub Actions. Nothing goes through Mergelight.</p>
         </div>
       </main>
     </div>
+  );
+}
+
+/** A native select, so keyboard and phone pickers work, with an arrow that matches the page. */
+function Dropdown({ value, onChange, disabled, children }: { value: string; onChange: (value: string) => void; disabled?: boolean; children: ReactNode }) {
+  return (
+    <span className="relative mt-1.5 block">
+      <select className={SELECT} value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled}>
+        {children}
+      </select>
+      <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" className="pointer-events-none absolute right-3.5 top-1/2 size-4 -translate-y-1/2 text-muted">
+        <path d="m4 6 4 4 4-4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    </span>
   );
 }
 

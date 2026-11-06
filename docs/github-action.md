@@ -24,8 +24,8 @@ OpenAI allows a ChatGPT login in CI only for trusted private automation, and say
 
 Go to **[mergelight.dev/setup](https://mergelight.dev/setup/)**. Three steps, all in your browser:
 
-1. **Install the app** on the repositories you want reviewed.
-2. **Add the workflow.** GitHub opens with the file filled in, and you commit it. Choose a new branch and open the pull request, so it reviews itself.
+1. **Install the app** on the repositories you want reviewed. This also signs you in, so the page can list them.
+2. **Add the workflow.** Pick the repository from the list. The page suggests the branch most of your pull requests go to, and which branches to skip. GitHub opens with the file filled in, and you commit it. Choose a new branch and open the pull request, so it reviews itself.
 3. **Connect your AI.** Either:
    - **ChatGPT plan** (private repositories): the pull request shows a link and a code. Enter the code, and the review starts. First turn on "Enable device code sign-in" in your [ChatGPT security settings](https://chatgpt.com/settings/security). It's in beta, and on a workspace an admin turns it on.
    - **OpenAI API key**: add it to the repository's secrets as `OPENAI_API_KEY`. OpenAI bills it per use, and it works on public repositories too.
