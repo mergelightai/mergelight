@@ -4,7 +4,7 @@ import { GitHub, type ApiOptions } from "./api.js";
 import { commentableLines, place } from "./diff-lines.js";
 import { FINDING_MARKER_RE, headline, inlineBody, LIGHT, SUMMARY_MARKER, summaryBody } from "./markdown.js";
 import { readMarks, trustedComment, writeAccess, type Mark, type PrComment } from "./handled.js";
-import { decodeState, nextState, type ReviewState } from "./state.js";
+import { decodeState, nextState, type ReviewState, type StateFinding } from "./state.js";
 
 export { trustedComment } from "./handled.js";
 
@@ -49,8 +49,10 @@ const MAX_PREVIOUS = 40;
 /** What earlier rounds found on this PR, latest first, for the verifier to check again. */
 export async function previousFindings(api: GitHub, number: number): Promise<PriorFinding[]> {
   const { state, marks } = await readPrReviewState(api, number);
+  // A decision not to fix must reach the verifier however long the list gets, or the problem comes back as new.
+  const order = (f: StateFinding) => (marks.get(f.id)?.as === "wont_fix" ? 0 : f.status === "gone" ? 2 : 1);
   return (state?.findings ?? [])
-    .sort((a, b) => Number(a.status === "gone") - Number(b.status === "gone"))
+    .sort((a, b) => order(a) - order(b))
     .slice(0, MAX_PREVIOUS)
     .map(({ id, title, file, line, end_line, how }) => {
       const mark = marks.get(id);

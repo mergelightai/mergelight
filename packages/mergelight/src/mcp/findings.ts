@@ -14,7 +14,10 @@ const ACTION: Record<Tier, "fix" | "ask" | "leave"> = { post: "fix", list: "fix"
 
 /** A URL, owner/repo#123, a number inside a clone, or nothing for the current branch's pull request. */
 async function resolvePr(pr: unknown): Promise<PrRef> {
-  if (typeof pr === "string" && pr.trim()) return parsePrRef(pr.trim(), await currentRepo());
+  if (typeof pr === "string" && pr.trim()) {
+    const ref = pr.trim();
+    return parsePrRef(ref, /^#?\d+$/.test(ref) ? await currentRepo() : undefined);
+  }
   try {
     const { stdout } = await runOk("gh", ["pr", "view", "--json", "url", "--jq", ".url"]);
     return parsePrRef(stdout.trim());

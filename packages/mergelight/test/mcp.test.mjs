@@ -129,6 +129,21 @@ function talk(env, messages) {
   });
 }
 
+/** Runs code in this process with the fake gh on the PATH. */
+async function withFakeGh(env, fn) {
+  const keys = ["PATH", "FAKE_GH", "FAKE_GH_LOG"];
+  const saved = keys.map((k) => process.env[k]);
+  for (const k of keys) process.env[k] = env[k];
+  try {
+    return await fn();
+  } finally {
+    keys.forEach((k, i) => {
+      if (saved[i] === undefined) delete process.env[k];
+      else process.env[k] = saved[i];
+    });
+  }
+}
+
 const INIT = { id: "init", method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "0" } } };
 
 async function call(env, name, args) {
@@ -190,6 +205,22 @@ test("the server speaks per-request metadata, and refuses what it can't serve", 
   assert.equal(replies.get(5).error.code, -32602, "no version and no handshake");
   assert.equal(replies.get(6).error.code, -32601);
   assert.equal(replies.get(7).error.code, -32602);
+});
+
+test("a cancelled request gets no answer, and its id can be used again", async () => {
+  const issueComments = [summaryComment(stateOf([finding()]))];
+  const { env } = useScenario({ issueComments });
+  const call = { method: "tools/call", params: { name: "list_findings", arguments: { pr: PR } } };
+  const { replies, code } = await talk(env, [
+    INIT,
+    { id: 1, ...call },
+    { method: "notifications/cancelled", params: { requestId: 1 } },
+    { method: "notifications/cancelled", params: { requestId: 99 } },
+    { id: 99, method: "ping" },
+  ]);
+  assert.equal(code, 0);
+  assert.equal(replies.has(1), false);
+  assert.deepEqual(replies.get(99).result, {});
 });
 
 test("bad JSON gets an error instead of killing the server", async () => {
@@ -410,6 +441,18 @@ test("a mark from someone who can't write to the repository doesn't count", asyn
   assert.equal(out.findings.post[0].state, "open");
 });
 
+test("a decision not to fix reaches the verifier even past the cap on earlier findings", async () => {
+  const many = Array.from({ length: 60 }, (_, i) => finding({ id: i.toString(16).padStart(10, "0") }));
+  const one = stateOf(many);
+  const two = stateOf(many.slice(0, 45), new Map(), one);
+  const decided = many[59].id;
+  const mark = { id: 2, html_url: "https://x", created_at: "2030-01-01T00:00:00Z", body: encodeMark([decided], "wont_fix", "Only admins", REVIEWED), ...MEMBER };
+  const { env } = useScenario({ issueComments: [summaryComment(two), mark] });
+  const previous = await withFakeGh(env, () => previousFindings(new GitHub("o", "r"), 7));
+  assert.equal(previous.length, 40);
+  assert.ok(previous.some((p) => p.id === decided));
+});
+
 test("readMarks takes the team's latest word, including members a workflow token can't see", async () => {
   const comment = (over) => ({ id: 1, html_url: "https://x", created_at: "2030-01-01T00:00:00Z", ...over });
   const asked = [];
@@ -537,10 +580,7 @@ test("a review round reads marks: the verifier gets them, and the summary shows 
     { id: 4, html_url: "https://x/4", created_at: "2030-01-01T00:00:00Z", pull_request_review_id: 1, body: encodeMark(["bbbbbbbbbb"], "wont_fix", "Spoof", PUSHED), ...STRANGER },
   ];
   const { env, writes } = useScenario({ issueComments, reviewComments, permissions: { "private-member": "write" }, head: PUSHED });
-  const saved = process.env.PATH;
-  const savedScenario = [process.env.FAKE_GH, process.env.FAKE_GH_LOG];
-  Object.assign(process.env, { PATH: env.PATH, FAKE_GH: env.FAKE_GH, FAKE_GH_LOG: env.FAKE_GH_LOG });
-  try {
+  await withFakeGh(env, async () => {
     const previous = await previousFindings(new GitHub("o", "r"), 7);
     const byId = Object.fromEntries(previous.map((p) => [p.id, p]));
     assert.deepEqual(byId.aaaaaaaaaa.handled, { as: "wont_fix", note: "Only admins", by: "private-member", sha: REVIEWED });
@@ -555,12 +595,7 @@ test("a review round reads marks: the verifier gets them, and the summary shows 
     const state = decodeState(summary.body);
     assert.equal(state.round, 2);
     assert.deepEqual(state.findings.map((f) => f.status), ["gone", "gone"]);
-  } finally {
-    process.env.PATH = saved;
-    [process.env.FAKE_GH, process.env.FAKE_GH_LOG] = savedScenario;
-    if (savedScenario[0] === undefined) delete process.env.FAKE_GH;
-    if (savedScenario[1] === undefined) delete process.env.FAKE_GH_LOG;
-  }
+  });
 });
 
 test("review status and next step cover the cases an agent has to act on", () => {

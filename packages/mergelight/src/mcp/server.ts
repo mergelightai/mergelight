@@ -102,7 +102,8 @@ const toolList = () => TOOLS.map(({ run: _, ...tool }) => tool);
 /** Serves until the client closes the input. */
 export async function serve(input: NodeJS.ReadableStream = process.stdin, output: NodeJS.WritableStream = process.stdout): Promise<void> {
   let initialized = false;
-  const cancelled = new Set<unknown>();
+  /** Requests still being answered. A cancelled one leaves, so its answer never goes out. */
+  const running = new Set<unknown>();
   const inFlight = new Set<Promise<void>>();
   const send = (message: object) => output.write(`${JSON.stringify(message)}\n`);
 
@@ -147,13 +148,14 @@ export async function serve(input: NodeJS.ReadableStream = process.stdin, output
       return;
     }
     const { id, method, params } = message ?? {};
-    if (method === "notifications/cancelled") cancelled.add((params as { requestId?: unknown } | undefined)?.requestId);
+    if (method === "notifications/cancelled") running.delete((params as { requestId?: unknown } | undefined)?.requestId);
     // Notifications get no answer, and this server sends no requests to get answers to.
     if (id === undefined || id === null) return;
     if (typeof method !== "string") {
       if (method !== undefined) send({ jsonrpc: "2.0", id, error: { code: -32600, message: "Invalid request" } });
       return;
     }
+    running.add(id);
     let reply: object;
     try {
       reply = { result: await answer(method, (params ?? {}) as Record<string, unknown>) };
@@ -161,7 +163,7 @@ export async function serve(input: NodeJS.ReadableStream = process.stdin, output
       const known = typeof (err as RpcError).code === "number";
       reply = { error: known ? err : { code: -32603, message: reason(err) } };
     }
-    if (!cancelled.delete(id)) send({ jsonrpc: "2.0", id, ...reply });
+    if (running.delete(id)) send({ jsonrpc: "2.0", id, ...reply });
   }
 
   output.on("error", () => process.exit(0));
