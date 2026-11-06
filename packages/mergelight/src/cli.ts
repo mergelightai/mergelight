@@ -4,7 +4,7 @@ import { parseArgs } from "node:util";
 import { currentRepo, fetchPullRequest, parsePrRef } from "./github.js";
 import { serve } from "./mcp/server.js";
 import { GitHub } from "./publish/api.js";
-import { approveCheck, failCheck, previousFindings, publishReview, startCheck } from "./publish/publish.js";
+import { approveCheck, failCheck, failSummary, previousFindings, publishReview, startCheck, startSummary } from "./publish/publish.js";
 import { renderTerminal } from "./render.js";
 import { reviewPullRequest } from "./review.js";
 import type { Review } from "./types.js";
@@ -136,6 +136,7 @@ async function main(): Promise<number> {
   if (values.post) {
     headSha ??= (await fetchPullRequest(ref)).headSha;
     checkRunId = await startCheck(api, headSha);
+    await startSummary(api, ref.number).catch((e) => log(`Couldn't post the summary yet: ${(e as Error).message}`));
   }
 
   const progress = progressPrinter();
@@ -169,6 +170,7 @@ async function main(): Promise<number> {
     log(`mergelight: ${message}`);
     if (values.post && headSha) {
       await failCheck(api, checkRunId, headSha, message).catch((e) => log(`Couldn't update the check: ${(e as Error).message}`));
+      await failSummary(api, ref.number).catch((e) => log(`Couldn't update the summary: ${(e as Error).message}`));
     }
     return 1;
   }
