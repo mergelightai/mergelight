@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { parsePatch, place } from "../dist/publish/diff-lines.js";
 import { clean, inlineBody, summaryBody } from "../dist/publish/markdown.js";
-import { fixedThreadComment, trustedComment } from "../dist/publish/publish.js";
+import { checkConclusion, fixedThreadComment, isYellowCheck, trustedComment } from "../dist/publish/publish.js";
 import { decodeState, encodeState, nextState } from "../dist/publish/state.js";
 import { buildVerifierPrompt } from "../dist/prompt.js";
 import { assignIds } from "../dist/review.js";
@@ -175,4 +175,23 @@ test("a thread is answered once, only when its code changed and its finding is g
   assert.equal(fixedThreadComment(thread({}, [{ databaseId: 8, body: "<!-- mergelight:gone -->\nThe code changed.", ...bot }]), new Set()), null, "already answered");
   const stranger = { ...first, authorAssociation: "NONE", author: { __typename: "User" } };
   assert.equal(fixedThreadComment({ ...thread(), comments: { nodes: [stranger] } }, new Set()), null, "not our comment");
+});
+
+test("yellow doesn't block unless a team asks, and red always does", () => {
+  assert.equal(checkConclusion("green"), "success");
+  assert.equal(checkConclusion("yellow"), "neutral");
+  assert.equal(checkConclusion("red"), "failure");
+  assert.equal(checkConclusion("yellow", true), "action_required");
+  assert.equal(checkConclusion("red", true), "failure");
+  assert.equal(checkConclusion("green", true), "success");
+});
+
+test("an approval turns only a yellow check green, not a review that couldn't run", () => {
+  const check = (conclusion, title) => ({ conclusion, output: { title } });
+  assert.equal(isYellowCheck(check("neutral", "🟡 Needs a human: 1 risk to fix")), true);
+  assert.equal(isYellowCheck(check("action_required", "🟡 Needs a human: 1 risk to fix")), true);
+  assert.equal(isYellowCheck(check("neutral", "Couldn't review this pull request")), false);
+  assert.equal(isYellowCheck(check("failure", "🔴 Blocked: 1 bug to fix")), false);
+  assert.equal(isYellowCheck(check("success", "🟢 Safe to merge: Nothing worth fixing")), false);
+  assert.equal(isYellowCheck(check(null, "Reviewing")), false);
 });

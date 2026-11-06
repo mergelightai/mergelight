@@ -1,5 +1,6 @@
 # Turns a "needs a human" Mergelight check green when someone approves the PR.
 # Copy to .github/workflows/mergelight-approve.yml. It needs no secrets.
+# Skip it if you work alone: GitHub doesn't let you approve your own PR.
 name: Mergelight approval
 
 on:
