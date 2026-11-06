@@ -28,10 +28,13 @@ async function fetchWithRetry(fetchImpl, url, init, wait, attempts = 3) {
  * log gets the workflow commands, so they reach the run's log and annotations.
  */
 export async function getAppToken({ env = process.env, fetchImpl = fetch, log = console.log, wait = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
-  const server = env.TOKEN_SERVER;
-  if (!server) return null;
+  if (!env.TOKEN_SERVER) return null;
+  const scope = env.TOKEN_SCOPE;
+  const server = new URL(env.TOKEN_SERVER);
+  if (scope) server.searchParams.set("scope", scope);
+  const fallback = scope ? "" : ` ${SETUP_HINT}`;
   if (!env.ACTIONS_ID_TOKEN_REQUEST_URL || !env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) {
-    log(`::notice::Add "id-token: write" to the workflow's permissions to post as Mergelight AI. ${SETUP_HINT}`);
+    log(`::notice::Add "id-token: write" to the workflow's permissions to use the Mergelight AI app.${fallback}`);
     return null;
   }
 
@@ -47,15 +50,15 @@ export async function getAppToken({ env = process.env, fetchImpl = fetch, log = 
     const body = await res.json().catch(() => ({}));
     if (res.ok && body.token) {
       log(`::add-mask::${body.token}`);
-      log(`Posting as Mergelight AI, with a token for ${body.repository}.`);
+      if (!scope) log(`Posting as Mergelight AI, with a token for ${body.repository}.`);
       return body.token;
     }
     // Not installed is a normal choice, not a problem.
     const level = body.error === "not_installed" ? "notice" : "warning";
-    log(`::${level}::${body.message ?? `The token server answered ${res.status}.`} ${SETUP_HINT}`);
+    log(`::${level}::${body.message ?? `The token server answered ${res.status}.`}${fallback}`);
     return null;
   } catch (err) {
-    log(`::warning::Couldn't reach the token server (${err instanceof Error ? err.message : "unknown error"}). ${SETUP_HINT}`);
+    log(`::warning::Couldn't reach the token server (${err instanceof Error ? err.message : "unknown error"}).${fallback}`);
     return null;
   }
 }

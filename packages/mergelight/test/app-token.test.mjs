@@ -36,6 +36,14 @@ test("returns the app token and masks both tokens before anything else can print
   assert.equal(s.calls[1].init.headers.authorization, "Bearer oidc-jwt");
 });
 
+test("asks for a login token when told to", async () => {
+  const s = setup(json(200, { token: "ghs_login", repository: "acme/widgets" }));
+  assert.equal(await getAppToken({ env: { ...env, TOKEN_SCOPE: "login" }, ...s }), "ghs_login");
+  assert.equal(s.calls[1].url, "https://token.test/token?scope=login");
+  assert.ok(s.lines.includes("::add-mask::ghs_login"));
+  assert.ok(!s.lines.some((l) => l.startsWith("Posting as")));
+});
+
 test("does nothing when the token server is switched off", async () => {
   const s = setup(json(200, {}));
   assert.equal(await getAppToken({ env: { ...env, TOKEN_SERVER: "" }, ...s }), null);

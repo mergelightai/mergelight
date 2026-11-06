@@ -7,6 +7,8 @@ Lets a workflow post as the Mergelight AI GitHub App, without anyone but this se
 3. The server checks GitHub's signature, the issuer, the audience (`mergelight`), the expiry and the event.
 4. If the App is installed on that repository, the server returns an App token limited to that one repository, with `checks: write`, `pull_requests: write` and `contents: read`. The token can't push code, and GitHub expires it after an hour.
 
+A second kind of token, `POST /token?scope=login`, can only write Actions secrets. The Action asks for it only when Codex refreshed its login, to save the new one back. GitHub never lets it read a secret's value.
+
 The server stores nothing, and never sees code or model logins. If it's down or the App isn't installed, the Action posts as `github-actions[bot]`.
 
 ## Run it
