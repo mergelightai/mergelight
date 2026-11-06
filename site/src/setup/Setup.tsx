@@ -88,7 +88,7 @@ export default function Setup() {
         </a>
       </header>
 
-      <main className="mx-auto grid max-w-6xl gap-10 px-4 pb-24 pt-8 sm:px-8 sm:pt-14 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)] lg:gap-16">
+      <main className="mx-auto grid max-w-6xl grid-cols-1 gap-10 px-4 pb-24 pt-8 sm:px-8 sm:pt-14 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)] lg:gap-16">
         <div>
           <h1 className="text-4xl font-semibold tracking-[-0.035em] [text-wrap:balance] sm:text-5xl">Turn on Mergelight</h1>
           <p className="mt-4 text-lg text-muted">Three steps, all in your browser. Nothing to install on your machine.</p>
