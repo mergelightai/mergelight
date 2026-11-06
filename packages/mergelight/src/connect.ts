@@ -15,6 +15,7 @@ import { CHECK_FAILED_TITLE, readPrReviewState, writeCheck } from "./publish/pub
 export const LOGIN_TIMEOUT_MS = 16 * 60_000;
 
 export const INSTALL_URL = "https://github.com/apps/mergelight-ai/installations/new";
+export const CHATGPT_SECURITY_URL = "https://chatgpt.com/settings/security";
 
 export interface DeviceLogin {
   url: string;
@@ -40,7 +41,7 @@ export function connectBody(login: DeviceLogin, runUrl?: string): string {
     "",
     "The review starts by itself once you're connected. The code lasts 15 minutes. If it runs out, push a new commit to get another.",
     "",
-    "**If OpenAI refuses the code:** turn on device code login in your ChatGPT security settings, or ask your workspace admin to.",
+    `**If OpenAI refuses the code:** turn on "Enable device code sign-in" in your [ChatGPT security settings](${CHATGPT_SECURITY_URL}), or ask your workspace admin to.`,
     "",
     `<sub>Reviews use the plan of the account you connect. This code comes from ${runUrl ? `[your own GitHub Actions run](${runUrl})` : "your own GitHub Actions run"}. The login is saved as this repository's secret and is never sent to Mergelight.</sub>`,
   ].join("\n");
@@ -95,8 +96,8 @@ export async function connect(deps: ConnectDeps): Promise<number> {
   }
   await deps.failed(
     shown
-      ? "The code ran out, or OpenAI refused it. Check that device code login is on in your ChatGPT security settings."
-      : "Codex couldn't start a device login. Device code login may be turned off for this account or workspace.",
+      ? `The code ran out, or OpenAI refused it. Check that "Enable device code sign-in" is on in your [ChatGPT security settings](${CHATGPT_SECURITY_URL}).`
+      : `Codex couldn't start a device login. "Enable device code sign-in" may be off in your [ChatGPT security settings](${CHATGPT_SECURITY_URL}), or for your workspace.`,
   );
   return 1;
 }

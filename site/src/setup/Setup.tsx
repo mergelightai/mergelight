@@ -8,7 +8,7 @@ import Ambient from '../sections/Ambient';
 import { Check, GitHubIcon, SURFACE, WELL } from '../ui';
 
 const INSTALL_URL = 'https://github.com/apps/mergelight-ai/installations/new';
-const CODEX_AUTH_DOCS = 'https://developers.openai.com/codex/auth';
+const CHATGPT_SECURITY = 'https://chatgpt.com/settings/security';
 const SKIP_MARKER = 'github.event.pull_request.head.repo.full_name == github.repository';
 
 /** Accepts owner/repo or a pasted GitHub link. */
@@ -199,10 +199,11 @@ export default function Setup() {
                 <div className="mt-5">
                   <p className="text-muted">Open your pull request. Mergelight posts a link and a code there. Enter the code, and the review starts.</p>
                   <p className="mt-3 text-[13px] leading-relaxed text-muted">
-                    <span className="text-fg">First:</span> turn on device code login in your ChatGPT security settings. It's in beta, and workspace admins turn it on for their team.{' '}
-                    <a className="underline underline-offset-4 hover:text-fg" target="_blank" rel="noreferrer" href={CODEX_AUTH_DOCS}>
-                      OpenAI's guide
+                    <span className="text-fg">First:</span> turn on "Enable device code sign-in" in your{' '}
+                    <a className="text-fg underline underline-offset-4" target="_blank" rel="noreferrer" href={CHATGPT_SECURITY}>
+                      ChatGPT security settings
                     </a>
+                    . It's in beta, and on a workspace an admin turns it on.
                   </p>
                   <p className="mt-2 text-[13px] text-faint">Private repos only, by OpenAI's rules.</p>
                   <div className="mt-5 flex flex-wrap items-center gap-x-5 gap-y-3">

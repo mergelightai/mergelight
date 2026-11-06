@@ -69,7 +69,7 @@ test("a login that can't start says device login may be off", async () => {
   const d = deps(["error: device code login is disabled"], 1);
   assert.equal(await connect(d), 1);
   assert.equal(d.events.length, 1);
-  assert.match(d.events[0], /^failed .*turned off/);
+  assert.match(d.events[0], /^failed .*may be off.*chatgpt\.com\/settings\/security/);
 });
 
 test("waits for the comment to post before reporting connected", async () => {
@@ -87,6 +87,7 @@ test("the comment gives the link, the code and where it came from", () => {
   assert.ok(body.includes("https://auth.openai.com/codex/device"));
   assert.ok(body.includes("`2ZYY-TEST1`"));
   assert.ok(body.includes("https://github.com/a/b/actions/runs/1"));
+  assert.ok(body.includes("(https://chatgpt.com/settings/security)"), "links to the setting");
   assert.doesNotMatch(body, /[–—]/, "no dashes in copy");
 });
 
