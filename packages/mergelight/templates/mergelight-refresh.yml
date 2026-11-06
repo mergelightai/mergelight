@@ -1,5 +1,5 @@
-# Uses the Codex login every third day, so it stays fresh and reviews rarely refresh it themselves.
-# Copy to .github/workflows/mergelight-refresh.yml. Only needed with a ChatGPT login.
+# Uses the Codex login every third day, so it stays fresh and two reviews at once don't both refresh it,
+# which can invalidate it. Scheduled jobs only run from the default branch. Only does anything with a ChatGPT login.
 name: Mergelight login refresh
 
 on:

@@ -3,9 +3,10 @@ import * as Select from '@radix-ui/react-select';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type Ref } from 'react';
 import workflowFile from '../../../examples/mergelight.yml?raw';
+import refreshFile from '../../../examples/mergelight-refresh.yml?raw';
 import Ambient from '../sections/Ambient';
 import { Check, GitHubIcon, SURFACE, WELL } from '../ui';
-import { cleanUrl, finishSignIn, GitHubError, INSTALL_URL, mockClient, realClient, signInUrl, wakeTokenServer, type CheckStatus, type GitHubClient, type Repo, type RepoDetails, type SetupPr } from './github';
+import { cleanUrl, finishSignIn, GitHubError, INSTALL_URL, mockClient, pinned, realClient, REFRESH_FILE, signInUrl, wakeTokenServer, type CheckStatus, type GitHubClient, type Repo, type RepoDetails, type SetupPr, type WorkflowFile } from './github';
 
 const CHATGPT_SECURITY = 'https://chatgpt.com/settings/security';
 const TYPES_MARKER = 'types: [opened, synchronize, reopened, ready_for_review]';
@@ -67,6 +68,7 @@ export default function Setup() {
   const [status, setStatus] = useState<CheckStatus | null>(null);
   const [hasLogin, setHasLogin] = useState(false);
   const [merged, setMerged] = useState(false);
+  const [detailsFailed, setDetailsFailed] = useState(false);
   const wide = useWide();
 
   const previous = useRef(view);
@@ -115,6 +117,7 @@ export default function Setup() {
 
   const choose = (r: Repo) => {
     setRepo(r);
+    setDetailsFailed(false);
     setDetails(null);
     setPr(null);
     setStatus(null);
@@ -128,21 +131,37 @@ export default function Setup() {
       setBranch(d.base);
       setScope(d.skip.length > 1 ? 'new' : 'all');
       setHasLogin(d.hasLogin);
-    }, () => undefined);
+    }, () => setDetailsFailed(true));
   };
 
-  const workflow = useMemo(() => workflowFor(scope, branch, details?.skip ?? []), [scope, branch, details]);
+  /** A repo already on another version only needs the version changed. Anything else in its file stays theirs. */
+  const updating = Boolean(details?.installed && details.installed.ref !== details.release.sha);
+  const workflow = useMemo(() => {
+    if (!details) return workflowFile;
+    return pinned(details.installed && updating ? details.installed.content : workflowFor(scope, branch, details.skip), details.release);
+  }, [scope, branch, details, updating]);
+  /**
+   * The review, and on a private repo the job that keeps a ChatGPT login fresh. Without that job reviews refresh the
+   * login themselves, and two at once can invalidate it. An API key needs no refreshing, and public repos can't use ChatGPT.
+   */
+  const files = useMemo<WorkflowFile[]>(() => {
+    const list = [{ name: 'mergelight.yml', content: workflow }];
+    if (!details || !repo) return list;
+    if (details.refresh) list.push({ name: REFRESH_FILE, content: pinned(details.refresh, details.release) });
+    else if (repo.isPrivate && !details.hasApiKey) list.push({ name: REFRESH_FILE, content: pinned(refreshFile, details.release) });
+    return list;
+  }, [workflow, details, repo]);
   const fileUrl = repo ? newFileUrl(repo.fullName, branch, workflow) : '#';
   const afterAdding = useCallback(() => setView(hasLogin ? 'live' : 'connect'), [hasLogin]);
 
   /** Opens the pull request right here, with the person's own sign-in. Nothing goes through Mergelight. */
   const addToRepo = async () => {
-    if (!client || !repo || adding) return;
+    if (!client || !repo || !details || adding) return;
     setAdding(true);
     setAddFailed(null);
     setFileOpen(false);
     try {
-      setPr(await client.addWorkflow(repo, branch, workflow));
+      setPr(await client.proposeWorkflows(repo, branch, files, details.release));
       afterAdding();
     } catch (err) {
       setAddFailed(err instanceof GitHubError && (err.status === 403 || err.status === 404) ? 'refused' : 'other');
@@ -218,11 +237,11 @@ export default function Setup() {
               {view === 'welcome' && <Welcome signingIn={signingIn} failed={signInFailed} installed={params.has('installation_id')} />}
               {view === 'repo' && <RepoStep repos={repos} onChoose={choose} failed={signInFailed} />}
               {view === 'add' && repo && (
-                <AddStep repo={repo} details={details} branch={branch} setBranch={setBranch} scope={scope} setScope={setScope} fileOpen={fileOpen} onToggleFile={() => setFileOpen((v) => !v)} adding={adding} failed={addFailed} onAdd={() => void addToRepo()} fileUrl={fileUrl} onBack={adding ? () => undefined : back.add!} onByHand={() => { setFileOpen(false); setView('finish'); }} onContinue={afterAdding} />
+                <AddStep repo={repo} details={details} fileCount={files.length} branch={branch} setBranch={setBranch} scope={scope} setScope={setScope} fileOpen={fileOpen} onToggleFile={() => setFileOpen((v) => !v)} adding={adding} failed={addFailed} detailsFailed={detailsFailed} onRetry={() => choose(repo)} updating={updating} onAdd={() => void addToRepo()} fileUrl={fileUrl} onBack={adding ? () => undefined : back.add!} onByHand={() => { setFileOpen(false); setView('finish'); }} onContinue={afterAdding} />
               )}
               {view === 'finish' && repo && <FinishStep repo={repo} branch={branch} fileUrl={fileUrl} pr={pr} onBack={back.finish!} />}
               {view === 'connect' && repo && <ConnectStep repo={repo} pr={pr} status={status} onBack={back.connect!} onSkip={() => setView('live')} />}
-              {view === 'live' && repo && <LiveStep repo={repo} pr={pr} status={status} hasLogin={hasLogin} merged={merged} onAnother={anotherRepo} />}
+              {view === 'live' && repo && <LiveStep repo={repo} pr={pr} status={status} hasLogin={hasLogin} merged={merged} updatedTo={updating ? details?.release.tag ?? null : null} onAnother={anotherRepo} />}
             </Stage>
             <p className="mt-6 flex items-center justify-center gap-1.5 text-center text-[13px] text-faint">
               <LockIcon className="size-3.5 shrink-0" />
@@ -230,10 +249,10 @@ export default function Setup() {
             </p>
           </motion.div>
           <AnimatePresence mode="popLayout" initial={false}>
-            {wide && view === 'add' && fileOpen && <FileSide key="file" workflow={workflow} onClose={() => setFileOpen(false)} />}
+            {wide && view === 'add' && fileOpen && <FileSide key="file" files={files} version={details?.release.tag} onClose={() => setFileOpen(false)} />}
           </AnimatePresence>
         </div>
-        {!wide && <FileSheet open={view === 'add' && fileOpen} workflow={workflow} onClose={() => setFileOpen(false)} />}
+        {!wide && <FileSheet open={view === 'add' && fileOpen} files={files} version={details?.release.tag} onClose={() => setFileOpen(false)} />}
       </main>
     </div>
   );
@@ -563,6 +582,7 @@ function Choices<T extends string>({ label, options, value, onChange }: { label:
 function AddStep(props: {
   repo: Repo;
   details: RepoDetails | null;
+  fileCount: number;
   branch: string;
   setBranch: (b: string) => void;
   scope: Scope;
@@ -571,15 +591,79 @@ function AddStep(props: {
   onToggleFile: () => void;
   adding: boolean;
   failed: 'refused' | 'other' | null;
+  detailsFailed: boolean;
+  onRetry: () => void;
+  updating: boolean;
   onAdd: () => void;
   fileUrl: string;
   onBack: () => void;
   onByHand: () => void;
   onContinue: () => void;
 }) {
-  const { repo, details, branch, setBranch, scope, setScope, fileOpen, onToggleFile, adding, failed, onAdd, fileUrl, onBack, onByHand, onContinue } = props;
+  const { repo, details, fileCount, branch, setBranch, scope, setScope, fileOpen, onToggleFile, adding, failed, detailsFailed, onRetry, updating, onAdd, fileUrl, onBack, onByHand, onContinue } = props;
   const name = repo.fullName.split('/')[1]!;
-  const already = Boolean(details?.hasWorkflow);
+
+  if (detailsFailed) {
+    return (
+      <div>
+        <BackButton onClick={onBack} />
+        <Heading title={`Couldn't read ${name}`} sub="GitHub didn't answer the way we expected. Nothing was changed." />
+        <button type="button" onClick={onRetry} className={`${PRIMARY} mt-6`}>
+          Try again
+        </button>
+      </div>
+    );
+  }
+
+  if (details && updating) {
+    const { installed, release } = details;
+    const from = installed?.version;
+    return (
+      <div>
+        <BackButton onClick={onBack} />
+        <Heading
+          title={`Update Mergelight on ${name}`}
+          sub={from ? `It's on ${from}, and ${release.tag} is out.` : `It's on ${installed?.ref}, a tag that can change. This locks it to ${release.tag}.`}
+        />
+        <ul className="mt-3 divide-y divide-white/[0.06]">
+          <Fact icon={<Check className="size-4" />}>Moves it to the exact commit of {release.tag}, so it can't change without a PR</Fact>
+          <Fact icon={<Check className="size-4" />}>Changes that one line, and nothing else in your file</Fact>
+          <Fact center icon={<LockIcon className="size-4" />}>
+            <span className="flex items-center justify-between gap-3">
+              <span className="[text-wrap:pretty]">Opens a PR, and you decide whether to merge.</span>
+              <button
+                type="button"
+                aria-expanded={fileOpen}
+                onClick={onToggleFile}
+                className={`h-8 shrink-0 rounded-lg px-2.5 text-[13px] font-medium text-fg outline-none transition-[background-color,transform] duration-100 hover:bg-white/[0.11] focus-visible:ring-2 focus-visible:ring-lilac active:scale-[0.97] ${fileOpen ? 'bg-white/[0.11]' : 'bg-white/[0.07]'}`}
+              >
+                {fileOpen ? (fileCount > 1 ? 'Hide files' : 'Hide file') : fileCount > 1 ? 'View files' : 'View file'}
+              </button>
+            </span>
+          </Fact>
+        </ul>
+        <button type="button" onClick={onAdd} disabled={adding} className={`${PRIMARY} mt-5 ${adding ? 'pointer-events-none opacity-70' : ''}`}>
+          {adding && <Spinner />}
+          {adding ? 'Opening your PR...' : `Update to ${release.tag}`}
+        </button>
+        <a href={`https://github.com/mergelightai/mergelight/releases/tag/${release.tag}`} target="_blank" rel="noreferrer" className="mt-4 flex items-center justify-center gap-1 text-[13px] text-muted transition-colors hover:text-fg">
+          What's new in {release.tag} <External />
+        </a>
+        {failed && (
+          <div role="alert" className="mt-4 text-center text-[13px] leading-relaxed text-muted">
+            <p>{failed === 'refused' ? "GitHub didn't let us open the PR. Your install may need to approve the access." : "That didn't work. Please try again."}</p>
+            {failed === 'refused' && (
+              <a href={repo.accessUrl} target="_blank" rel="noreferrer" className="mx-auto mt-1.5 flex w-fit items-center gap-1 text-lilac transition-colors hover:text-fg">
+                Approve on GitHub <External />
+              </a>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  const already = Boolean(details?.installed);
   const canChoose = Boolean(details && details.skip.length > 1);
   // With New work the branch is already picked up top, so only Every PR asks where the file goes.
   const pickFileBranch = scope === 'all' && Boolean(details && details.branches.length > 1);
@@ -637,7 +721,7 @@ function AddStep(props: {
                   {pickFileBranch ? (
                     <span className="flex flex-wrap items-center gap-x-2 gap-y-1">Opens a PR into {picker}</span>
                   ) : (
-                    <span className="[text-wrap:pretty]">Needs one small file to run. We open a PR with it, and you decide whether to merge.</span>
+                    <span className="[text-wrap:pretty]">{fileCount > 1 ? 'Needs two small files to run. We open a PR with them, and you decide whether to merge.' : 'Needs one small file to run. We open a PR with it, and you decide whether to merge.'}</span>
                   )}
                   <button
                     type="button"
@@ -645,12 +729,12 @@ function AddStep(props: {
                     onClick={onToggleFile}
                     className={`h-8 shrink-0 rounded-lg px-2.5 text-[13px] font-medium text-fg outline-none transition-[background-color,transform] duration-100 hover:bg-white/[0.11] focus-visible:ring-2 focus-visible:ring-lilac active:scale-[0.97] ${fileOpen ? 'bg-white/[0.11]' : 'bg-white/[0.07]'}`}
                   >
-                    {fileOpen ? 'Hide file' : 'View file'}
+                    {fileOpen ? (fileCount > 1 ? 'Hide files' : 'Hide file') : fileCount > 1 ? 'View files' : 'View file'}
                   </button>
                 </span>
                 {pickFileBranch && (
                   <span className="mt-1 block [text-wrap:pretty]">
-                    It adds one small file needed to run, and you decide whether to merge.{canChoose && ' Merge it into other branches to review PRs there.'}
+                    {fileCount > 1 ? 'It adds two small files needed to run' : 'It adds one small file needed to run'}, and you decide whether to merge.{canChoose && ` Merge ${fileCount > 1 ? 'them' : 'it'} into other branches to review PRs there.`}
                   </span>
                 )}
               </Fact>
@@ -659,7 +743,7 @@ function AddStep(props: {
         </>
       )}
 
-      {details?.hasWorkflow ? (
+      {details?.installed ? (
         <button type="button" onClick={onContinue} className={`${PRIMARY} mt-5`}>
           Continue
         </button>
@@ -748,54 +832,70 @@ function YamlLine({ text }: { text: string }) {
 }
 
 /** The exact file GitHub will open with, and why it's there. */
-function FileView({ workflow, onClose }: { workflow: string; onClose: () => void }) {
-  const lines = workflow.trimEnd().split('\n');
+/** What each workflow is for, shown above its lines. */
+const FILE_PURPOSE: Record<string, string> = {
+  'mergelight.yml': 'Runs the review on your pull requests.',
+  [REFRESH_FILE]: "Keeps a ChatGPT login from expiring. Scheduled jobs only run from your default branch, so it starts once it's merged there.",
+};
+
+/** The exact files the pull request will hold, and why they're there. */
+function FileView({ files, version, onClose }: { files: WorkflowFile[]; version?: string; onClose: () => void }) {
+  const all = files.flatMap((f) => f.content.trimEnd().split('\n'));
   // A line that wasn't there before lights up, so a choice on the card is visibly a change in the file.
-  const seen = useRef(new Set(lines));
+  const seen = useRef(new Set(all));
   useEffect(() => {
-    lines.forEach((l) => seen.current.add(l));
+    all.forEach((l) => seen.current.add(l));
   });
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex h-12 shrink-0 items-center justify-between gap-3 pl-5 pr-2.5 shadow-[inset_0_-1px_0_rgb(255_255_255/0.06)]">
         <p className="min-w-0 truncate font-mono text-[12.5px]">
           <span className="text-faint">.github/workflows/</span>
-          <span className="text-fg">mergelight.yml</span>
+          {files.length === 1 && <span className="text-fg">{files[0]!.name}</span>}
         </p>
-        <button type="button" onClick={onClose} aria-label="Close the file" className="grid size-8 shrink-0 place-items-center rounded-lg text-faint outline-none transition-[background-color,color,transform] duration-100 hover:bg-white/[0.06] hover:text-fg focus-visible:ring-2 focus-visible:ring-lilac active:scale-[0.94]">
+        <button type="button" onClick={onClose} aria-label="Close" className="grid size-8 shrink-0 place-items-center rounded-lg text-faint outline-none transition-[background-color,color,transform] duration-100 hover:bg-white/[0.06] hover:text-fg focus-visible:ring-2 focus-visible:ring-lilac active:scale-[0.94]">
           <svg viewBox="0 0 16 16" fill="none" aria-hidden="true" className="size-4">
             <path d="m4.5 4.5 7 7m0-7-7 7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
           </svg>
         </button>
       </div>
       <div className="shrink-0 px-5 py-4">
-        <p className="text-[14.5px] font-medium text-fg [text-wrap:balance]">This file is why your code and AI login never touch Mergelight</p>
-        <p className="mt-1 text-[13.5px] leading-relaxed text-muted [text-wrap:pretty]">Most review tools run on their own servers. Mergelight runs in your GitHub Actions instead, and GitHub needs this file in your repo to do that.</p>
+        <p className="text-[14.5px] font-medium text-fg [text-wrap:balance]">{files.length > 1 ? 'These files are' : 'This file is'} why your code and AI login never touch Mergelight</p>
+        <p className="mt-1 text-[13.5px] leading-relaxed text-muted [text-wrap:pretty]">Most review tools run on their own servers. Mergelight runs in your GitHub Actions instead, and GitHub needs {files.length > 1 ? 'these files' : 'this file'} in your repo to do that.</p>
         <ul className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5 text-[13px] text-muted">
           <li className="flex items-center gap-1.5"><Check className="size-3.5 text-lilac" /> Reads your code</li>
           <li className="flex items-center gap-1.5"><Check className="size-3.5 text-lilac" /> Posts reviews</li>
           <li className="flex items-center gap-1.5"><LockIcon className="size-3.5 text-lilac" /> Reviews can't push code</li>
+          {version && <li className="flex items-center gap-1.5"><LockIcon className="size-3.5 text-lilac" /> Locked to {version}</li>}
         </ul>
       </div>
-      <div tabIndex={0} aria-label="The file's contents" className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-black/25 pb-7 pt-3 font-mono text-[12px] leading-[20px] outline-none shadow-[inset_0_1px_0_rgb(255_255_255/0.06)] [mask-image:linear-gradient(to_bottom,black_calc(100%-28px),transparent)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-lilac">
-        {lines.map((line, i) => {
-          const hang = (line.match(/^\s*/)![0].length + 2);
-          return (
-            <div key={`${i}:${line}`} className={`flex pr-4 ${seen.current.has(line) ? '' : 'setup-fresh'}`}>
-              <span aria-hidden="true" className="w-10 shrink-0 select-none pr-3 text-right tabular-nums text-faint/50">{i + 1}</span>
-              <code className="min-w-0 flex-1 whitespace-pre-wrap break-words" style={{ paddingLeft: `${hang}ch`, textIndent: `-${hang}ch` }}>
-                <YamlLine text={line} />
-              </code>
+      <div tabIndex={0} aria-label="The files' contents" className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-black/25 pb-7 font-mono text-[12px] leading-[20px] outline-none shadow-[inset_0_1px_0_rgb(255_255_255/0.06)] [mask-image:linear-gradient(to_bottom,black_calc(100%-28px),transparent)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-lilac">
+        {files.map((file) => (
+          <section key={file.name} className="pt-3">
+            <div className="mb-2 px-5 font-sans">
+              <p className="font-mono text-[12.5px] text-fg">{file.name}</p>
+              <p className="mt-0.5 text-[12.5px] leading-snug text-muted [text-wrap:pretty]">{FILE_PURPOSE[file.name]}</p>
             </div>
-          );
-        })}
+            {file.content.trimEnd().split('\n').map((line, i) => {
+              const hang = line.match(/^\s*/)![0].length + 2;
+              return (
+                <div key={`${i}:${line}`} className={`flex pr-4 ${seen.current.has(line) ? '' : 'setup-fresh'}`}>
+                  <span aria-hidden="true" className="w-10 shrink-0 select-none pr-3 text-right tabular-nums text-faint/50">{i + 1}</span>
+                  <code className="min-w-0 flex-1 whitespace-pre-wrap break-words" style={{ paddingLeft: `${hang}ch`, textIndent: `-${hang}ch` }}>
+                    <YamlLine text={line} />
+                  </code>
+                </div>
+              );
+            })}
+          </section>
+        ))}
       </div>
     </div>
   );
 }
 
 /** Beside the card when there's room. The card moves over to make space, and back when it closes. */
-function FileSide({ workflow, onClose, ref }: { workflow: string; onClose: () => void; ref?: Ref<HTMLElement> }) {
+function FileSide({ files, version, onClose, ref }: { files: WorkflowFile[]; version?: string; onClose: () => void; ref?: Ref<HTMLElement> }) {
   const reduce = useReducedMotion();
   return (
     <motion.aside
@@ -807,13 +907,13 @@ function FileSide({ workflow, onClose, ref }: { workflow: string; onClose: () =>
       transition={{ ...SPRING, opacity: { duration: 0.2 } }}
       className={`${SURFACE} ml-5 h-[min(720px,calc(100dvh-64px-9vh-40px))] w-[600px] shrink-0 overflow-hidden`}
     >
-      <FileView workflow={workflow} onClose={onClose} />
+      <FileView files={files} version={version} onClose={onClose} />
     </motion.aside>
   );
 }
 
 /** On a phone or tablet the same thing comes up as a sheet. */
-function FileSheet({ open, workflow, onClose }: { open: boolean; workflow: string; onClose: () => void }) {
+function FileSheet({ open, files, version, onClose }: { open: boolean; files: WorkflowFile[]; version?: string; onClose: () => void }) {
   const reduce = useReducedMotion();
   const hidden = reduce ? { opacity: 0 } : { y: '100%' };
   return (
@@ -833,7 +933,7 @@ function FileSheet({ open, workflow, onClose }: { open: boolean; workflow: strin
                 className="fixed inset-x-0 bottom-0 z-50 h-[88dvh] overflow-hidden rounded-t-[22px] bg-[linear-gradient(180deg,#1a1820_0%,#121116_100%)] pb-[env(safe-area-inset-bottom)] shadow-[inset_0_1px_0_rgb(255_255_255/0.08)] outline-none"
               >
                 <Dialog.Title className="sr-only">The workflow file</Dialog.Title>
-                <FileView workflow={workflow} onClose={onClose} />
+                <FileView files={files} version={version} onClose={onClose} />
               </motion.div>
             </Dialog.Content>
           </Dialog.Portal>
@@ -973,7 +1073,7 @@ function Milestone({ state, title, last = false, children }: { state: 'done' | '
   );
 }
 
-function LiveStep({ repo, pr, status, hasLogin, merged, onAnother }: { repo: Repo; pr: SetupPr | null; status: CheckStatus | null; hasLogin: boolean; merged: boolean; onAnother: () => void }) {
+function LiveStep({ repo, pr, status, hasLogin, merged, updatedTo, onAnother }: { repo: Repo; pr: SetupPr | null; status: CheckStatus | null; hasLogin: boolean; merged: boolean; updatedTo: string | null; onAnother: () => void }) {
   const name = repo.fullName.split('/')[1]!;
   const another = (
     <button type="button" onClick={onAnother} className={`${BUTTON} mt-3 text-fg shadow-[inset_0_0_0_1px_rgb(255_255_255/0.12)] hover:bg-white/[0.05]`}>
@@ -988,9 +1088,9 @@ function LiveStep({ repo, pr, status, hasLogin, merged, onAnother }: { repo: Rep
         <motion.div initial={{ scale: 0.94, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={SPRING} className="mx-auto w-fit">
           <img src="/logo-animated.svg" alt="" width={72} height={72} className="size-[72px] rounded-[18px] shadow-[0_0_0_1px_rgb(255_255_255/0.08),0_14px_40px_-12px_rgb(0_0_0/0.8)]" />
         </motion.div>
-        <h1 className="mt-4 text-[28px] font-semibold leading-[1.1] tracking-[-0.028em]">Mergelight is on</h1>
+        <h1 className="mt-4 text-[28px] font-semibold leading-[1.1] tracking-[-0.028em]">{updatedTo ? `You're on ${updatedTo}` : 'Mergelight is on'}</h1>
         <p className="mx-auto mt-2 max-w-[340px] text-[15px] leading-relaxed text-muted [text-wrap:pretty]">
-          New PRs on {name} get reviewed by themselves, and the results show up on the PR. You can close this page.
+          {updatedTo ? `Reviews on ${name} now use the new version.` : `New PRs on ${name} get reviewed by themselves, and the results show up on the PR.`} You can close this page.
         </p>
         <div className="mt-6">{another}</div>
       </div>
@@ -1001,16 +1101,16 @@ function LiveStep({ repo, pr, status, hasLogin, merged, onAnother }: { repo: Rep
   const reviewTitle = done ? 'First review done' : status ? 'First review running' : hasLogin ? 'Starting the first review' : 'Waiting for the first review to start';
   return (
     <div>
-      <Heading title="Your PR is open" sub={`Merge it to turn on reviews for ${name}.`} />
+      <Heading title="Your PR is open" sub={updatedTo ? `Merge it to update Mergelight on ${name}.` : `Merge it to turn on reviews for ${name}.`} />
       <ol className="mt-6">
         <Milestone state="done" title={`PR #${pr.number} opened`}>
-          It adds the one file Mergelight needs.
+          {updatedTo ? `It moves the workflow to ${updatedTo}.` : 'It adds what Mergelight needs to run.'}
         </Milestone>
         <Milestone state={done ? 'done' : 'now'} title={reviewTitle}>
           {done ? `${plainTitle(status)}. It reviewed this same PR, so you can see what a review looks like.` : "It's reviewing this same PR, so you can see what a review looks like. It usually takes 2 to 15 minutes."}
         </Milestone>
         <Milestone last state={done ? 'now' : 'next'} title="Merge the PR">
-          After that, new PRs on {name} get reviewed by themselves. You can merge any time.
+          {updatedTo ? `After that, reviews on ${name} use the new version.` : `After that, new PRs on ${name} get reviewed by themselves.`} You can merge any time.
         </Milestone>
       </ol>
       <a href={pr.url} target="_blank" rel="noreferrer" className={`${PRIMARY} mt-6`}>
