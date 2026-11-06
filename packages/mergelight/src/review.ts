@@ -6,9 +6,8 @@ import {
   buildHunterPrompt,
   buildSweepPrompt,
   buildVerifierPrompt,
-  FOCUS,
+  focusesFor,
   type Candidate,
-  type Focus,
   type PriorFinding,
   type PromptInput,
 } from "./prompt.js";
@@ -196,7 +195,7 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
     };
 
     // Step 1: hunters, one per area, in parallel. One failing doesn't sink the review.
-    const focuses = Object.keys(FOCUS) as Focus[];
+    const focuses = focusesFor(ws.changedFiles.filter((f) => f.added > 0).map((f) => f.path));
     let done = 0;
     progress(`Hunting for problems (0 of ${focuses.length} areas done)`);
     const hunts = await Promise.allSettled(
