@@ -1,5 +1,5 @@
-# Mergelight review. Copy to .github/workflows/mergelight.yml.
-# Setup: https://github.com/mergelightai/mergelight/blob/main/docs/github-action.md
+# Mergelight review. It runs in your GitHub Actions, on your AI plan.
+# Setup: https://mergelight.dev/setup
 name: Mergelight
 
 on:

@@ -1,18 +1,28 @@
+import * as Dialog from '@radix-ui/react-dialog';
 import * as Select from '@radix-ui/react-select';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type Ref } from 'react';
 import workflowFile from '../../../examples/mergelight.yml?raw';
 import Ambient from '../sections/Ambient';
 import { Check, GitHubIcon, SURFACE, WELL } from '../ui';
 import { cleanUrl, finishSignIn, INSTALL_URL, mockClient, realClient, signInUrl, type CheckStatus, type GitHubClient, type Repo, type RepoDetails, type SetupPr } from './github';
 
 const CHATGPT_SECURITY = 'https://chatgpt.com/settings/security';
+const TYPES_MARKER = 'types: [opened, synchronize, reopened, ready_for_review]';
 const SKIP_MARKER = 'github.event.pull_request.head.repo.full_name == github.repository';
 const SPRING = { type: 'spring', bounce: 0, duration: 0.45 } as const;
 
-function withSkippedBranches(content: string, branches: string[]): string {
-  if (!branches.length) return content;
-  return content.replace(SKIP_MARKER, `${SKIP_MARKER} &&\n      !contains(fromJSON('${JSON.stringify(branches)}'), github.head_ref)`);
+/** What gets reviewed. New work is PRs into one branch, without merges from the other long-lived ones. */
+type Scope = 'new' | 'all';
+
+function workflowFor(scope: Scope, branch: string, longLived: string[]): string {
+  if (scope === 'all') return workflowFile;
+  // GitHub reads + and ! in a branch filter as a pattern.
+  const filter = JSON.stringify(branch.replace(/[+!]/g, '\\$&'));
+  const skip = longLived.filter((b) => b !== branch);
+  const scoped = workflowFile.replace(TYPES_MARKER, () => `${TYPES_MARKER}\n    branches: [${filter}]`);
+  if (!skip.length) return scoped;
+  return scoped.replace(SKIP_MARKER, () => `${SKIP_MARKER} &&\n      !contains(fromJSON('${JSON.stringify(skip)}'), github.head_ref)`);
 }
 
 /** GitHub's own editor, already filled in. Nothing is written until the person commits it there. */
@@ -21,9 +31,17 @@ function newFileUrl(repo: string, branch: string, content: string): string {
   return `https://github.com/${repo}/new/${path}?filename=.github/workflows/mergelight.yml&value=${encodeURIComponent(content)}`;
 }
 
-function listInWords(items: string[]): string {
-  if (items.length < 2) return items[0] ?? '';
-  return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
+const WIDE = '(min-width: 1160px)';
+/** Whether there's room for the file beside the card. */
+function useWide(): boolean {
+  return useSyncExternalStore(
+    (changed) => {
+      const media = window.matchMedia(WIDE);
+      media.addEventListener('change', changed);
+      return () => media.removeEventListener('change', changed);
+    },
+    () => window.matchMedia(WIDE).matches,
+  );
 }
 
 type View = 'welcome' | 'repo' | 'add' | 'finish' | 'connect' | 'live';
@@ -41,10 +59,12 @@ export default function Setup() {
   const [repo, setRepo] = useState<Repo | null>(null);
   const [details, setDetails] = useState<RepoDetails | null>(null);
   const [branch, setBranch] = useState('main');
-  const [skip, setSkip] = useState<string[]>([]);
+  const [scope, setScope] = useState<Scope>('all');
+  const [fileOpen, setFileOpen] = useState(false);
   const [pr, setPr] = useState<SetupPr | null>(null);
   const [status, setStatus] = useState<CheckStatus | null>(null);
   const [hasLogin, setHasLogin] = useState(false);
+  const wide = useWide();
 
   const previous = useRef(view);
   const direction = ORDER.indexOf(view) >= ORDER.indexOf(previous.current) ? 1 : -1;
@@ -93,16 +113,17 @@ export default function Setup() {
     setPr(null);
     setStatus(null);
     setHasLogin(false);
+    setFileOpen(false);
     setView('add');
     client?.details(r).then((d) => {
       setDetails(d);
       setBranch(d.base);
-      setSkip(d.skip);
+      setScope(d.skip.length > 1 ? 'new' : 'all');
       setHasLogin(d.hasLogin);
     }, () => undefined);
   };
 
-  const workflow = useMemo(() => withSkippedBranches(workflowFile, skip), [skip]);
+  const workflow = useMemo(() => workflowFor(scope, branch, details?.skip ?? []), [scope, branch, details]);
   const fileUrl = repo ? newFileUrl(repo.fullName, branch, workflow) : '#';
   const afterAdding = useCallback(() => setView(hasLogin ? 'live' : 'connect'), [hasLogin]);
 
@@ -162,22 +183,28 @@ export default function Setup() {
       </header>
 
       <main className="flex flex-1 justify-center px-4 pb-16 pt-[6vh] sm:pt-[9vh]">
-        <div className="w-full max-w-[460px]">
-          <Stage viewKey={view} direction={direction}>
-            {view === 'welcome' && <Welcome signingIn={signingIn} failed={signInFailed} installed={params.has('installation_id')} />}
-            {view === 'repo' && <RepoStep repos={repos} onChoose={choose} failed={signInFailed} />}
-            {view === 'add' && repo && (
-              <AddStep repo={repo} details={details} branch={branch} setBranch={setBranch} skip={skip} setSkip={setSkip} workflow={workflow} fileUrl={fileUrl} onBack={back.add!} onOpened={() => setView('finish')} onContinue={afterAdding} />
-            )}
-            {view === 'finish' && repo && <FinishStep repo={repo} branch={branch} fileUrl={fileUrl} pr={pr} onBack={back.finish!} />}
-            {view === 'connect' && repo && <ConnectStep repo={repo} pr={pr} status={status} onBack={back.connect!} onSkip={() => setView('live')} />}
-            {view === 'live' && repo && <LiveStep repo={repo} pr={pr} status={status} hasLogin={hasLogin} onAnother={anotherRepo} />}
-          </Stage>
-          <p className="mt-6 flex items-center justify-center gap-1.5 text-center text-[13px] text-faint">
-            <LockIcon className="size-3.5 shrink-0" />
-            Your code and AI login never touch Mergelight.
-          </p>
+        <div className="relative flex w-full items-start justify-center">
+          <motion.div layout="position" transition={SPRING} className="z-10 w-full max-w-[460px] shrink-0">
+            <Stage viewKey={view} direction={direction}>
+              {view === 'welcome' && <Welcome signingIn={signingIn} failed={signInFailed} installed={params.has('installation_id')} />}
+              {view === 'repo' && <RepoStep repos={repos} onChoose={choose} failed={signInFailed} />}
+              {view === 'add' && repo && (
+                <AddStep repo={repo} details={details} branch={branch} setBranch={setBranch} scope={scope} setScope={setScope} fileOpen={fileOpen} onToggleFile={() => setFileOpen((v) => !v)} fileUrl={fileUrl} onBack={back.add!} onOpened={() => { setFileOpen(false); setView('finish'); }} onContinue={afterAdding} />
+              )}
+              {view === 'finish' && repo && <FinishStep repo={repo} branch={branch} fileUrl={fileUrl} pr={pr} onBack={back.finish!} />}
+              {view === 'connect' && repo && <ConnectStep repo={repo} pr={pr} status={status} onBack={back.connect!} onSkip={() => setView('live')} />}
+              {view === 'live' && repo && <LiveStep repo={repo} pr={pr} status={status} hasLogin={hasLogin} onAnother={anotherRepo} />}
+            </Stage>
+            <p className="mt-6 flex items-center justify-center gap-1.5 text-center text-[13px] text-faint">
+              <LockIcon className="size-3.5 shrink-0" />
+              Your code and AI login never touch Mergelight.
+            </p>
+          </motion.div>
+          <AnimatePresence mode="popLayout" initial={false}>
+            {wide && view === 'add' && fileOpen && <FileSide key="file" workflow={workflow} onClose={() => setFileOpen(false)} />}
+          </AnimatePresence>
         </div>
+        {!wide && <FileSheet open={view === 'add' && fileOpen} workflow={workflow} onClose={() => setFileOpen(false)} />}
       </main>
     </div>
   );
@@ -451,12 +478,34 @@ function RepoStep({ repos, onChoose, failed }: { repos: Repo[] | null; onChoose:
   );
 }
 
-function Fact({ icon, center = false, children }: { icon: ReactNode; center?: boolean; children: ReactNode }) {
+/** `tall` lines the icon up with a first line that holds a control. */
+function Fact({ icon, center = false, tall = false, children }: { icon: ReactNode; center?: boolean; tall?: boolean; children: ReactNode }) {
   return (
     <li className={`flex gap-3 py-3 text-[14.5px] leading-[1.45] text-muted ${center ? 'items-center' : 'items-start'}`}>
-      <span className={`grid size-[18px] shrink-0 place-items-center text-lilac ${center ? '' : 'mt-[2px]'}`}>{icon}</span>
+      <span className={`grid size-[18px] shrink-0 place-items-center text-lilac ${center ? '' : tall ? 'mt-[7px]' : 'mt-[2px]'}`}>{icon}</span>
       <span className="min-w-0 flex-1">{children}</span>
     </li>
+  );
+}
+
+/** Two choices side by side. Real radio buttons, so arrow keys and screen readers just work. */
+function Choices<T extends string>({ label, options, value, onChange }: { label: string; options: { id: T; title: string; note: string; disabled?: boolean }[]; value: T; onChange: (v: T) => void }) {
+  return (
+    <div role="radiogroup" aria-label={label} className="mt-5 grid grid-cols-2 gap-2">
+      {options.map((o) => {
+        const on = value === o.id;
+        return (
+          <label
+            key={o.id}
+            className={`rounded-2xl p-3.5 transition-[background-color,box-shadow,transform] duration-150 has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-lilac ${o.disabled ? 'cursor-not-allowed opacity-40' : 'cursor-pointer active:scale-[0.98]'} ${on ? 'bg-white/[0.07] shadow-[inset_0_0_0_1.5px_rgb(184_156_255/0.75)]' : 'bg-white/[0.025] shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)] hover:bg-white/[0.05]'}`}
+          >
+            <input type="radio" name={label} className="sr-only" checked={on} disabled={o.disabled} onChange={() => onChange(o.id)} />
+            <span className="block text-[14.5px] font-medium text-fg">{o.title}</span>
+            <span className="mt-1 block text-[12.5px] leading-snug text-muted [text-wrap:pretty]">{o.note}</span>
+          </label>
+        );
+      })}
+    </div>
   );
 }
 
@@ -465,73 +514,95 @@ function AddStep(props: {
   details: RepoDetails | null;
   branch: string;
   setBranch: (b: string) => void;
-  skip: string[];
-  setSkip: (s: string[]) => void;
-  workflow: string;
+  scope: Scope;
+  setScope: (s: Scope) => void;
+  fileOpen: boolean;
+  onToggleFile: () => void;
   fileUrl: string;
   onBack: () => void;
   onOpened: () => void;
   onContinue: () => void;
 }) {
-  const { repo, details, branch, setBranch, skip, setSkip, workflow, fileUrl, onBack, onOpened, onContinue } = props;
-  const [changingSkip, setChangingSkip] = useState(false);
-  const [showingFile, setShowingFile] = useState(false);
+  const { repo, details, branch, setBranch, scope, setScope, fileOpen, onToggleFile, fileUrl, onBack, onOpened, onContinue } = props;
   const name = repo.fullName.split('/')[1]!;
+  const already = Boolean(details?.hasWorkflow);
+  const canChoose = Boolean(details && details.skip.length > 1);
+  // With New work the branch is already picked up top, so only Every PR asks where the file goes.
+  const pickFileBranch = scope === 'all' && Boolean(details && details.branches.length > 1);
+  const others = details?.skip.filter((b) => b !== branch) ?? [];
+  const mergedInto = others.includes('main') ? 'main' : others[0];
+  const picker = details && <BranchPicker branches={details.branches} value={branch} suggested={details.base} onChange={setBranch} />;
+  const sub = !details ? 'Reading your repo...' : already ? `It's already on ${branch}.` : canChoose ? 'Choose what it reviews.' : 'Here is what it will do.';
 
   return (
     <div>
       <BackButton onClick={onBack} />
-      <Heading title={`Add Mergelight to ${name}`} sub={details?.hasWorkflow ? `It's already on ${branch}.` : 'Here is what it will do.'} />
+      <Heading title={`Add Mergelight to ${name}`} sub={sub} />
 
       {!details ? (
-        <div className="mt-5 space-y-3" aria-label="Reading your repo">
+        <div className="mt-5 space-y-3" aria-hidden="true">
           {[0, 1, 2].map((i) => (
             <span key={i} className="block h-5 animate-pulse rounded bg-white/[0.05]" style={{ width: `${86 - i * 14}%`, animationDelay: `${i * 90}ms` }} />
           ))}
         </div>
       ) : (
-        <ul className="mt-3 divide-y divide-white/[0.06]">
-          <Fact center icon={<Check className="size-4" />}>
-            <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              Reviews every PR into
-              <BranchPicker branches={details.branches} value={branch} suggested={details.base} onChange={setBranch} />
-            </span>
-          </Fact>
-          {details.skip.length > 0 && (
-            <Fact icon={<Check className="size-4" />}>
-              <button type="button" onClick={() => setChangingSkip((v) => !v)} className="text-left transition-colors hover:text-fg">
-                {skip.length ? `Skips releases from ${listInWords(skip)}` : 'Reviews releases too'} <span className="text-faint underline underline-offset-2">Change</span>
-              </button>
-              {changingSkip && (
-                <span className="mt-2.5 flex flex-wrap gap-1.5">
-                  {details.skip.map((b) => {
-                    const on = skip.includes(b);
-                    return (
-                      <button
-                        key={b}
-                        type="button"
-                        aria-pressed={on}
-                        onClick={() => setSkip(on ? skip.filter((x) => x !== b) : [...skip, b])}
-                        className={`flex h-8 items-center gap-1 rounded-full px-3 text-[13px] transition-[background-color,color,transform] duration-100 active:scale-[0.96] ${on ? 'bg-white/[0.12] text-fg' : 'text-faint shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)] hover:text-muted'}`}
-                      >
-                        {on && <Check className="size-3" />}
-                        {b}
-                      </button>
-                    );
-                  })}
-                </span>
-              )}
-            </Fact>
+        <>
+          {canChoose && !already && (
+            <Choices
+              label="What it reviews"
+              value={scope}
+              onChange={setScope}
+              options={[
+                { id: 'new', title: 'New work', note: 'Best if all your code goes through a PR' },
+                { id: 'all', title: 'Every PR', note: 'Any branch, nothing skipped. Uses more of your AI plan' },
+              ]}
+            />
           )}
-          <Fact icon={<Check className="size-4" />}>Runs in your own GitHub Actions, on your AI plan</Fact>
-          <Fact icon={<LockIcon className="size-4" />}>
-            Adds one small file, and can never push code.{' '}
-            <button type="button" onClick={() => setShowingFile((v) => !v)} className="text-faint underline underline-offset-2 transition-colors hover:text-fg">
-              {showingFile ? 'Hide it' : 'See it'}
-            </button>
-            {showingFile && <pre className={`${WELL} mt-2.5 max-h-56 overflow-auto p-3 font-mono text-[11.5px] leading-[1.6] text-muted`}>{workflow.split('\n').filter((l) => !l.trim().startsWith('#')).join('\n').trim()}</pre>}
-          </Fact>
-        </ul>
+          <ul className="mt-3 divide-y divide-white/[0.06]">
+            {!already && scope === 'new' && (
+              <>
+                <Fact center icon={<Check className="size-4" />}>
+                  <span className="flex flex-wrap items-center gap-x-2 gap-y-1">Reviews PRs into {picker}</span>
+                </Fact>
+                {mergedInto && (
+                  <Fact icon={<Check className="size-4" />}>
+                    Skips merges like {branch} into {mergedInto}, so code pushed straight to {branch} won't get reviewed.
+                  </Fact>
+                )}
+              </>
+            )}
+            {!already && scope === 'all' && (
+              <Fact icon={<Check className="size-4" />}>
+                {canChoose ? 'Reviews every PR into a branch with the file' : pickFileBranch ? 'Reviews every PR' : `Reviews every PR on ${branch}`}
+              </Fact>
+            )}
+            <Fact icon={<Check className="size-4" />}>Runs in your own GitHub Actions, on your AI plan</Fact>
+            {!already && (
+              <Fact center={!pickFileBranch} tall={pickFileBranch} icon={<LockIcon className="size-4" />}>
+                <span className="flex items-center justify-between gap-3">
+                  {pickFileBranch ? (
+                    <span className="flex flex-wrap items-center gap-x-2 gap-y-1">Adds one small file to {picker}</span>
+                  ) : (
+                    <span className="[text-wrap:pretty]">Needs one small file in your repo to run. It can never push code.</span>
+                  )}
+                  <button
+                    type="button"
+                    aria-expanded={fileOpen}
+                    onClick={onToggleFile}
+                    className={`h-8 shrink-0 rounded-lg px-2.5 text-[13px] font-medium text-fg outline-none transition-[background-color,transform] duration-100 hover:bg-white/[0.11] focus-visible:ring-2 focus-visible:ring-lilac active:scale-[0.97] ${fileOpen ? 'bg-white/[0.11]' : 'bg-white/[0.07]'}`}
+                  >
+                    {fileOpen ? 'Hide file' : 'View file'}
+                  </button>
+                </span>
+                {pickFileBranch && (
+                  <span className="mt-1 block [text-wrap:pretty]">
+                    Needed to run, and it can never push code.{canChoose && ' Merge it into other branches to review PRs there.'}
+                  </span>
+                )}
+              </Fact>
+            )}
+          </ul>
+        </>
       )}
 
       {details?.hasWorkflow ? (
@@ -578,6 +649,125 @@ function BranchPicker({ branches, value, suggested, onChange }: { branches: stri
         </Select.Content>
       </Select.Portal>
     </Select.Root>
+  );
+}
+
+/** Colors one line of the workflow file. The file is small and regular, so a parser would be overkill. */
+function YamlLine({ text }: { text: string }) {
+  const [, indent, rest] = text.match(/^(\s*)(.*)$/)!;
+  if (rest!.startsWith('#')) return <>{indent}<span className="text-faint">{rest}</span></>;
+  const [, code, comment] = rest!.match(/^(.*?)(\s#\s.*)?$/)!;
+  const [, dash, key, value] = code!.match(/^(- )?([\w-]+:)(\s.*)?$/) ?? [];
+  const parts = (value ?? (key ? '' : code!)).split(/(\$\{\{.*?\}\})/);
+  return (
+    <>
+      {indent}
+      {dash && <span className="text-faint">{dash}</span>}
+      {key && <span className="text-lilac">{key}</span>}
+      {parts.map((part, i) => (
+        <span key={i} className={i % 2 ? 'text-mint' : key ? 'text-fg' : 'text-muted'}>
+          {/* Long expressions wrap at their dots on a phone, not mid-word. <wbr> stays out of copied text. */}
+          {part.split(/(?<=\.)/).map((piece, j) => [j > 0 && <wbr key={j} />, piece])}
+        </span>
+      ))}
+      {comment && <span className="text-faint">{comment}</span>}
+    </>
+  );
+}
+
+/** The exact file GitHub will open with, and why it's there. */
+function FileView({ workflow, onClose }: { workflow: string; onClose: () => void }) {
+  const lines = workflow.trimEnd().split('\n');
+  // A line that wasn't there before lights up, so a choice on the card is visibly a change in the file.
+  const seen = useRef(new Set(lines));
+  useEffect(() => {
+    lines.forEach((l) => seen.current.add(l));
+  });
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex h-12 shrink-0 items-center justify-between gap-3 pl-5 pr-2.5 shadow-[inset_0_-1px_0_rgb(255_255_255/0.06)]">
+        <p className="min-w-0 truncate font-mono text-[12.5px]">
+          <span className="text-faint">.github/workflows/</span>
+          <span className="text-fg">mergelight.yml</span>
+        </p>
+        <button type="button" onClick={onClose} aria-label="Close the file" className="grid size-8 shrink-0 place-items-center rounded-lg text-faint outline-none transition-[background-color,color,transform] duration-100 hover:bg-white/[0.06] hover:text-fg focus-visible:ring-2 focus-visible:ring-lilac active:scale-[0.94]">
+          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true" className="size-4">
+            <path d="m4.5 4.5 7 7m0-7-7 7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+          </svg>
+        </button>
+      </div>
+      <div className="shrink-0 px-5 py-4">
+        <p className="text-[14.5px] font-medium text-fg [text-wrap:balance]">This file is why your code and AI login never touch Mergelight</p>
+        <p className="mt-1 text-[13.5px] leading-relaxed text-muted [text-wrap:pretty]">Most review tools run on their own servers. Mergelight runs in your GitHub Actions instead, and GitHub needs this file in your repo to do that.</p>
+        <ul className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5 text-[13px] text-muted">
+          <li className="flex items-center gap-1.5"><Check className="size-3.5 text-lilac" /> Reads your code</li>
+          <li className="flex items-center gap-1.5"><Check className="size-3.5 text-lilac" /> Posts reviews</li>
+          <li className="flex items-center gap-1.5"><LockIcon className="size-3.5 text-lilac" /> Can't push code</li>
+        </ul>
+      </div>
+      <div tabIndex={0} aria-label="The file's contents" className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-black/25 pb-7 pt-3 font-mono text-[12px] leading-[20px] outline-none shadow-[inset_0_1px_0_rgb(255_255_255/0.06)] [mask-image:linear-gradient(to_bottom,black_calc(100%-28px),transparent)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-lilac">
+        {lines.map((line, i) => {
+          const hang = (line.match(/^\s*/)![0].length + 2);
+          return (
+            <div key={`${i}:${line}`} className={`flex pr-4 ${seen.current.has(line) ? '' : 'setup-fresh'}`}>
+              <span aria-hidden="true" className="w-10 shrink-0 select-none pr-3 text-right tabular-nums text-faint/50">{i + 1}</span>
+              <code className="min-w-0 flex-1 whitespace-pre-wrap break-words" style={{ paddingLeft: `${hang}ch`, textIndent: `-${hang}ch` }}>
+                <YamlLine text={line} />
+              </code>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** Beside the card when there's room. The card moves over to make space, and back when it closes. */
+function FileSide({ workflow, onClose, ref }: { workflow: string; onClose: () => void; ref?: Ref<HTMLElement> }) {
+  const reduce = useReducedMotion();
+  return (
+    <motion.aside
+      ref={ref}
+      aria-label="The workflow file"
+      initial={{ opacity: 0, x: reduce ? 0 : -28 }}
+      animate={{ opacity: 1, x: 0 }}
+      exit={{ opacity: 0, x: reduce ? 0 : -28 }}
+      transition={{ ...SPRING, opacity: { duration: 0.2 } }}
+      className={`${SURFACE} ml-5 h-[min(720px,calc(100dvh-64px-9vh-40px))] w-[600px] shrink-0 overflow-hidden`}
+    >
+      <FileView workflow={workflow} onClose={onClose} />
+    </motion.aside>
+  );
+}
+
+/** On a phone or tablet the same thing comes up as a sheet. */
+function FileSheet({ open, workflow, onClose }: { open: boolean; workflow: string; onClose: () => void }) {
+  const reduce = useReducedMotion();
+  const hidden = reduce ? { opacity: 0 } : { y: '100%' };
+  return (
+    <Dialog.Root open={open} onOpenChange={(next) => !next && onClose()}>
+      <AnimatePresence>
+        {open && (
+          <Dialog.Portal forceMount>
+            <Dialog.Overlay asChild forceMount>
+              <motion.div className="fixed inset-0 z-40 bg-black/60" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }} />
+            </Dialog.Overlay>
+            <Dialog.Content asChild forceMount aria-describedby={undefined}>
+              <motion.div
+                initial={hidden}
+                animate={reduce ? { opacity: 1 } : { y: 0 }}
+                exit={hidden}
+                transition={SPRING}
+                className="fixed inset-x-0 bottom-0 z-50 h-[88dvh] overflow-hidden rounded-t-[22px] bg-[linear-gradient(180deg,#1a1820_0%,#121116_100%)] pb-[env(safe-area-inset-bottom)] shadow-[inset_0_1px_0_rgb(255_255_255/0.08)] outline-none"
+              >
+                <Dialog.Title className="sr-only">The workflow file</Dialog.Title>
+                <FileView workflow={workflow} onClose={onClose} />
+              </motion.div>
+            </Dialog.Content>
+          </Dialog.Portal>
+        )}
+      </AnimatePresence>
+    </Dialog.Root>
   );
 }
 
@@ -642,25 +832,7 @@ function ConnectStep({ repo, pr, status, onBack, onSkip }: { repo: Repo; pr: Set
       <BackButton onClick={onBack} />
       <Heading title="Connect your AI" sub="Reviews run on your own account." />
 
-      <div role="radiogroup" aria-label="How to connect" className="mt-5 grid grid-cols-2 gap-2">
-        {options.map((o) => {
-          const on = mode === o.id;
-          return (
-            <button
-              key={o.id}
-              type="button"
-              role="radio"
-              aria-checked={on}
-              disabled={o.disabled}
-              onClick={() => setMode(o.id)}
-              className={`rounded-2xl p-3.5 text-left transition-[background-color,box-shadow,transform] duration-150 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 ${on ? 'bg-white/[0.07] shadow-[inset_0_0_0_1.5px_rgb(184_156_255/0.75)]' : 'bg-white/[0.025] shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)] hover:bg-white/[0.05]'}`}
-            >
-              <span className="block text-[14.5px] font-medium text-fg">{o.title}</span>
-              <span className="mt-1 block text-[12.5px] leading-snug text-muted">{o.note}</span>
-            </button>
-          );
-        })}
-      </div>
+      <Choices label="How to connect" options={options} value={mode} onChange={setMode} />
 
       {mode === 'chatgpt' ? (
         <ol className="mt-6 space-y-4">
@@ -713,7 +885,7 @@ function LiveStep({ repo, pr, status, hasLogin, onAnother }: { repo: Repo; pr: S
       </motion.div>
       <h1 className="mt-4 text-[28px] font-semibold leading-[1.1] tracking-[-0.028em]">Mergelight is on</h1>
       <p className="mx-auto mt-2 max-w-[330px] text-[15px] leading-relaxed text-muted [text-wrap:pretty]">
-        {pr ? `Merge the pull request, and it reviews every new PR on ${name}.` : `It reviews the next pull request on ${name}.`}
+        {pr ? `Merge the pull request, and it reviews new PRs on ${name}.` : `It reviews the next pull request on ${name}.`}
       </p>
       {pr && (
         <a href={pr.url} target="_blank" rel="noreferrer" className={`${WELL} group mt-6 flex items-center justify-between gap-3 px-4 py-3.5 text-left transition-colors hover:bg-white/[0.05]`}>

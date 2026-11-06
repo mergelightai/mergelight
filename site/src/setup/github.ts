@@ -183,15 +183,21 @@ export function mockClient(): GitHubClient {
   let checks = 0;
   const later = <T,>(value: T) => new Promise<T>((r) => setTimeout(() => r(value), 300));
   return {
-    repos: () => later([repo('api'), repo('app'), repo('docs', false), repo('platform')]),
+    repos: () => later([repo('api'), repo('app'), repo('docs', false), repo('platform'), repo('site')]),
     details: (r) =>
-      later({
-        branches: ['main', 'staging', 'development', 'feat/billing-export', 'fix/invoice-rounding'],
-        base: 'staging',
-        skip: ['main', 'staging', 'development'],
-        hasLogin: r.fullName === 'acme/platform',
-        hasWorkflow: r.fullName === 'acme/app',
-      }),
+      later(
+        r.fullName === 'acme/docs'
+          ? { branches: ['main'], base: 'main', skip: ['main'], hasLogin: false, hasWorkflow: false }
+          : r.fullName === 'acme/site'
+          ? { branches: ['main', 'feat/new-landing'], base: 'main', skip: ['main'], hasLogin: false, hasWorkflow: false }
+          : {
+              branches: ['main', 'staging', 'development', 'feat/billing-export', 'fix/invoice-rounding'],
+              base: 'staging',
+              skip: ['main', 'staging', 'development'],
+              hasLogin: r.fullName === 'acme/platform',
+              hasWorkflow: r.fullName === 'acme/app',
+            },
+      ),
     findSetupPr: () => later(++finds > 1 ? { number: 128, url: 'https://github.com/acme/api/pull/128', headSha: 'abc' } : null),
     hasWorkflow: () => later(false),
     hasLogin: (r) => later(r.fullName === 'acme/platform'),

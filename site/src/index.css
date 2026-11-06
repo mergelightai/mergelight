@@ -56,6 +56,17 @@ section[id] { scroll-margin-top: 88px; }
   }
 }
 
+/* A line of the workflow file that a choice on the card just changed. */
+.setup-fresh {
+  animation: setup-fresh 1100ms ease-out;
+}
+
+@keyframes setup-fresh {
+  from {
+    background-color: rgb(184 156 255 / 0.22);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .setup-pop {
     animation: none;
