@@ -48,6 +48,21 @@ There's no key or token to manage. The workflow's `id-token: write` permission p
 - **Write access to code and workflows** is there for the setup page, which uses it with your own sign-in to open the pull request that adds the file. Review runs don't get it: their token only allows comments, checks and reading code, so a review can't push code.
 - **Secrets** let it save the refreshed Codex login. It can't read a secret's value.
 
+**Versions.** The setup page and `mergelight setup` pin the workflow to the exact commit of the latest release, like `mergelightai/mergelight@<commit> # v0.1.0`, because a tag can be moved. So an update never reaches you on its own: the review says when a newer release is out, and the setup page opens a pull request that updates the file. To get update pull requests from Dependabot instead, add this to `.github/dependabot.yml`:
+
+```yaml
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    allow:
+      - dependency-name: mergelightai/mergelight
+```
+
+The example workflows in this repository use `@v0`, which always points to the latest release. That gets you fixes automatically, but also whatever is on that tag if this repository is ever compromised, with access to your AI login and your pull requests.
+
 **Optional: make it required.** In branch protection or a ruleset, require the **Mergelight** check. 🔴 then blocks the merge. 🟡 doesn't, unless your team sets `yellow-blocks: true` to make it wait for an approval.
 
 ## Set it up by hand
@@ -98,7 +113,8 @@ They're separate files so a PR's merge box only shows the review, not skipped jo
 
 ## Good to know
 
-- **Forks:** PRs from forks get no secrets, so the example workflow skips them.
+- **Forks and Dependabot:** GitHub gives their runs no secrets, so the example workflow skips them.
+- **Whose plan:** whoever enters the login code decides whose ChatGPT plan pays for reviews, and anyone who can read the repository can see the code. So after connecting, Mergelight posts part of the account's email on the pull request. If it isn't yours, remove the `CODEX_AUTH_JSON` secret and push a commit to connect again.
 - **Self-hosted Linux runners:** Codex's sandbox needs unprivileged user namespaces. On GitHub-hosted runners the Action enables them; on your own runners, allow them ahead of time (on Ubuntu 24.04: `kernel.apparmor_restrict_unprivileged_userns=0`). Without them Codex can't read the code, and the review fails instead of guessing from the diff.
 - **Time:** a review takes about 2 to 15 minutes depending on the size of the PR, around 7 for a typical one.
 - **Same finding, next push:** every review checks what earlier reviews found again, so a finding stays one comment even if it's worded differently or points at other lines.

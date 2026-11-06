@@ -14,12 +14,14 @@ permissions:
 
 jobs:
   review:
-    # Forks get no secrets, and drafts aren't ready for review.
+    # Forks and Dependabot get no secrets, and drafts aren't ready for review.
     if: >
       !github.event.pull_request.draft &&
+      github.actor != 'dependabot[bot]' &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Room for the first login, which can wait up to 16 minutes, and then a long review.
+    timeout-minutes: 45
     # A new push cancels the older review of the same PR.
     concurrency:
       group: mergelight-pr-${{ github.event.pull_request.number }}

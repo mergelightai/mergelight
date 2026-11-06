@@ -75,9 +75,30 @@ export const FOCUS = {
 - error handling the change introduced or made worse, where one failure now breaks more than it should
 - caches, translations, defaults and configuration that stay out of sync with the change`,
   },
+  supply: {
+    label: "CI and supply chain",
+    brief: `What runs this code, and whose code it runs. Only what this pull request adds or changes. Look for:
+- third-party code that can reach secrets or write access through a reference that can change: a GitHub Action on a tag or branch instead of a full commit SHA, a container image on a tag instead of a digest, a script piped from a URL. Actions owned by GitHub (actions/*, github/*) on a version tag are normal, don't report those.
+- untrusted text reaching a shell or secrets: \${{ github.event... }} or a branch name inside a run step, pull_request_target or workflow_run jobs that check out and run pull request code
+- permissions wider than the job needs: write-all, write scopes the job never uses, secrets passed to a step that doesn't need them
+- dependencies that aren't what they seem: a package name that looks like a misspelling of a popular one, a dependency from a URL or git branch instead of a registry version, a pinned version replaced by a loose range, a new install script
+- builds and deploys that changed what they do: a deploy that now runs on a different trigger or branch, a check that got skipped, a secret that reaches a log, a production setting changed in an infrastructure file
+
+You can't reach the network, so judge from what's in this repository. A compromised or moved upstream counts as a concrete scenario here. Name exactly what the job could reach if it happened: which secrets, which write permissions.`,
+  },
 } as const;
 
 export type Focus = keyof typeof FOCUS;
+
+/** Files that decide what runs in CI and production, and whose code it pulls in. Lockfiles alone don't count. */
+const SUPPLY_CHAIN_FILES =
+  /(^|\/)(\.github\/(workflows|actions)\/|\.gitlab-ci|\.circleci\/|Jenkinsfile|azure-pipelines|bitbucket-pipelines|([^/]*\.)?Dockerfile(\.[^/]*)?$|docker-compose[^/]*\.ya?ml$|compose\.ya?ml$|render\.ya?ml$|fly\.toml$|vercel\.json$|netlify\.toml$|package\.json$|requirements[^/]*\.txt$|pyproject\.toml$|go\.mod$|Cargo\.toml$|Gemfile$|composer\.json$|pom\.xml$|build\.gradle(\.kts)?$|\.npmrc$)|\.tf$/i;
+
+/** Every pull request gets the first three areas. The fourth only runs when the files it covers changed. */
+export function focusesFor(changedPaths: string[]): Focus[] {
+  const areas: Focus[] = ["access", "data", "behavior"];
+  return changedPaths.some((p) => SUPPLY_CHAIN_FILES.test(p)) ? [...areas, "supply"] : areas;
+}
 
 function context(input: PromptInput): string {
   const { pr, mergeBase, headSha } = input;
@@ -260,7 +281,9 @@ A small problem that really happens is a minor bug, not hardening. A wrong label
 - severity major: breaks a feature, loses or corrupts data, charges the wrong amount, or exposes data or actions to someone who shouldn't have them.
 - severity minor: a real but small problem: wrong text, a confusing state, a glitch the user can get past.
 
-Money, permissions, other people's data, deleting data, migrations and anything irreversible deserve extra care. A rare problem there can still be a risk or a bug.
+Money, permissions, other people's data, secrets, deleting data, migrations and anything irreversible deserve extra care. A rare problem there can still be a risk or a bug.
+
+Third-party code that can reach secrets or write access through a reference that can change is a risk, not hardening, because upstreams do get compromised. Don't reject it for needing that, or because you can't see the upstream code. If pinning would also stop automatic updates, that's a real trade-off: use decide.
 
 # Every finding
 

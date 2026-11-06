@@ -45,6 +45,11 @@ export class GitHub {
     return JSON.parse(await gh(["api", this.repoPath(path)])) as T;
   }
 
+  /** Who this token belongs to. App and workflow tokens aren't a person, so GitHub refuses and this is null. */
+  async viewer(): Promise<string | null> {
+    return this.get<{ login: string }>("/user").then((u) => u.login, () => null);
+  }
+
   /** All pages of a list endpoint, flattened. */
   async list<T>(path: string): Promise<T[]> {
     const sep = path.includes("?") ? "&" : "?";

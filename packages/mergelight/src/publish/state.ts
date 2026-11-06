@@ -64,6 +64,11 @@ export function encodeState(state: ReviewState): string {
   return slimmer.length <= MAX_STATE ? slimmer : pack({ ...state, findings: state.findings.map(withoutHow) });
 }
 
+/** The encoded state exactly as it sits in a comment, to carry over into a new body. */
+export function stateBlock(body: string | undefined): string | null {
+  return body?.match(new RegExp(`<!-- ${MARKER} [A-Za-z0-9+/=]+ -->`))?.[0] ?? null;
+}
+
 export function decodeState(body: string | undefined): ReviewState | null {
   const m = body?.match(new RegExp(`<!-- ${MARKER} ([A-Za-z0-9+/=]+) -->`));
   if (!m) return null;
