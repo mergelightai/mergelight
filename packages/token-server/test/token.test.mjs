@@ -210,3 +210,77 @@ test("random key ids don't refetch GitHub's keys every time", async () => {
   }
   assert.equal(calls.filter((c) => c.url.endsWith("/jwks")).length, 1);
 });
+
+function signInRequest(body, { origin = "https://mergelight.dev", method = "POST" } = {}) {
+  return new Request("https://token.test/sign-in", {
+    method,
+    headers: { ...(origin ? { origin } : {}), "content-type": "application/json" },
+    ...(method === "POST" ? { body: typeof body === "string" ? body : JSON.stringify(body) } : {}),
+  });
+}
+
+const signInEnv = () => ({ ...env(), GITHUB_APP_CLIENT_SECRET: "client-secret" });
+
+function fakeSignIn(answer) {
+  const calls = [];
+  return { calls, fetchImpl: async (url, init) => (calls.push({ url: String(url), init }), answer) };
+}
+
+test("sign-in swaps a code for the person's token, and only tells the setup page", async () => {
+  const { calls, fetchImpl } = fakeSignIn(json(200, { access_token: "ghu_person", expires_in: 28800 }));
+  const res = await handle(signInRequest({ code: "abc123" }), signInEnv(), fetchImpl, NOW);
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { token: "ghu_person", expires_in: 28800 });
+  assert.equal(res.headers.get("access-control-allow-origin"), "https://mergelight.dev");
+  assert.equal(res.headers.get("cache-control"), "no-store");
+  assert.equal(calls[0].url, "https://github.com/login/oauth/access_token");
+  assert.deepEqual(JSON.parse(calls[0].init.body), { client_id: "Iv23-test", client_secret: "client-secret", code: "abc123" });
+});
+
+test("sign-in refuses other sites, and requests with no origin", async () => {
+  for (const origin of ["https://evil.example", "https://mergelight.dev.evil.example", null]) {
+    const { calls, fetchImpl } = fakeSignIn(json(200, { access_token: "x" }));
+    const res = await handle(signInRequest({ code: "abc" }, { origin }), signInEnv(), fetchImpl, NOW);
+    assert.equal(res.status, 403, String(origin));
+    assert.equal(res.headers.get("access-control-allow-origin"), null);
+    assert.equal(calls.length, 0);
+  }
+});
+
+test("sign-in answers the browser's preflight", async () => {
+  const { calls, fetchImpl } = fakeSignIn(json(200, {}));
+  const res = await handle(signInRequest(null, { method: "OPTIONS" }), signInEnv(), fetchImpl, NOW);
+  assert.equal(res.status, 204);
+  assert.equal(res.headers.get("access-control-allow-origin"), "https://mergelight.dev");
+  assert.match(res.headers.get("access-control-allow-headers"), /content-type/);
+  assert.equal(calls.length, 0);
+});
+
+test("sign-in rejects bad codes without asking GitHub", async () => {
+  for (const body of ["not json", {}, { code: 5 }, { code: "" }, { code: "a b" }, { code: "x".repeat(201) }]) {
+    const { calls, fetchImpl } = fakeSignIn(json(200, {}));
+    const res = await handle(signInRequest(body), signInEnv(), fetchImpl, NOW);
+    assert.equal(res.status, 400, JSON.stringify(body).slice(0, 30));
+    assert.equal(calls.length, 0);
+  }
+});
+
+test("a used code fails plainly, without echoing GitHub's answer", async () => {
+  const { fetchImpl } = fakeSignIn(json(200, { error: "bad_verification_code", error_description: "secret detail" }));
+  const res = await handle(signInRequest({ code: "used" }), signInEnv(), fetchImpl, NOW);
+  assert.equal(res.status, 400);
+  assert.deepEqual(await res.json(), { error: "sign_in_failed" });
+});
+
+test("without a client secret only sign-in is off", async () => {
+  const { fetchImpl } = fakeSignIn(json(200, {}));
+  const res = await handle(signInRequest({ code: "abc" }), env(), fetchImpl, NOW);
+  assert.equal(res.status, 503);
+  assert.equal((await res.json()).error, "sign_in_not_set_up");
+});
+
+test("sign-in doesn't take other methods", async () => {
+  const { fetchImpl } = fakeSignIn(json(200, {}));
+  const res = await handle(signInRequest(null, { method: "GET" }), signInEnv(), fetchImpl, NOW);
+  assert.equal(res.status, 405);
+});

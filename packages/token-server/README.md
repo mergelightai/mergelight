@@ -9,6 +9,8 @@ Lets a workflow post as the Mergelight AI GitHub App, without anyone but this se
 
 A second kind of token, `POST /token?scope=login`, can only write Actions secrets. The Action asks for it only when Codex refreshed its login, to save the new one back. GitHub never lets it read a secret's value.
 
+`POST /sign-in` is for the setup page only. It swaps the code from "Sign in with GitHub" for the person's token, because that step needs the app's client secret, which can't live in a web page. The token goes straight back to the browser, which uses it to list repositories and branches.
+
 The server stores nothing, and never sees code or model logins. If it's down or the App isn't installed, the Action posts as `github-actions[bot]`.
 
 ## Run it

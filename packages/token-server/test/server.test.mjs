@@ -50,6 +50,15 @@ test("other paths and methods are refused", async () => {
   assert.equal((await fetch(`${base}/token`)).status, 405);
 });
 
+test("passes a sign-in's origin and body through, and refuses a huge body", async () => {
+  // No client secret in this server, so a request that got through reports that.
+  const ok = await fetch(`${base}/sign-in`, { method: "POST", headers: { origin: "https://mergelight.dev", "content-type": "application/json" }, body: JSON.stringify({ code: "abc" }) });
+  assert.equal(ok.status, 503);
+  assert.equal(ok.headers.get("access-control-allow-origin"), "https://mergelight.dev");
+  const huge = await fetch(`${base}/sign-in`, { method: "POST", headers: { origin: "https://mergelight.dev" }, body: "x".repeat(5000) });
+  assert.equal(huge.status, 400);
+});
+
 test("refuses to start without the private key", async () => {
   const child = spawn(process.execPath, [join(here, "..", "src", "server.js")], {
     env: { PATH: process.env.PATH, GITHUB_APP_CLIENT_ID: "x" },
