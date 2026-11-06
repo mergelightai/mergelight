@@ -41,6 +41,12 @@ inputs:
   github-token:
     description: Token for posting comments and checks. Needs pull-requests and checks write.
     default: ${{ github.token }}
+  token-server:
+    description: >
+      Where to get a Mergelight AI app token, so comments and checks carry the app's name and logo.
+      Needs the app installed and "id-token: write". Without them, or with this empty, the run posts
+      as github-actions[bot].
+    default: https://api.mergelight.dev/token
 
 runs:
   using: composite
@@ -54,12 +60,25 @@ runs:
       working-directory: ${{ github.action_path }}/packages/mergelight
       run: npm ci --no-audit --no-fund --loglevel=error && npm run build --silent
 
+    # GitHub's OIDC token proves which repository this run belongs to, and the token server swaps
+    # it for an app token limited to that repository. Skipped when you pass your own github-token.
+    - name: Get the Mergelight AI app token
+      id: app
+      if: >
+        inputs.github-token == github.token &&
+        (github.event_name == 'pull_request' || github.event_name == 'pull_request_target' ||
+        (github.event_name == 'pull_request_review' && github.event.review.state == 'approved'))
+      shell: bash
+      env:
+        TOKEN_SERVER: ${{ inputs.token-server }}
+      run: node "$GITHUB_ACTION_PATH/packages/mergelight/scripts/app-token.mjs"
+
     # A human approved the PR: turn a "needs a human" check green. No Codex needed.
     - name: Approve the check
       if: github.event_name == 'pull_request_review' && github.event.review.state == 'approved'
       shell: bash
       env:
-        GH_TOKEN: ${{ inputs.github-token }}
+        GH_TOKEN: ${{ steps.app.outputs.token || inputs.github-token }}
         PR: ${{ github.event.pull_request.number }}
         BY: ${{ github.event.review.user.login }}
       run: node "$GITHUB_ACTION_PATH/packages/mergelight/dist/cli.js" approve "$GITHUB_REPOSITORY#$PR" --by "$BY"
@@ -124,7 +143,7 @@ runs:
       if: github.event_name == 'pull_request' || github.event_name == 'pull_request_target'
       shell: bash
       env:
-        GH_TOKEN: ${{ inputs.github-token }}
+        GH_TOKEN: ${{ steps.app.outputs.token || inputs.github-token }}
         PR: ${{ github.event.pull_request.number }}
         MODEL: ${{ inputs.model }}
         EFFORT: ${{ inputs.effort }}

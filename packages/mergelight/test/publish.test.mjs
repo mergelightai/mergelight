@@ -7,8 +7,9 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { parsePatch, place } from "../dist/publish/diff-lines.js";
-import { clean, inlineBody, summaryBody } from "../dist/publish/markdown.js";
-import { checkConclusion, fixedThreadComment, isYellowCheck, trustedComment } from "../dist/publish/publish.js";
+import { closedBody, readClosed, reopenedBody, resolvedByPeople, threadAction } from "../dist/publish/closed.js";
+import { clean, failedSummaryBody, FINDING_MARKER_RE, inlineBody, isPendingSummary, pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "../dist/publish/markdown.js";
+import { checkConclusion, isYellowCheck, trustedComment } from "../dist/publish/publish.js";
 import { decodeState, encodeState, nextState } from "../dist/publish/state.js";
 import { buildVerifierPrompt } from "../dist/prompt.js";
 import { assignIds } from "../dist/review.js";
@@ -169,17 +170,123 @@ test("top picks and other findings worth fixing get their own sections, with det
   assert.equal(state.findings[0].how, "How.");
 });
 
-test("a thread is answered once, only when its code changed and its finding is gone", () => {
-  const bot = { authorAssociation: "NONE", author: { __typename: "Bot" } };
-  const first = { databaseId: 7, body: "<!-- mergelight:finding id=aaaaaaaaaa -->", ...bot };
-  const thread = (over = {}, extra = []) => ({ id: "t", isResolved: false, isOutdated: true, comments: { nodes: [first, ...extra] }, ...over });
-  assert.equal(fixedThreadComment(thread(), new Set()), 7);
-  assert.equal(fixedThreadComment(thread(), new Set(["aaaaaaaaaa"])), null, "still found");
-  assert.equal(fixedThreadComment(thread({ isOutdated: false }), new Set()), null, "code unchanged");
-  assert.equal(fixedThreadComment(thread({ isResolved: true }), new Set()), null, "already resolved");
-  assert.equal(fixedThreadComment(thread({}, [{ databaseId: 8, body: "<!-- mergelight:gone -->\nThe code changed.", ...bot }]), new Set()), null, "already answered");
-  const stranger = { ...first, authorAssociation: "NONE", author: { __typename: "User" } };
-  assert.equal(fixedThreadComment({ ...thread(), comments: { nodes: [stranger] } }, new Set()), null, "not our comment");
+const FINDING = "<!-- mergelight:finding id=aaaaaaaaaa -->";
+const ORIGINAL = `${FINDING}\n🔴 **Bug** · **Refunds <b>break</b>**\n\nHow it happens.\n\n**→ Fix it.**`;
+const bot = { author: { __typename: "Bot" }, authorAssociation: "NONE" };
+const thread = (over = {}, body = ORIGINAL, replies = []) => ({
+  id: "T1",
+  isResolved: false,
+  isOutdated: true,
+  resolvedBy: null,
+  comments: { nodes: [{ databaseId: 7, body, ...bot }, ...replies] },
+  ...over,
+});
+const none = new Set();
+const stillFound = new Set(["aaaaaaaaaa"]);
+
+test("a thread counts as fixed only when its code changed and its finding is gone", () => {
+  assert.deepEqual(threadAction(thread(), none), { kind: "fixed", resolve: true });
+  assert.equal(threadAction(thread(), stillFound), null, "still found");
+  assert.equal(threadAction(thread({ isOutdated: false }), none), null, "code unchanged");
+});
+
+const writers = async (login) => login === "tommy";
+
+test("a thread someone resolved is handled once the review drops it, never while it still reports it", async () => {
+  const resolved = thread({ isResolved: true, isOutdated: false, resolvedBy: { login: "tommy" } });
+  assert.deepEqual(threadAction(resolved, none), { kind: "resolved" });
+  assert.equal(threadAction(resolved, stillFound), null, "a major bug the verifier keeps stays reported");
+  assert.deepEqual([...(await resolvedByPeople([resolved], writers))], [["aaaaaaaaaa", "tommy"]]);
+});
+
+test("only people with write access can tell the verifier the team decided", async () => {
+  const author = thread({ isResolved: true, resolvedBy: { login: "pr-author" } });
+  assert.equal((await resolvedByPeople([author], writers)).size, 0);
+  assert.equal((await resolvedByPeople([thread({ isResolved: true, resolvedBy: null })], writers)).size, 0, "no name, no trust");
+});
+
+test("only Mergelight's own comments count, not a stranger's copy of the marker", async () => {
+  const stranger = { databaseId: 9, body: ORIGINAL, authorAssociation: "NONE", author: { __typename: "User" } };
+  const t = { ...thread({ isResolved: true }), comments: { nodes: [stranger] } };
+  assert.equal(threadAction(t, none), null);
+  assert.equal((await resolvedByPeople([t], writers)).size, 0);
+});
+
+test("closing a comment keeps the original behind a dropdown, and reopening restores it", () => {
+  const closed = closedBody(ORIGINAL, { how: "fixed", resolved: true, sha: "abc1234" });
+  assert.ok(closed.includes("✅ **Handled.**"));
+  assert.ok(closed.includes("`abc1234`"));
+  assert.ok(closed.includes("<details><summary>🔴 Bug · Refunds &lt;b>break&lt;/b></summary>"), "the dropdown names the finding, safely");
+  assert.equal(closed.match(FINDING_MARKER_RE)[1], "aaaaaaaaaa", "still recognised as this finding");
+  assert.deepEqual(readClosed(closed), { how: "fixed", resolved: true, sha: "abc1234" });
+  assert.equal(reopenedBody(closed, false), ORIGINAL);
+  assert.ok(closedBody(ORIGINAL, { how: "resolved", resolved: true, by: "tommy" }).includes("Resolved by tommy."));
+});
+
+test("a closed thread stays closed until someone reopens it or the finding comes back", async () => {
+  const fixed = closedBody(ORIGINAL, { how: "fixed", resolved: true, sha: "abc1234" });
+  assert.equal(threadAction(thread({ isResolved: true }, fixed), none), null);
+  assert.deepEqual(threadAction(thread({}, fixed), none), { kind: "reopened" });
+  assert.deepEqual(threadAction(thread({ isResolved: true }, fixed), stillFound), { kind: "regressed", unresolve: true });
+  assert.equal((await resolvedByPeople([thread({ isResolved: true, resolvedBy: { login: "tommy" } }, fixed)], writers)).size, 0, "a fix isn't a person's decision");
+
+  const resolved = closedBody(ORIGINAL, { how: "resolved", resolved: true, by: "tommy" });
+  assert.equal(threadAction(thread({ isResolved: true }, resolved), none), null);
+  assert.deepEqual(threadAction(thread({ isResolved: true }, resolved), stillFound), { kind: "regressed", unresolve: false }, "reported again: not handled, but the person's resolve stays");
+  assert.deepEqual(threadAction(thread({}, resolved), none), { kind: "reopened" });
+});
+
+test("a thread the workflow couldn't resolve isn't mistaken for one someone reopened", () => {
+  const closed = closedBody(ORIGINAL, { how: "fixed", resolved: false, sha: "abc1234" });
+  assert.equal(threadAction(thread({}, closed), none), null);
+  assert.deepEqual(threadAction(thread({}, closed), stillFound), { kind: "regressed", unresolve: false });
+});
+
+test("Mergelight doesn't close a thread someone reopened", () => {
+  const reopened = reopenedBody(closedBody(ORIGINAL, { how: "fixed", resolved: true }), true);
+  assert.equal(reopened.match(FINDING_MARKER_RE)[1], "aaaaaaaaaa");
+  assert.equal(threadAction(thread({}, reopened), none), null);
+  assert.deepEqual(threadAction(thread({ isResolved: true }, reopened), none), { kind: "resolved" }, "a person can still resolve it");
+  assert.ok(!closedBody(reopened, { how: "resolved", resolved: true }).includes("mergelight:reopened"));
+});
+
+test("threads an older version answered with a reply aren't answered again", async () => {
+  const reply = { databaseId: 8, body: "<!-- mergelight:gone -->\nThe code here changed.", ...bot };
+  assert.equal(threadAction(thread({}, ORIGINAL, [reply]), none), null, "someone reopened it");
+  assert.deepEqual(threadAction(thread({ isResolved: true }, ORIGINAL, [reply]), none), { kind: "fixed", resolve: false });
+  assert.equal((await resolvedByPeople([thread({ isResolved: true, resolvedBy: { login: "tommy" } }, ORIGINAL, [reply])], writers)).size, 0);
+});
+
+test("the summary starts as a placeholder, and that placeholder has no state to trip over", () => {
+  const body = pendingSummaryBody();
+  assert.ok(body.includes(SUMMARY_MARKER));
+  assert.ok(isPendingSummary(body));
+  assert.equal(decodeState(body), null);
+  assert.ok(!isPendingSummary(failedSummaryBody()));
+  assert.ok(failedSummaryBody().includes(SUMMARY_MARKER), "the next round still finds it");
+});
+
+test("handled findings get their own dropdown, and aren't also listed as no longer found", () => {
+  const review = {
+    pr: { head_sha: "abcdef1234" },
+    provider: { name: "codex", model: "m" },
+    light: "green",
+    summary: "All good.",
+    findings: [],
+    stats: { duration_ms: 1000 },
+  };
+  const one = (id, title) => ({ id, title, file: "src/a.ts", line: 3, tier: "post", class: "bug", severity: "major", first_round: 1, status: "gone", url: `https://x/${id}` });
+  const state = { v: 1, round: 2, rounds: [], findings: [one("aaaaaaaaaa", "Fixed one"), one("bbbbbbbbbb", "Resolved one"), one("cccccccccc", "Vanished one"), one("dddddddddd", "Left one")] };
+  const handled = new Map([["aaaaaaaaaa", { how: "fixed", sha: "abc1234" }], ["bbbbbbbbbb", { how: "resolved", by: "tommy" }]]);
+  const marks = new Map([["dddddddddd", { id: "dddddddddd", as: "wont_fix", note: "Only admins can do this.", sha: null, by: "teammate", at: "", url: "" }]]);
+  const body = summaryBody({ review, state, urls: new Map(), handled, marks });
+  assert.ok(body.includes("<details><summary>✅ Handled: 3</summary>"), "one list, including decisions not to fix");
+  assert.ok(body.includes("- ✅ [Left one](https://x/dddddddddd) `src/a.ts:3`: not fixing. Only admins can do this. (teammate)"));
+  assert.ok(body.includes("- ✅ [Fixed one](https://x/aaaaaaaaaa) `src/a.ts:3`: fixed in `abc1234`"));
+  assert.ok(body.includes("- ✅ [Resolved one](https://x/bbbbbbbbbb) `src/a.ts:3`: resolved by tommy"));
+  assert.ok(body.includes("No longer found since the last review: 1"));
+  assert.ok(body.includes("**Nothing left to fix**"));
+  assert.ok(!summaryBody({ review, state: { ...state, findings: [] }, urls: new Map() }).includes("Handled"));
 });
 
 test("yellow doesn't block unless a team asks, and red always does", () => {

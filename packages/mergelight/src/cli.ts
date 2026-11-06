@@ -2,8 +2,9 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { currentRepo, fetchPullRequest, parsePrRef } from "./github.js";
+import { serve } from "./mcp/server.js";
 import { GitHub } from "./publish/api.js";
-import { approveCheck, failCheck, previousFindings, publishReview, startCheck } from "./publish/publish.js";
+import { approveCheck, failCheck, failSummary, previousFindings, publishReview, startCheck, startSummary } from "./publish/publish.js";
 import { renderTerminal } from "./render.js";
 import { reviewPullRequest } from "./review.js";
 import type { Review } from "./types.js";
@@ -14,6 +15,7 @@ Usage
   mergelight review <pr> [options]       Review a pull request
   mergelight post <review.json>          Post a saved review to its pull request
   mergelight approve <pr> --by <login>   Turn a "needs a human" check green after approval
+  mergelight mcp                         Run the MCP server, so your coding agent can read findings
 
   <pr> is a pull request URL, owner/repo#123, or a number inside a clone.
 
@@ -94,6 +96,10 @@ async function main(): Promise<number> {
     process.stdout.write(HELP);
     return values.help ? 0 : 1;
   }
+  if (command === "mcp") {
+    await serve();
+    return 0;
+  }
   if (!["review", "post", "approve"].includes(command) || !target) {
     process.stderr.write(HELP);
     return 1;
@@ -131,6 +137,7 @@ async function main(): Promise<number> {
   if (values.post) {
     headSha ??= (await fetchPullRequest(ref)).headSha;
     checkRunId = await startCheck(api, headSha);
+    await startSummary(api, ref.number).catch((e) => log(`Couldn't post the summary yet: ${(e as Error).message}`));
   }
 
   const progress = progressPrinter();
@@ -164,6 +171,7 @@ async function main(): Promise<number> {
     log(`mergelight: ${message}`);
     if (values.post && headSha) {
       await failCheck(api, checkRunId, headSha, message, log).catch((e) => log(`Couldn't update the check: ${(e as Error).message}`));
+      await failSummary(api, ref.number).catch((e) => log(`Couldn't update the summary: ${(e as Error).message}`));
     }
     return 1;
   }

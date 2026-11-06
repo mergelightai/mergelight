@@ -56,7 +56,9 @@ Without it, reviews work until the first refresh, then the login has to be redon
 
 They're separate files so a PR's merge box only shows the review, not skipped jobs.
 
-**5. Optional: make it required.** In branch protection or a ruleset, require the **Mergelight** check. 🔴 then blocks the merge. 🟡 doesn't, unless your team sets `yellow-blocks: true` to make it wait for an approval.
+**5. Install the app.** [Install Mergelight AI](https://github.com/apps/mergelight-ai/installations/new) on the repository, so comments and checks carry its name and logo. There's no key to manage: the workflow's `id-token: write` permission proves which repository it runs in, and Mergelight's token server returns a short-lived token for that repository only. It can post comments and checks, read code, and can't push. Skip this and everything still works, posted as `github-actions[bot]`.
+
+**6. Optional: make it required.** In branch protection or a ruleset, require the **Mergelight** check. 🔴 then blocks the merge. 🟡 doesn't, unless your team sets `yellow-blocks: true` to make it wait for an approval.
 
 ## Inputs
 
@@ -71,6 +73,7 @@ They're separate files so a PR's merge box only shows the review, not skipped jo
 | `verify-with` | `codex` | Who checks the findings: `codex`, or `claude` on a runner with Claude Code logged in |
 | `yellow-blocks` | `false` | Make a 🟡 check wait for an approval. For teams: GitHub doesn't let you approve your own PR |
 | `codex-version` | `0.166.0` | Codex CLI version |
+| `token-server` | Mergelight's | Where to get an app token. Empty means always post as `github-actions[bot]` |
 | `github-token` | `github.token` | Posts comments and checks |
 
 ## Good to know
@@ -78,6 +81,9 @@ They're separate files so a PR's merge box only shows the review, not skipped jo
 - **Forks:** PRs from forks get no secrets, so the example workflow skips them.
 - **Self-hosted Linux runners:** Codex's sandbox needs unprivileged user namespaces. On GitHub-hosted runners the Action enables them; on your own runners, allow them ahead of time (on Ubuntu 24.04: `kernel.apparmor_restrict_unprivileged_userns=0`). Without them Codex can't read the code, and the review fails instead of guessing from the diff.
 - **Time:** a review takes about 2 to 15 minutes depending on the size of the PR, around 7 for a typical one.
-- **Same finding, next push:** every review checks what earlier reviews found again, so a finding stays one comment even if it's worded differently or points at other lines. When a thread's code changed and the finding is gone, Mergelight says so in the thread, once.
-- **Resolving threads:** GitHub only lets a workflow mark a thread resolved with `contents: write`, so the example workflow leaves that to you and fixed threads just collapse as outdated. To have them resolved too, add `contents: write` to the workflow's permissions.
+- **Same finding, next push:** every review checks what earlier reviews found again, so a finding stays one comment even if it's worded differently or points at other lines.
+- **Handled comments:** when a finding's code changed and the finding is gone, or the review drops it after someone resolved its thread, the next review edits that comment to a ✅ with the original behind a dropdown, and moves it to a Handled section in the summary. Nothing new gets posted. Reopen a thread and the comment comes back. GitHub Actions can't react to a thread being resolved, so that shows on the next push.
+- **Resolving a thread is a decision:** it tells the next review your team decided to leave that finding, and the review respects that. The one exception is a major bug that can still happen as described: it stays listed and keeps counting toward the check, so resolving a thread can't wave a real bug through. Only resolves by people with write access count.
+- **Fixing findings:** your coding agent can read the findings and mark them handled through the [MCP server and skill](agents.md). No extra workflow permissions: marks are comments under your own login.
+- **Resolving threads:** GitHub only lets a workflow mark a thread resolved with `contents: write`, so the example workflow leaves that to you and fixed threads just collapse as outdated. The ✅ and the dropdown work either way. To have them resolved too, add `contents: write` to the workflow's permissions.
 - **Your code:** the review runs inside your own GitHub Actions runner with your own Codex login. Nothing is sent to Mergelight.

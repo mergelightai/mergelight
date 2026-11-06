@@ -10,6 +10,7 @@ on:
 permissions:
   checks: write
   pull-requests: read
+  id-token: write # The app that posted the check has to update it.
 
 jobs:
   approve:
