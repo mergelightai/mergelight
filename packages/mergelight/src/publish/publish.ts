@@ -37,11 +37,24 @@ export interface PrReviewState {
   reviewComments: ReviewComment[];
 }
 
+/**
+ * The summary comment, which Mergelight edits and reads its state from. Only a bot's comment or the
+ * current login's own counts. A person's association isn't enough: a teammate who wrote the marker
+ * could edit the comment later, and change a login code people are told to enter.
+ */
+export async function ownSummary(comments: PrComment[], viewer: () => Promise<string | null>): Promise<PrComment | undefined> {
+  const marked = comments.filter((c) => c.body?.includes(SUMMARY_MARKER));
+  const bots = marked.find((c) => c.user?.type === "Bot");
+  if (bots || !marked.length) return bots;
+  const me = await viewer();
+  return me ? marked.find((c) => c.user?.login === me) : undefined;
+}
+
 /** What Mergelight has on this PR so far. Reviews read it before they publish, and the MCP server hands it to agents. */
 export async function readPrReviewState(api: GitHub, number: number): Promise<PrReviewState> {
   const issueComments = await api.list<PrComment>(`issues/${number}/comments`);
   const reviewComments = await api.list<ReviewComment>(`pulls/${number}/comments`);
-  const summary = issueComments.find((c) => trustedComment(c) && c.body?.includes(SUMMARY_MARKER));
+  const summary = await ownSummary(issueComments, () => api.viewer());
   const marks = await readMarks([...issueComments, ...reviewComments], writeAccess(api));
   return { summary, state: decodeState(summary?.body), marks, reviewComments };
 }

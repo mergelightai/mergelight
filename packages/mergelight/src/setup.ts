@@ -40,9 +40,10 @@ export function workflowFiles(skipBranches: string[] = []): { name: string; cont
     let content = readFileSync(join(dir, name), "utf8");
     if (name === "mergelight.yml" && skipBranches.length) {
       if (!content.includes(SKIP_MARKER)) throw new Error(`${name} has changed: can't add the branches to skip.`);
-      // GitHub expressions quote strings with single quotes, and fromJSON needs double quotes inside.
-      const json = JSON.stringify(skipBranches);
-      content = content.replace(SKIP_MARKER, `${SKIP_MARKER} &&\n      !contains(fromJSON('${json}'), github.head_ref)`);
+      // GitHub expressions quote strings with single quotes, doubled inside, and fromJSON needs double quotes.
+      const json = JSON.stringify(skipBranches).replace(/'/g, "''");
+      // A function, so a $ in a branch name stays a $.
+      content = content.replace(SKIP_MARKER, () => `${SKIP_MARKER} &&\n      !contains(fromJSON('${json}'), github.head_ref)`);
     }
     return { name, content };
   });
