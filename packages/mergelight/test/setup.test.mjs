@@ -7,6 +7,7 @@ import { checkAuthJson, setup, workflowFiles } from "../dist/setup.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const GOOD_AUTH = JSON.stringify({ auth_mode: "chatgpt", tokens: { refresh_token: "r" } });
+const PIN = { tag: "v0.1.0", sha: "a".repeat(40) };
 
 /** A fake gh. Records calls, and knows about one repository. */
 function fake({ secrets = [], isPrivate = true, files = {}, openPrs = [] } = {}) {
@@ -19,6 +20,8 @@ function fake({ secrets = [], isPrivate = true, files = {}, openPrs = [] } = {})
       if (a === "secret" && b === "list") return JSON.stringify(secrets.map((name) => ({ name })));
       if (a === "secret" && b === "set") return "";
       const path = args.find((x) => x.startsWith("repos/")) ?? "";
+      if (path === "repos/mergelightai/mergelight/releases/latest") return `${PIN.tag}\n`;
+      if (path === `repos/mergelightai/mergelight/commits/${PIN.tag}`) return `${PIN.sha}\n`;
       if (path === "repos/acme/widgets") return JSON.stringify({ private: isPrivate, default_branch: "main" });
       if (path.includes("/contents/") && !args.includes("PUT")) {
         const name = path.split("/").pop().split("?")[0];
@@ -64,6 +67,13 @@ test("no workflow needs a personal token any more", () => {
 
 test("the workflows that write a login can ask for the app's token", () => {
   for (const f of workflowFiles().filter((x) => x.name !== "mergelight-approve.yml")) assert.match(f.content, /id-token: write/, f.name);
+});
+
+test("every workflow gets pinned to the release's commit, with the version beside it", () => {
+  for (const f of workflowFiles([], PIN)) {
+    assert.match(f.content, new RegExp(`uses: mergelightai/mergelight@${PIN.sha} # ${PIN.tag}\\n`), f.name);
+    assert.doesNotMatch(f.content, /mergelight@v0/, f.name);
+  }
 });
 
 test("odd branch names can't break the review's condition", () => {
@@ -137,7 +147,7 @@ test("the workflows go to the chosen branch", async () => {
 });
 
 test("does nothing when the workflows are already there", async () => {
-  const files = Object.fromEntries(workflowFiles().map((x) => [x.name, x.content]));
+  const files = Object.fromEntries(workflowFiles([], PIN).map((x) => [x.name, x.content]));
   const f = fake({ secrets: ["CODEX_AUTH_JSON"], files });
   assert.equal(await setup({ repo: "acme/widgets", yes: true }, f.deps), 0);
   assert.equal(puts(f.calls).length, 0);

@@ -11,6 +11,13 @@ const SECRET = "CODEX_AUTH_JSON";
 const BRANCH = "mergelight-setup";
 const WORKFLOWS = ["mergelight.yml", "mergelight-approve.yml", "mergelight-refresh.yml"];
 const SKIP_MARKER = "github.event.pull_request.head.repo.full_name == github.repository";
+const ACTION = "mergelightai/mergelight";
+
+/** The release a workflow is pinned to. A tag can be moved, so the commit is what gets used. */
+export interface Pin {
+  sha: string;
+  tag: string;
+}
 
 export interface SetupOptions {
   repo: string;
@@ -33,8 +40,8 @@ export interface SetupDeps {
   log: (message: string) => void;
 }
 
-/** The workflow files, adjusted for this repository. */
-export function workflowFiles(skipBranches: string[] = []): { name: string; content: string }[] {
+/** The workflow files, adjusted for this repository, and pinned to a release if one is given. */
+export function workflowFiles(skipBranches: string[] = [], pin?: Pin): { name: string; content: string }[] {
   const dir = join(dirname(fileURLToPath(import.meta.url)), "..", "templates");
   return WORKFLOWS.map((name) => {
     let content = readFileSync(join(dir, name), "utf8");
@@ -45,8 +52,19 @@ export function workflowFiles(skipBranches: string[] = []): { name: string; cont
       // A function, so a $ in a branch name stays a $.
       content = content.replace(SKIP_MARKER, () => `${SKIP_MARKER} &&\n      !contains(fromJSON('${json}'), github.head_ref)`);
     }
+    if (pin) {
+      if (!content.includes(`${ACTION}@v0`)) throw new Error(`${name} has changed: can't pin it.`);
+      content = content.replaceAll(`${ACTION}@v0`, () => `${ACTION}@${pin.sha} # ${pin.tag}`);
+    }
     return { name, content };
   });
+}
+
+/** The latest release, as a commit. */
+async function latestPin(deps: SetupDeps): Promise<Pin> {
+  const tag = (await deps.gh(["api", `repos/${ACTION}/releases/latest`, "--jq", ".tag_name"])).trim();
+  const sha = (await deps.gh(["api", `repos/${ACTION}/commits/${tag}`, "--jq", ".sha"])).trim();
+  return { sha, tag };
 }
 
 /** A ChatGPT login is only useful in CI if it can refresh itself. */
@@ -75,7 +93,7 @@ async function hasFile(deps: SetupDeps, repo: string, path: string, ref: string)
 /** Puts the workflows on a branch and opens a pull request. Returns its URL, or null if there's nothing to add. */
 async function openWorkflowPr(deps: SetupDeps, opts: SetupOptions, base: string): Promise<string | null> {
   const { repo } = opts;
-  const files = workflowFiles(opts.skipBranches);
+  const files = workflowFiles(opts.skipBranches, await latestPin(deps));
 
   const missing: typeof files = [];
   for (const f of files) {

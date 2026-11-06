@@ -6,6 +6,7 @@ import { closedBody, readClosed, reopenedBody, resolvedByPeople, threadAction, t
 import { failedSummaryBody, FINDING_MARKER_RE, headline, inlineBody, isPendingSummary, LIGHT, pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "./markdown.js";
 import { readMarks, trustedComment, writeAccess, type Mark, type PrComment } from "./handled.js";
 import { decodeState, nextState, type ReviewState, type StateFinding } from "./state.js";
+import { newerVersion } from "../update.js";
 
 export { trustedComment } from "./handled.js";
 export type { ReviewThread } from "./closed.js";
@@ -231,7 +232,7 @@ export async function publishReview(
   const { handled, resolved } = await settleThreads(api, review, log);
 
   const state = nextState(prev, review.findings, review.pr.head_sha, review.light, urls);
-  const summaryInput = { review, state, urls, marks, handled };
+  const summaryInput = { review, state, urls, marks, handled, update: await newerVersion(api) };
   const commentBody = summaryBody(summaryInput);
   let summaryUrl: string | null = summary?.html_url ?? null;
   if (summary) {

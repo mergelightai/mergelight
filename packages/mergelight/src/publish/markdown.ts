@@ -105,6 +105,8 @@ export interface SummaryInput {
   marks?: Map<string, Mark>;
   /** Inline findings that got fixed or whose thread someone resolved, by finding id. */
   handled?: Map<string, Handled>;
+  /** A newer release of Mergelight, if this run isn't on the latest. */
+  update?: string | null;
 }
 
 /** A finding this review still reports, though someone marked it handled before the review finished. */
@@ -134,7 +136,7 @@ function fixLine(f: Finding, urls: Map<string, string>, mark?: Mark): string[] {
   ];
 }
 
-export function summaryBody({ review: r, state, urls, marks = new Map(), handled = new Map() }: SummaryInput, withState = true): string {
+export function summaryBody({ review: r, state, urls, marks = new Map(), handled = new Map(), update }: SummaryInput, withState = true): string {
   const light = LIGHT[r.light];
   const top = r.findings.filter((f) => f.tier === "post").sort((a, b) => (a.rank ?? 9) - (b.rank ?? 9) || rank(a) - rank(b));
   const listed = r.findings.filter((f) => f.tier === "list").sort((a, b) => rank(a) - rank(b));
@@ -199,6 +201,7 @@ export function summaryBody({ review: r, state, urls, marks = new Map(), handled
     "",
     `<sub>Round ${state.round} · reviewed \`${r.pr.head_sha.slice(0, 7)}\` with ${who(r.provider)}${checkedBy} on your own plan · ${duration(r.stats.duration_ms)} · <a href="https://mergelight.dev">Mergelight</a></sub>`,
   );
+  if (update) out.push("", `<sub>Mergelight ${update} is out. <a href="https://mergelight.dev/setup/">Update it</a></sub>`);
 
   const tail = withState ? `\n${encodeState(state)}` : "";
   const room = MAX_BODY - tail.length;
