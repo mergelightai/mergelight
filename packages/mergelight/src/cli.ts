@@ -21,6 +21,7 @@ Options
   --repo <owner/name>   Repository for a bare PR number
   --at <sha>            Review this commit of the PR instead of the latest
   --post                Post the review to the PR: summary comment, inline findings, check
+                        (the check needs a GitHub App, a personal gh login skips it)
   --dry-run             With --post, post or approve: print what would be posted, change nothing
   --yellow-blocks       With --post or post: a "needs a human" check waits for an approval
   --json                Print the review as JSON
@@ -162,7 +163,7 @@ async function main(): Promise<number> {
     const message = err instanceof Error ? err.message : String(err);
     log(`mergelight: ${message}`);
     if (values.post && headSha) {
-      await failCheck(api, checkRunId, headSha, message).catch((e) => log(`Couldn't update the check: ${(e as Error).message}`));
+      await failCheck(api, checkRunId, headSha, message, log).catch((e) => log(`Couldn't update the check: ${(e as Error).message}`));
     }
     return 1;
   }
