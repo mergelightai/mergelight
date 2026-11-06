@@ -1,4 +1,5 @@
 import type { Finding, Light, Review } from "../types.js";
+import type { Mark } from "./handled.js";
 import { encodeState, type ReviewState } from "./state.js";
 
 export const SUMMARY_MARKER = "<!-- mergelight:summary -->";
@@ -87,15 +88,24 @@ export interface SummaryInput {
   state: ReviewState;
   /** Inline comment URL per finding id, for findings posted inline. */
   urls: Map<string, string>;
+  /** What the team marked as handled, by finding id. */
+  marks?: Map<string, Mark>;
+}
+
+/** A finding this review still reports, though someone marked it handled before the review finished. */
+function markTag(mark: Mark | undefined): string {
+  if (!mark) return "";
+  return mark.as === "fixed" ? " _(marked fixed, still found)_" : " _(marked won't fix, still reported)_";
 }
 
 /** A line for a finding worth fixing. Without an inline comment to link to, the details go here. */
-function fixLine(f: Finding, urls: Map<string, string>): string[] {
+function fixLine(f: Finding, urls: Map<string, string>, mark?: Mark): string[] {
   const { dot, name } = label(f);
   const url = urls.get(f.id);
-  if (url) return [`- ${dot} ${name}: [${clean(f.title)}](${url}) ${where(f)}`];
+  const tag = markTag(mark);
+  if (url) return [`- ${dot} ${name}: [${clean(f.title)}](${url}) ${where(f)}${tag}`];
   return [
-    `- ${dot} ${name}: **${clean(f.title)}** ${where(f)}`,
+    `- ${dot} ${name}: **${clean(f.title)}** ${where(f)}${tag}`,
     `  <details><summary>Details</summary>`,
     "",
     `  ${clean(f.how_it_happens)}`,
@@ -109,30 +119,31 @@ function fixLine(f: Finding, urls: Map<string, string>): string[] {
   ];
 }
 
-export function summaryBody({ review: r, state, urls }: SummaryInput, withState = true): string {
+export function summaryBody({ review: r, state, urls, marks = new Map() }: SummaryInput, withState = true): string {
   const light = LIGHT[r.light];
   const top = r.findings.filter((f) => f.tier === "post").sort((a, b) => (a.rank ?? 9) - (b.rank ?? 9) || rank(a) - rank(b));
   const listed = r.findings.filter((f) => f.tier === "list").sort((a, b) => rank(a) - rank(b));
   const decisions = r.findings.filter((f) => f.tier === "decision");
   const leftAlone = r.findings.filter((f) => f.tier === "hardening");
-  const gone = state.round > 1 ? state.findings.filter((f) => f.status === "gone" && f.tier !== "hardening") : [];
+  const dropped = state.findings.filter((f) => f.status === "gone" && marks.get(f.id)?.as === "wont_fix");
+  const gone = state.round > 1 ? state.findings.filter((f) => f.status === "gone" && f.tier !== "hardening" && !dropped.includes(f)) : [];
 
   const out: string[] = [SUMMARY_MARKER, `### ${light.dot} Mergelight: ${light.label}`, "", clean(r.summary), "", `**${headline(r)}**`];
 
   if (top.length) {
     out.push("", "#### To fix");
-    for (const f of top) out.push(...fixLine(f, urls));
+    for (const f of top) out.push(...fixLine(f, urls, marks.get(f.id)));
   }
 
   if (listed.length) {
     out.push("", "#### Also worth fixing");
-    for (const f of listed) out.push(...fixLine(f, urls));
+    for (const f of listed) out.push(...fixLine(f, urls, marks.get(f.id)));
   }
 
   if (decisions.length) {
     out.push("", "#### Your call", "Real, but whether to fix it is a trade-off for you to make.", "");
     for (const f of decisions) {
-      out.push(`- **${clean(f.title)}** ${where(f)}: ${clean(f.verdict)}`);
+      out.push(`- **${clean(f.title)}** ${where(f)}: ${clean(f.verdict)}${markTag(marks.get(f.id))}`);
       out.push(`  <details><summary>How it happens</summary>`, "", `  ${clean(f.how_it_happens)} ${clean(f.what_breaks)}`, "", `  Fix (${f.fix_cost}): ${clean(f.fix)}`, "  </details>");
     }
   }
@@ -140,6 +151,15 @@ export function summaryBody({ review: r, state, urls }: SummaryInput, withState 
   if (leftAlone.length) {
     out.push("", `<details><summary>Left alone: ${plural(leftAlone.length, "finding")} not worth fixing</summary>`, "");
     for (const f of leftAlone) out.push(`- ${clean(f.title)} ${where(f)}: ${clean(f.verdict)}`);
+    out.push("", "</details>");
+  }
+
+  if (dropped.length) {
+    out.push("", `<details><summary>The team decided not to fix: ${dropped.length}</summary>`, "");
+    for (const f of dropped) {
+      const mark = marks.get(f.id)!;
+      out.push(`- ${clean(f.title)} \`${f.file}:${f.line}\`: ${clean(mark.note ?? "No reason given.")} (${mark.by})`);
+    }
     out.push("", "</details>");
   }
 
@@ -156,7 +176,9 @@ export function summaryBody({ review: r, state, urls }: SummaryInput, withState 
     `<sub>Round ${state.round} · reviewed \`${r.pr.head_sha.slice(0, 7)}\` with ${who(r.provider)}${checkedBy} on your own plan · ${duration(r.stats.duration_ms)} · <a href="https://mergelight.dev">Mergelight</a></sub>`,
   );
 
+  const tail = withState ? `\n${encodeState(state)}` : "";
+  const room = MAX_BODY - tail.length;
   let body = out.join("\n");
-  if (body.length > MAX_BODY) body = `${body.slice(0, MAX_BODY - 200)}\n\n_Summary cut short: too many findings to list._`;
-  return withState ? `${body}\n${encodeState(state)}` : body;
+  if (body.length > room) body = `${body.slice(0, room - 200)}\n\n_Summary cut short: too many findings to list._`;
+  return `${body}${tail}`;
 }
