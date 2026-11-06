@@ -66,6 +66,17 @@ test("the workflows that write a login can ask for the app's token", () => {
   for (const f of workflowFiles().filter((x) => x.name !== "mergelight-approve.yml")) assert.match(f.content, /id-token: write/, f.name);
 });
 
+test("odd branch names can't break the review's condition", () => {
+  const review = workflowFiles(["release/o'clock", "feature/$&"]).find((f) => f.name === "mergelight.yml");
+  assert.ok(review.content.includes(`fromJSON('["release/o''clock","feature/$&"]')`), review.content);
+});
+
+test("Dependabot runs are skipped, and there's room for the first login", () => {
+  const review = workflowFiles().find((f) => f.name === "mergelight.yml");
+  assert.match(review.content, /github\.actor != 'dependabot\[bot\]'/);
+  assert.equal(Number(review.content.match(/timeout-minutes: (\d+)/)[1]) >= 45, true);
+});
+
 test("skipped branches end up in the review's condition, as valid expression syntax", () => {
   const review = workflowFiles(["staging", "development"]).find((f) => f.name === "mergelight.yml");
   assert.match(review.content, /!contains\(fromJSON\('\["staging","development"\]'\), github\.head_ref\)/);
