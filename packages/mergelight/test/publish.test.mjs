@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { parsePatch, place } from "../dist/publish/diff-lines.js";
 import { clean, inlineBody, summaryBody } from "../dist/publish/markdown.js";
-import { trustedComment } from "../dist/publish/publish.js";
+import { fixedThreadComment, trustedComment } from "../dist/publish/publish.js";
 import { decodeState, encodeState, nextState } from "../dist/publish/state.js";
 import { buildVerifierPrompt } from "../dist/prompt.js";
 import { assignIds } from "../dist/review.js";
@@ -162,4 +162,17 @@ test("top picks and other findings worth fixing get their own sections, with det
   assert.equal(body.match(/<summary>Details<\/summary>/g).length, 1);
   assert.ok(body.includes("checked by Claude opus"));
   assert.equal(state.findings[0].how, "How.");
+});
+
+test("a thread is answered once, only when its code changed and its finding is gone", () => {
+  const bot = { authorAssociation: "NONE", author: { __typename: "Bot" } };
+  const first = { databaseId: 7, body: "<!-- mergelight:finding id=aaaaaaaaaa -->", ...bot };
+  const thread = (over = {}, extra = []) => ({ id: "t", isResolved: false, isOutdated: true, comments: { nodes: [first, ...extra] }, ...over });
+  assert.equal(fixedThreadComment(thread(), new Set()), 7);
+  assert.equal(fixedThreadComment(thread(), new Set(["aaaaaaaaaa"])), null, "still found");
+  assert.equal(fixedThreadComment(thread({ isOutdated: false }), new Set()), null, "code unchanged");
+  assert.equal(fixedThreadComment(thread({ isResolved: true }), new Set()), null, "already resolved");
+  assert.equal(fixedThreadComment(thread({}, [{ databaseId: 8, body: "<!-- mergelight:gone -->\nThe code changed.", ...bot }]), new Set()), null, "already answered");
+  const stranger = { ...first, authorAssociation: "NONE", author: { __typename: "User" } };
+  assert.equal(fixedThreadComment({ ...thread(), comments: { nodes: [stranger] } }, new Set()), null, "not our comment");
 });

@@ -205,22 +205,35 @@ export async function publishReview(
   return { summaryUrl, inline: inline.length, outside: outside.length, resolved, light: review.light };
 }
 
+const GONE_MARKER = "<!-- mergelight:gone -->";
+
+export interface ReviewThread {
+  id: string;
+  isResolved: boolean;
+  isOutdated: boolean;
+  comments: { nodes: { databaseId: number; body: string; authorAssociation?: string; author?: { __typename?: string } | null }[] };
+}
+
 /**
- * Resolves Mergelight threads whose finding is gone and whose code changed.
- * Both are required: a finding can drop out of a review without being fixed,
- * so an untouched line keeps its thread open.
+ * The comment to answer if this thread's finding is fixed: gone from the review,
+ * and its code changed. Both are required: a finding can drop out of a review
+ * without being fixed, so an untouched line keeps its thread open. Mergelight
+ * only closes a thread once, so it doesn't repeat itself or overrule someone who
+ * reopened it.
  */
+export function fixedThreadComment(t: ReviewThread, open: Set<string>): number | null {
+  const first = t.comments.nodes[0];
+  if (!first || t.isResolved || !t.isOutdated) return null;
+  if (!trustedComment({ user: { type: first.author?.__typename }, author_association: first.authorAssociation })) return null;
+  const id = first.body.match(FINDING_MARKER_RE)?.[1];
+  if (!id || open.has(id) || t.comments.nodes.some((c) => c.body.includes(GONE_MARKER))) return null;
+  return first.databaseId;
+}
+
+/** Answers and resolves Mergelight threads whose finding is fixed. */
 async function resolveFixedThreads(api: GitHub, review: Review, log: (s: string) => void): Promise<number> {
   const open = new Set(review.findings.map((f) => f.id));
-  type Threads = {
-    repository: {
-      pullRequest: {
-        reviewThreads: {
-          nodes: { id: string; isResolved: boolean; isOutdated: boolean; comments: { nodes: { databaseId: number; body: string }[] } }[];
-        };
-      };
-    };
-  };
+  type Threads = { repository: { pullRequest: { reviewThreads: { nodes: ReviewThread[] } } } };
   let data: Threads | null;
   try {
     data = await api.graphql<Threads>(
@@ -228,7 +241,7 @@ async function resolveFixedThreads(api: GitHub, review: Review, log: (s: string)
         repository(owner: $owner, name: $repo) {
           pullRequest(number: $number) {
             reviewThreads(first: 100) {
-              nodes { id isResolved isOutdated comments(first: 1) { nodes { databaseId body } } }
+              nodes { id isResolved isOutdated comments(first: 50) { nodes { databaseId body authorAssociation author { __typename } } } }
             }
           }
         }
@@ -241,17 +254,18 @@ async function resolveFixedThreads(api: GitHub, review: Review, log: (s: string)
   }
   let resolved = 0;
   for (const t of data?.repository.pullRequest.reviewThreads.nodes ?? []) {
-    const first = t.comments.nodes[0];
-    const id = first?.body.match(FINDING_MARKER_RE)?.[1];
-    if (!id || t.isResolved || !t.isOutdated || open.has(id)) continue;
+    const comment = fixedThreadComment(t, open);
+    if (comment === null) continue;
     try {
-      await api.write("POST", `pulls/${review.pr.number}/comments/${first!.databaseId}/replies`, {
-        body: `The code here changed and Mergelight no longer finds this in \`${review.pr.head_sha.slice(0, 7)}\`, so it's resolved.`,
+      await api.write("POST", `pulls/${review.pr.number}/comments/${comment}/replies`, {
+        body: `${GONE_MARKER}\nThe code here changed and Mergelight no longer finds this in \`${review.pr.head_sha.slice(0, 7)}\`.`,
       });
       await api.graphql(`mutation($id: ID!) { resolveReviewThread(input: { threadId: $id }) { thread { id } } }`, { id: t.id }, true);
       resolved++;
     } catch (err) {
-      log(`Couldn't resolve a thread: ${(err as Error).message}`);
+      // GitHub only lets a workflow token resolve threads with contents: write. The reply still stands.
+      const hint = /not accessible by integration/i.test((err as Error).message) ? "the workflow needs contents: write for that" : (err as Error).message;
+      log(`Answered a fixed thread but couldn't mark it resolved: ${hint}`);
     }
   }
   return resolved;
