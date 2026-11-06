@@ -25,7 +25,7 @@ OpenAI allows a ChatGPT login in CI only for trusted private automation, and say
 Go to **[mergelight.dev/setup](https://mergelight.dev/setup/)** and continue with GitHub. Everything happens in your browser, one step at a time:
 
 1. **Pick a repo.** If it isn't listed, add it on GitHub, and the list refreshes when you come back.
-2. **Add Mergelight.** Choose what it reviews: pull requests into one branch, or every pull request. With one branch, merges like `staging` into `main` are skipped, so code pushed straight to `staging` isn't reviewed. With every pull request, GitHub only runs the file on branches that have it, so other branches join once it's merged into them. GitHub opens with the file filled in. Commit it to a new branch and create the pull request, which reviews itself. The page notices the pull request by itself.
+2. **Add Mergelight.** Choose what it reviews: pull requests into one branch, or every pull request. With one branch, merges like `staging` into `main` are skipped, so code pushed straight to `staging` isn't reviewed. With every pull request, GitHub only runs the file on branches that have it, so other branches join once it's merged into them. The page then opens a pull request with the file, using your own sign-in in your browser. It reviews itself, and you decide whether to merge. If GitHub refuses, the page offers GitHub's editor with the file filled in instead.
 3. **Connect your AI,** if the repo isn't connected yet:
    - **ChatGPT plan** (private repositories): the pull request shows a link and a code. Enter the code, and the review starts. First turn on "Enable device code sign-in" in your [ChatGPT security settings](https://chatgpt.com/settings/security). It's in beta, and on a workspace an admin turns it on.
    - **OpenAI API key**: add it to the repository's secrets as `OPENAI_API_KEY`, then push a commit. OpenAI bills it per use, and it works on public repositories too.
@@ -43,7 +43,10 @@ There's no key or token to manage. The workflow's `id-token: write` permission p
 | `--relogin` | Log in to Codex again |
 | `--yes` | Don't stop to ask whether the app is installed |
 
-**What the app can do:** post comments and checks, read code, and overwrite this repository's Actions secrets, so it can save the refreshed Codex login. It can't read a secret's value, and it can't push code.
+**What the app can do:** post comments and checks, read and write code and workflows, and overwrite this repository's Actions secrets.
+
+- **Write access to code and workflows** is there for the setup page, which uses it with your own sign-in to open the pull request that adds the file. Review runs don't get it: their token only allows comments, checks and reading code, so a review can't push code.
+- **Secrets** let it save the refreshed Codex login. It can't read a secret's value.
 
 **Optional: make it required.** In branch protection or a ruleset, require the **Mergelight** check. 🔴 then blocks the merge. 🟡 doesn't, unless your team sets `yellow-blocks: true` to make it wait for an approval.
 

@@ -2,8 +2,10 @@
 
 const API = 'https://api.github.com';
 const CLIENT_ID = 'Iv23liM8BL5MwWeDmXHV';
-const SIGN_IN_ENDPOINT = 'https://api.mergelight.dev/sign-in';
+const TOKEN_SERVER = 'https://api.mergelight.dev';
 const STATE_KEY = 'mergelight.setup.state';
+/** A sleeping server can take about a minute to wake up, so this is generous. */
+const SIGN_IN_TIMEOUT_MS = 120_000;
 
 export const INSTALL_URL = 'https://github.com/apps/mergelight-ai/installations/new';
 
@@ -42,9 +44,19 @@ export interface CheckStatus {
   title: string | null;
 }
 
+export class GitHubError extends Error {
+  status: number;
+  constructor(status: number) {
+    super(`GitHub answered ${status}.`);
+    this.status = status;
+  }
+}
+
 export interface GitHubClient {
   repos(): Promise<Repo[]>;
   details(repo: Repo): Promise<RepoDetails>;
+  /** Opens a pull request that adds the workflow, unless one is open already. Null if the branch already has the file. */
+  addWorkflow(repo: Repo, branch: string, content: string): Promise<SetupPr | null>;
   /** The open pull request that adds the workflow, once someone has made it. */
   findSetupPr(repo: Repo): Promise<SetupPr | null>;
   hasWorkflow(repo: Repo, branch: string): Promise<boolean>;
@@ -54,6 +66,14 @@ export interface GitHubClient {
 }
 
 const WORKFLOW_PATH = '.github/workflows/mergelight.yml';
+const SETUP_TITLE = 'Add Mergelight code review';
+const SETUP_BODY = [
+  'Adds the one file [Mergelight](https://mergelight.dev) needs to review your pull requests.',
+  '',
+  "It runs in your own GitHub Actions, on your AI plan. This pull request reviews itself, so you can see what you'll get. Merge it to keep reviews on.",
+].join('\n');
+
+const toBase64 = (text: string) => btoa(String.fromCharCode(...new TextEncoder().encode(text)));
 
 function stateValue(): string {
   try {
@@ -68,6 +88,11 @@ function stateValue(): string {
 }
 
 export const signInUrl = () => `https://github.com/login/oauth/authorize?client_id=${CLIENT_ID}&state=${stateValue()}`;
+
+/** The token server sleeps when idle, so this wakes it before the person needs it. Sends nothing. */
+export function wakeTokenServer(): void {
+  void fetch(TOKEN_SERVER, { mode: 'no-cors' }).catch(() => undefined);
+}
 
 /**
  * Finishes a sign-in if GitHub just sent the person back here. A code only counts with the state this
@@ -85,10 +110,11 @@ export async function finishSignIn(params: URLSearchParams): Promise<string | nu
     /* Without storage there's no state to compare, so it's treated as not signed in. */
   }
   if (!expected || params.get('state') !== expected) return null;
-  const res = await fetch(SIGN_IN_ENDPOINT, {
+  const res = await fetch(`${TOKEN_SERVER}/sign-in`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ code }),
+    signal: AbortSignal.timeout(SIGN_IN_TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`Sign-in failed (${res.status}).`);
   return ((await res.json()) as { token: string }).token;
@@ -114,14 +140,25 @@ export function pickBase(pulls: { base: string; head: string }[], defaultBranch:
 export const pickSkip = (branches: string[]) => branches.filter((b) => LONG_LIVED.test(b));
 
 export function realClient(token: string): GitHubClient {
-  const get = async <T,>(path: string): Promise<T> => {
+  const call = async <T,>(method: string, path: string, body?: unknown): Promise<T> => {
     const res = await fetch(`${API}${path}`, {
+      method,
       headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28' },
+      body: body === undefined ? undefined : JSON.stringify(body),
     });
-    if (!res.ok) throw new Error(`GitHub answered ${res.status}.`);
-    return (await res.json()) as T;
+    if (!res.ok) throw new GitHubError(res.status);
+    return (res.status === 204 ? undefined : await res.json()) as T;
   };
+  const get = <T,>(path: string) => call<T>('GET', path);
   const hasWorkflow = (repo: Repo, branch: string) => get(`/repos/${repo.fullName}/contents/${WORKFLOW_PATH}?ref=${encodeURIComponent(branch)}`).then(() => true, () => false);
+  const findSetupPr = async (repo: Repo): Promise<SetupPr | null> => {
+    const pulls = await get<{ number: number; html_url: string; head: { sha: string } }[]>(`/repos/${repo.fullName}/pulls?state=open&sort=created&direction=desc&per_page=5`);
+    for (const pull of pulls) {
+      const files = await get<{ filename: string }[]>(`/repos/${repo.fullName}/pulls/${pull.number}/files?per_page=30`).catch(() => []);
+      if (files.some((f) => f.filename === WORKFLOW_PATH)) return { number: pull.number, url: pull.html_url, headSha: pull.head.sha };
+    }
+    return null;
+  };
   const hasLogin = async (repo: Repo) => {
     const { secrets } = await get<{ secrets: { name: string }[] }>(`/repos/${repo.fullName}/actions/secrets?per_page=100`).catch(() => ({ secrets: [] as { name: string }[] }));
     return secrets.some((s) => s.name === 'CODEX_AUTH_JSON' || s.name === 'OPENAI_API_KEY');
@@ -156,14 +193,25 @@ export function realClient(token: string): GitHubClient {
         hasWorkflow: await hasWorkflow(repo, base),
       };
     },
-    findSetupPr: async (repo) => {
-      const pulls = await get<{ number: number; html_url: string; head: { sha: string } }[]>(`/repos/${repo.fullName}/pulls?state=open&sort=created&direction=desc&per_page=5`);
-      for (const pull of pulls) {
-        const files = await get<{ filename: string }[]>(`/repos/${repo.fullName}/pulls/${pull.number}/files?per_page=30`).catch(() => []);
-        if (files.some((f) => f.filename === WORKFLOW_PATH)) return { number: pull.number, url: pull.html_url, headSha: pull.head.sha };
+    addWorkflow: async (repo, branch, content) => {
+      const existing = await findSetupPr(repo);
+      if (existing) return existing;
+      if (await hasWorkflow(repo, branch)) return null;
+      const r = `/repos/${repo.fullName}`;
+      const base = await get<{ object: { sha: string } }>(`${r}/git/ref/heads/${branch.split('/').map(encodeURIComponent).join('/')}`);
+      const head = `mergelight-setup-${Date.now().toString(36)}`;
+      await call('POST', `${r}/git/refs`, { ref: `refs/heads/${head}`, sha: base.object.sha });
+      try {
+        await call('PUT', `${r}/contents/${WORKFLOW_PATH}`, { message: SETUP_TITLE, content: toBase64(content), branch: head });
+        const pull = await call<{ number: number; html_url: string; head: { sha: string } }>('POST', `${r}/pulls`, { title: SETUP_TITLE, head, base: branch, body: SETUP_BODY });
+        return { number: pull.number, url: pull.html_url, headSha: pull.head.sha };
+      } catch (err) {
+        // Don't leave an empty branch behind in their repo.
+        await call('DELETE', `${r}/git/refs/heads/${head}`).catch(() => undefined);
+        throw err;
       }
-      return null;
     },
+    findSetupPr,
     hasWorkflow,
     hasLogin,
     checkStatus: async (repo, sha) => {
@@ -198,6 +246,8 @@ export function mockClient(): GitHubClient {
               hasWorkflow: r.fullName === 'acme/app',
             },
       ),
+    // acme/site plays an install that hasn't approved the access, to show the way around it.
+    addWorkflow: (r) => (r.fullName === 'acme/site' ? Promise.reject(new GitHubError(403)) : new Promise((done) => setTimeout(() => done({ number: 128, url: 'https://github.com/acme/api/pull/128', headSha: 'abc' }), 900))),
     findSetupPr: () => later(++finds > 1 ? { number: 128, url: 'https://github.com/acme/api/pull/128', headSha: 'abc' } : null),
     hasWorkflow: () => later(false),
     hasLogin: (r) => later(r.fullName === 'acme/platform'),

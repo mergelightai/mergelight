@@ -5,7 +5,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import workflowFile from '../../../examples/mergelight.yml?raw';
 import Ambient from '../sections/Ambient';
 import { Check, GitHubIcon, SURFACE, WELL } from '../ui';
-import { cleanUrl, finishSignIn, INSTALL_URL, mockClient, realClient, signInUrl, type CheckStatus, type GitHubClient, type Repo, type RepoDetails, type SetupPr } from './github';
+import { cleanUrl, finishSignIn, GitHubError, INSTALL_URL, mockClient, realClient, signInUrl, wakeTokenServer, type CheckStatus, type GitHubClient, type Repo, type RepoDetails, type SetupPr } from './github';
 
 const CHATGPT_SECURITY = 'https://chatgpt.com/settings/security';
 const TYPES_MARKER = 'types: [opened, synchronize, reopened, ready_for_review]';
@@ -61,6 +61,8 @@ export default function Setup() {
   const [branch, setBranch] = useState('main');
   const [scope, setScope] = useState<Scope>('all');
   const [fileOpen, setFileOpen] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [addFailed, setAddFailed] = useState<'refused' | 'other' | null>(null);
   const [pr, setPr] = useState<SetupPr | null>(null);
   const [status, setStatus] = useState<CheckStatus | null>(null);
   const [hasLogin, setHasLogin] = useState(false);
@@ -76,6 +78,9 @@ export default function Setup() {
     setClient(c);
     setView('repo');
   }, []);
+
+  // Sign-in needs the token server, so start waking it while the person reads the first screen.
+  useEffect(wakeTokenServer, []);
 
   // Local development: `?mock` runs the whole flow on made-up data. Not in the built site.
   useEffect(() => {
@@ -114,6 +119,7 @@ export default function Setup() {
     setStatus(null);
     setHasLogin(false);
     setFileOpen(false);
+    setAddFailed(null);
     setView('add');
     client?.details(r).then((d) => {
       setDetails(d);
@@ -126,6 +132,22 @@ export default function Setup() {
   const workflow = useMemo(() => workflowFor(scope, branch, details?.skip ?? []), [scope, branch, details]);
   const fileUrl = repo ? newFileUrl(repo.fullName, branch, workflow) : '#';
   const afterAdding = useCallback(() => setView(hasLogin ? 'live' : 'connect'), [hasLogin]);
+
+  /** Opens the pull request right here, with the person's own sign-in. Nothing goes through Mergelight. */
+  const addToRepo = async () => {
+    if (!client || !repo || adding) return;
+    setAdding(true);
+    setAddFailed(null);
+    setFileOpen(false);
+    try {
+      setPr(await client.addWorkflow(repo, branch, workflow));
+      afterAdding();
+    } catch (err) {
+      setAddFailed(err instanceof GitHubError && (err.status === 403 || err.status === 404) ? 'refused' : 'other');
+    } finally {
+      setAdding(false);
+    }
+  };
 
   // Waiting for the pull request to show up on GitHub.
   useEffect(() => {
@@ -168,7 +190,7 @@ export default function Setup() {
   const back: Partial<Record<View, () => void>> = {
     add: anotherRepo,
     finish: () => setView('add'),
-    connect: () => setView('finish'),
+    connect: () => setView('add'),
   };
 
   return (
@@ -189,7 +211,7 @@ export default function Setup() {
               {view === 'welcome' && <Welcome signingIn={signingIn} failed={signInFailed} installed={params.has('installation_id')} />}
               {view === 'repo' && <RepoStep repos={repos} onChoose={choose} failed={signInFailed} />}
               {view === 'add' && repo && (
-                <AddStep repo={repo} details={details} branch={branch} setBranch={setBranch} scope={scope} setScope={setScope} fileOpen={fileOpen} onToggleFile={() => setFileOpen((v) => !v)} fileUrl={fileUrl} onBack={back.add!} onOpened={() => { setFileOpen(false); setView('finish'); }} onContinue={afterAdding} />
+                <AddStep repo={repo} details={details} branch={branch} setBranch={setBranch} scope={scope} setScope={setScope} fileOpen={fileOpen} onToggleFile={() => setFileOpen((v) => !v)} adding={adding} failed={addFailed} onAdd={() => void addToRepo()} fileUrl={fileUrl} onBack={adding ? () => undefined : back.add!} onByHand={() => { setFileOpen(false); setView('finish'); }} onContinue={afterAdding} />
               )}
               {view === 'finish' && repo && <FinishStep repo={repo} branch={branch} fileUrl={fileUrl} pr={pr} onBack={back.finish!} />}
               {view === 'connect' && repo && <ConnectStep repo={repo} pr={pr} status={status} onBack={back.connect!} onSkip={() => setView('live')} />}
@@ -359,7 +381,24 @@ function Pulse({ tone = 'lilac', still = false, children }: { tone?: 'lilac' | '
 
 /* ---------- Steps ---------- */
 
+function Spinner({ className = 'size-[18px]' }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true" className={`${className} animate-spin motion-reduce:animate-none`}>
+      <circle cx="8" cy="8" r="6" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2" />
+      <path d="M14 8a6 6 0 0 0-6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function Welcome({ signingIn, failed, installed }: { signingIn: boolean; failed: boolean; installed: boolean }) {
+  // Most sign-ins take a second. When one doesn't, say so before it looks stuck.
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    if (!signingIn) return;
+    const timer = setTimeout(() => setSlow(true), 4000);
+    return () => clearTimeout(timer);
+  }, [signingIn]);
+
   return (
     <div className="py-2 text-center">
       <img src="/logo-animated.svg" alt="" width={84} height={84} className="mx-auto size-[84px] rounded-[20px] shadow-[0_0_0_1px_rgb(255_255_255/0.08),0_14px_40px_-12px_rgb(0_0_0/0.8)]" />
@@ -369,9 +408,14 @@ function Welcome({ signingIn, failed, installed }: { signingIn: boolean; failed:
       </p>
       {failed && <p className="mt-4 text-[13px] text-risk">GitHub sign-in didn't work. Please try again.</p>}
       <a href={signingIn ? undefined : signInUrl()} aria-disabled={signingIn} className={`${PRIMARY} mt-7 ${signingIn ? 'pointer-events-none opacity-70' : ''}`}>
-        <GitHubIcon className="size-[18px]" />
+        {signingIn ? <Spinner /> : <GitHubIcon className="size-[18px]" />}
         {signingIn ? 'Signing you in...' : 'Continue with GitHub'}
       </a>
+      {signingIn && slow && (
+        <motion.p role="status" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.3 }} className="mt-3 text-[13px] text-muted">
+          This can take up to a minute.
+        </motion.p>
+      )}
     </div>
   );
 }
@@ -518,12 +562,15 @@ function AddStep(props: {
   setScope: (s: Scope) => void;
   fileOpen: boolean;
   onToggleFile: () => void;
+  adding: boolean;
+  failed: 'refused' | 'other' | null;
+  onAdd: () => void;
   fileUrl: string;
   onBack: () => void;
-  onOpened: () => void;
+  onByHand: () => void;
   onContinue: () => void;
 }) {
-  const { repo, details, branch, setBranch, scope, setScope, fileOpen, onToggleFile, fileUrl, onBack, onOpened, onContinue } = props;
+  const { repo, details, branch, setBranch, scope, setScope, fileOpen, onToggleFile, adding, failed, onAdd, fileUrl, onBack, onByHand, onContinue } = props;
   const name = repo.fullName.split('/')[1]!;
   const already = Boolean(details?.hasWorkflow);
   const canChoose = Boolean(details && details.skip.length > 1);
@@ -581,9 +628,9 @@ function AddStep(props: {
               <Fact center={!pickFileBranch} tall={pickFileBranch} icon={<LockIcon className="size-4" />}>
                 <span className="flex items-center justify-between gap-3">
                   {pickFileBranch ? (
-                    <span className="flex flex-wrap items-center gap-x-2 gap-y-1">Adds one small file to {picker}</span>
+                    <span className="flex flex-wrap items-center gap-x-2 gap-y-1">Opens a PR into {picker}</span>
                   ) : (
-                    <span className="[text-wrap:pretty]">Needs one small file in your repo to run. It can never push code.</span>
+                    <span className="[text-wrap:pretty]">Needs one small file to run. We open a PR with it, and you decide whether to merge.</span>
                   )}
                   <button
                     type="button"
@@ -596,7 +643,7 @@ function AddStep(props: {
                 </span>
                 {pickFileBranch && (
                   <span className="mt-1 block [text-wrap:pretty]">
-                    Needed to run, and it can never push code.{canChoose && ' Merge it into other branches to review PRs there.'}
+                    It adds one small file needed to run, and you decide whether to merge.{canChoose && ' Merge it into other branches to review PRs there.'}
                   </span>
                 )}
               </Fact>
@@ -610,9 +657,27 @@ function AddStep(props: {
           Continue
         </button>
       ) : (
-        <a href={details ? fileUrl : undefined} target="_blank" rel="noreferrer" onClick={onOpened} aria-disabled={!details} className={`${PRIMARY} mt-5 ${details ? '' : 'pointer-events-none opacity-40'}`}>
-          Add to {name} <External className="size-4" />
-        </a>
+        <>
+          <button type="button" onClick={onAdd} disabled={!details || adding} className={`${PRIMARY} mt-5 ${!details ? 'pointer-events-none opacity-40' : adding ? 'pointer-events-none opacity-70' : ''}`}>
+            {adding && <Spinner />}
+            {adding ? 'Opening your PR...' : `Add to ${name}`}
+          </button>
+          {failed && (
+            <div role="alert" className="mt-4 text-center text-[13px] leading-relaxed text-muted">
+              <p>{failed === 'refused' ? "GitHub didn't let us open the PR. Your install may need to approve the access." : "That didn't work. Please try again."}</p>
+              <p className="mt-1.5 flex flex-wrap items-center justify-center gap-x-4 gap-y-1">
+                {failed === 'refused' && (
+                  <a href={repo.accessUrl} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-lilac transition-colors hover:text-fg">
+                    Approve on GitHub <External />
+                  </a>
+                )}
+                <a href={fileUrl} target="_blank" rel="noreferrer" onClick={onByHand} className="flex items-center gap-1 text-lilac transition-colors hover:text-fg">
+                  Add the file yourself <External />
+                </a>
+              </p>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -702,7 +767,7 @@ function FileView({ workflow, onClose }: { workflow: string; onClose: () => void
         <ul className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5 text-[13px] text-muted">
           <li className="flex items-center gap-1.5"><Check className="size-3.5 text-lilac" /> Reads your code</li>
           <li className="flex items-center gap-1.5"><Check className="size-3.5 text-lilac" /> Posts reviews</li>
-          <li className="flex items-center gap-1.5"><LockIcon className="size-3.5 text-lilac" /> Can't push code</li>
+          <li className="flex items-center gap-1.5"><LockIcon className="size-3.5 text-lilac" /> Reviews can't push code</li>
         </ul>
       </div>
       <div tabIndex={0} aria-label="The file's contents" className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-black/25 pb-7 pt-3 font-mono text-[12px] leading-[20px] outline-none shadow-[inset_0_1px_0_rgb(255_255_255/0.06)] [mask-image:linear-gradient(to_bottom,black_calc(100%-28px),transparent)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-lilac">
