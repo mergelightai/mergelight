@@ -19,10 +19,14 @@ Options
   --out <file>          Also write the JSON review to a file
   --model <name>        Codex model (default: your Codex config)
   --effort <level>      Reasoning effort: low, medium, high (default: high)
+  --verify-with <name>  Who checks the findings: claude or codex
+                        (default: claude when Claude Code is installed)
+  --verify-model <name> Model for the checker (default for claude: opus)
   --keep                Keep the temporary checkout
   -h, --help            Show this help
 
-Reviews run on your own logged-in Codex CLI. Nothing is sent to Mergelight.
+Reviews run on your own logged-in Codex CLI, and Claude Code if you check with it.
+Nothing is sent to Mergelight.
 `;
 
 async function main(): Promise<number> {
@@ -35,6 +39,8 @@ async function main(): Promise<number> {
       out: { type: "string" },
       model: { type: "string" },
       effort: { type: "string" },
+      "verify-with": { type: "string" },
+      "verify-model": { type: "string" },
       keep: { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
@@ -47,6 +53,12 @@ async function main(): Promise<number> {
   }
   if (command !== "review" || !target) {
     process.stderr.write(HELP);
+    return 1;
+  }
+
+  const verifyWith = values["verify-with"];
+  if (verifyWith !== undefined && verifyWith !== "codex" && verifyWith !== "claude") {
+    process.stderr.write(`mergelight: --verify-with must be codex or claude, not "${verifyWith}"\n`);
     return 1;
   }
 
@@ -76,6 +88,8 @@ async function main(): Promise<number> {
       at: values.at,
       model: values.model,
       effort: values.effort,
+      verifyWith,
+      verifyModel: values["verify-model"],
       keep: values.keep,
       onProgress,
     });

@@ -16,9 +16,6 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { parseArgs } from "node:util";
-import { dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-const { tierOf } = await import(join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "review.js"));
 const { values, positionals } = parseArgs({
   allowPositionals: true,
   options: { tag: { type: "string", default: "" }, selection: { type: "string", default: "selection.json" } },
@@ -28,8 +25,9 @@ const [owner, name] = repoArg.split("/");
 const dir = join(process.env.MERGELIGHT_CACHE ?? join(homedir(), ".cache", "mergelight"), "eval", `${owner}-${name}`);
 const selection = JSON.parse(readFileSync(join(dir, values.selection), "utf8"));
 
-// MP is Mergelight counting only what it posts as its own comment (what the verifier says to fix).
-const REVIEWERS = { CR: "CodeRabbit", CP: "Copilot", ML: "Mergelight, everything", MP: "Mergelight, posted only" };
+// MP is everything the verifier says to fix (inline comments plus the summary list).
+// MT is only the inline comments: the verifier's top picks, at most 3 per PR, for reviews that have them.
+const REVIEWERS = { CR: "CodeRabbit", CP: "Copilot", ML: "Mergelight, everything", MP: "Mergelight, worth fixing", MT: "Mergelight, inline comments" };
 const stats = Object.fromEntries(
   Object.keys(REVIEWERS).map((k) => [k, { comments: 0, fixed: 0, issues_found: 0, fixed_issues_found: 0, only_one: 0 }]),
 );
@@ -48,8 +46,10 @@ for (const { number } of selection) {
   const mlFile = join(dir, values.tag ? `ml-${values.tag}-${number}.json` : `ml-${number}.json`);
   const findings = existsSync(mlFile) ? JSON.parse(readFileSync(mlFile, "utf8")).findings : [];
   const mlIds = items.filter((i) => i.id.startsWith("ML")).map((i) => i.id);
-  const posted = new Set(mlIds.filter((id, k) => findings[k] && (findings[k].tier ?? tierOf(findings[k])) === "post"));
-  const whoOf = (id) => (id.startsWith("ML") ? (posted.has(id) ? ["ML", "MP"] : ["ML"]) : [id.slice(0, 2)]);
+  const posted = new Set(mlIds.filter((id, k) => findings[k]?.recommendation === "fix"));
+  const picked = new Set(mlIds.filter((id, k) => findings[k]?.rank));
+  const whoOf = (id) =>
+    id.startsWith("ML") ? ["ML", ...(posted.has(id) ? ["MP"] : []), ...(picked.has(id) ? ["MT"] : [])] : [id.slice(0, 2)];
 
   // Union-find over same_as links.
   const parent = new Map(items.map((i) => [i.id, i.id]));
@@ -74,7 +74,7 @@ for (const { number } of selection) {
     allIssues++;
     const fixed = members.some((m) => ["fixed", "partly"].includes(byId.get(m.id)?.outcome));
     const who = new Set(members.flatMap((m) => whoOf(m.id)));
-    const reviewers = new Set([...who].map((w) => (w === "MP" ? "ML" : w)));
+    const reviewers = new Set([...who].map((w) => (w === "MP" || w === "MT" ? "ML" : w)));
     for (const w of who) {
       stats[w].issues_found++;
       if (fixed) stats[w].fixed_issues_found++;

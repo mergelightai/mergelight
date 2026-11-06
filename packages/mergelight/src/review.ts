@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fetchPullRequest, type PrRef } from "./github.js";
 import {
@@ -11,7 +11,7 @@ import {
   type Focus,
   type PromptInput,
 } from "./prompt.js";
-import { runCodex } from "./providers/codex.js";
+import { claudeAvailable, runModel, TOOLING, type ProviderName } from "./providers/index.js";
 import { candidateSchema, reviewSchema } from "./schema.js";
 import type { Finding, Light, ModelFinding, ModelReview, Review, Tier } from "./types.js";
 import { cacheDir, prepareWorkspace } from "./workspace.js";
@@ -22,6 +22,10 @@ export interface ReviewOptions {
   model?: string;
   /** Reasoning effort for every Codex run. Defaults to high, whatever the user's Codex config says. */
   effort?: string;
+  /** Who checks and sorts the candidates. Defaults to Claude when Claude Code is installed, else Codex. */
+  verifyWith?: ProviderName;
+  /** Model for the verifier. Defaults to the latest Opus on Claude, and to the hunters' model on Codex. */
+  verifyModel?: string;
   /** Keep the temporary checkout for inspection. */
   keep?: boolean;
   /** Progress messages. transient ones (the command the agent is running) are only worth showing live. */
@@ -47,13 +51,15 @@ function fingerprint(dir: string, f: ModelFinding): string {
 }
 
 /**
- * The verifier's recommendation decides where a finding shows up: fix gets its
- * own comment, decide becomes a line in the summary, leave is collapsed.
- * (An earlier rule also demanded common or plausible likelihood for risks. In
- * the eval it threw away rare problems with one-line fixes that teams fixed.)
+ * Only the verifier's top picks (at most 3 per PR) get their own comment. Other
+ * findings it says to fix are listed in the summary, decide becomes a "your
+ * call" line and leave is collapsed. In the eval, Opus's top picks were fixed
+ * about as often as Copilot's comments, while posting everything it would fix
+ * meant about 4 comments per PR, and posting all of Codex's about 6.
  */
-export function tierOf(f: ModelFinding): Tier {
-  if (f.recommendation === "fix") return "post";
+export function tierOf(f: ModelFinding & { rank?: number | null }): Tier {
+  if (f.rank) return "post";
+  if (f.recommendation === "fix") return "list";
   if (f.recommendation === "decide") return "decision";
   return "hardening";
 }
@@ -81,6 +87,56 @@ const ORDER = { bug: 0, risk: 1, hardening: 2 } as const;
  * low) found 41 of 51 fixed problems at high, 32 at medium and 29 at low.
  */
 export const DEFAULT_EFFORT = "high";
+
+export interface VerifyOptions {
+  provider: ProviderName;
+  model?: string;
+  effort: string;
+  logFile?: string;
+  onCommand?: (command: string) => void;
+}
+
+export interface Verified {
+  summary: string;
+  findings: Finding[];
+  rejected: ModelReview["rejected"];
+  model: string | null;
+  cost_usd: number | null;
+}
+
+/**
+ * The verifier: tries to disprove every candidate, merges duplicates, rates the
+ * rest and picks the few that matter most. Exported so the eval can replay the
+ * same candidates through another model.
+ */
+export async function verifyCandidates(dir: string, input: PromptInput, found: Candidate[], opts: VerifyOptions): Promise<Verified> {
+  const tooling = TOOLING[opts.provider];
+  let diffFile: string | undefined;
+  if (tooling === "files" && input.diffTruncated) {
+    // Without a shell the agent can't run git diff, so the full diff goes into the checkout.
+    diffFile = ".mergelight/pr.diff";
+    mkdirSync(join(dir, ".mergelight"), { recursive: true });
+    writeFileSync(join(dir, diffFile), input.diff);
+  }
+  const result = await runModel(opts.provider, {
+    cwd: dir,
+    prompt: buildVerifierPrompt({ ...input, tooling, diffFile }, found),
+    schema: reviewSchema,
+    model: opts.model,
+    effort: opts.effort,
+    logFile: opts.logFile,
+    onCommand: opts.onCommand,
+  });
+  const review = result.output as ModelReview;
+  const top = [...new Set((review.top ?? []).filter((n) => Number.isInteger(n) && n >= 1 && n <= review.findings.length))].slice(0, 3);
+  const findings: Finding[] = review.findings
+    .map((f, i) => {
+      const rank = top.includes(i + 1) ? top.indexOf(i + 1) + 1 : null;
+      return { id: fingerprint(dir, f), tier: tierOf({ ...f, rank }), rank, ...f };
+    })
+    .sort((a, b) => ORDER[a.class] - ORDER[b.class] || a.file.localeCompare(b.file) || a.line - b.line);
+  return { summary: review.summary, findings, rejected: review.rejected, model: result.model, cost_usd: result.cost_usd ?? null };
+}
 
 export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): Promise<Review> {
   const started = Date.now();
@@ -111,7 +167,7 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
     progress(`Hunting for problems (0 of ${focuses.length} areas done)`);
     const hunts = await Promise.allSettled(
       focuses.map(async (focus) => {
-        const result = await runCodex({
+        const result = await runModel("codex", {
           cwd: ws.dir,
           prompt: buildHunterPrompt(input, focus),
           schema: candidateSchema,
@@ -145,7 +201,7 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
       progress(`Sweeping ${uncovered.length} file${uncovered.length === 1 ? "" : "s"} the hunters didn't mention`);
       const sweeps = await Promise.allSettled(
         chunks.map((files, i) =>
-          runCodex({
+          runModel("codex", {
             cwd: ws.dir,
             prompt: buildSweepPrompt(input, files),
             schema: candidateSchema,
@@ -165,21 +221,19 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
     }
 
     // Step 2: the verifier tries to disprove each candidate and sorts the rest.
-    progress(`Checking ${found.length} candidate${found.length === 1 ? "" : "s"}`);
-    const verdict = await runCodex({
-      cwd: ws.dir,
-      prompt: buildVerifierPrompt(input, found),
-      schema: reviewSchema,
-      model: opts.model,
+    // Opus checks better than Codex: in the eval it posted a third less and kept the same finds.
+    const verifyWith = opts.verifyWith ?? ((await claudeAvailable()) ? "claude" : "codex");
+    if (!opts.verifyWith && verifyWith === "codex") progress("Claude Code isn't installed, so Codex checks the findings");
+    progress(`Checking ${found.length} candidate${found.length === 1 ? "" : "s"}${verifyWith === "codex" ? "" : ` with ${verifyWith}`}`);
+    const verified = await verifyCandidates(ws.dir, input, found, {
+      provider: verifyWith,
+      model: verifyWith === "codex" ? (opts.verifyModel ?? opts.model) : (opts.verifyModel ?? "opus"),
       effort,
       logFile: log("verify"),
       onCommand: (cmd) => progress(`Checking ${found.length} candidates: ${cmd.replace(/\s+/g, " ").slice(0, 80)}`, true),
     });
-
-    const model = verdict.output as ModelReview;
-    const findings: Finding[] = model.findings
-      .map((f) => ({ id: fingerprint(ws.dir, f), tier: tierOf(f), ...f }))
-      .sort((a, b) => ORDER[a.class] - ORDER[b.class] || a.file.localeCompare(b.file) || a.line - b.line);
+    const firstHunt = hunts.find((h) => h.status === "fulfilled");
+    const hunterModel = firstHunt?.status === "fulfilled" ? firstHunt.value.model : null;
 
     return {
       schema_version: 1,
@@ -192,10 +246,11 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
         base_sha: ws.mergeBase,
         head_sha: ws.headSha,
       },
-      provider: { name: "codex", model: verdict.model, effort },
-      light: mergeLight(findings),
-      summary: model.summary,
-      findings,
+      provider: { name: "codex", model: hunterModel, effort },
+      verifier: { name: verifyWith, model: verified.model, effort, cost_usd: verified.cost_usd },
+      light: mergeLight(verified.findings),
+      summary: verified.summary,
+      findings: verified.findings,
       stats: {
         duration_ms: Date.now() - started,
         diff_chars: ws.diff.length,
@@ -204,8 +259,8 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
         deletions: pr.deletions,
       },
       trace: {
-        candidates: found.map((c) => ({ focus: c.focus, title: c.title, file: c.file, line: c.line })),
-        rejected: model.rejected,
+        candidates: found,
+        rejected: verified.rejected,
         failed_hunters: failed,
       },
       created_at: new Date().toISOString(),

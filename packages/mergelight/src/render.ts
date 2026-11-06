@@ -51,38 +51,51 @@ function full(f: Finding, dot: string, label: string): string {
   ].join("\n");
 }
 
+function kind(f: Finding): { dot: string; label: string } {
+  if (f.class === "bug") return f.severity === "minor" ? { dot: "🟠", label: "Minor bug" } : { dot: "🔴", label: "Bug" };
+  if (f.class === "risk") return { dot: "🟡", label: "Risk" };
+  return { dot: "⚪", label: "Small fix" };
+}
+
 export function renderTerminal(r: Review): string {
   const light = LIGHT[r.light];
-  const posted = r.findings.filter((f) => f.tier === "post");
-  const bugs = posted.filter((f) => f.class === "bug" && f.severity !== "minor");
-  const minor = posted.filter((f) => f.class === "bug" && f.severity === "minor");
-  const risks = posted.filter((f) => f.class === "risk");
-  const small = posted.filter((f) => f.class === "hardening");
+  // Top picks first, most important first. Older reviews without picks post everything marked post.
+  const posted = r.findings.filter((f) => f.tier === "post").sort((a, b) => (a.rank ?? 9) - (b.rank ?? 9));
+  const listed = r.findings.filter((f) => f.tier === "list");
   const decisions = r.findings.filter((f) => f.tier === "decision");
   const hardening = r.findings.filter((f) => f.tier === "hardening");
-  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
   const counts = [
-    plural(bugs.length, "bug"),
-    plural(minor.length, "minor bug"),
-    plural(risks.length, "risk"),
-    plural(decisions.length, "decision"),
+    `${posted.length} to fix first`,
+    `${listed.length} more worth fixing`,
+    `${decisions.length} decision${decisions.length === 1 ? "" : "s"}`,
     `${hardening.length} hardening`,
   ].join(", ");
+  const words = (...parts: (string | null | undefined)[]) => parts.filter(Boolean).join(" ");
+  const hunters = words(r.provider.name, r.provider.model, r.provider.effort);
+  const checker = r.verifier && r.verifier.name !== r.provider.name ? `, checked by ${words(r.verifier.name, r.verifier.model)}` : "";
 
   const out: string[] = [];
   out.push(`${bold("Mergelight")} ${dim("·")} ${r.pr.owner}/${r.pr.repo}#${r.pr.number} ${dim("·")} ${r.pr.title}`);
   out.push(
-    `${light.dot} ${light.color(bold(light.label))}  ${dim(`(${counts})`)}  ${dim(`· codex ${r.provider.model ?? ""} ${r.provider.effort ?? ""} · ${duration(r.stats.duration_ms)} · ${r.pr.head_sha.slice(0, 7)}`)}`,
+    `${light.dot} ${light.color(bold(light.label))}  ${dim(`(${counts})`)}  ${dim(`· ${hunters}${checker} · ${duration(r.stats.duration_ms)} · ${r.pr.head_sha.slice(0, 7)}`)}`,
   );
   const checked = r.trace.candidates.length;
   out.push(dim(`Checked ${checked} candidate${checked === 1 ? "" : "s"}, rejected ${r.trace.rejected.length}${r.trace.failed_hunters.length ? `, hunters failed: ${r.trace.failed_hunters.join(", ")}` : ""}`));
   out.push("");
   out.push(wrap(r.summary, ""));
 
-  for (const f of bugs) out.push("", full(f, "🔴", "Bug"));
-  for (const f of risks) out.push("", full(f, "🟡", "Risk"));
-  for (const f of minor) out.push("", full(f, "🟠", "Minor bug"));
-  for (const f of small) out.push("", full(f, "⚪", "Small fix"));
+  for (const f of posted) {
+    const k = kind(f);
+    out.push("", full(f, k.dot, k.label));
+  }
+
+  if (listed.length) {
+    out.push("", bold(`Also worth fixing (${listed.length})`));
+    for (const f of listed) {
+      out.push(`   ${kind(f).dot} ${dim(where(f))}  ${f.title}`);
+      out.push(`      ${dim(`${f.likelihood} · ${f.severity} · fix ${f.fix_cost} ·`)} ${f.verdict}`);
+    }
+  }
 
   if (decisions.length) {
     out.push("", bold(`Your call (${decisions.length})`));

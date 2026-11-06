@@ -31,8 +31,13 @@ export const candidateSchema = {
 export const reviewSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["summary", "findings", "rejected"],
+  required: ["summary", "findings", "rejected", "top"],
   properties: {
+    top: {
+      type: "array",
+      description: "Up to 3 finding numbers, counting from 1 in the order of findings, that a senior reviewer would hold the merge for, most important first.",
+      items: { type: "integer" },
+    },
     rejected: {
       type: "array",
       description: "Candidates you rejected, with the reason.",

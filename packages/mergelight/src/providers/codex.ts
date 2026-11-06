@@ -2,27 +2,10 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { run } from "../run.js";
+import type { ModelOptions, ModelResult } from "./index.js";
 
-export interface CodexOptions {
-  /** Read-only working directory for the agent. */
-  cwd: string;
-  prompt: string;
-  schema: object;
-  model?: string;
-  effort?: string;
-  /** Where to keep the raw event log for debugging. */
-  logFile?: string;
-  timeoutMs?: number;
-  /** Called whenever the agent starts a shell command. */
-  onCommand?: (command: string) => void;
-}
-
-export interface CodexResult {
-  output: unknown;
-  model: string | null;
-  commands: number;
-  usage: { input_tokens: number; output_tokens: number } | null;
-}
+export type CodexOptions = ModelOptions;
+export type CodexResult = ModelResult;
 
 function codexHome(): string {
   return process.env.CODEX_HOME ?? join(homedir(), ".codex");

@@ -37,18 +37,23 @@ export interface ModelReview {
   summary: string;
   findings: ModelFinding[];
   rejected: { candidate: string; reason: string }[];
+  /** Up to 3 findings (1-based) a senior reviewer would hold the merge for, most important first. */
+  top: number[];
 }
 
 /**
- * Where a finding shows up. post: its own inline comment. decision: a line in
- * the summary for a human to decide. hardening: collapsed, left alone by default.
+ * Where a finding shows up. post: its own inline comment, only the verifier's
+ * top picks. list: worth fixing, listed in the summary. decision: a line in the
+ * summary for a human to decide. hardening: collapsed, left alone by default.
  */
-export type Tier = "post" | "decision" | "hardening";
+export type Tier = "post" | "list" | "decision" | "hardening";
 
 export interface Finding extends ModelFinding {
   /** Stable id from the file and the code the finding points at, not the line number. */
   id: string;
   tier: Tier;
+  /** 1 to 3 when the verifier picked it as one of the few that matter most, else null. */
+  rank: number | null;
 }
 
 /** The merge light: green is safe, yellow needs a human, red is blocked. */
@@ -83,7 +88,10 @@ export interface Review {
     base_sha: string;
     head_sha: string;
   };
-  provider: { name: "codex"; model: string | null; effort: string };
+  /** Who hunted for problems. */
+  provider: { name: "codex" | "claude"; model: string | null; effort: string };
+  /** Who checked and sorted them, when that differs from the hunters. */
+  verifier?: { name: "codex" | "claude"; model: string | null; effort: string; cost_usd?: number | null };
   light: Light;
   summary: string;
   findings: Finding[];
@@ -96,7 +104,8 @@ export interface Review {
   };
   /** What the hunters reported and what the verifier threw out, for tuning. */
   trace: {
-    candidates: { focus: string; title: string; file: string; line: number }[];
+    /** Every candidate the hunters and sweeps reported, in full, so the verifier can be replayed. */
+    candidates: { focus: string; title: string; file: string; line: number; end_line?: number; scenario?: string; impact?: string; evidence?: string }[];
     rejected: { candidate: string; reason: string }[];
     failed_hunters: string[];
   };
