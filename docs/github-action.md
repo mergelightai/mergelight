@@ -6,7 +6,7 @@ Reviews every pull request with your own Codex login and posts:
 - **Inline comments** for the few findings a senior reviewer would hold the merge for, at most 3 per review, each with how it happens, what breaks and the smallest fix. Anything else worth fixing is listed in the summary.
 - **A live check** called **Mergelight**. It shows "Reviewing" while it works, then:
   - 🟢 **Safe to merge:** success.
-  - 🟡 **Needs a human:** action required. It turns green when someone approves the PR.
+  - 🟡 **Needs a human:** neutral, so it doesn't block the merge. Read it and decide. It turns green if someone approves the PR.
   - 🔴 **Blocked:** a bug that must be fixed. Approving doesn't change it; fixing does.
 
 If the review itself can't run, for example because the login expired, the check ends neutral so it doesn't block merging, and the workflow job fails so you notice.
@@ -51,12 +51,12 @@ Without it, reviews work until the first refresh, then the login has to be redon
 **4. Add the workflows.** Copy the three files in [`examples/`](../examples) to `.github/workflows/`:
 
 - [`mergelight.yml`](../examples/mergelight.yml) reviews every non-draft PR from this repository, and cancels an older review of the same PR when you push again.
-- [`mergelight-approve.yml`](../examples/mergelight-approve.yml) turns a 🟡 check green when someone approves the PR.
+- [`mergelight-approve.yml`](../examples/mergelight-approve.yml) turns a 🟡 check green when someone approves the PR. Skip it if you work alone: GitHub doesn't let you approve your own PR.
 - [`mergelight-refresh.yml`](../examples/mergelight-refresh.yml) uses the login every third day so it stays fresh.
 
 They're separate files so a PR's merge box only shows the review, not skipped jobs.
 
-**5. Optional: make it required.** In branch protection or a ruleset, require the **Mergelight** check. 🔴 then blocks the merge, and 🟡 waits for an approval.
+**5. Optional: make it required.** In branch protection or a ruleset, require the **Mergelight** check. 🔴 then blocks the merge. 🟡 doesn't, unless your team sets `yellow-blocks: true` to make it wait for an approval.
 
 ## Inputs
 
@@ -69,6 +69,7 @@ They're separate files so a PR's merge box only shows the review, not skipped jo
 | `model` | Codex default | Model to review with |
 | `effort` | `high` | Reasoning effort: `low`, `medium` or `high` |
 | `verify-with` | `codex` | Who checks the findings: `codex`, or `claude` on a runner with Claude Code logged in |
+| `yellow-blocks` | `false` | Make a 🟡 check wait for an approval. For teams: GitHub doesn't let you approve your own PR |
 | `codex-version` | `0.166.0` | Codex CLI version |
 | `github-token` | `github.token` | Posts comments and checks |
 

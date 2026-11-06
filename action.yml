@@ -32,6 +32,9 @@ inputs:
   verify-with:
     description: "Who checks the findings: codex, or claude on a runner with Claude Code logged in."
     default: codex
+  yellow-blocks:
+    description: 'Set to "true" for a team: a "needs a human" check then waits for an approval. Leave it off if you work alone, since GitHub bars approving your own PR.'
+    default: "false"
   codex-version:
     description: Version of the Codex CLI to install.
     default: "0.166.0"
@@ -126,11 +129,13 @@ runs:
         MODEL: ${{ inputs.model }}
         EFFORT: ${{ inputs.effort }}
         VERIFY_WITH: ${{ inputs.verify-with }}
+        YELLOW_BLOCKS: ${{ inputs.yellow-blocks }}
       run: |
         set -euo pipefail
         args=(review "$GITHUB_REPOSITORY#$PR" --post --verify-with "$VERIFY_WITH" --out "$RUNNER_TEMP/mergelight-review.json")
         [ -n "$MODEL" ] && args+=(--model "$MODEL")
         [ -n "$EFFORT" ] && args+=(--effort "$EFFORT")
+        [ "$YELLOW_BLOCKS" = "true" ] && args+=(--yellow-blocks)
         node "$GITHUB_ACTION_PATH/packages/mergelight/dist/cli.js" "${args[@]}"
 
     # Codex may have refreshed the login during the run. Save the new one, or the next run

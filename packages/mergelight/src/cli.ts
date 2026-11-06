@@ -22,6 +22,7 @@ Options
   --at <sha>            Review this commit of the PR instead of the latest
   --post                Post the review to the PR: summary comment, inline findings, check
   --dry-run             With --post, post or approve: print what would be posted, change nothing
+  --yellow-blocks       With --post or post: a "needs a human" check waits for an approval
   --json                Print the review as JSON
   --out <file>          Also write the JSON review to a file
   --model <name>        Codex model (default: your Codex config)
@@ -74,6 +75,7 @@ async function main(): Promise<number> {
       at: { type: "string" },
       post: { type: "boolean" },
       "dry-run": { type: "boolean" },
+      "yellow-blocks": { type: "boolean" },
       json: { type: "boolean" },
       out: { type: "string" },
       model: { type: "string" },
@@ -105,7 +107,7 @@ async function main(): Promise<number> {
 
   if (command === "post") {
     const review = JSON.parse(readFileSync(target, "utf8")) as Review;
-    const result = await publishReview(review, { dryRun, log });
+    const result = await publishReview(review, { dryRun, log, yellowBlocks: values["yellow-blocks"] });
     log(`Posted: ${result.inline} inline, ${result.outside} in the summary only, ${result.resolved} resolved. ${result.summaryUrl ?? ""}`);
     return 0;
   }
@@ -149,7 +151,7 @@ async function main(): Promise<number> {
     process.stdout.write(values.json ? `${json}\n` : `${renderTerminal(review)}\n`);
 
     if (values.post) {
-      const result = await publishReview(review, { dryRun, log, checkRunId });
+      const result = await publishReview(review, { dryRun, log, checkRunId, yellowBlocks: values["yellow-blocks"] });
       log(`Posted: ${result.inline} inline, ${result.outside} in the summary only, ${result.resolved} resolved. ${result.summaryUrl ?? ""}`);
       // The check carries the verdict; the job itself only fails on errors.
       return 0;

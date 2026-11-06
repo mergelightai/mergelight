@@ -44,6 +44,7 @@ Other ways to name the pull request: `owner/repo#123`, or just `123` inside a cl
 | `--keep` | Keep the temporary checkout |
 | `--post` | Post the review to the PR: inline findings, one summary comment and a **Mergelight** check |
 | `--dry-run` | With `--post`, `post` or `approve`: print what would be posted and change nothing |
+| `--yellow-blocks` | With `--post` or `post`: a 🟡 check waits for an approval instead of being neutral |
 
 Two more commands, used by the GitHub Action:
 

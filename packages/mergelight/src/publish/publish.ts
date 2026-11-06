@@ -8,15 +8,16 @@ import { decodeState, nextState } from "./state.js";
 export const CHECK_NAME = "Mergelight";
 
 /**
- * How each merge light shows up as a GitHub check. action_required doesn't
- * count as passing, so a required check holds the merge until a human approves
- * the PR, which flips it to success (see approveCheck).
+ * How each merge light shows up as a GitHub check. Yellow is neutral, which
+ * GitHub counts as passing: a solo developer can't approve their own PR, so
+ * yellow must not wait for an approval unless a team asks for that. Then it's
+ * action_required, which doesn't pass until someone approves (see approveCheck).
  */
-const CONCLUSION: Record<Light, "success" | "action_required" | "failure"> = {
-  green: "success",
-  yellow: "action_required",
-  red: "failure",
-};
+export function checkConclusion(light: Light, yellowBlocks = false): "success" | "neutral" | "action_required" | "failure" {
+  if (light === "green") return "success";
+  if (light === "red") return "failure";
+  return yellowBlocks ? "action_required" : "neutral";
+}
 
 interface Commenter {
   user?: { type?: string } | null;
@@ -108,7 +109,7 @@ export async function failCheck(api: GitHub, checkRunId: number | null, headSha:
 
 export async function publishReview(
   review: Review,
-  opts: ApiOptions & { checkRunId?: number | null } = {},
+  opts: ApiOptions & { checkRunId?: number | null; yellowBlocks?: boolean } = {},
 ): Promise<PublishResult> {
   const log = opts.log ?? (() => {});
   const api = new GitHub(review.pr.owner, review.pr.repo, opts);
@@ -191,7 +192,7 @@ export async function publishReview(
   const light = LIGHT[review.light];
   const check = {
     status: "completed",
-    conclusion: CONCLUSION[review.light],
+    conclusion: checkConclusion(review.light, opts.yellowBlocks),
     completed_at: new Date().toISOString(),
     ...(summaryUrl ? { details_url: summaryUrl } : {}),
     output: {
@@ -271,16 +272,18 @@ async function resolveFixedThreads(api: GitHub, review: Review, log: (s: string)
   return resolved;
 }
 
-/**
- * When someone approves a PR whose check is waiting on a human, the check turns
- * green. A blocked check (a bug to fix) stays red.
- */
+/** A yellow check. A review that couldn't run also ends neutral, but an approval says nothing about that. */
+export function isYellowCheck(check: { conclusion: string | null; output: { title: string | null } }): boolean {
+  return check.conclusion === "action_required" || (check.conclusion === "neutral" && Boolean(check.output.title?.startsWith(LIGHT.yellow.dot)));
+}
+
+/** When someone approves a PR with a yellow check, it turns green. A blocked check (a bug to fix) stays red. */
 export async function approveCheck(api: GitHub, number: number, by: string): Promise<string> {
   const pr = await api.get<{ head: { sha: string } }>(`pulls/${number}`);
   const runs = await api.get<{ check_runs: CheckRun[] }>(`commits/${pr.head.sha}/check-runs?check_name=${CHECK_NAME}`);
   const latest = [...runs.check_runs].sort((a, b) => b.id - a.id)[0];
   if (!latest) return "No Mergelight check on this commit.";
-  if (latest.conclusion !== "action_required") return `Mergelight check is ${latest.conclusion ?? "still running"}, nothing to approve.`;
+  if (!isYellowCheck(latest)) return `Mergelight check is ${latest.conclusion ?? "still running"}, nothing to approve.`;
   const body = {
     conclusion: "success",
     output: {
