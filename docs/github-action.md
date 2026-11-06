@@ -30,7 +30,7 @@ Go to **[mergelight.dev/setup](https://mergelight.dev/setup/)** and continue wit
    - **ChatGPT plan** (private repositories): the pull request shows a link and a code. Enter the code, and the review starts. First turn on "Enable device code sign-in" in your [ChatGPT security settings](https://chatgpt.com/settings/security). It's in beta, and on a workspace an admin turns it on.
    - **OpenAI API key**: add it to the repository's secrets as `OPENAI_API_KEY`, then push a commit. OpenAI bills it per use, and it works on public repositories too.
 
-The page follows the first review live, and links to it when it's done.
+The first review runs on that same pull request, so you can see what a review looks like. The page follows it live, but you can close the page: the review keeps running, and the result shows up on the pull request. Merge the pull request to turn on reviews for new ones.
 
 There's no key or token to manage. The workflow's `id-token: write` permission proves which repository it runs in, and Mergelight's token server returns a short-lived token for that repository only. Your ChatGPT login stays in your own run and your repository's secret, and never goes through Mergelight.
 
