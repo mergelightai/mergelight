@@ -174,7 +174,7 @@ export async function finishSignIn(params: URLSearchParams): Promise<string | nu
 /** Takes the code out of the address bar, so it can't be copied or reused. */
 export function cleanUrl(): void {
   const url = new URL(window.location.href);
-  for (const key of ['code', 'state']) url.searchParams.delete(key);
+  for (const key of ['code', 'state', 'iss']) url.searchParams.delete(key);
   window.history.replaceState(null, '', url);
 }
 
@@ -194,6 +194,8 @@ export function realClient(token: string): GitHubClient {
   const call = async <T,>(method: string, path: string, body?: unknown): Promise<T> => {
     const res = await fetch(`${API}${path}`, {
       method,
+      // GitHub lets browsers reuse an answer for 60 seconds, which would keep the page on a status that's out of date.
+      cache: 'no-store',
       headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28' },
       body: body === undefined ? undefined : JSON.stringify(body),
     });

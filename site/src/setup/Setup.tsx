@@ -628,6 +628,7 @@ function AddStep(props: {
         <ul className="mt-3 divide-y divide-white/[0.06]">
           <Fact icon={<Check className="size-4" />}>Moves it to the exact commit of {release.tag}, so it can't change without a PR</Fact>
           <Fact icon={<Check className="size-4" />}>Changes that one line, and nothing else in your file</Fact>
+          {!details.refresh && fileCount > 1 && <Fact icon={<Check className="size-4" />}>Adds the small job that keeps a ChatGPT login fresh</Fact>}
           <Fact center icon={<LockIcon className="size-4" />}>
             <span className="flex items-center justify-between gap-3">
               <span className="[text-wrap:pretty]">Opens a PR, and you decide whether to merge.</span>
