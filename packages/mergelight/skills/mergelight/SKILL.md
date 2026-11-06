@@ -57,7 +57,7 @@ Before you push, run whatever this project uses: look in its agent instructions,
 
 Commit and push the way this project and this user normally do. Mergelight never pushes, and the user decides when your work leaves this machine.
 
-Once a fix is pushed, call `mark_finding_handled` with `as: "fixed"` and the ids. Put findings fixed by the same push in one call. It refuses if nothing was pushed since the review, and that's correct: push first. A mark doesn't change the check. The next review checks the code itself, runs by itself after a push, and closes the thread if the finding is gone.
+Once a fix is pushed, call `mark_finding_handled` with `as: "fixed"` and the ids. Put findings fixed by the same push in one call. It refuses if GitHub shows no new commit since the review: push first, and if you just pushed, try again in a few seconds. A mark doesn't change the check. The next review checks the code itself, runs by itself after a push, and closes the thread if the finding is gone.
 
 If the user decides not to fix a finding, call it with `as: "wont_fix"` and a `note` with their reason. The reason goes on the pull request and into the next review, which won't raise it again unless it's a major bug that still stands, the reason is wrong, or the code got worse. Only do this when the user said so. Don't decide it for them, and never use it to get a green check. Hardening needs no mark.
 

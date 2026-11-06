@@ -321,14 +321,14 @@ test("a gh failure comes back as a tool error, not a dead server", async () => {
 });
 
 test("no gh at all comes back as a tool error that says how to fix it", async () => {
-  const out = await call({ ...process.env, PATH: dirname(process.execPath) === fakeDir ? "" : mkdtempSync(join(fakeDir, "empty-")) }, "list_findings", { pr: PR });
+  const out = await call({ ...process.env, PATH: mkdtempSync(join(fakeDir, "empty-")) }, "list_findings", { pr: PR });
   assert.match(out.error, /GitHub CLI isn't installed/);
 });
 
 test("a fix can't be marked until it's pushed", async () => {
   const { env, writes } = useScenario({ issueComments: [summaryComment(stateOf([finding()]))] });
   const out = await call(env, "mark_finding_handled", { pr: PR, ids: ["aaaaaaaaaa"], as: "fixed" });
-  assert.match(out.error, /Nothing was pushed since the latest review/);
+  assert.match(out.error, /Nothing was marked.*Push the fix first.*try again/);
   assert.deepEqual(writes(), []);
 });
 

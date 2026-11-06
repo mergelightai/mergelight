@@ -182,7 +182,9 @@ export async function markHandled(args: { pr?: unknown; ids?: unknown; as?: unkn
 
   const reviewed = state.rounds.at(-1)?.sha;
   if (as === "fixed" && reviewed === pr.headSha) {
-    throw new Error(`Nothing was pushed since the latest review of ${pr.headSha.slice(0, 7)}, so it can't be fixed yet. Nothing was marked. Push the fix first, then mark it.`);
+    throw new Error(
+      `Nothing was marked: GitHub shows ${pr.headSha.slice(0, 7)} as the latest commit, and the latest review already looked at it. Push the fix first. If you just pushed, GitHub can take a few seconds to catch up, so try again.`,
+    );
   }
 
   const skipped: { id: string; reason: string }[] = [];
