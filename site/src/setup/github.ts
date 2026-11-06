@@ -13,6 +13,7 @@ const LONG_LIVED = /^(main|master|staging|stage|production|prod|development|deve
 export interface Repo {
   fullName: string;
   account: string;
+  avatarUrl: string;
   isPrivate: boolean;
   defaultBranch: string;
   /** Where to change which repos this install can reach. */
@@ -29,10 +30,30 @@ export interface RepoDetails {
   hasWorkflow: boolean;
 }
 
+export interface SetupPr {
+  number: number;
+  url: string;
+  headSha: string;
+}
+
+export interface CheckStatus {
+  status: string;
+  conclusion: string | null;
+  title: string | null;
+}
+
 export interface GitHubClient {
   repos(): Promise<Repo[]>;
   details(repo: Repo): Promise<RepoDetails>;
+  /** The open pull request that adds the workflow, once someone has made it. */
+  findSetupPr(repo: Repo): Promise<SetupPr | null>;
+  hasWorkflow(repo: Repo, branch: string): Promise<boolean>;
+  hasLogin(repo: Repo): Promise<boolean>;
+  /** The Mergelight check on this commit, if a review has started. */
+  checkStatus(repo: Repo, sha: string): Promise<CheckStatus | null>;
 }
+
+const WORKFLOW_PATH = '.github/workflows/mergelight.yml';
 
 function stateValue(): string {
   try {
@@ -46,7 +67,6 @@ function stateValue(): string {
   }
 }
 
-export const installUrl = () => `${INSTALL_URL}?state=${stateValue()}`;
 export const signInUrl = () => `https://github.com/login/oauth/authorize?client_id=${CLIENT_ID}&state=${stateValue()}`;
 
 /**
@@ -101,26 +121,30 @@ export function realClient(token: string): GitHubClient {
     if (!res.ok) throw new Error(`GitHub answered ${res.status}.`);
     return (await res.json()) as T;
   };
-  const exists = (path: string) => get(path).then(() => true, () => false);
+  const hasWorkflow = (repo: Repo, branch: string) => get(`/repos/${repo.fullName}/contents/${WORKFLOW_PATH}?ref=${encodeURIComponent(branch)}`).then(() => true, () => false);
+  const hasLogin = async (repo: Repo) => {
+    const { secrets } = await get<{ secrets: { name: string }[] }>(`/repos/${repo.fullName}/actions/secrets?per_page=100`).catch(() => ({ secrets: [] as { name: string }[] }));
+    return secrets.some((s) => s.name === 'CODEX_AUTH_JSON' || s.name === 'OPENAI_API_KEY');
+  };
 
   return {
     repos: async () => {
-      const { installations } = await get<{ installations: { id: number; html_url: string; account: { login: string } }[] }>('/user/installations?per_page=100');
+      const { installations } = await get<{ installations: { id: number; html_url: string; account: { login: string; avatar_url: string } }[] }>('/user/installations?per_page=100');
       const lists = await Promise.all(
         installations.map(async (install) => {
           const { repositories } = await get<{ repositories: { full_name: string; private: boolean; default_branch: string; archived: boolean }[] }>(`/user/installations/${install.id}/repositories?per_page=100`);
           return repositories
             .filter((r) => !r.archived)
-            .map((r): Repo => ({ fullName: r.full_name, account: install.account.login, isPrivate: r.private, defaultBranch: r.default_branch, accessUrl: install.html_url }));
+            .map((r): Repo => ({ fullName: r.full_name, account: install.account.login, avatarUrl: install.account.avatar_url, isPrivate: r.private, defaultBranch: r.default_branch, accessUrl: install.html_url }));
         }),
       );
       return lists.flat().sort((a, b) => a.fullName.localeCompare(b.fullName));
     },
     details: async (repo) => {
-      const [branches, pulls, secrets] = await Promise.all([
+      const [branches, pulls, login] = await Promise.all([
         get<{ name: string }[]>(`/repos/${repo.fullName}/branches?per_page=100`),
         get<{ base: { ref: string }; head: { ref: string } }[]>(`/repos/${repo.fullName}/pulls?state=all&per_page=50`).catch(() => []),
-        get<{ secrets: { name: string }[] }>(`/repos/${repo.fullName}/actions/secrets?per_page=100`).catch(() => ({ secrets: [] })),
+        hasLogin(repo),
       ]);
       const names = branches.map((b) => b.name);
       const base = pickBase(pulls.map((p) => ({ base: p.base.ref, head: p.head.ref })), repo.defaultBranch);
@@ -128,25 +152,61 @@ export function realClient(token: string): GitHubClient {
         branches: names.includes(base) ? names : [base, ...names],
         base,
         skip: pickSkip(names),
-        hasLogin: secrets.secrets.some((s) => s.name === 'CODEX_AUTH_JSON' || s.name === 'OPENAI_API_KEY'),
-        hasWorkflow: await exists(`/repos/${repo.fullName}/contents/.github/workflows/mergelight.yml?ref=${encodeURIComponent(base)}`),
+        hasLogin: login,
+        hasWorkflow: await hasWorkflow(repo, base),
       };
+    },
+    findSetupPr: async (repo) => {
+      const pulls = await get<{ number: number; html_url: string; head: { sha: string } }[]>(`/repos/${repo.fullName}/pulls?state=open&sort=created&direction=desc&per_page=5`);
+      for (const pull of pulls) {
+        const files = await get<{ filename: string }[]>(`/repos/${repo.fullName}/pulls/${pull.number}/files?per_page=30`).catch(() => []);
+        if (files.some((f) => f.filename === WORKFLOW_PATH)) return { number: pull.number, url: pull.html_url, headSha: pull.head.sha };
+      }
+      return null;
+    },
+    hasWorkflow,
+    hasLogin,
+    checkStatus: async (repo, sha) => {
+      const { check_runs } = await get<{ check_runs: { status: string; conclusion: string | null; output: { title: string | null } }[] }>(`/repos/${repo.fullName}/commits/${sha}/check-runs?check_name=Mergelight`);
+      const latest = check_runs[0];
+      return latest ? { status: latest.status, conclusion: latest.conclusion, title: latest.output.title } : null;
     },
   };
 }
 
-/** Local development only: `?mock` shows the signed-in page without GitHub. Not in the built site. */
+/** Local development only: `?mock` runs the whole flow on made-up data. Not in the built site. */
 export function mockClient(): GitHubClient {
   const accessUrl = 'https://github.com/organizations/acme/settings/installations/1';
-  const repo = (name: string, isPrivate = true): Repo => ({ fullName: `acme/${name}`, account: 'acme', isPrivate, defaultBranch: 'main', accessUrl });
+  const avatarUrl = '/logo.png';
+  const repo = (name: string, isPrivate = true): Repo => ({ fullName: `acme/${name}`, account: 'acme', avatarUrl, isPrivate, defaultBranch: 'main', accessUrl });
+  let finds = 0;
+  let checks = 0;
+  const later = <T,>(value: T) => new Promise<T>((r) => setTimeout(() => r(value), 300));
   return {
-    repos: async () => [repo('api'), repo('app'), repo('docs', false), repo('platform')],
-    details: async (r) => ({
-      branches: ['main', 'staging', 'development', 'feat/billing-export', 'fix/invoice-rounding'],
-      base: 'staging',
-      skip: ['main', 'staging', 'development'],
-      hasLogin: r.fullName === 'acme/platform',
-      hasWorkflow: r.fullName === 'acme/app',
-    }),
+    repos: () => later([repo('api'), repo('app'), repo('docs', false), repo('platform'), repo('site')]),
+    details: (r) =>
+      later(
+        r.fullName === 'acme/docs'
+          ? { branches: ['main'], base: 'main', skip: ['main'], hasLogin: false, hasWorkflow: false }
+          : r.fullName === 'acme/site'
+          ? { branches: ['main', 'feat/new-landing'], base: 'main', skip: ['main'], hasLogin: false, hasWorkflow: false }
+          : {
+              branches: ['main', 'staging', 'development', 'feat/billing-export', 'fix/invoice-rounding'],
+              base: 'staging',
+              skip: ['main', 'staging', 'development'],
+              hasLogin: r.fullName === 'acme/platform',
+              hasWorkflow: r.fullName === 'acme/app',
+            },
+      ),
+    findSetupPr: () => later(++finds > 1 ? { number: 128, url: 'https://github.com/acme/api/pull/128', headSha: 'abc' } : null),
+    hasWorkflow: () => later(false),
+    hasLogin: (r) => later(r.fullName === 'acme/platform'),
+    checkStatus: () => {
+      checks += 1;
+      if (checks < 2) return later(null);
+      if (checks < 4) return later({ status: 'in_progress', conclusion: null, title: 'Waiting for you to connect ChatGPT' });
+      if (checks < 7) return later({ status: 'in_progress', conclusion: null, title: 'Reviewing' });
+      return later({ status: 'completed', conclusion: 'failure', title: '🔴 Blocked: 2 bugs, 1 risk to fix' });
+    },
   };
 }

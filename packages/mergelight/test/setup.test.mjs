@@ -50,6 +50,14 @@ test("the templates are the example workflows", () => {
   }
 });
 
+test("the workflow still has the lines the setup page adds to", () => {
+  const root = join(here, "..", "..", "..");
+  const file = readFileSync(join(root, "examples", "mergelight.yml"), "utf8");
+  const markers = [...readFileSync(join(root, "site", "src", "setup", "Setup.tsx"), "utf8").matchAll(/_MARKER = '(.+)'/g)].map((m) => m[1]);
+  assert.equal(markers.length, 2);
+  for (const marker of markers) assert.ok(file.includes(marker), marker);
+});
+
 test("no workflow needs a personal token any more", () => {
   for (const f of workflowFiles()) assert.doesNotMatch(f.content, /secrets-token|MERGELIGHT_SECRETS_TOKEN/, f.name);
 });

@@ -22,13 +22,15 @@ OpenAI allows a ChatGPT login in CI only for trusted private automation, and say
 
 ## Set it up
 
-Go to **[mergelight.dev/setup](https://mergelight.dev/setup/)**. Three steps, all in your browser:
+Go to **[mergelight.dev/setup](https://mergelight.dev/setup/)** and continue with GitHub. Everything happens in your browser, one step at a time:
 
-1. **Install the app** on the repositories you want reviewed. This also signs you in, so the page can list them.
-2. **Add the workflow.** Pick the repository from the list. The page suggests the branch most of your pull requests go to, and which branches to skip. GitHub opens with the file filled in, and you commit it. Choose a new branch and open the pull request, so it reviews itself.
-3. **Connect your AI.** Either:
+1. **Pick a repo.** If it isn't listed, add it on GitHub, and the list refreshes when you come back.
+2. **Add Mergelight.** Choose what it reviews: pull requests into one branch, or every pull request. With one branch, merges like `staging` into `main` are skipped, so code pushed straight to `staging` isn't reviewed. With every pull request, GitHub only runs the file on branches that have it, so other branches join once it's merged into them. GitHub opens with the file filled in. Commit it to a new branch and create the pull request, which reviews itself. The page notices the pull request by itself.
+3. **Connect your AI,** if the repo isn't connected yet:
    - **ChatGPT plan** (private repositories): the pull request shows a link and a code. Enter the code, and the review starts. First turn on "Enable device code sign-in" in your [ChatGPT security settings](https://chatgpt.com/settings/security). It's in beta, and on a workspace an admin turns it on.
-   - **OpenAI API key**: add it to the repository's secrets as `OPENAI_API_KEY`. OpenAI bills it per use, and it works on public repositories too.
+   - **OpenAI API key**: add it to the repository's secrets as `OPENAI_API_KEY`, then push a commit. OpenAI bills it per use, and it works on public repositories too.
+
+The page follows the first review live, and links to it when it's done.
 
 There's no key or token to manage. The workflow's `id-token: write` permission proves which repository it runs in, and Mergelight's token server returns a short-lived token for that repository only. Your ChatGPT login stays in your own run and your repository's secret, and never goes through Mergelight.
 
