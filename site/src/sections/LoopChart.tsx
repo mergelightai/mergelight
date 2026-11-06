@@ -98,15 +98,13 @@ export default function LoopChart() {
         stroke="#3fe8b8"
         strokeWidth="3"
         strokeLinecap="round"
-        style={{ filter: 'drop-shadow(0 0 6px rgb(63 232 184 / 0.6))' }}
         initial={{ pathLength: 0 }}
         animate={{ pathLength: show ? 1 : 0 }}
         transition={t(0.2, 0.9)}
       />
       <motion.g initial={{ opacity: 0, y: 6 }} animate={{ opacity: show ? 1 : 0, y: show ? 0 : 6 }} transition={t(1.0, 0.4)}>
         <circle cx={X[1]} cy={y(52)} r="6" fill="#3fe8b8" />
-        <circle cx={X[1]} cy={y(52)} r="12" fill="#3fe8b8" opacity="0.2" />
-        <rect x={X[1] + 20} y={y(52) - 15} width="156" height="30" rx="15" fill="rgb(13 11 24 / 0.9)" stroke="rgb(63 232 184 / 0.5)" />
+        <rect x={X[1] + 20} y={y(52) - 15} width="156" height="30" rx="15" fill="#1d1b23" stroke="rgb(63 232 184 / 0.35)" />
         <text x={X[1] + 98} y={y(52) + 5} textAnchor="middle" className="fill-mint text-[14px] font-medium">Merged at 52 lines</text>
       </motion.g>
     </svg>

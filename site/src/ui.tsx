@@ -1,5 +1,11 @@
 import type { ReactNode } from 'react';
 
+/** The MagicBento dark card: surface gradient, hairline edge, top highlight and drop shadow. */
+export const SURFACE =
+  'rounded-[22px] bg-[linear-gradient(180deg,#1a1820_0%,#121116_100%)] shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07),inset_0_1px_0_rgb(255_255_255/0.06),0_24px_48px_-28px_rgb(0_0_0/0.85),0_8px_18px_-12px_rgb(0_0_0/0.6)]';
+/** A recessed panel inside a SURFACE card, like the bento's wells. */
+export const WELL = 'rounded-2xl bg-white/[0.03] shadow-[inset_0_0_0_1px_rgb(255_255_255/0.06)]';
+
 export function Container({ children, className = '' }: { children: ReactNode; className?: string }) {
   return <div className={`mx-auto w-full max-w-6xl px-5 sm:px-8 ${className}`}>{children}</div>;
 }
