@@ -1,0 +1,35 @@
+import { runClaude } from "./claude.js";
+export { claudeAvailable } from "./claude.js";
+import { runCodex } from "./codex.js";
+
+export type ProviderName = "codex" | "claude";
+
+export interface ModelOptions {
+  /** Read-only working directory for the agent. */
+  cwd: string;
+  prompt: string;
+  schema: object;
+  model?: string;
+  effort?: string;
+  /** Where to keep the raw log for debugging. */
+  logFile?: string;
+  timeoutMs?: number;
+  /** Called whenever the agent starts a shell command (Codex only). */
+  onCommand?: (command: string) => void;
+}
+
+export interface ModelResult {
+  output: unknown;
+  model: string | null;
+  commands: number;
+  usage: { input_tokens: number; output_tokens: number } | null;
+  /** List-price cost the CLI reports, if it does. On a subscription nothing is billed per run. */
+  cost_usd?: number | null;
+}
+
+/** How each provider's agent reads the checkout, so prompts can name the right tools. */
+export const TOOLING: Record<ProviderName, "shell" | "files"> = { codex: "shell", claude: "files" };
+
+export function runModel(provider: ProviderName, opts: ModelOptions): Promise<ModelResult> {
+  return provider === "claude" ? runClaude(opts) : runCodex(opts);
+}

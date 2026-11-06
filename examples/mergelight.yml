@@ -1,0 +1,30 @@
+# Mergelight review. Copy to .github/workflows/mergelight.yml.
+# Setup: https://github.com/mergelightai/mergelight/blob/main/docs/github-action.md
+name: Mergelight
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+
+jobs:
+  review:
+    # Forks get no secrets, and drafts aren't ready for review.
+    if: >
+      !github.event.pull_request.draft &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # A new push cancels the older review of the same PR.
+    concurrency:
+      group: mergelight-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - uses: mergelightai/mergelight@v0
+        with:
+          codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}
+          secrets-token: ${{ secrets.MERGELIGHT_SECRETS_TOKEN }}
