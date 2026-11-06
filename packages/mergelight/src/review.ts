@@ -53,9 +53,10 @@ function fingerprint(dir: string, f: ModelFinding): string {
 /**
  * Only the verifier's top picks (at most 3 per PR) get their own comment. Other
  * findings it says to fix are listed in the summary, decide becomes a "your
- * call" line and leave is collapsed. In the eval, Opus's top picks were fixed
- * about as often as Copilot's comments, while posting everything it would fix
- * meant about 4 comments per PR, and posting all of Codex's about 6.
+ * call" line and leave is collapsed. In the eval, among problems only Mergelight
+ * raised, teams fixed 38% of Opus's top picks and 14% of its other findings.
+ * Posting everything it would fix meant about 4.5 comments per PR, and all of
+ * Codex's about 6.
  */
 export function tierOf(f: ModelFinding & { rank?: number | null }): Tier {
   if (f.rank) return "post";

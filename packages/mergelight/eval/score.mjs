@@ -5,9 +5,10 @@
 // An issue counts as fixed if the team fixed it (fully or partly) before merging.
 //
 // Keep the bias in mind: the team saw CodeRabbit's and Copilot's comments and
-// often fixed them because they were posted. Nobody saw Mergelight's. So a
-// Mergelight comment that got fixed anyway was found by the team on its own,
-// and an unfixed Mergelight comment may still be right.
+// often fixed them because they were posted. Nobody saw Mergelight's, but a
+// Mergelight comment often describes a problem a bot also raised, so "fixed"
+// doesn't mean the team found it alone. The last column does: problems only
+// that reviewer raised. An unfixed Mergelight comment may still be right.
 //
 //   node eval/score.mjs owner/repo
 
@@ -104,7 +105,7 @@ ${fixedIssues} of ${allIssues} issues raised by any reviewer were fixed before m
 |---|---|---|---|---|
 ${rows.join("\n")}
 
-The team saw CodeRabbit's and Copilot's comments, not Mergelight's. Every Mergelight comment the team fixed, it fixed without being told.
+The team saw CodeRabbit's and Copilot's comments, not Mergelight's. Where a bot raised the same problem, the fix may have come from that bot's comment. The last column counts problems only that reviewer raised.
 
 ## Fixed, and only Mergelight raised it (${mlOnlyFixed.length})
 
