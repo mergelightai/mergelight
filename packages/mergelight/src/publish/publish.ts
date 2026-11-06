@@ -3,7 +3,10 @@ import type { PriorFinding } from "../prompt.js";
 import { GitHub, type ApiOptions } from "./api.js";
 import { commentableLines, place } from "./diff-lines.js";
 import { FINDING_MARKER_RE, headline, inlineBody, LIGHT, SUMMARY_MARKER, summaryBody } from "./markdown.js";
-import { decodeState, nextState } from "./state.js";
+import { readMarks, trustedComment, writeAccess, type Mark, type PrComment } from "./handled.js";
+import { decodeState, nextState, type ReviewState, type StateFinding } from "./state.js";
+
+export { trustedComment } from "./handled.js";
 
 export const CHECK_NAME = "Mergelight";
 
@@ -19,48 +22,50 @@ export function checkConclusion(light: Light, yellowBlocks = false): "success" |
   return yellowBlocks ? "action_required" : "neutral";
 }
 
-interface Commenter {
-  user?: { type?: string } | null;
-  author_association?: string;
-}
-
-interface IssueComment extends Commenter {
-  id: number;
-  body?: string;
-  html_url: string;
-}
-
-interface ReviewComment extends Commenter {
-  id: number;
+interface ReviewComment extends PrComment {
   body: string;
-  html_url: string;
   pull_request_review_id: number | null;
 }
 
-/**
- * Whether Mergelight's hidden markers in this comment count. Anyone can write a
- * comment containing them, and they steer what gets posted and what the verifier
- * reads, so a passer-by's comment must not be taken for ours.
- */
-export function trustedComment(c: Commenter): boolean {
-  return c.user?.type === "Bot" || ["OWNER", "MEMBER", "COLLABORATOR"].includes(c.author_association ?? "");
+export interface PrReviewState {
+  /** The summary comment, with last round's state. */
+  summary: PrComment | undefined;
+  state: ReviewState | null;
+  marks: Map<string, Mark>;
+  reviewComments: ReviewComment[];
+}
+
+/** What Mergelight has on this PR so far. Reviews read it before they publish, and the MCP server hands it to agents. */
+export async function readPrReviewState(api: GitHub, number: number): Promise<PrReviewState> {
+  const issueComments = await api.list<PrComment>(`issues/${number}/comments`);
+  const reviewComments = await api.list<ReviewComment>(`pulls/${number}/comments`);
+  const summary = issueComments.find((c) => trustedComment(c) && c.body?.includes(SUMMARY_MARKER));
+  const marks = await readMarks([...issueComments, ...reviewComments], writeAccess(api));
+  return { summary, state: decodeState(summary?.body), marks, reviewComments };
 }
 
 const MAX_PREVIOUS = 40;
 
 /** What earlier rounds found on this PR, latest first, for the verifier to check again. */
 export async function previousFindings(api: GitHub, number: number): Promise<PriorFinding[]> {
-  const comments = await api.list<IssueComment>(`issues/${number}/comments`);
-  const state = decodeState(comments.find((c) => trustedComment(c) && c.body?.includes(SUMMARY_MARKER))?.body);
+  const { state, marks } = await readPrReviewState(api, number);
+  // A decision not to fix must reach the verifier however long the list gets, or the problem comes back as new.
+  const order = (f: StateFinding) => (marks.get(f.id)?.as === "wont_fix" ? 0 : f.status === "gone" ? 2 : 1);
   return (state?.findings ?? [])
-    .sort((a, b) => Number(a.status === "gone") - Number(b.status === "gone"))
+    .sort((a, b) => order(a) - order(b))
     .slice(0, MAX_PREVIOUS)
-    .map(({ id, title, file, line, end_line, how }) => ({ id, title, file, line, end_line, how }));
+    .map(({ id, title, file, line, end_line, how }) => {
+      const mark = marks.get(id);
+      return { id, title, file, line, end_line, how, ...(mark ? { handled: { as: mark.as, note: mark.note, by: mark.by, sha: mark.sha } } : {}) };
+    });
 }
 
-interface CheckRun {
+export const CHECK_FAILED_TITLE = "Couldn't review this pull request";
+
+export interface CheckRun {
   id: number;
   name: string;
+  status?: string;
   conclusion: string | null;
   started_at: string;
   output: { title: string | null; summary: string | null };
@@ -99,7 +104,7 @@ export async function failCheck(api: GitHub, checkRunId: number | null, headSha:
     conclusion: "neutral",
     completed_at: new Date().toISOString(),
     output: {
-      title: "Couldn't review this pull request",
+      title: CHECK_FAILED_TITLE,
       summary: `${reason.slice(0, 2000)}\n\nThis check is neutral so a broken review doesn't block merging. The workflow log has the details.`,
     },
   };
@@ -116,10 +121,7 @@ export async function publishReview(
   const n = review.pr.number;
 
   // What's already on the PR: the summary comment with last round's state, and inline findings.
-  const issueComments = await api.list<IssueComment>(`issues/${n}/comments`);
-  const summary = issueComments.find((c) => trustedComment(c) && c.body?.includes(SUMMARY_MARKER));
-  const prev = decodeState(summary?.body);
-  const reviewComments = await api.list<ReviewComment>(`pulls/${n}/comments`);
+  const { summary, state: prev, marks, reviewComments } = await readPrReviewState(api, n);
   const urls = new Map<string, string>();
   for (const c of reviewComments) {
     if (!trustedComment(c)) continue;
@@ -179,13 +181,13 @@ export async function publishReview(
   const resolved = await resolveFixedThreads(api, review, log);
 
   const state = nextState(prev, review.findings, review.pr.head_sha, review.light, urls);
-  const summaryInput = { review, state, urls };
+  const summaryInput = { review, state, urls, marks };
   const commentBody = summaryBody(summaryInput);
   let summaryUrl: string | null = summary?.html_url ?? null;
   if (summary) {
     await api.write("PATCH", `issues/comments/${summary.id}`, { body: commentBody });
   } else {
-    const created = await api.write<IssueComment>("POST", `issues/${n}/comments`, { body: commentBody });
+    const created = await api.write<PrComment>("POST", `issues/${n}/comments`, { body: commentBody });
     summaryUrl = created?.html_url ?? null;
   }
 
@@ -231,37 +233,45 @@ export function fixedThreadComment(t: ReviewThread, open: Set<string>): number |
   return first.databaseId;
 }
 
+export async function reviewThreads(api: GitHub, number: number): Promise<ReviewThread[]> {
+  type Threads = { repository: { pullRequest: { reviewThreads: { nodes: ReviewThread[] } } } };
+  const data = await api.graphql<Threads>(
+    `query($owner: String!, $repo: String!, $number: Int!) {
+      repository(owner: $owner, name: $repo) {
+        pullRequest(number: $number) {
+          reviewThreads(first: 100) {
+            nodes { id isResolved isOutdated comments(first: 50) { nodes { databaseId body authorAssociation author { __typename } } } }
+          }
+        }
+      }
+    }`,
+    { owner: api.owner, repo: api.repo, number },
+  );
+  return data?.repository.pullRequest.reviewThreads.nodes ?? [];
+}
+
+export const resolveThread = (api: GitHub, id: string) =>
+  api.graphql(`mutation($id: ID!) { resolveReviewThread(input: { threadId: $id }) { thread { id } } }`, { id }, true);
+
 /** Answers and resolves Mergelight threads whose finding is fixed. */
 async function resolveFixedThreads(api: GitHub, review: Review, log: (s: string) => void): Promise<number> {
   const open = new Set(review.findings.map((f) => f.id));
-  type Threads = { repository: { pullRequest: { reviewThreads: { nodes: ReviewThread[] } } } };
-  let data: Threads | null;
+  let threads: ReviewThread[];
   try {
-    data = await api.graphql<Threads>(
-      `query($owner: String!, $repo: String!, $number: Int!) {
-        repository(owner: $owner, name: $repo) {
-          pullRequest(number: $number) {
-            reviewThreads(first: 100) {
-              nodes { id isResolved isOutdated comments(first: 50) { nodes { databaseId body authorAssociation author { __typename } } } }
-            }
-          }
-        }
-      }`,
-      { owner: review.pr.owner, repo: review.pr.repo, number: review.pr.number },
-    );
+    threads = await reviewThreads(api, review.pr.number);
   } catch (err) {
     log(`Couldn't read review threads: ${(err as Error).message}`);
     return 0;
   }
   let resolved = 0;
-  for (const t of data?.repository.pullRequest.reviewThreads.nodes ?? []) {
+  for (const t of threads) {
     const comment = fixedThreadComment(t, open);
     if (comment === null) continue;
     try {
       await api.write("POST", `pulls/${review.pr.number}/comments/${comment}/replies`, {
         body: `${GONE_MARKER}\nThe code here changed and Mergelight no longer finds this in \`${review.pr.head_sha.slice(0, 7)}\`.`,
       });
-      await api.graphql(`mutation($id: ID!) { resolveReviewThread(input: { threadId: $id }) { thread { id } } }`, { id: t.id }, true);
+      await resolveThread(api, t.id);
       resolved++;
     } catch (err) {
       // GitHub only lets a workflow token resolve threads with contents: write. The reply still stands.
@@ -277,11 +287,16 @@ export function isYellowCheck(check: { conclusion: string | null; output: { titl
   return check.conclusion === "action_required" || (check.conclusion === "neutral" && Boolean(check.output.title?.startsWith(LIGHT.yellow.dot)));
 }
 
+/** The newest Mergelight check on a commit. */
+export async function latestCheck(api: GitHub, sha: string): Promise<CheckRun | undefined> {
+  const runs = await api.get<{ check_runs: CheckRun[] }>(`commits/${sha}/check-runs?check_name=${CHECK_NAME}`);
+  return [...runs.check_runs].sort((a, b) => b.id - a.id)[0];
+}
+
 /** When someone approves a PR with a yellow check, it turns green. A blocked check (a bug to fix) stays red. */
 export async function approveCheck(api: GitHub, number: number, by: string): Promise<string> {
   const pr = await api.get<{ head: { sha: string } }>(`pulls/${number}`);
-  const runs = await api.get<{ check_runs: CheckRun[] }>(`commits/${pr.head.sha}/check-runs?check_name=${CHECK_NAME}`);
-  const latest = [...runs.check_runs].sort((a, b) => b.id - a.id)[0];
+  const latest = await latestCheck(api, pr.head.sha);
   if (!latest) return "No Mergelight check on this commit.";
   if (!isYellowCheck(latest)) return `Mergelight check is ${latest.conclusion ?? "still running"}, nothing to approve.`;
   const body = {

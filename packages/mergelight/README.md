@@ -13,7 +13,7 @@ How likely a problem is and how bad it is are rated separately, so a small probl
 
 ## Status
 
-Early. It runs locally, and posts to GitHub through the [GitHub Action](../../docs/github-action.md) or `--post`.
+Early. It runs locally, posts to GitHub through the [GitHub Action](../../docs/github-action.md) or `--post`, and hands findings to your coding agent through an [MCP server and a skill](../../docs/agents.md).
 
 ## Requirements
 
@@ -51,6 +51,8 @@ Two more commands, used by the GitHub Action:
 - `node dist/cli.js post review.json` posts a review saved with `--out`.
 - `node dist/cli.js approve owner/repo#123 --by login` turns a 🟡 "needs a human" check green after someone approves the PR. A 🔴 check stays red.
 
+`node dist/cli.js mcp` runs the MCP server, so Claude Code, Codex or Cursor can read a PR's findings and mark them handled. See [Mergelight in your coding agent](../../docs/agents.md).
+
 The exit code is `2` when the review finds a bug that blocks the merge, `1` on errors and `0` otherwise. With `--post` it is `0` unless the review fails, since the check carries the verdict.
 
 ## How it works
@@ -59,7 +61,7 @@ The exit code is `2` when the review finds a bug that blocks the merge, `1` on e
 2. Three hunters run in parallel, each a `codex exec` in a read-only sandbox with one area to cover: access (who can see and do what), money and data, and behavior (does the change do what the PR says, everywhere it's used). They're told to be thorough and to check the code before reporting.
 3. A sweep pass reads the changed files no hunter reported anything in, up to 36 files in runs of 12, so big PRs aren't only reviewed where the hunters happened to look. Tests and docs are skipped.
 4. A verifier tries to disprove every candidate. It runs on Claude Code with the latest Opus when Claude Code is installed, and on Codex otherwise. It merges candidates only when they share the same cause and the same fix, and rates the rest: class, how likely, how bad, what the fix costs, and whether to fix it, decide or leave it. Then it picks at most 3 a senior reviewer would hold the merge for.
-5. Only those top picks get their own comment. Everything else it would **fix** is listed under **also worth fixing** in the summary. **Decide** becomes a one-line **your call**, for real trade-offs. **Leave** is collapsed under hardening. With `--post`, later review rounds hand the verifier what earlier rounds found. It checks each one again, so a finding keeps its id and its one comment even if it's worded differently or points at other lines, and "no longer found" means it was checked, not just missed.
+5. Only those top picks get their own comment. Everything else it would **fix** is listed under **also worth fixing** in the summary. **Decide** becomes a one-line **your call**, for real trade-offs. **Leave** is collapsed under hardening. With `--post`, later review rounds hand the verifier what earlier rounds found. It checks each one again, so a finding keeps its id and its one comment even if it's worded differently or points at other lines, and "no longer found" means it was checked, not just missed. It also sees what the team marked as fixed or won't fix: a fix gets checked like anything else, and a decision not to fix is respected unless a major bug still stands.
 
 On 32 real pull requests across two repositories, Opus's top picks came to about 2 comments per PR, and the team fixed 65% of the problems they describe. The team never saw these comments, but another bot had raised the same problem in 37 of the 63 cases. Among problems only Mergelight raised, the team fixed 38% of the top picks on its own and 14% of the other findings worth fixing, so the picks are a real signal, on a small sample. Posting everything the verifier would fix meant about 4.5 comments per PR with Opus and 6 with Codex.
 
