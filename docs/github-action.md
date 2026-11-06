@@ -56,7 +56,9 @@ Without it, reviews work until the first refresh, then the login has to be redon
 
 They're separate files so a PR's merge box only shows the review, not skipped jobs.
 
-**5. Optional: make it required.** In branch protection or a ruleset, require the **Mergelight** check. 🔴 then blocks the merge. 🟡 doesn't, unless your team sets `yellow-blocks: true` to make it wait for an approval.
+**5. Install the app.** [Install Mergelight AI](https://github.com/apps/mergelight-ai/installations/new) on the repository, so comments and checks carry its name and logo. There's no key to manage: the workflow's `id-token: write` permission proves which repository it runs in, and Mergelight's token server returns a short-lived token for that repository only. It can post comments and checks, read code, and can't push. Skip this and everything still works, posted as `github-actions[bot]`.
+
+**6. Optional: make it required.** In branch protection or a ruleset, require the **Mergelight** check. 🔴 then blocks the merge. 🟡 doesn't, unless your team sets `yellow-blocks: true` to make it wait for an approval.
 
 ## Inputs
 
@@ -71,6 +73,7 @@ They're separate files so a PR's merge box only shows the review, not skipped jo
 | `verify-with` | `codex` | Who checks the findings: `codex`, or `claude` on a runner with Claude Code logged in |
 | `yellow-blocks` | `false` | Make a 🟡 check wait for an approval. For teams: GitHub doesn't let you approve your own PR |
 | `codex-version` | `0.166.0` | Codex CLI version |
+| `token-server` | Mergelight's | Where to get an app token. Empty means always post as `github-actions[bot]` |
 | `github-token` | `github.token` | Posts comments and checks |
 
 ## Good to know
