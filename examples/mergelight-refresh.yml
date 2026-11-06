@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write # Lets the app save the refreshed login.
 
 jobs:
   refresh:
@@ -19,4 +20,3 @@ jobs:
       - uses: mergelightai/mergelight@v0
         with:
           codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}
-          secrets-token: ${{ secrets.MERGELIGHT_SECRETS_TOKEN }}

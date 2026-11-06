@@ -8,7 +8,9 @@
   },
   "files": [
     "dist",
-    "skills"
+    "scripts",
+    "skills",
+    "templates"
   ],
   "scripts": {
     "build": "tsc -p .",

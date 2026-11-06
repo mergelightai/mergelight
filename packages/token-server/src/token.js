@@ -11,11 +11,22 @@ const OIDC_AUDIENCE = "mergelight";
 const GITHUB_API = "https://api.github.com";
 const INSTALL_URL = "https://github.com/apps/mergelight-ai/installations/new";
 
-/** What a review needs. Nothing can push code. */
-const PERMISSIONS = { checks: "write", pull_requests: "write", contents: "read" };
-
-/** Only runs that review a pull request or approve its check get a token. */
-const EVENTS = new Set(["pull_request", "pull_request_target", "pull_request_review"]);
+/**
+ * What each kind of token can do, and which runs can ask for it. Neither can push code.
+ * review: posts comments and checks, for runs that review a pull request or approve its check.
+ * login: saves a refreshed Codex login back to the repository's secret, so customers don't have to
+ * create a personal token. Asked for only when the login changed. GitHub never lets it read a secret.
+ */
+const SCOPES = {
+  review: {
+    permissions: { checks: "write", pull_requests: "write", contents: "read" },
+    events: new Set(["pull_request", "pull_request_target", "pull_request_review"]),
+  },
+  login: {
+    permissions: { secrets: "write" },
+    events: new Set(["pull_request", "pull_request_target", "schedule", "workflow_dispatch"]),
+  },
+};
 
 const CLOCK_SKEW_S = 30;
 const JWKS_TTL_MS = 60 * 60_000;
@@ -165,8 +176,9 @@ async function callGitHub(fetchImpl, path, appJwt, init = {}) {
 }
 
 /** Turns verified claims into an app token limited to the repository the run belongs to. */
-export async function issueToken(claims, env, fetchImpl = fetch, now = Date.now()) {
-  if (!EVENTS.has(claims.event_name)) {
+export async function issueToken(claims, env, fetchImpl = fetch, now = Date.now(), scope = "review") {
+  const { permissions, events } = SCOPES[scope];
+  if (!events.has(claims.event_name)) {
     throw new HttpError(403, "event_not_allowed", `Runs triggered by ${claims.event_name} don't get a token.`);
   }
   const match = /^([\w.-]+)\/([\w.-]+)$/.exec(claims.repository ?? "");
@@ -183,7 +195,7 @@ export async function issueToken(claims, env, fetchImpl = fetch, now = Date.now(
 
   const res = await callGitHub(fetchImpl, `/app/installations/${id}/access_tokens`, appJwt, {
     method: "POST",
-    body: JSON.stringify({ repositories: [repo], permissions: PERMISSIONS }),
+    body: JSON.stringify({ repositories: [repo], permissions }),
   });
   if (res.status === 403 || res.status === 422) {
     throw new HttpError(403, "needs_approval", `The app's install on ${owner}/${repo} needs the updated permissions approved.`);
@@ -201,16 +213,18 @@ function respond(status, body) {
 }
 
 export async function handle(request, env, fetchImpl = fetch, now = Date.now()) {
-  const { pathname } = new URL(request.url);
+  const { pathname, searchParams } = new URL(request.url);
   if (request.method === "GET" && pathname === "/") return respond(200, { service: "mergelight-token-server" });
   if (pathname !== "/token") return respond(404, { error: "not_found" });
   if (request.method !== "POST") return respond(405, { error: "method_not_allowed" });
 
   try {
+    const scope = searchParams.get("scope") ?? "review";
+    if (!Object.hasOwn(SCOPES, scope)) throw new HttpError(400, "unknown_scope", "That kind of token doesn't exist.");
     const auth = request.headers.get("authorization") ?? "";
     if (!auth.startsWith("Bearer ")) throw new HttpError(401, "invalid_token", "Send GitHub's OIDC token as a Bearer token.");
     const claims = await verifyOidcToken(auth.slice("Bearer ".length), fetchImpl, now);
-    return respond(200, await issueToken(claims, env, fetchImpl, now));
+    return respond(200, await issueToken(claims, env, fetchImpl, now, scope));
   } catch (err) {
     if (err instanceof HttpError) return respond(err.status, { error: err.code, message: err.message });
     // Never echo unexpected errors: they could carry key material.

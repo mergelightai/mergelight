@@ -16,9 +16,9 @@ inputs:
     required: false
   secrets-token:
     description: >
-      A token that can update this repository's secrets (fine-grained, "Secrets: read and write").
-      Codex refreshes a ChatGPT login about every 8 days. With this token the refreshed login is
-      saved back to the secret, so the next run can still log in.
+      Only needed without the Mergelight AI app. A token that can update this repository's secrets
+      (fine-grained, "Secrets: read and write"). Codex refreshes a ChatGPT login about every 8 days,
+      and the refreshed login has to be saved back to the secret. The app does this on its own.
     required: false
   auth-secret-name:
     description: Name of the secret that holds the ChatGPT login.
@@ -165,17 +165,28 @@ runs:
       env:
         SECRETS_TOKEN: ${{ inputs.secrets-token }}
         SECRET_NAME: ${{ inputs.auth-secret-name }}
+        TOKEN_SERVER: ${{ inputs.token-server }}
       run: |
         set -euo pipefail
         auth="$CODEX_HOME/auth.json"
         [ -f "$auth" ] || exit 0
         if [ "$(sha256sum "$auth" | cut -d' ' -f1)" = "$(cat "$RUNNER_TEMP/codex-auth.sha256" 2>/dev/null)" ]; then
           echo "The Codex login didn't change."
-        elif [ -n "$SECRETS_TOKEN" ]; then
-          GH_TOKEN="$SECRETS_TOKEN" gh secret set "$SECRET_NAME" --repo "$GITHUB_REPOSITORY" < "$auth"
+          exit 0
+        fi
+        token="$SECRETS_TOKEN"
+        if [ -z "$token" ]; then
+          out="$RUNNER_TEMP/mergelight-login-token"
+          : > "$out"
+          TOKEN_SCOPE=login GITHUB_OUTPUT="$out" node "$GITHUB_ACTION_PATH/packages/mergelight/scripts/app-token.mjs"
+          token="$(sed -n 's/^token=//p' "$out")"
+          rm -f "$out"
+        fi
+        if [ -n "$token" ]; then
+          GH_TOKEN="$token" gh secret set "$SECRET_NAME" --repo "$GITHUB_REPOSITORY" < "$auth"
           echo "Saved the refreshed Codex login to $SECRET_NAME."
         else
-          echo "::warning::Codex refreshed its login, but secrets-token isn't set, so the new login wasn't saved and the next run may fail to log in. Add secrets-token, or run 'codex login' again and update $SECRET_NAME."
+          echo "::warning::Codex refreshed its login, but it couldn't be saved, so the next run may fail to log in. Install the Mergelight AI app and add \"id-token: write\", or run 'mergelight setup' again with --relogin."
         fi
 
     - name: Clean up the Codex login

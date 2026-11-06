@@ -20,9 +20,38 @@ If the review itself can't run, for example because the login expired, the check
 
 OpenAI allows a ChatGPT login in CI only for trusted private automation, and says not to use it for public or open source repositories. The Action refuses a ChatGPT login on a public repository. See [OpenAI's guide](https://learn.chatgpt.com/docs/auth/ci-cd-auth).
 
-## Setup with a ChatGPT login
+## Set it up
 
-**1. Make a login just for CI.** Don't copy your own `~/.codex/auth.json`: one login used on two machines breaks when either one refreshes it.
+One command, for each repository:
+
+```bash
+mergelight setup owner/repo
+```
+
+It does three things:
+
+1. **Installs the app.** It opens the install page, so comments and checks carry Mergelight's name and logo.
+2. **Logs in to Codex.** It's a login just for CI, saved as a repository secret. Your own login stays separate, and the local copy is deleted.
+3. **Opens a pull request with the workflows.** That pull request reviews itself, so you can see it working before you merge.
+
+There's no key or token to manage. The workflow's `id-token: write` permission proves which repository it runs in, and Mergelight's token server returns a short-lived token for that repository only.
+
+| Option | What it does |
+|---|---|
+| `--base <branch>` | Add the workflows to this branch. Use the branch most pull requests go to |
+| `--skip-branches <a,b>` | Don't review pull requests from these branches, like `staging` into `main` |
+| `--relogin` | Log in to Codex again |
+| `--yes` | Don't stop to ask whether the app is installed |
+
+**What the app can do:** post comments and checks, read code, and overwrite this repository's Actions secrets, so it can save the refreshed Codex login. It can't read a secret's value, and it can't push code.
+
+**Optional: make it required.** In branch protection or a ruleset, require the **Mergelight** check. 🔴 then blocks the merge. 🟡 doesn't, unless your team sets `yellow-blocks: true` to make it wait for an approval.
+
+## Set it up by hand
+
+**1. Install the app.** [Install Mergelight AI](https://github.com/apps/mergelight-ai/installations/new) on the repository. Skip it and everything still posts, as `github-actions[bot]`, but you then need `secrets-token`: a [fine-grained token](https://github.com/settings/personal-access-tokens/new) with **Secrets: Read and write**, or the login has to be redone by hand after about 8 days.
+
+**2. Make a login just for CI.** Don't copy your own `~/.codex/auth.json`: one login used on two machines breaks when either one refreshes it.
 
 ```bash
 mkdir -p ~/.codex-ci && printf 'cli_auth_credentials_store = "file"\n' > ~/.codex-ci/config.toml
@@ -34,19 +63,11 @@ CODEX_HOME=~/.codex-ci codex login
 
 Check that `~/.codex-ci/auth.json` has `"auth_mode": "chatgpt"` and a `refresh_token`.
 
-**2. Store it as a secret,** then delete the local copy so only CI uses it:
+**3. Store it as a secret,** then delete the local copy so only CI uses it:
 
 ```bash
 gh secret set CODEX_AUTH_JSON --repo owner/repo < ~/.codex-ci/auth.json && rm -rf ~/.codex-ci
 ```
-
-**3. Let CI save refreshed logins.** Codex refreshes the login about every 8 days. Create a [fine-grained token](https://github.com/settings/personal-access-tokens/new) for this repository with **Secrets: Read and write**, and store it:
-
-```bash
-gh secret set MERGELIGHT_SECRETS_TOKEN --repo owner/repo
-```
-
-Without it, reviews work until the first refresh, then the login has to be redone by hand.
 
 **4. Add the workflows.** Copy the three files in [`examples/`](../examples) to `.github/workflows/`:
 
@@ -56,17 +77,13 @@ Without it, reviews work until the first refresh, then the login has to be redon
 
 They're separate files so a PR's merge box only shows the review, not skipped jobs.
 
-**5. Install the app.** [Install Mergelight AI](https://github.com/apps/mergelight-ai/installations/new) on the repository, so comments and checks carry its name and logo. There's no key to manage: the workflow's `id-token: write` permission proves which repository it runs in, and Mergelight's token server returns a short-lived token for that repository only. It can post comments and checks, read code, and can't push. Skip this and everything still works, posted as `github-actions[bot]`.
-
-**6. Optional: make it required.** In branch protection or a ruleset, require the **Mergelight** check. 🔴 then blocks the merge. 🟡 doesn't, unless your team sets `yellow-blocks: true` to make it wait for an approval.
-
 ## Inputs
 
 | Input | Default | What it does |
 |---|---|---|
 | `codex-auth-json` | | ChatGPT login (private repositories) |
 | `openai-api-key` | | OpenAI API key (any repository) |
-| `secrets-token` | | Token that can update secrets, to save refreshed logins |
+| `secrets-token` | | Only without the app: a token that can update secrets, to save refreshed logins |
 | `auth-secret-name` | `CODEX_AUTH_JSON` | The secret the refreshed login is saved to |
 | `model` | Codex default | Model to review with |
 | `effort` | `high` | Reasoning effort: `low`, `medium` or `high` |

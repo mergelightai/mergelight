@@ -1,0 +1,20 @@
+# Turns a "needs a human" Mergelight check green when someone approves the PR.
+# Copy to .github/workflows/mergelight-approve.yml. It needs no secrets.
+# Skip it if you work alone: GitHub doesn't let you approve your own PR.
+name: Mergelight approval
+
+on:
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  checks: write
+  pull-requests: read
+  id-token: write # The app that posted the check has to update it.
+
+jobs:
+  approve:
+    if: github.event.review.state == 'approved'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: mergelightai/mergelight@v0

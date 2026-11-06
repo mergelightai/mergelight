@@ -7,6 +7,7 @@ import { GitHub } from "./publish/api.js";
 import { approveCheck, failCheck, failSummary, previousFindings, publishReview, startCheck, startSummary } from "./publish/publish.js";
 import { renderTerminal } from "./render.js";
 import { reviewPullRequest } from "./review.js";
+import { realDeps, setup } from "./setup.js";
 import type { Review } from "./types.js";
 
 const HELP = `Mergelight: AI code review on the plan you already pay for.
@@ -16,6 +17,7 @@ Usage
   mergelight post <review.json>          Post a saved review to its pull request
   mergelight approve <pr> --by <login>   Turn a "needs a human" check green after approval
   mergelight mcp                         Run the MCP server, so your coding agent can read findings
+  mergelight setup <owner/repo>          Set up the GitHub Action on a repository
 
   <pr> is a pull request URL, owner/repo#123, or a number inside a clone.
 
@@ -35,6 +37,10 @@ Options
   --verify-model <name> Model for the checker (default for claude: opus)
   --keep                Keep the temporary checkout
   --by <login>          Who approved, for approve
+  --base <branch>       For setup: add the workflows to this branch (default: the default branch)
+  --skip-branches <a,b> For setup: don't review pull requests from these branches
+  --relogin             For setup: log in to Codex again
+  --yes                 For setup: don't stop to ask whether the app is installed
   -h, --help            Show this help
 
 Reviews run on your own logged-in Codex CLI, and Claude Code if you check with it.
@@ -87,6 +93,10 @@ async function main(): Promise<number> {
       "verify-model": { type: "string" },
       keep: { type: "boolean" },
       by: { type: "string" },
+      base: { type: "string" },
+      "skip-branches": { type: "string" },
+      relogin: { type: "boolean" },
+      yes: { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -96,6 +106,28 @@ async function main(): Promise<number> {
     process.stdout.write(HELP);
     return values.help ? 0 : 1;
   }
+  if (command === "setup") {
+    if (!target || !/^[\w.-]+\/[\w.-]+$/.test(target)) {
+      log("mergelight: name the repository, like: mergelight setup owner/repo");
+      return 1;
+    }
+    try {
+      return await setup(
+        {
+          repo: target,
+          base: values.base,
+          skipBranches: values["skip-branches"]?.split(",").map((b) => b.trim()).filter(Boolean),
+          relogin: values.relogin,
+          yes: values.yes,
+        },
+        realDeps(),
+      );
+    } catch (err) {
+      log(`mergelight: ${err instanceof Error ? err.message : String(err)}`);
+      return 1;
+    }
+  }
+
   if (command === "mcp") {
     await serve();
     return 0;

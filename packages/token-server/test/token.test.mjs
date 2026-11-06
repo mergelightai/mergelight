@@ -110,6 +110,34 @@ test("rejects tokens that aren't GitHub's", async (t) => {
   }
 });
 
+test("a login token can only write secrets", async () => {
+  const { calls, fetchImpl } = fakeGitHub();
+  const res = await handle(post(makeToken({ event_name: "schedule" }), "/token?scope=login"), env(), fetchImpl, NOW);
+  assert.equal(res.status, 200);
+  const minted = calls.find((c) => c.url.endsWith("/access_tokens"));
+  assert.deepEqual(JSON.parse(minted.init.body), { repositories: ["widgets"], permissions: { secrets: "write" } });
+});
+
+test("a scheduled run gets a login token but no review token", async () => {
+  const { fetchImpl } = fakeGitHub();
+  assert.equal((await handle(post(makeToken({ event_name: "schedule" })), env(), fetchImpl, NOW)).status, 403);
+});
+
+test("an approval can't ask for a login token", async () => {
+  const { fetchImpl } = fakeGitHub();
+  const res = await handle(post(makeToken({ event_name: "pull_request_review" }), "/token?scope=login"), env(), fetchImpl, NOW);
+  assert.equal(res.status, 403);
+});
+
+test("unknown scopes are refused before any check, including inherited names", async () => {
+  for (const scope of ["admin", "constructor", "__proto__"]) {
+    const { calls, fetchImpl } = fakeGitHub();
+    const res = await handle(post(makeToken(), `/token?scope=${scope}`), env(), fetchImpl, NOW);
+    assert.equal(res.status, 400, scope);
+    assert.equal(calls.length, 0, scope);
+  }
+});
+
 test("a missing token gets a 401", async () => {
   const { fetchImpl } = fakeGitHub();
   assert.equal((await handle(post(null), env(), fetchImpl, NOW)).status, 401);
