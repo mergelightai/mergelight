@@ -88,11 +88,28 @@ export interface PublishResult {
   light: Light;
 }
 
-/** Shows a live "Reviewing" check right away, so people and agents can see work is happening. */
+/**
+ * Creates the check, or updates it if it has an id. GitHub only lets Apps write
+ * checks, so a personal `gh` login gets a 403 on any repository. That doesn't sink
+ * a review, since the comments carry it. Every other error still throws.
+ */
+async function writeCheck(api: GitHub, id: number | null | undefined, headSha: string, body: object, log?: (line: string) => void): Promise<CheckRun | null> {
+  try {
+    if (id) return await api.write<CheckRun>("PATCH", `check-runs/${id}`, body);
+    return await api.write<CheckRun>("POST", "check-runs", { name: CHECK_NAME, head_sha: headSha, ...body });
+  } catch (err) {
+    if (!/must authenticate via a GitHub App/i.test((err as Error).message)) throw err;
+    log?.("Skipped the Mergelight check: GitHub only lets a GitHub App write checks, not a personal gh login.");
+    return null;
+  }
+}
+
+/**
+ * Shows a live "Reviewing" check right away, so people and agents can see work is
+ * happening. A login that can't write checks hears about it once, from the last write.
+ */
 export async function startCheck(api: GitHub, headSha: string): Promise<number | null> {
-  const run = await api.write<CheckRun>("POST", "check-runs", {
-    name: CHECK_NAME,
-    head_sha: headSha,
+  const run = await writeCheck(api, null, headSha, {
     status: "in_progress",
     started_at: new Date().toISOString(),
     output: {
@@ -119,8 +136,8 @@ export async function failSummary(api: GitHub, number: number): Promise<void> {
  * A review that couldn't run ends neutral, so a broken login doesn't block
  * merging. The workflow job itself still fails, so it's visible.
  */
-export async function failCheck(api: GitHub, checkRunId: number | null, headSha: string, reason: string): Promise<void> {
-  const body = {
+export async function failCheck(api: GitHub, checkRunId: number | null, headSha: string, reason: string, log?: (line: string) => void): Promise<void> {
+  await writeCheck(api, checkRunId, headSha, {
     status: "completed",
     conclusion: "neutral",
     completed_at: new Date().toISOString(),
@@ -128,9 +145,7 @@ export async function failCheck(api: GitHub, checkRunId: number | null, headSha:
       title: CHECK_FAILED_TITLE,
       summary: `${reason.slice(0, 2000)}\n\nThis check is neutral so a broken review doesn't block merging. The workflow log has the details.`,
     },
-  };
-  if (checkRunId) await api.write("PATCH", `check-runs/${checkRunId}`, body);
-  else await api.write("POST", "check-runs", { name: CHECK_NAME, head_sha: headSha, ...body });
+  }, log);
 }
 
 export async function publishReview(
@@ -224,8 +239,7 @@ export async function publishReview(
       summary: summaryBody(summaryInput, false).replace(SUMMARY_MARKER, "").slice(0, 65_000),
     },
   };
-  if (opts.checkRunId) await api.write("PATCH", `check-runs/${opts.checkRunId}`, check);
-  else await api.write("POST", "check-runs", { name: CHECK_NAME, head_sha: review.pr.head_sha, ...check });
+  await writeCheck(api, opts.checkRunId, review.pr.head_sha, check, log);
 
   return { summaryUrl, inline: inline.length, outside: outside.length, resolved, light: review.light };
 }

@@ -42,7 +42,7 @@ Other ways to name the pull request: `owner/repo#123`, or just `123` inside a cl
 | `--verify-with <name>` | Who checks the findings: `claude` (default when Claude Code is installed) or `codex` |
 | `--verify-model <name>` | Model for the checker, like `claude-opus-5-5` (default for Claude: `opus`) |
 | `--keep` | Keep the temporary checkout |
-| `--post` | Post the review to the PR: inline findings, one summary comment and a **Mergelight** check |
+| `--post` | Post the review to the PR: inline findings, one summary comment and a **Mergelight** check. GitHub only lets Apps write checks, so a personal `gh` login gets the comments and no check. The [GitHub Action](../../docs/github-action.md) gets all three |
 | `--dry-run` | With `--post`, `post` or `approve`: print what would be posted and change nothing |
 | `--yellow-blocks` | With `--post` or `post`: a 🟡 check waits for an approval instead of being neutral |
 
@@ -53,7 +53,7 @@ Two more commands, used by the GitHub Action:
 
 `node dist/cli.js mcp` runs the MCP server, so Claude Code, Codex or Cursor can read a PR's findings and mark them handled. See [Mergelight in your coding agent](../../docs/agents.md).
 
-The exit code is `2` when the review finds a bug that blocks the merge, `1` on errors and `0` otherwise. With `--post` it is `0` unless the review fails, since the check carries the verdict.
+The exit code is `2` when the review finds a bug that blocks the merge, `1` on errors and `0` otherwise. With `--post` it is `0` unless the review fails, since the check carries the verdict. On a personal `gh` login, where GitHub doesn't allow checks, the summary comment carries it instead.
 
 ## How it works
 

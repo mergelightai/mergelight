@@ -1,6 +1,11 @@
 // Run with: npm test (builds first)
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { parsePatch, place } from "../dist/publish/diff-lines.js";
 import { closedBody, readClosed, reopenedBody, resolvedByPeople, threadAction } from "../dist/publish/closed.js";
 import { clean, failedSummaryBody, FINDING_MARKER_RE, inlineBody, isPendingSummary, pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "../dist/publish/markdown.js";
@@ -301,4 +306,80 @@ test("an approval turns only a yellow check green, not a review that couldn't ru
   assert.equal(isYellowCheck(check("failure", "🔴 Blocked: 1 bug to fix")), false);
   assert.equal(isYellowCheck(check("success", "🟢 Safe to merge: Nothing worth fixing")), false);
   assert.equal(isYellowCheck(check(null, "Reviewing")), false);
+});
+
+// Stands in for gh. Check writes fail with the error under test, and the PR itself can't be fetched, so a review stops right there.
+const FAKE_GH = `#!/usr/bin/env node
+const args = process.argv.slice(2);
+require("node:fs").appendFileSync(process.env.FAKE_GH_CALLS, args.join(" ") + "\\n");
+const fail = (message) => {
+  console.error(message);
+  process.exit(1);
+};
+const answer = (value) => console.log(JSON.stringify(value));
+if (args.some((a) => a.endsWith("/check-runs"))) fail(process.env.FAKE_GH_CHECK_ERROR);
+if (args.some((a) => a.endsWith("/pulls/1"))) fail("gh: Not Found (HTTP 404)");
+if (args.includes("--slurp")) answer([[]]);
+else if (args.includes("graphql")) answer({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } });
+else answer({ id: 1, html_url: "https://github.com/o/r/pull/1#issuecomment-1" });
+`;
+
+const APP_ONLY = "gh: You must authenticate via a GitHub App. (HTTP 403)";
+const SKIPPED = "Skipped the Mergelight check";
+
+function runCli(t, args, checkError) {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-test-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  writeFileSync(join(dir, "gh"), FAKE_GH);
+  chmodSync(join(dir, "gh"), 0o755);
+  const calls = join(dir, "calls");
+  writeFileSync(calls, "");
+  writeFileSync(
+    join(dir, "review.json"),
+    JSON.stringify({
+      pr: { owner: "o", repo: "r", number: 1, title: "t", url: "u", base_sha: "b", head_sha: "abcdef1234" },
+      provider: { name: "codex", model: null },
+      light: "green",
+      summary: "Summary.",
+      findings: [],
+      stats: { duration_ms: 1000 },
+    }),
+  );
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL("../dist/cli.js", import.meta.url)), ...args(dir)], {
+    encoding: "utf8",
+    env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, FAKE_GH_CALLS: calls, FAKE_GH_CHECK_ERROR: checkError },
+  });
+  return { ...result, calls: readFileSync(calls, "utf8") };
+}
+
+const count = (text, needle) => text.split(needle).length - 1;
+
+test("post on a personal login leaves the comment, skips the check once and exits 0", (t) => {
+  const { status, stderr, calls } = runCli(t, (dir) => ["post", join(dir, "review.json")], APP_ONLY);
+  assert.equal(status, 0, stderr);
+  assert.ok(calls.includes("-X POST repos/o/r/issues/1/comments"));
+  assert.equal(count(stderr, SKIPPED), 1);
+  assert.ok(stderr.includes("Posted:"));
+});
+
+test("review --post on a personal login gets past the check and still skips it only once", (t) => {
+  const { status, stderr, calls } = runCli(t, () => ["review", "o/r#1", "--post", "--at", "abcdef1234"], APP_ONLY);
+  assert.ok(calls.includes("api repos/o/r/pulls/1"), "the review started");
+  assert.equal(status, 1, "the fake PR can't be fetched, so the review itself fails");
+  assert.ok(stderr.includes("mergelight: gh api repos/o/r/pulls/1"));
+  assert.equal(count(stderr, SKIPPED), 1);
+});
+
+test("any other check error still fails post", (t) => {
+  const { status, stderr } = runCli(t, (dir) => ["post", join(dir, "review.json")], "gh: Resource not accessible by integration (HTTP 403)");
+  assert.notEqual(status, 0);
+  assert.ok(stderr.includes("Resource not accessible by integration"));
+  assert.ok(!stderr.includes(SKIPPED));
+});
+
+test("any other check error still stops review --post before it reviews", (t) => {
+  const { status, stderr, calls } = runCli(t, () => ["review", "o/r#1", "--post", "--at", "abcdef1234"], "gh: Resource not accessible by integration (HTTP 403)");
+  assert.notEqual(status, 0);
+  assert.ok(!calls.includes("api repos/o/r/pulls/1"));
+  assert.ok(!stderr.includes(SKIPPED));
 });
