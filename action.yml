@@ -8,8 +8,8 @@ branding:
 inputs:
   codex-auth-json:
     description: >
-      Contents of ~/.codex/auth.json from a ChatGPT login, stored as a secret.
-      OpenAI allows this for private repositories only.
+      A ChatGPT login, saved as a secret. Leave the secret unset and the first pull request shows a
+      link and code to connect ChatGPT, then saves it. OpenAI allows this for private repositories only.
     required: false
   openai-api-key:
     description: An OpenAI API key, billed per use. Works on public repositories too.
@@ -127,17 +127,37 @@ runs:
           sha256sum "$CODEX_HOME/auth.json" | cut -d' ' -f1 > "$RUNNER_TEMP/codex-auth.sha256"
         elif [ -n "$API_KEY" ]; then
           printf '%s' "$API_KEY" | codex login --with-api-key
+        elif [ "$REPO_PRIVATE" = "true" ] && { [ "$GITHUB_EVENT_NAME" = "pull_request" ] || [ "$GITHUB_EVENT_NAME" = "pull_request_target" ]; }; then
+          # No login yet: the next step connects ChatGPT from the pull request.
+          printf 'cli_auth_credentials_store = "file"\n' > "$CODEX_HOME/config.toml"
+          echo "MERGELIGHT_CONNECT=1" >> "$GITHUB_ENV"
+        elif [ "$REPO_PRIVATE" = "true" ]; then
+          echo "No Codex login yet, so there's nothing to keep fresh."
+          echo "MERGELIGHT_NO_LOGIN=1" >> "$GITHUB_ENV"
         else
-          echo "::error::Set codex-auth-json (a ChatGPT login, private repositories) or openai-api-key."
+          echo "::error::Public repositories need openai-api-key. OpenAI allows a ChatGPT login in CI for private repositories only."
           exit 1
         fi
 
     # Scheduled or manual run: just use the login once, so Codex refreshes it if it's due and the
     # step below saves it. Keeps reviews from having to refresh it themselves.
     - name: Keep the Codex login fresh
-      if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+      if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && env.MERGELIGHT_NO_LOGIN != '1'
       shell: bash
       run: codex exec --skip-git-repo-check --sandbox read-only --ephemeral "Reply with the single word OK." > /dev/null
+
+    # Needs somewhere to save the login: the app, or a token that can update secrets.
+    - name: Connect ChatGPT
+      if: env.MERGELIGHT_CONNECT == '1'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.app.outputs.token || inputs.github-token }}
+        PR: ${{ github.event.pull_request.number }}
+        CAN_SAVE: ${{ steps.app.outputs.token != '' || inputs.secrets-token != '' }}
+      run: |
+        args=(connect "$GITHUB_REPOSITORY#$PR")
+        [ "$CAN_SAVE" = "true" ] || args+=(--no-save)
+        node "$GITHUB_ACTION_PATH/packages/mergelight/dist/cli.js" "${args[@]}"
 
     - name: Review
       if: github.event_name == 'pull_request' || github.event_name == 'pull_request_target'
@@ -160,7 +180,7 @@ runs:
     # Codex may have refreshed the login during the run. Save the new one, or the next run
     # starts from tokens that no longer work.
     - name: Save the refreshed Codex login
-      if: always() && github.event_name != 'pull_request_review' && inputs.codex-auth-json != ''
+      if: always() && github.event_name != 'pull_request_review' && (inputs.codex-auth-json != '' || env.MERGELIGHT_CONNECT == '1')
       shell: bash
       env:
         SECRETS_TOKEN: ${{ inputs.secrets-token }}
