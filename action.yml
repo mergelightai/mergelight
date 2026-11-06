@@ -29,6 +29,9 @@ inputs:
   effort:
     description: "Reasoning effort: low, medium or high."
     required: false
+  verify-with:
+    description: "Who checks the findings: codex, or claude on a runner with Claude Code logged in."
+    default: codex
   codex-version:
     description: Version of the Codex CLI to install.
     default: "0.166.0"
@@ -122,9 +125,10 @@ runs:
         PR: ${{ github.event.pull_request.number }}
         MODEL: ${{ inputs.model }}
         EFFORT: ${{ inputs.effort }}
+        VERIFY_WITH: ${{ inputs.verify-with }}
       run: |
         set -euo pipefail
-        args=(review "$GITHUB_REPOSITORY#$PR" --post --out "$RUNNER_TEMP/mergelight-review.json")
+        args=(review "$GITHUB_REPOSITORY#$PR" --post --verify-with "$VERIFY_WITH" --out "$RUNNER_TEMP/mergelight-review.json")
         [ -n "$MODEL" ] && args+=(--model "$MODEL")
         [ -n "$EFFORT" ] && args+=(--effort "$EFFORT")
         node "$GITHUB_ACTION_PATH/packages/mergelight/dist/cli.js" "${args[@]}"

@@ -76,6 +76,7 @@ export const reviewSchema = {
           "recommendation",
           "verdict",
           "confidence",
+          "same_as",
         ],
         properties: {
           class: { type: "string", enum: ["bug", "risk", "hardening"] },
@@ -96,6 +97,10 @@ export const reviewSchema = {
           recommendation: { type: "string", enum: ["fix", "decide", "leave"] },
           verdict: { type: "string", description: "One short plain sentence a non-engineer understands." },
           confidence: { type: "string", enum: ["high", "medium", "low"] },
+          same_as: {
+            type: ["string", "null"],
+            description: "The id of the problem from an earlier review that this finding is, or null.",
+          },
         },
       },
     },

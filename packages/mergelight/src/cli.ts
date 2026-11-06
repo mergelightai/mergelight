@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { currentRepo, fetchPullRequest, parsePrRef } from "./github.js";
 import { GitHub } from "./publish/api.js";
-import { approveCheck, failCheck, publishReview, startCheck } from "./publish/publish.js";
+import { approveCheck, failCheck, previousFindings, publishReview, startCheck } from "./publish/publish.js";
 import { renderTerminal } from "./render.js";
 import { reviewPullRequest } from "./review.js";
 import type { Review } from "./types.js";
@@ -133,6 +133,7 @@ async function main(): Promise<number> {
   const progress = progressPrinter();
   try {
     const review = await reviewPullRequest(ref, {
+      previous: values.post ? await previousFindings(api, ref.number) : undefined,
       at: values.at,
       model: values.model,
       effort: values.effort,

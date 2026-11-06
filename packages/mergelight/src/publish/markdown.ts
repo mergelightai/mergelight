@@ -68,10 +68,10 @@ function plural(n: number, word: string): string {
 
 /** One line on what the review found, for the summary and the check title. */
 export function headline(r: Review): string {
-  const posted = r.findings.filter((f) => f.tier === "post");
-  const bugs = posted.filter((f) => f.class === "bug" && f.severity !== "minor").length;
-  const minor = posted.filter((f) => f.class === "bug" && f.severity === "minor").length;
-  const risks = posted.filter((f) => f.class !== "bug").length;
+  const toFix = r.findings.filter((f) => f.tier === "post" || f.tier === "list");
+  const bugs = toFix.filter((f) => f.class === "bug" && f.severity !== "minor").length;
+  const minor = toFix.filter((f) => f.class === "bug" && f.severity === "minor").length;
+  const risks = toFix.filter((f) => f.class !== "bug").length;
   const decisions = r.findings.filter((f) => f.tier === "decision").length;
   const parts: string[] = [];
   if (bugs) parts.push(plural(bugs, "bug"));
@@ -87,42 +87,46 @@ export interface SummaryInput {
   state: ReviewState;
   /** Inline comment URL per finding id, for findings posted inline. */
   urls: Map<string, string>;
-  /** Posted findings that couldn't go inline because their lines aren't in the diff. */
-  outside: Finding[];
 }
 
-export function summaryBody({ review: r, state, urls, outside }: SummaryInput, withState = true): string {
+/** A line for a finding worth fixing. Without an inline comment to link to, the details go here. */
+function fixLine(f: Finding, urls: Map<string, string>): string[] {
+  const { dot, name } = label(f);
+  const url = urls.get(f.id);
+  if (url) return [`- ${dot} ${name}: [${clean(f.title)}](${url}) ${where(f)}`];
+  return [
+    `- ${dot} ${name}: **${clean(f.title)}** ${where(f)}`,
+    `  <details><summary>Details</summary>`,
+    "",
+    `  ${clean(f.how_it_happens)}`,
+    "",
+    `  **What breaks:** ${clean(f.what_breaks)}`,
+    "",
+    `  **Smallest fix** (${f.fix_cost}): ${clean(f.fix)}`,
+    "",
+    `  **→ ${clean(f.verdict)}**`,
+    "  </details>",
+  ];
+}
+
+export function summaryBody({ review: r, state, urls }: SummaryInput, withState = true): string {
   const light = LIGHT[r.light];
-  const posted = r.findings.filter((f) => f.tier === "post").sort((a, b) => rank(a) - rank(b));
+  const top = r.findings.filter((f) => f.tier === "post").sort((a, b) => (a.rank ?? 9) - (b.rank ?? 9) || rank(a) - rank(b));
+  const listed = r.findings.filter((f) => f.tier === "list").sort((a, b) => rank(a) - rank(b));
   const decisions = r.findings.filter((f) => f.tier === "decision");
   const leftAlone = r.findings.filter((f) => f.tier === "hardening");
   const gone = state.round > 1 ? state.findings.filter((f) => f.status === "gone" && f.tier !== "hardening") : [];
-  const outsideIds = new Set(outside.map((f) => f.id));
 
   const out: string[] = [SUMMARY_MARKER, `### ${light.dot} Mergelight: ${light.label}`, "", clean(r.summary), "", `**${headline(r)}**`];
 
-  if (posted.length) {
+  if (top.length) {
     out.push("", "#### To fix");
-    for (const f of posted) {
-      const { dot, name } = label(f);
-      const url = urls.get(f.id);
-      const title = url ? `[${clean(f.title)}](${url})` : `**${clean(f.title)}**`;
-      out.push(`- ${dot} ${name}: ${title} ${where(f)}`);
-      if (outsideIds.has(f.id)) {
-        out.push(
-          `  <details><summary>Details (outside the changed lines)</summary>`,
-          "",
-          `  ${clean(f.how_it_happens)}`,
-          "",
-          `  **What breaks:** ${clean(f.what_breaks)}`,
-          "",
-          `  **Smallest fix** (${f.fix_cost}): ${clean(f.fix)}`,
-          "",
-          `  **→ ${clean(f.verdict)}**`,
-          "  </details>",
-        );
-      }
-    }
+    for (const f of top) out.push(...fixLine(f, urls));
+  }
+
+  if (listed.length) {
+    out.push("", "#### Also worth fixing");
+    for (const f of listed) out.push(...fixLine(f, urls));
   }
 
   if (decisions.length) {
@@ -145,10 +149,11 @@ export function summaryBody({ review: r, state, urls, outside }: SummaryInput, w
     out.push("", "</details>");
   }
 
-  const model = r.provider.model ? `Codex ${r.provider.model}` : "Codex";
+  const who = (p: { name: string; model: string | null }) => `${p.name === "codex" ? "Codex" : "Claude"}${p.model ? ` ${p.model}` : ""}`;
+  const checkedBy = r.verifier && r.verifier.name !== r.provider.name ? `, checked by ${who(r.verifier)},` : "";
   out.push(
     "",
-    `<sub>Round ${state.round} · reviewed \`${r.pr.head_sha.slice(0, 7)}\` with ${model} on your own plan · ${duration(r.stats.duration_ms)} · <a href="https://mergelight.dev">Mergelight</a></sub>`,
+    `<sub>Round ${state.round} · reviewed \`${r.pr.head_sha.slice(0, 7)}\` with ${who(r.provider)}${checkedBy} on your own plan · ${duration(r.stats.duration_ms)} · <a href="https://mergelight.dev">Mergelight</a></sub>`,
   );
 
   let body = out.join("\n");

@@ -9,6 +9,7 @@ import {
   FOCUS,
   type Candidate,
   type Focus,
+  type PriorFinding,
   type PromptInput,
 } from "./prompt.js";
 import { claudeAvailable, runModel, TOOLING, type ProviderName } from "./providers/index.js";
@@ -26,6 +27,8 @@ export interface ReviewOptions {
   verifyWith?: ProviderName;
   /** Model for the verifier. Defaults to the latest Opus on Claude, and to the hunters' model on Codex. */
   verifyModel?: string;
+  /** What earlier review rounds of this pull request found. The verifier checks each one again. */
+  previous?: PriorFinding[];
   /** Keep the temporary checkout for inspection. */
   keep?: boolean;
   /** Progress messages. transient ones (the command the agent is running) are only worth showing live. */
@@ -48,6 +51,35 @@ function fingerprint(dir: string, f: ModelFinding): string {
     code = f.title.toLowerCase();
   }
   return createHash("sha1").update(`${f.file}\n${f.class}\n${code}`).digest("hex").slice(0, 10);
+}
+
+/**
+ * Gives each finding its id. One the verifier matched to an earlier round keeps
+ * that round's id and title, so it stays one comment however the model words or
+ * locates it this time: a fingerprint alone changes whenever the model cites
+ * slightly different lines.
+ */
+export function assignIds(
+  findings: ModelReview["findings"],
+  previous: PriorFinding[],
+  fingerprintOf: (f: ModelFinding) => string,
+): (ModelFinding & { id: string })[] {
+  const known = new Map(previous.map((p) => [p.id, p]));
+  const used = new Set<string>();
+  const matched = findings.map((f) => {
+    const prior = f.same_as && !used.has(f.same_as) ? known.get(f.same_as) : undefined;
+    if (prior) used.add(prior.id);
+    return prior;
+  });
+  return findings.map(({ same_as: _, ...f }, i) => {
+    const prior = matched[i];
+    if (prior) return { ...f, id: prior.id, title: prior.title };
+    let id = fingerprintOf(f);
+    // Two findings on the same code still need their own ids.
+    for (let n = 1; used.has(id); n++) id = createHash("sha1").update(`${id}${n}`).digest("hex").slice(0, 10);
+    used.add(id);
+    return { ...f, id };
+  });
 }
 
 /**
@@ -129,10 +161,10 @@ export async function verifyCandidates(dir: string, input: PromptInput, found: C
   });
   const review = result.output as ModelReview;
   const top = [...new Set((review.top ?? []).filter((n) => Number.isInteger(n) && n >= 1 && n <= review.findings.length))].slice(0, 3);
-  const findings: Finding[] = review.findings
+  const findings: Finding[] = assignIds(review.findings, input.previous ?? [], (f) => fingerprint(dir, f))
     .map((f, i) => {
       const rank = top.includes(i + 1) ? top.indexOf(i + 1) + 1 : null;
-      return { id: fingerprint(dir, f), tier: tierOf({ ...f, rank }), rank, ...f };
+      return { ...f, tier: tierOf({ ...f, rank }), rank };
     })
     .sort((a, b) => ORDER[a.class] - ORDER[b.class] || a.file.localeCompare(b.file) || a.line - b.line);
   return { summary: review.summary, findings, rejected: review.rejected, model: result.model, cost_usd: result.cost_usd ?? null };
@@ -159,6 +191,7 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
       diffStat: ws.diffStat,
       diff: ws.diff,
       diffTruncated: ws.diffTruncated,
+      previous: opts.previous,
     };
 
     // Step 1: hunters, one per area, in parallel. One failing doesn't sink the review.

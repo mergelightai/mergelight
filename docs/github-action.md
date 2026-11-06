@@ -3,7 +3,7 @@
 Reviews every pull request with your own Codex login and posts:
 
 - **One summary comment**, kept up to date on every push: what the PR does, what's worth fixing, what's your call, and what was left alone on purpose.
-- **Inline comments** for findings worth fixing, each with how it happens, what breaks and the smallest fix.
+- **Inline comments** for the few findings a senior reviewer would hold the merge for, at most 3 per review, each with how it happens, what breaks and the smallest fix. Anything else worth fixing is listed in the summary.
 - **A live check** called **Mergelight**. It shows "Reviewing" while it works, then:
   - 🟢 **Safe to merge:** success.
   - 🟡 **Needs a human:** action required. It turns green when someone approves the PR.
@@ -67,7 +67,8 @@ They're separate files so a PR's merge box only shows the review, not skipped jo
 | `secrets-token` | | Token that can update secrets, to save refreshed logins |
 | `auth-secret-name` | `CODEX_AUTH_JSON` | The secret the refreshed login is saved to |
 | `model` | Codex default | Model to review with |
-| `effort` | Codex default | Reasoning effort: `low`, `medium` or `high` |
+| `effort` | `high` | Reasoning effort: `low`, `medium` or `high` |
+| `verify-with` | `codex` | Who checks the findings: `codex`, or `claude` on a runner with Claude Code logged in |
 | `codex-version` | `0.166.0` | Codex CLI version |
 | `github-token` | `github.token` | Posts comments and checks |
 
@@ -75,6 +76,6 @@ They're separate files so a PR's merge box only shows the review, not skipped jo
 
 - **Forks:** PRs from forks get no secrets, so the example workflow skips them.
 - **Self-hosted Linux runners:** Codex's sandbox needs unprivileged user namespaces. On GitHub-hosted runners the Action enables them; on your own runners, allow them ahead of time (on Ubuntu 24.04: `kernel.apparmor_restrict_unprivileged_userns=0`). Without them Codex can't read the code, and the review fails instead of guessing from the diff.
-- **Time:** a review takes about 4 to 15 minutes depending on the size of the PR, around 7 for a typical one.
-- **Same finding, next push:** findings already posted aren't posted again. A Mergelight thread is resolved when its code changed and the finding is gone.
+- **Time:** a review takes about 2 to 15 minutes depending on the size of the PR, around 7 for a typical one.
+- **Same finding, next push:** every review checks what earlier reviews found again, so a finding stays one comment even if it's worded differently or points at other lines. A Mergelight thread is resolved when its code changed and the finding is gone.
 - **Your code:** the review runs inside your own GitHub Actions runner with your own Codex login. Nothing is sent to Mergelight.

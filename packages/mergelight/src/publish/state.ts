@@ -14,6 +14,9 @@ export interface StateFinding {
   title: string;
   file: string;
   line: number;
+  end_line?: number;
+  /** How it happens, so later rounds can check it again. */
+  how?: string;
   first_round: number;
   /** open: in the latest review. gone: in an earlier review, not in the latest. */
   status: "open" | "gone";
@@ -60,6 +63,8 @@ export function nextState(prev: ReviewState | null, findings: Finding[], sha: st
       title: f.title,
       file: f.file,
       line: f.line,
+      end_line: f.end_line,
+      how: f.how_it_happens,
       first_round: before.get(f.id)?.first_round ?? round,
       status: "open",
       ...(url ? { url } : {}),

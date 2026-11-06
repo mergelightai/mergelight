@@ -35,7 +35,8 @@ export interface ModelFinding {
 
 export interface ModelReview {
   summary: string;
-  findings: ModelFinding[];
+  /** same_as: the earlier review's finding this one continues, if any. */
+  findings: (ModelFinding & { same_as?: string | null })[];
   rejected: { candidate: string; reason: string }[];
   /** Up to 3 findings (1-based) a senior reviewer would hold the merge for, most important first. */
   top: number[];
@@ -49,7 +50,7 @@ export interface ModelReview {
 export type Tier = "post" | "list" | "decision" | "hardening";
 
 export interface Finding extends ModelFinding {
-  /** Stable id from the file and the code the finding points at, not the line number. */
+  /** Stays the same across review rounds: the earlier round's id, or a fingerprint of the file and code it points at. */
   id: string;
   tier: Tier;
   /** 1 to 3 when the verifier picked it as one of the few that matter most, else null. */

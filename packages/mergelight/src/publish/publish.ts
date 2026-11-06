@@ -1,4 +1,5 @@
 import type { Finding, Light, Review } from "../types.js";
+import type { PriorFinding } from "../prompt.js";
 import { GitHub, type ApiOptions } from "./api.js";
 import { commentableLines, place } from "./diff-lines.js";
 import { FINDING_MARKER_RE, headline, inlineBody, LIGHT, SUMMARY_MARKER, summaryBody } from "./markdown.js";
@@ -17,17 +18,43 @@ const CONCLUSION: Record<Light, "success" | "action_required" | "failure"> = {
   red: "failure",
 };
 
-interface IssueComment {
+interface Commenter {
+  user?: { type?: string } | null;
+  author_association?: string;
+}
+
+interface IssueComment extends Commenter {
   id: number;
   body?: string;
   html_url: string;
 }
 
-interface ReviewComment {
+interface ReviewComment extends Commenter {
   id: number;
   body: string;
   html_url: string;
   pull_request_review_id: number | null;
+}
+
+/**
+ * Whether Mergelight's hidden markers in this comment count. Anyone can write a
+ * comment containing them, and they steer what gets posted and what the verifier
+ * reads, so a passer-by's comment must not be taken for ours.
+ */
+export function trustedComment(c: Commenter): boolean {
+  return c.user?.type === "Bot" || ["OWNER", "MEMBER", "COLLABORATOR"].includes(c.author_association ?? "");
+}
+
+const MAX_PREVIOUS = 40;
+
+/** What earlier rounds found on this PR, latest first, for the verifier to check again. */
+export async function previousFindings(api: GitHub, number: number): Promise<PriorFinding[]> {
+  const comments = await api.list<IssueComment>(`issues/${number}/comments`);
+  const state = decodeState(comments.find((c) => trustedComment(c) && c.body?.includes(SUMMARY_MARKER))?.body);
+  return (state?.findings ?? [])
+    .sort((a, b) => Number(a.status === "gone") - Number(b.status === "gone"))
+    .slice(0, MAX_PREVIOUS)
+    .map(({ id, title, file, line, end_line, how }) => ({ id, title, file, line, end_line, how }));
 }
 
 interface CheckRun {
@@ -55,7 +82,7 @@ export async function startCheck(api: GitHub, headSha: string): Promise<number |
     started_at: new Date().toISOString(),
     output: {
       title: "Reviewing",
-      summary: "Mergelight is reviewing this pull request with Codex on your own plan. This usually takes 4 to 15 minutes.",
+      summary: "Mergelight is reviewing this pull request with Codex on your own plan. This usually takes 2 to 15 minutes.",
     },
   });
   return run?.id ?? null;
@@ -89,19 +116,22 @@ export async function publishReview(
 
   // What's already on the PR: the summary comment with last round's state, and inline findings.
   const issueComments = await api.list<IssueComment>(`issues/${n}/comments`);
-  const summary = issueComments.find((c) => c.body?.includes(SUMMARY_MARKER));
+  const summary = issueComments.find((c) => trustedComment(c) && c.body?.includes(SUMMARY_MARKER));
   const prev = decodeState(summary?.body);
   const reviewComments = await api.list<ReviewComment>(`pulls/${n}/comments`);
   const urls = new Map<string, string>();
   for (const c of reviewComments) {
+    if (!trustedComment(c)) continue;
     const id = c.body.match(FINDING_MARKER_RE)?.[1];
     if (id && !urls.has(id)) urls.set(id, c.html_url);
   }
 
-  // New posted findings go inline, if their lines are in the diff.
+  // New top picks go inline, if their lines are in the diff. A finding from an earlier
+  // round stays where it is, even if the verifier ranks it higher now: the reader has
+  // seen it, and a new comment on old code is just more noise.
   const lines = await commentableLines(api, n);
-  const posted = review.findings.filter((f) => f.tier === "post");
-  const fresh = posted.filter((f) => !urls.has(f.id));
+  const seen = new Set(prev?.findings.map((f) => f.id));
+  const fresh = review.findings.filter((f) => f.tier === "post" && !urls.has(f.id) && !seen.has(f.id));
   const inline: { f: Finding; comment: Record<string, unknown> }[] = [];
   const outside: Finding[] = [];
   for (const f of fresh) {
@@ -148,7 +178,7 @@ export async function publishReview(
   const resolved = await resolveFixedThreads(api, review, log);
 
   const state = nextState(prev, review.findings, review.pr.head_sha, review.light, urls);
-  const summaryInput = { review, state, urls, outside };
+  const summaryInput = { review, state, urls };
   const commentBody = summaryBody(summaryInput);
   let summaryUrl: string | null = summary?.html_url ?? null;
   if (summary) {
