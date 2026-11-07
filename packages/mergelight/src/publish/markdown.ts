@@ -155,7 +155,8 @@ export function summaryBody({ review: r, state, urls, marks = new Map(), handled
   }
 
   if (listed.length) {
-    out.push("", "#### Also worth fixing");
+    // With nothing above it, the count is the heading already, and "also" would point at an empty section.
+    out.push("", ...(top.length ? ["#### Also worth fixing"] : []));
     for (const f of listed) out.push(...fixLine(f, urls, marks.get(f.id)));
   }
 
@@ -200,7 +201,7 @@ export function summaryBody({ review: r, state, urls, marks = new Map(), handled
   const checkedBy = r.verifier && r.verifier.name !== r.provider.name ? `, checked by ${who(r.verifier)},` : "";
   out.push(
     "",
-    `<sub>Round ${state.round} · reviewed \`${r.pr.head_sha.slice(0, 7)}\` with ${who(r.provider)}${checkedBy} on your own plan · ${duration(r.stats.duration_ms)} · <a href="https://mergelight.dev">Mergelight</a></sub>`,
+    `<sub>Round ${state.round} · reviewed \`${r.pr.head_sha.slice(0, 7)}\` with ${who(r.provider)}${checkedBy} on your own plan · ${duration(r.stats.duration_ms)}</sub>`,
   );
   if (update) out.push("", `<sub>Mergelight ${update} is out. <a href="https://mergelight.dev/setup/">Update it</a></sub>`);
 

@@ -392,3 +392,21 @@ test("a login failure says what happened and what to do, instead of just failing
   assert.doesNotMatch(body, /couldn't review/);
   assert.match(failedSummaryBody(), /couldn't review/);
 });
+
+test("with no top picks the list sits right under the count, and the footer has no link", () => {
+  const findings = [finding({ id: "4444444444", tier: "list", title: "Only one" })];
+  const review = {
+    pr: { owner: "o", repo: "r", number: 1, title: "t", url: "u", base_sha: "b", head_sha: "abcdef1234" },
+    provider: { name: "codex", model: null },
+    verifier: null,
+    light: "yellow",
+    summary: "Summary.",
+    findings,
+    stats: { duration_ms: 1000 },
+  };
+  const body = summaryBody({ review, state: nextState(null, findings, "abcdef1234", "yellow", new Map()), urls: new Map() });
+  assert.ok(body.includes("Only one"), body);
+  assert.ok(!body.includes("#### Also worth fixing"), body);
+  assert.ok(!body.includes("#### To fix"), body);
+  assert.ok(!body.includes('href="https://mergelight.dev"'), body);
+});
