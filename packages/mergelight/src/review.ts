@@ -200,7 +200,7 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
     const focuses = focusesFor(addedTo);
     if (focuses.includes("supply")) {
       const uses = actionsUsedBy(ws.dir, addedTo);
-      if (uses.length) progress(`Reading the source of ${uses.length} action${uses.length === 1 ? "" : "s"}`);
+      if (uses.length) progress("Reading the source of the actions these workflows use");
       input.actionSources = await fetchActionSources(uses);
     }
     let done = 0;
