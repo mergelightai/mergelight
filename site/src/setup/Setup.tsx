@@ -6,7 +6,7 @@ import workflowFile from '../../../examples/mergelight.yml?raw';
 import refreshFile from '../../../examples/mergelight-refresh.yml?raw';
 import Ambient from '../sections/Ambient';
 import { Check, GitHubIcon, SURFACE, WELL } from '../ui';
-import { cleanUrl, finishSignIn, GitHubError, INSTALL_URL, isPinned, mockClient, pinned, realClient, REFRESH_FILE, signInUrl, wakeTokenServer, type CheckStatus, type ConnectCode, type GitHubClient, type Release, type Repo, type RepoDetails, type SetupPr, type WorkflowFile } from './github';
+import { cleanUrl, finishSignIn, GitHubError, INSTALL_URL, REVIEW_APP_URL, isPinned, mockClient, pinned, realClient, REFRESH_FILE, signInUrl, wakeTokenServer, type CheckStatus, type ConnectCode, type GitHubClient, type Release, type Repo, type RepoDetails, type SetupPr, type WorkflowFile } from './github';
 
 const CHATGPT_SECURITY = 'https://chatgpt.com/settings/security';
 const TYPES_MARKER = 'types: [opened, synchronize, reopened, ready_for_review]';
@@ -45,10 +45,10 @@ function useWide(): boolean {
   );
 }
 
-type View = 'welcome' | 'repo' | 'add' | 'finish' | 'connect' | 'live';
-const ORDER: View[] = ['welcome', 'repo', 'add', 'finish', 'connect', 'live'];
+type View = 'welcome' | 'repo' | 'review-app' | 'add' | 'finish' | 'connect' | 'live';
+const ORDER: View[] = ['welcome', 'repo', 'review-app', 'add', 'finish', 'connect', 'live'];
 /** Where each view sits on the rail. Add and finish are the same step to the person. */
-const RAIL: Record<View, number> = { welcome: 0, repo: 1, add: 2, finish: 2, connect: 3, live: 4 };
+const RAIL: Record<View, number> = { welcome: 0, repo: 1, 'review-app': 1, add: 2, finish: 2, connect: 3, live: 4 };
 
 export default function Setup() {
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
@@ -145,6 +145,7 @@ export default function Setup() {
       setBranch(d.base);
       setScope(d.skip.length > 1 ? 'new' : 'all');
       setHasLogin(d.hasLogin);
+      if (d.reviewApp === false) setView('review-app');
     }, () => setDetailsFailed(true));
   };
 
@@ -239,6 +240,7 @@ export default function Setup() {
   };
 
   const back: Partial<Record<View, () => void>> = {
+    'review-app': anotherRepo,
     add: anotherRepo,
     finish: () => setView('add'),
     connect: () => setView('add'),
@@ -262,6 +264,7 @@ export default function Setup() {
             <Stage viewKey={view} direction={direction}>
               {view === 'welcome' && <Welcome signingIn={signingIn} failed={signInFailed} requested={requested} />}
               {view === 'repo' && <RepoStep repos={repos} onChoose={choose} failed={signInFailed} />}
+              {view === 'review-app' && repo && <ReviewAppStep repo={repo} onCheck={() => choose(repo)} onBack={back['review-app']!} />}
               {view === 'add' && repo && (
                 <AddStep repo={repo} details={details} fileCount={files.length} branch={branch} setBranch={setBranch} scope={scope} setScope={setScope} fileOpen={fileOpen} onToggleFile={() => setFileOpen((v) => !v)} adding={adding} failed={addFailed} detailsFailed={detailsFailed} onRetry={() => choose(repo)} update={update} onAdd={() => void addToRepo()} fileUrl={fileUrl} onBack={adding ? () => undefined : back.add!} onByHand={() => { setFileOpen(false); setView('finish'); }} onContinue={afterAdding} />
               )}
@@ -990,6 +993,25 @@ function Numbered({ n, children }: { n: number; children: ReactNode }) {
 }
 
 const Strong = ({ children }: { children: ReactNode }) => <span className="font-medium text-fg">{children}</span>;
+
+/** Two apps, so that the key on our server can't commit anything. This one posts the reviews. */
+function ReviewAppStep({ repo, onCheck, onBack }: { repo: Repo; onCheck: () => void; onBack: () => void }) {
+  return (
+    <div>
+      <BackButton onClick={onBack} />
+      <Heading title="One more install" sub={`Add Mergelight AI to ${repo.fullName.split('/')[1]}. It's the app that posts the reviews.`} />
+      <p className="mt-4 text-[13px] leading-relaxed text-muted">
+        Mergelight uses two apps. Mergelight AI can't change your code or workflows. Mergelight Setup can, but only while you're signed in here.
+      </p>
+      <a href={REVIEW_APP_URL} className={`${PRIMARY} mt-6`}>
+        <GitHubIcon className="size-[18px]" /> Install Mergelight AI
+      </a>
+      <button type="button" onClick={onCheck} className="mx-auto mt-3 flex items-center justify-center text-[13px] text-muted transition-colors hover:text-fg">
+        I've installed it, check again
+      </button>
+    </div>
+  );
+}
 
 function FinishStep({ repo, branch, fileUrl, pr, onBack }: { repo: Repo; branch: string; fileUrl: string; pr: SetupPr | null; onBack: () => void }) {
   return (

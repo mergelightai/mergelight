@@ -10,6 +10,8 @@ const OIDC_ISSUER = "https://token.actions.githubusercontent.com";
 const OIDC_AUDIENCE = "mergelight";
 const GITHUB_API = "https://api.github.com";
 const INSTALL_URL = "https://github.com/apps/mergelight-ai/installations/new";
+/** The Mergelight Setup app, which the setup page signs in with. It has no private key anywhere, so it only ever acts for a signed-in person. */
+const SETUP_CLIENT_ID = "Iv23liSVH2xajWoG53R0";
 
 /**
  * What each kind of token can do, and which runs can ask for it. Neither can push code.
@@ -217,8 +219,9 @@ function respond(status, body, headers = {}) {
 
 /**
  * Swaps the code from "Sign in with GitHub" for the person's token, so the setup page can list their
- * repositories and branches. Only this step needs the app's client secret, which can't live in a web
- * page. The token goes straight back to the browser, and nothing here stores or logs it.
+ * repositories and open the setup pull request. It's a Mergelight Setup token, and this server holds
+ * no private key for that app. Only this step needs the client secret, which can't live in a web page.
+ * The token goes straight back to the browser, and nothing here stores or logs it.
  */
 async function signIn(request, env, fetchImpl) {
   const cors = { "access-control-allow-origin": SITE_ORIGIN, vary: "Origin" };
@@ -230,7 +233,7 @@ async function signIn(request, env, fetchImpl) {
     });
   }
   if (request.method !== "POST") return respond(405, { error: "method_not_allowed" }, cors);
-  if (!env.GITHUB_APP_CLIENT_SECRET) return respond(503, { error: "sign_in_not_set_up" }, cors);
+  if (!env.GITHUB_SETUP_APP_CLIENT_SECRET) return respond(503, { error: "sign_in_not_set_up" }, cors);
 
   let code;
   try {
@@ -243,13 +246,40 @@ async function signIn(request, env, fetchImpl) {
   const res = await fetchImpl("https://github.com/login/oauth/access_token", {
     method: "POST",
     headers: { accept: "application/json", "content-type": "application/json", "user-agent": "mergelight-token-server" },
-    body: JSON.stringify({ client_id: env.GITHUB_APP_CLIENT_ID, client_secret: env.GITHUB_APP_CLIENT_SECRET, code }),
+    body: JSON.stringify({ client_id: SETUP_CLIENT_ID, client_secret: env.GITHUB_SETUP_APP_CLIENT_SECRET, code }),
   });
   if (!res.ok) return respond(502, { error: "github_error" }, cors);
   const body = await res.json();
   // GitHub answers 200 with an error for a used or expired code.
   if (!body.access_token) return respond(400, { error: "sign_in_failed" }, cors);
   return respond(200, { token: body.access_token, expires_in: body.expires_in ?? null }, cors);
+}
+
+/**
+ * Tells the setup page if Mergelight AI, the app that posts reviews, is on a repository. Only this server
+ * can ask, because GitHub answers that only with the app's private key. The person's token has to reach the
+ * repository first, so nobody learns anything about a repository they can't see. Nothing is stored or logged.
+ */
+async function reviewApp(request, env, fetchImpl, now, searchParams) {
+  const cors = { "access-control-allow-origin": SITE_ORIGIN, vary: "Origin" };
+  if (request.headers.get("origin") !== SITE_ORIGIN) return respond(403, { error: "origin_not_allowed" });
+  if (request.method === "OPTIONS") {
+    return new Response(null, {
+      status: 204,
+      headers: { ...cors, "access-control-allow-methods": "GET", "access-control-allow-headers": "authorization", "access-control-max-age": "600" },
+    });
+  }
+  if (request.method !== "GET") return respond(405, { error: "method_not_allowed" }, cors);
+  const repo = searchParams.get("repo") ?? "";
+  const person = /^Bearer ([\w-]{1,300})$/.exec(request.headers.get("authorization") ?? "")?.[1];
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || repo.includes("..") || !person) return respond(400, { error: "bad_request" }, cors);
+
+  const visible = await callGitHub(fetchImpl, `/repos/${repo}`, person);
+  if (!visible.ok) return respond(404, { error: "no_access" }, cors);
+  const installation = await callGitHub(fetchImpl, `/repos/${repo}/installation`, await createAppJwt(env, now));
+  if (installation.status === 404) return respond(200, { installed: false }, cors);
+  if (!installation.ok) return respond(502, { error: "github_error" }, cors);
+  return respond(200, { installed: true }, cors);
 }
 
 export async function handle(request, env, fetchImpl = fetch, now = Date.now()) {
@@ -261,6 +291,14 @@ export async function handle(request, env, fetchImpl = fetch, now = Date.now()) 
     } catch (err) {
       console.error("sign-in error", err?.name);
       return respond(500, { error: "server_error" });
+    }
+  }
+  if (pathname === "/review-app") {
+    try {
+      return await reviewApp(request, env, fetchImpl, now, searchParams);
+    } catch (err) {
+      console.error("review-app error", err?.name);
+      return respond(500, { error: "server_error" }, { "access-control-allow-origin": SITE_ORIGIN, vary: "Origin" });
     }
   }
   if (pathname !== "/token") return respond(404, { error: "not_found" });

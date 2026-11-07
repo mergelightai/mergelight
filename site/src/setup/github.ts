@@ -1,14 +1,17 @@
 /** What the setup page reads from GitHub, in the browser, with the person's own token. */
 
 const API = 'https://api.github.com';
-const CLIENT_ID = 'Iv23liM8BL5MwWeDmXHV';
+/** Mergelight Setup. It has no private key anywhere, so it only ever acts for the person signed in here. */
+const CLIENT_ID = 'Iv23liSVH2xajWoG53R0';
 const ACTION_REPO = 'mergelightai/mergelight';
 const TOKEN_SERVER = 'https://api.mergelight.dev';
 const STATE_KEY = 'mergelight.setup.state';
 /** A sleeping server can take about a minute to wake up, so this is generous. */
 const SIGN_IN_TIMEOUT_MS = 120_000;
 
-export const INSTALL_URL = 'https://github.com/apps/mergelight-ai/installations/new';
+export const INSTALL_URL = 'https://github.com/apps/mergelight-setup/installations/new';
+/** Mergelight AI, which posts the reviews. It can't commit, so a leak of its key on our server can't reach anyone's code or workflows. */
+export const REVIEW_APP_URL = 'https://github.com/apps/mergelight-ai/installations/new';
 
 /** Branches that hold releases or shared work. PRs from these are promotions, not new code. */
 const LONG_LIVED = /^(main|master|staging|stage|production|prod|development|develop|dev)$/;
@@ -53,6 +56,8 @@ export interface RepoDetails {
   refresh: string | null;
   /** The latest release. Only a pinned repo needs it, so failing to read it doesn't stop a setup. */
   release: Release | null;
+  /** If the app that posts reviews is on this repo. Null if that can't be told, which doesn't stop a setup. */
+  reviewApp: boolean | null;
 }
 
 /** A workflow file the setup pull request should end up with. */
@@ -269,6 +274,16 @@ export function realClient(token: string): GitHubClient {
     const pull = await openSetupPull(repo);
     return pull && { number: pull.number, url: pull.html_url, headSha: pull.head.sha };
   };
+  /** Only our server can ask GitHub this, and it needs the person's token to show they can see the repo. */
+  const reviewAppInstalled = async (repo: Repo) => {
+    const res = await fetch(`${TOKEN_SERVER}/review-app?repo=${encodeURIComponent(repo.fullName)}`, {
+      headers: { authorization: `Bearer ${token}` },
+      cache: 'no-store',
+      signal: AbortSignal.timeout(SIGN_IN_TIMEOUT_MS),
+    });
+    if (!res.ok) throw new Error(`Couldn't check for the review app (${res.status}).`);
+    return ((await res.json()) as { installed: boolean }).installed;
+  };
   const secretNames = async (repo: Repo) => {
     const { secrets } = await get<{ secrets: { name: string }[] }>(`/repos/${repo.fullName}/actions/secrets?per_page=100`).catch(() => ({ secrets: [] as { name: string }[] }));
     return secrets.map((s) => s.name);
@@ -292,11 +307,12 @@ export function realClient(token: string): GitHubClient {
       return lists.flat().sort((a, b) => a.fullName.localeCompare(b.fullName));
     },
     details: async (repo) => {
-      const [branches, pulls, secrets, release] = await Promise.all([
+      const [branches, pulls, secrets, release, reviewApp] = await Promise.all([
         get<{ name: string }[]>(`/repos/${repo.fullName}/branches?per_page=100`),
         get<{ base: { ref: string }; head: { ref: string } }[]>(`/repos/${repo.fullName}/pulls?state=all&per_page=50`).catch(() => []),
         secretNames(repo),
         latestRelease().catch(() => null),
+        reviewAppInstalled(repo).catch(() => null),
       ]);
       const names = branches.map((b) => b.name);
       const base = pickBase(pulls.map((p) => ({ base: p.base.ref, head: p.head.ref })), repo.defaultBranch);
@@ -310,6 +326,7 @@ export function realClient(token: string): GitHubClient {
         installed: onBase && readInstalled(onBase.content),
         refresh: refresh?.content ?? null,
         release,
+        reviewApp,
       };
     },
     proposeWorkflows: async (repo, branch, files, update) => {
@@ -390,8 +407,9 @@ export function mockClient(): GitHubClient {
           : null;
   return {
     repos: () => later([repo('api'), repo('app'), repo('behind'), repo('docs', false), repo('old'), repo('platform'), repo('site')]),
+    // acme/docs plays a repo that has only the setup app so far.
     details: (r) =>
-      later(
+      later<RepoDetails>({ reviewApp: r.fullName !== 'acme/docs', ...(
         r.fullName === 'acme/docs'
           ? { branches: ['main'], base: 'main', skip: ['main'], hasLogin: false, hasApiKey: false, installed: null, refresh: null, release }
           : r.fullName === 'acme/site'
@@ -405,8 +423,7 @@ export function mockClient(): GitHubClient {
               installed: installedFor(r.fullName),
               refresh: null,
               release,
-            },
-      ),
+            }) }),
     // acme/site plays an install that hasn't approved the access, to show the way around it.
     proposeWorkflows: (r) => (r.fullName === 'acme/site' ? Promise.reject(new GitHubError(403)) : new Promise((done) => setTimeout(() => done({ number: 128, url: 'https://github.com/acme/api/pull/128', headSha: 'abc' }), 900))),
     findSetupPr: () => later(++finds > 1 ? { number: 128, url: 'https://github.com/acme/api/pull/128', headSha: 'abc' } : null),
