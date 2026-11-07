@@ -9,7 +9,7 @@ import { Check, GitHubIcon, SURFACE, WELL } from '../ui';
 import { cleanUrl, finishSignIn, GitHubError, INSTALL_URL, rememberRepo, reviewAppUrl, takeRememberedRepo, isPinned, mockClient, pinned, realClient, REFRESH_FILE, signInUrl, wakeTokenServer, type CheckStatus, type ConnectCode, type GitHubClient, type Release, type Repo, type RepoDetails, type SetupPr, type WorkflowFile } from './github';
 
 const CHATGPT_SECURITY = 'https://chatgpt.com/settings/security';
-const TYPES_MARKER = 'types: [opened, synchronize, reopened, ready_for_review]';
+const TYPES_MARKER = 'types: [opened, synchronize, reopened, ready_for_review, edited]';
 const SKIP_MARKER = 'github.event.pull_request.head.repo.full_name == github.repository';
 const SPRING = { type: 'spring', bounce: 0, duration: 0.45 } as const;
 

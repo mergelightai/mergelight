@@ -4,7 +4,7 @@ name: Mergelight
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, edited]
 
 permissions:
   contents: read
@@ -14,8 +14,10 @@ permissions:
 
 jobs:
   review:
-    # Forks and Dependabot get no secrets, and drafts aren't ready for review.
+    # Forks and Dependabot get no secrets, and drafts aren't ready for review. An edit only counts when the
+    # target branch changed, so a new title doesn't start a review.
     if: >
+      (github.event.action != 'edited' || github.event.changes.base) &&
       !github.event.pull_request.draft &&
       github.actor != 'dependabot[bot]' &&
       github.event.pull_request.head.repo.full_name == github.repository
