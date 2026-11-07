@@ -17,7 +17,7 @@ export class LoginError extends Error {}
 const LOGIN_FAILURE = /access token could not be refreshed|401 Unauthorized/i;
 
 export function loginFailureMessage(secretName = "CODEX_AUTH_JSON"): string {
-  return `The ChatGPT login didn't work, most likely because another review refreshed it at the same moment. Re-run the Mergelight job from the Actions tab, or push again, to pick up the new one. If it fails again, the login has stopped working: delete the ${secretName} secret, then push, and this pull request shows a code to connect ChatGPT again.`;
+  return `The ChatGPT login didn't work, most likely because another run already refreshed it. Re-run the Mergelight job from the Actions tab, or push again, to pick up the new one. If it fails again, the login has stopped working: delete the ${secretName} secret, then push, and this pull request shows a code to connect ChatGPT again.`;
 }
 
 const SANDBOX_FAILURE = /bwrap:|user namespace|new namespace|RTM_NEWADDR|uid map|sandbox.*(denied|not permitted)/i;

@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 // Refreshes the Codex login before Codex would, and saves it straight away.
 //
-// Each refresh token works once, and a run only has the login that was saved when it started. Codex
-// itself refreshes in a token's last 5 minutes and we only save at the end of the run, so a review
-// starting during that run would hold a used refresh token and fail. Refreshing here keeps tokens away
-// from those 5 minutes and shrinks the gap between refreshing and saving from minutes to seconds.
+// A used refresh token keeps working for a while, then gets refused: it still worked 18 minutes after
+// its first use and was refused by 38, in one test. A run only has the login that was saved when it
+// started. Codex itself refreshes in a token's last 5 minutes and we only save at the end of the run, so
+// a long review could leave others holding a token about to be refused. Refreshing here keeps tokens
+// away from those 5 minutes and shrinks the gap between refreshing and saving from minutes to seconds.
 //
 // An access token lasts 10 days and keeps working after a refresh, so a run that loses the race can
 // carry on with the one it has, and a refresh doesn't disturb the reviews already running.
@@ -146,9 +147,9 @@ export async function refreshLogin({
     log(`::error::Couldn't refresh the Codex login${reason ? ` (${reason})` : ""}. If this keeps failing, it has stopped working: delete the ${env.SECRET_NAME} secret, and the next pull request shows a code to connect ChatGPT again.`);
     return 1;
   }
-  // Probably another run refreshed it a moment ago. The access token still works, so use what's left of it.
+  // Probably another run refreshed it a while ago. The access token still works, so use what's left of it.
   if (expiry !== null && expiry - now() > CARRY_ON_ABOVE) {
-    log(`::warning::Couldn't refresh the Codex login${reason ? ` (${reason})` : ""}, so another run may just have done it. This review carries on, since the login is good for another ${left(expiry - now())}.`);
+    log(`::warning::Couldn't refresh the Codex login${reason ? ` (${reason})` : ""}, so another run may have done it already. This review carries on, since the login is good for another ${left(expiry - now())}.`);
     return 0;
   }
   // Codex would try the same used token, once per reviewer, so don't start it.
