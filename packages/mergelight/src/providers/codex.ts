@@ -17,7 +17,7 @@ export class LoginError extends Error {}
 const LOGIN_FAILURE = /access token could not be refreshed|401 Unauthorized/i;
 
 export function loginFailureMessage(secretName = "CODEX_AUTH_JSON"): string {
-  return `The ChatGPT login didn't work, most likely because another review refreshed it at the same moment. Re-run this check to pick up the new one. If it fails again, the login has stopped working: delete the ${secretName} secret, then push, and this pull request shows a code to connect ChatGPT again.`;
+  return `The ChatGPT login didn't work, most likely because another review refreshed it at the same moment. Re-run the Mergelight job from the Actions tab, or push again, to pick up the new one. If it fails again, the login has stopped working: delete the ${secretName} secret, then push, and this pull request shows a code to connect ChatGPT again.`;
 }
 
 const SANDBOX_FAILURE = /bwrap:|user namespace|new namespace|RTM_NEWADDR|uid map|sandbox.*(denied|not permitted)/i;
@@ -85,6 +85,8 @@ export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
   let completed = 0;
   let sandboxFailures = 0;
   let firstSandboxError = "";
+  /** Codex's own errors, kept apart from its stdout, which also carries the code it reads. */
+  const failures: string[] = [];
   let usage: CodexResult["usage"] = null;
   let buffer = "";
   const onStdout = (chunk: string) => {
@@ -99,7 +101,10 @@ export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
           type?: string;
           item?: { type?: string; command?: string; exit_code?: number | null; aggregated_output?: string };
           usage?: { input_tokens?: number; output_tokens?: number };
+          message?: string;
+          error?: { message?: string };
         };
+        if (event.type === "error" || event.type === "turn.failed") failures.push(event.message ?? event.error?.message ?? "");
         if (event.type === "item.started" && event.item?.type === "command_execution") {
           commands++;
           opts.onCommand?.(event.item.command ?? "");
@@ -136,7 +141,10 @@ export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
     }
     if (result.code !== 0) {
       const tail = (result.stderr || result.stdout).trim().split("\n").slice(-6).join("\n");
-      if (LOGIN_FAILURE.test(tail)) throw new LoginError(loginFailureMessage(process.env.SECRET_NAME || undefined));
+      // Only a ChatGPT login: a refused API key has a different fix.
+      if (process.env.MERGELIGHT_CHATGPT === "1" && LOGIN_FAILURE.test(`${result.stderr}\n${failures.join("\n")}`)) {
+        throw new LoginError(loginFailureMessage(process.env.SECRET_NAME || undefined));
+      }
       throw new Error(`Codex exited with code ${result.code}.${opts.logFile ? ` Log: ${opts.logFile}` : ""}\n${tail}`);
     }
     // Without a working sandbox Codex can't read the code and reviews the diff blind.

@@ -105,5 +105,6 @@ test("a private repository with no login yet connects on a pull request, and idl
 test("the refresh and its save come before the review, and the login step can call gh", () => {
   assert.ok(action.indexOf("- name: Refresh the Codex login if it's due") < action.indexOf("- name: Review\n"));
   assert.match(action.slice(action.indexOf("- name: Log in to Codex"), action.indexOf("- name: Refresh the Codex login")), /GH_TOKEN: \$\{\{ github\.token \}\}/);
+  assert.match(stepScript("Log in to Codex"), /MERGELIGHT_LOGIN_LOST=0/, "nothing carries over from an earlier run in the job");
   assert.doesNotMatch(action, /Reply with the single word OK/, "the job no longer spends plan quota on a model call");
 });

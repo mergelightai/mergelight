@@ -92,7 +92,7 @@ gh secret set CODEX_AUTH_JSON --repo owner/repo < ~/.codex-ci/auth.json && rm -r
 
 - [`mergelight.yml`](../examples/mergelight.yml) reviews every non-draft PR from this repository, and cancels an older review of the same PR when you push again.
 - [`mergelight-approve.yml`](../examples/mergelight-approve.yml) turns a 🟡 check green when someone approves the PR. Skip it if you work alone: GitHub doesn't let you approve your own PR.
-- [`mergelight-refresh.yml`](../examples/mergelight-refresh.yml) refreshes the login before it gets close to expiring, and saves it at once. It looks every third day.
+- [`mergelight-refresh.yml`](../examples/mergelight-refresh.yml) refreshes the login every third day and saves it at once, so reviews rarely need to.
 
 They're separate files so a PR's merge box only shows the review, not skipped jobs.
 

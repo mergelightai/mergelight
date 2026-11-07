@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
 import { accessTokenExpiry, forceRefresh, isDue, refreshLogin } from "../scripts/refresh-login.mjs";
@@ -12,7 +12,7 @@ const HOUR = 3_600_000;
 const jwt = (exp) => `h.${Buffer.from(JSON.stringify({ exp: exp / 1000 })).toString("base64url")}.s`;
 const login = (msLeft, refreshToken = "old") => JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: jwt(NOW + msLeft), refresh_token: refreshToken } });
 
-function setup({ event, msLeft, rotates = true, secretsToken = "tok", appToken = null, saveCode = 0 }) {
+function setup({ event, msLeft, rotates = true, secretsToken = "tok", appToken = null, saveCode = 0, reason = null }) {
   const home = mkdtempSync(join(tmpdir(), "mergelight-refresh-"));
   const file = join(home, "auth.json");
   const envFile = join(home, "env");
@@ -32,6 +32,7 @@ function setup({ event, msLeft, rotates = true, secretsToken = "tok", appToken =
         refresh: async () => {
           calls.refresh++;
           if (rotates) writeFileSync(file, login(240 * HOUR, "new"));
+          return reason;
         },
         save: (token) => {
           calls.saved.push(token);
@@ -53,10 +54,10 @@ test("when a refresh is due", () => {
   assert.equal(isDue("pull_request", NOW + 61 * 60_000, NOW), false);
   assert.equal(isDue("pull_request_target", NOW + 59 * 60_000, NOW), true);
   assert.equal(isDue("pull_request", null, NOW), false, "unknown expiry: a review leaves it to Codex");
-  assert.equal(isDue("schedule", NOW + 4 * DAY, NOW), true);
-  assert.equal(isDue("schedule", NOW + 6 * DAY, NOW), false, "a fresh login isn't rotated for nothing");
-  assert.equal(isDue("schedule", null, NOW), true);
-  assert.equal(isDue("workflow_dispatch", NOW + 10 * DAY, NOW), true, "by hand always refreshes");
+  for (const event of ["schedule", "workflow_dispatch"]) {
+    assert.equal(isDue(event, NOW + 10 * DAY, NOW), true, "the job always refreshes, so it notices a dead login");
+    assert.equal(isDue(event, null, NOW), true);
+  }
 });
 
 test("a login with time left isn't touched", async () => {
@@ -75,8 +76,8 @@ test("a due login is refreshed and saved before the review starts", async () => 
   assert.equal(readFileSync(s.envFile, "utf8"), "");
 });
 
-test("the job refreshes well before expiry", async () => {
-  const s = setup({ event: "schedule", msLeft: 4 * 24 * HOUR });
+test("the job refreshes a login with plenty of time left", async () => {
+  const s = setup({ event: "schedule", msLeft: 9 * 24 * HOUR });
   assert.equal(await s.run(), 0);
   assert.equal(s.calls.refresh, 1);
   assert.equal(s.calls.saved.length, 1);
@@ -111,7 +112,7 @@ test("a review that loses the race carries on while its token still works", asyn
 });
 
 test("a review that loses the race with no time left doesn't start Codex", async () => {
-  for (const msLeft of [4 * 60_000, -HOUR]) {
+  for (const msLeft of [19 * 60_000, 4 * 60_000, -HOUR]) {
     const s = setup({ event: "pull_request", msLeft, rotates: false });
     assert.equal(await s.run(), 0, "the review step reports it on the pull request");
     assert.equal(readFileSync(s.envFile, "utf8"), "MERGELIGHT_LOGIN_LOST=1\n");
@@ -155,6 +156,42 @@ function fakeServer(answer) {
   return { child, seen };
 }
 
+test("what comes back decides whether it worked, not just that a token changed", async () => {
+  const outcome = async (content) => {
+    const s = setup({ event: "workflow_dispatch", msLeft: HOUR, rotates: false });
+    return { s, content };
+  };
+  for (const [name, content, ok] of [
+    ["tokens wiped", JSON.stringify({ auth_mode: "chatgpt" }), false],
+    ["cut off mid-write", '{"auth_mode":"chat', false],
+    ["same tokens", login(HOUR), false],
+    ["new access token, same refresh token", login(240 * HOUR, "old"), true],
+  ]) {
+    const { s } = await outcome(content);
+    const code = await refreshLogin({
+      env: { CODEX_HOME: dirname(s.file), GITHUB_EVENT_NAME: "workflow_dispatch", SECRETS_TOKEN: "tok", SECRET_NAME: "CODEX_AUTH_JSON", GITHUB_ENV: s.envFile },
+      now: () => NOW,
+      log: (l) => s.calls.logs.push(l),
+      refresh: async () => {
+        writeFileSync(s.file, content);
+        return null;
+      },
+      save: (token) => {
+        s.calls.saved.push(token);
+        return 0;
+      },
+    });
+    assert.equal(code, ok ? 0 : 1, name);
+    assert.deepEqual(s.calls.saved, ok ? ["tok"] : [], `${name}: only a working login is saved`);
+  }
+});
+
+test("the reason a refresh failed reaches the log", async () => {
+  const s = setup({ event: "schedule", msLeft: HOUR, rotates: false, reason: "method not found" });
+  assert.equal(await s.run(), 1);
+  assert.ok(said(s.calls, /Couldn't refresh the Codex login \(method not found\)/));
+});
+
 test("forces the refresh through the app-server: initialize, then account/read", async () => {
   const { child, seen } = fakeServer((m, c) => {
     if (m.id) c.stdout.write(`noise that isn't JSON\n${JSON.stringify({ method: "account/updated" })}\n${JSON.stringify({ id: m.id, result: {} })}\n`);
@@ -167,11 +204,19 @@ test("forces the refresh through the app-server: initialize, then account/read",
 
 test("a server that hangs or never starts doesn't hang the run", async () => {
   const hung = fakeServer(() => {});
-  await forceRefresh({ spawnImpl: () => hung.child, timeoutMs: 10 });
+  assert.match(await forceRefresh({ spawnImpl: () => hung.child, timeoutMs: 10 }), /didn't answer/);
   assert.equal(hung.child.killed, 1);
   const missing = fakeServer(() => {});
   setImmediate(() => missing.child.emit("error", new Error("ENOENT")));
-  await forceRefresh({ spawnImpl: () => missing.child });
+  assert.equal(await forceRefresh({ spawnImpl: () => missing.child }), "ENOENT");
+});
+
+test("an error from the app-server comes back as the reason", async () => {
+  const { child } = fakeServer((m, c) => {
+    if (m.id === 1) c.stdout.write(`${JSON.stringify({ id: 1, result: {} })}\n`);
+    if (m.id === 2) c.stdout.write(`${JSON.stringify({ id: 2, error: { code: -32601, message: "method not found" } })}\n`);
+  });
+  assert.equal(await forceRefresh({ spawnImpl: () => child }), "method not found");
 });
 
 test("a saved login it can't use is left alone", async () => {

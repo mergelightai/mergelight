@@ -124,6 +124,7 @@ runs:
           echo "MERGELIGHT_CHATGPT=0"
           echo "MERGELIGHT_CONNECT=0"
           echo "MERGELIGHT_NO_LOGIN=0"
+          echo "MERGELIGHT_LOGIN_LOST=0"
         } >> "$GITHUB_ENV"
         if [ -n "$AUTH_JSON" ] && [ "$REPO_PRIVATE" = "true" ]; then
           printf 'cli_auth_credentials_store = "file"\n' > "$CODEX_HOME/config.toml"
@@ -157,7 +158,8 @@ runs:
         fi
 
     # Refresh before anything uses the login, and save at once, so a review never does it halfway
-    # through while another starts from the old login. refresh-login.mjs says when it's due.
+    # through while another starts from the old login. The job always refreshes. A review only does
+    # when its token could run out during it.
     - name: Refresh the Codex login if it's due
       if: >
         env.MERGELIGHT_CHATGPT == '1' &&
