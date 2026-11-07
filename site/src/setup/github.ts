@@ -6,19 +6,25 @@ const CLIENT_ID = 'Iv23liSVH2xajWoG53R0';
 const ACTION_REPO = 'mergelightai/mergelight';
 const TOKEN_SERVER = 'https://api.mergelight.dev';
 const STATE_KEY = 'mergelight.setup.state';
+const REPO_KEY = 'mergelight.setup.repo';
 /** A sleeping server can take about a minute to wake up, so this is generous. */
 const SIGN_IN_TIMEOUT_MS = 120_000;
 
 export const INSTALL_URL = 'https://github.com/apps/mergelight-setup/installations/new';
-/** Mergelight AI, which posts the reviews. It can't commit, so a leak of its key on our server can't reach anyone's code or workflows. */
-export const REVIEW_APP_URL = 'https://github.com/apps/mergelight-ai/installations/new';
+/**
+ * Mergelight AI, which posts the reviews. It can't commit, so a leak of its key on our server can't reach anyone's
+ * code or workflows. This address opens GitHub's install screen with the account and repo already selected.
+ */
+export const reviewAppUrl = (repo: Repo) => `https://github.com/apps/mergelight-ai/installations/new/permissions?suggested_target_id=${repo.accountId}&repository_ids[]=${repo.id}`;
 
 /** Branches that hold releases or shared work. PRs from these are promotions, not new code. */
 const LONG_LIVED = /^(main|master|staging|stage|production|prod|development|develop|dev)$/;
 
 export interface Repo {
+  id: number;
   fullName: string;
   account: string;
+  accountId: number;
   avatarUrl: string;
   isPrivate: boolean;
   defaultBranch: string;
@@ -212,6 +218,25 @@ export async function finishSignIn(params: URLSearchParams): Promise<string | nu
   return ((await res.json()) as { token: string }).token;
 }
 
+/** Remembers the repo for the trip to GitHub, so nobody has to pick it again when they come back. */
+export function rememberRepo(fullName: string): void {
+  try {
+    sessionStorage.setItem(REPO_KEY, fullName);
+  } catch {
+    /* Without storage they just pick it again. */
+  }
+}
+
+export function takeRememberedRepo(): string | null {
+  try {
+    const name = sessionStorage.getItem(REPO_KEY);
+    sessionStorage.removeItem(REPO_KEY);
+    return name;
+  } catch {
+    return null;
+  }
+}
+
 /** Takes the code out of the address bar, so it can't be copied or reused. */
 export function cleanUrl(): void {
   const url = new URL(window.location.href);
@@ -295,13 +320,13 @@ export function realClient(token: string): GitHubClient {
 
   return {
     repos: async () => {
-      const { installations } = await get<{ installations: { id: number; html_url: string; account: { login: string; avatar_url: string } }[] }>('/user/installations?per_page=100');
+      const { installations } = await get<{ installations: { id: number; html_url: string; account: { id: number; login: string; avatar_url: string } }[] }>('/user/installations?per_page=100');
       const lists = await Promise.all(
         installations.map(async (install) => {
-          const { repositories } = await get<{ repositories: { full_name: string; private: boolean; default_branch: string; archived: boolean }[] }>(`/user/installations/${install.id}/repositories?per_page=100`);
+          const { repositories } = await get<{ repositories: { id: number; full_name: string; private: boolean; default_branch: string; archived: boolean }[] }>(`/user/installations/${install.id}/repositories?per_page=100`);
           return repositories
             .filter((r) => !r.archived)
-            .map((r): Repo => ({ fullName: r.full_name, account: install.account.login, avatarUrl: install.account.avatar_url, isPrivate: r.private, defaultBranch: r.default_branch, accessUrl: install.html_url }));
+            .map((r): Repo => ({ id: r.id, fullName: r.full_name, account: install.account.login, accountId: install.account.id, avatarUrl: install.account.avatar_url, isPrivate: r.private, defaultBranch: r.default_branch, accessUrl: install.html_url }));
         }),
       );
       return lists.flat().sort((a, b) => a.fullName.localeCompare(b.fullName));
@@ -391,7 +416,7 @@ export function realClient(token: string): GitHubClient {
 export function mockClient(): GitHubClient {
   const accessUrl = 'https://github.com/organizations/acme/settings/installations/1';
   const avatarUrl = '/logo.png';
-  const repo = (name: string, isPrivate = true): Repo => ({ fullName: `acme/${name}`, account: 'acme', avatarUrl, isPrivate, defaultBranch: 'main', accessUrl });
+  const repo = (name: string, isPrivate = true): Repo => ({ id: name.length, fullName: `acme/${name}`, account: 'acme', accountId: 1, avatarUrl, isPrivate, defaultBranch: 'main', accessUrl });
   let finds = 0;
   let checks = 0;
   const later = <T,>(value: T) => new Promise<T>((r) => setTimeout(() => r(value), 300));
