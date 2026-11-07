@@ -76,12 +76,12 @@ test("by default every workflow follows @v0, and says why it isn't pinned", () =
   }
 });
 
-test("pinning uses the release's commit, with the version beside it, and drops the note", () => {
+test("pinning uses the release's commit, with the version beside it, and says why it's pinned", () => {
   for (const f of workflowFiles([], PIN)) {
     assert.match(f.content, new RegExp(`uses: mergelightai/mergelight@${PIN.sha} # ${PIN.tag}\\n`), f.name);
     assert.doesNotMatch(f.content, /mergelight@v0/, f.name);
     assert.doesNotMatch(f.content, /Not pinned|releases\n/, f.name);
-    assert.match(f.content, /steps:\n\s+- uses:/, f.name);
+    assert.match(f.content, /steps:\n\s+# Pinned to a release, so new code only runs here once you merge an update\.\n\s+# Mergelight says on your pull requests when a new version is out\.\n\s+- uses:/, f.name);
   }
 });
 
@@ -156,21 +156,21 @@ test("the workflows go to the chosen branch", async () => {
 });
 
 test("does nothing when the workflows are already there", async () => {
-  const files = Object.fromEntries(workflowFiles().map((x) => [x.name, x.content]));
+  const files = Object.fromEntries(workflowFiles([], PIN).map((x) => [x.name, x.content]));
   const f = fake({ secrets: ["CODEX_AUTH_JSON"], files });
   assert.equal(await setup({ repo: "acme/widgets", yes: true }, f.deps), 0);
   assert.equal(puts(f.calls).length, 0);
   assert.ok(f.logs.some((l) => l.includes("already has the workflows")));
 });
 
-test("--pin pins what it adds, and without it the latest release isn't even looked up", async () => {
+test("setup pins what it adds by default, and with pin: false the latest release isn't even looked up", async () => {
   const content = (calls) => calls.filter((c) => c.args.includes("PUT")).map((c) => Buffer.from(c.args.find((a) => a.startsWith("content=")).slice(8), "base64").toString());
   const follows = fake({ secrets: ["CODEX_AUTH_JSON"] });
-  await setup({ repo: "acme/widgets", yes: true }, follows.deps);
+  await setup({ repo: "acme/widgets", yes: true, pin: false }, follows.deps);
   assert.ok(!follows.calls.some((c) => c.args.some((a) => a.includes("releases/latest"))));
   for (const file of content(follows.calls)) assert.match(file, /mergelight@v0/);
   const pinned = fake({ secrets: ["CODEX_AUTH_JSON"] });
-  await setup({ repo: "acme/widgets", yes: true, pin: true }, pinned.deps);
+  await setup({ repo: "acme/widgets", yes: true }, pinned.deps);
   assert.equal(content(pinned.calls).length, 3);
   for (const file of content(pinned.calls)) assert.ok(file.includes(`mergelight@${PIN.sha} # ${PIN.tag}`));
 });

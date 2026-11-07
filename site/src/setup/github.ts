@@ -85,9 +85,15 @@ export function readInstalled(content: string): Installed | null {
 /** A moving tag like v0 gets each release by itself. Only a pinned commit has anything to update. */
 export const isPinned = (installed: Installed) => /^[0-9a-f]{40}$/i.test(installed.ref);
 
-/** Points every use of the Action at this release's commit. The only other change is dropping that note. */
+/** Says why a workflow is pinned, in place of the note that said why it wasn't. */
+const pinnedNote = (note: string) => {
+  const indent = note.match(/^[ \t]*/)![0];
+  return `${indent}# Pinned to a release, so new code only runs here once you merge an update.\n${indent}# Mergelight says on your pull requests when a new version is out.\n`;
+};
+
+/** Points every use of the Action at this release's commit. The only other change is the note about pinning. */
 export function pinned(content: string, release: Release): string {
-  return content.replace(NOT_PINNED_NOTE, '').replace(new RegExp(ACTION_USE, 'gm'), (_, before: string) => `${before}mergelightai/mergelight@${release.sha} # ${release.tag}`);
+  return content.replace(NOT_PINNED_NOTE, pinnedNote).replace(new RegExp(ACTION_USE, 'gm'), (_, before: string) => `${before}mergelightai/mergelight@${release.sha} # ${release.tag}`);
 }
 
 export interface SetupPr {
