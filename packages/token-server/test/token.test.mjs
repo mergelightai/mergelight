@@ -219,7 +219,7 @@ function signInRequest(body, { origin = "https://mergelight.dev", method = "POST
   });
 }
 
-const signInEnv = () => ({ ...env(), GITHUB_APP_CLIENT_SECRET: "client-secret" });
+const signInEnv = () => ({ ...env(), GITHUB_SETUP_APP_CLIENT_SECRET: "client-secret" });
 
 function fakeSignIn(answer) {
   const calls = [];
@@ -234,7 +234,7 @@ test("sign-in swaps a code for the person's token, and only tells the setup page
   assert.equal(res.headers.get("access-control-allow-origin"), "https://mergelight.dev");
   assert.equal(res.headers.get("cache-control"), "no-store");
   assert.equal(calls[0].url, "https://github.com/login/oauth/access_token");
-  assert.deepEqual(JSON.parse(calls[0].init.body), { client_id: "Iv23-test", client_secret: "client-secret", code: "abc123" });
+  assert.deepEqual(JSON.parse(calls[0].init.body), { client_id: "Iv23liSVH2xajWoG53R0", client_secret: "client-secret", code: "abc123" });
 });
 
 test("sign-in refuses other sites, and requests with no origin", async () => {
@@ -283,4 +283,70 @@ test("sign-in doesn't take other methods", async () => {
   const { fetchImpl } = fakeSignIn(json(200, {}));
   const res = await handle(signInRequest(null, { method: "GET" }), signInEnv(), fetchImpl, NOW);
   assert.equal(res.status, 405);
+});
+
+function reviewAppRequest(repo, { origin = "https://mergelight.dev", method = "GET", token = "ghu_person" } = {}) {
+  return new Request(`https://token.test/review-app?repo=${encodeURIComponent(repo)}`, {
+    method,
+    headers: { ...(origin ? { origin } : {}), ...(token ? { authorization: `Bearer ${token}` } : {}) },
+  });
+}
+
+function fakeReviewApp({ visible = 200, installation = 200 } = {}) {
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url: String(url), auth: init?.headers?.authorization });
+    return json(String(url).endsWith("/installation") ? installation : visible, {});
+  };
+  return { calls, fetchImpl };
+}
+
+test("review-app says the app is there, using the person's token first and the app's key second", async () => {
+  const { calls, fetchImpl } = fakeReviewApp();
+  const res = await handle(reviewAppRequest("acme/api"), env(), fetchImpl, NOW);
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { installed: true });
+  assert.equal(res.headers.get("access-control-allow-origin"), "https://mergelight.dev");
+  assert.equal(calls[0].url, "https://api.github.com/repos/acme/api");
+  assert.equal(calls[0].auth, "Bearer ghu_person");
+  assert.equal(calls[1].url, "https://api.github.com/repos/acme/api/installation");
+  assert.notEqual(calls[1].auth, "Bearer ghu_person");
+});
+
+test("review-app says when the app isn't on the repository", async () => {
+  const res = await handle(reviewAppRequest("acme/api"), env(), fakeReviewApp({ installation: 404 }).fetchImpl, NOW);
+  assert.deepEqual(await res.json(), { installed: false });
+});
+
+test("review-app tells nothing about a repository the person can't see", async () => {
+  const { calls, fetchImpl } = fakeReviewApp({ visible: 404 });
+  const res = await handle(reviewAppRequest("acme/secret"), env(), fetchImpl, NOW);
+  assert.equal(res.status, 404);
+  assert.deepEqual(await res.json(), { error: "no_access" });
+  assert.equal(calls.length, 1);
+});
+
+test("review-app refuses other sites, bad names and missing tokens without asking GitHub", async () => {
+  for (const [repo, options, status] of [
+    ["acme/api", { origin: "https://evil.example" }, 403],
+    ["acme/api", { origin: null }, 403],
+    ["acme/api", { token: null }, 400],
+    ["acme/../user", {}, 400],
+    ["acme", {}, 400],
+    ["acme/api/installation", {}, 400],
+    ["acme/api", { method: "POST" }, 405],
+  ]) {
+    const { calls, fetchImpl } = fakeReviewApp();
+    const res = await handle(reviewAppRequest(repo, options), env(), fetchImpl, NOW);
+    assert.equal(res.status, status, `${repo} ${JSON.stringify(options)}`);
+    assert.equal(calls.length, 0);
+  }
+});
+
+test("review-app answers the browser's preflight, and reports GitHub's errors plainly", async () => {
+  const preflight = await handle(reviewAppRequest("acme/api", { method: "OPTIONS", token: null }), env(), fakeReviewApp().fetchImpl, NOW);
+  assert.equal(preflight.status, 204);
+  assert.match(preflight.headers.get("access-control-allow-headers"), /authorization/);
+  const failed = await handle(reviewAppRequest("acme/api"), env(), fakeReviewApp({ installation: 500 }).fetchImpl, NOW);
+  assert.equal(failed.status, 502);
 });
