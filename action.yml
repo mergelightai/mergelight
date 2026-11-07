@@ -198,6 +198,7 @@ runs:
       env:
         GH_TOKEN: ${{ steps.app.outputs.token || inputs.github-token }}
         PR: ${{ github.event.pull_request.number }}
+        GITHUB_WORKFLOW_TOKEN: ${{ inputs.github-token }}
         CAN_SAVE: ${{ steps.saving.outputs.can_save }}
         SECRET_NAME: ${{ inputs.auth-secret-name }}
       run: |

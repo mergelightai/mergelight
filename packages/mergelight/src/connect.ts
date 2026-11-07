@@ -168,6 +168,21 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
   const runUrl = env.GITHUB_RUN_ID ? `${env.GITHUB_SERVER_URL}/${env.GITHUB_REPOSITORY}/actions/runs/${env.GITHUB_RUN_ID}` : undefined;
   let checkId: number | null = null;
   let running: ChildProcess | null = null;
+  /**
+   * The app's token dies if the app is removed during the login, which can wait 15 minutes. The comment
+   * still has to change, or it keeps offering a dead code, and the workflow's own token can do that.
+   */
+  const updateSummary = async (body: string) => {
+    try {
+      await upsertSummary(api, number, body);
+    } catch (err) {
+      const fallback = env.GITHUB_WORKFLOW_TOKEN;
+      if (!fallback || fallback === env.GH_TOKEN || !/Bad credentials|HTTP 401/i.test(err instanceof Error ? err.message : String(err))) throw err;
+      log("GitHub refused the app's token, so this updates the comment with the workflow's token.");
+      env.GH_TOKEN = fallback;
+      await upsertSummary(api, number, body);
+    }
+  };
   const finish = (title: string, summary: string) =>
     writeCheck(api, checkId, headSha, { status: "completed", conclusion: "neutral", completed_at: new Date().toISOString(), output: { title, summary } }, log);
   return {
@@ -204,7 +219,7 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
       }
     },
     connected: async () => {
-      await upsertSummary(api, number, pendingSummaryBody());
+      await updateSummary(pendingSummaryBody());
       let auth = "";
       try {
         auth = readFileSync(join(env.CODEX_HOME ?? "", "auth.json"), "utf8");
@@ -216,8 +231,9 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
       log("Connected to ChatGPT.");
     },
     failed: async (reason) => {
-      await upsertSummary(api, number, connectFailedBody(reason));
-      await finish(CHECK_FAILED_TITLE, reason);
+      // One failed write mustn't stop the other. Only the app that made a check can finish it.
+      await updateSummary(connectFailedBody(reason)).catch((err) => log(`Couldn't update the comment: ${err instanceof Error ? err.message : String(err)}`));
+      await finish(CHECK_FAILED_TITLE, reason).catch((err) => log(`Couldn't finish the check: ${err instanceof Error ? err.message : String(err)}`));
       log(reason);
     },
   };
