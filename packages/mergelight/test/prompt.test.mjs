@@ -51,6 +51,8 @@ test("names that only look like those files don't count", () => {
 test("the supply chain reviewer knows what to look for and when not to bother", () => {
   const prompt = buildHunterPrompt(input, "supply");
   assert.match(prompt, /CI and supply chain/);
+  assert.match(prompt, /mergelightai\/mergelight on a major version tag/, "doesn't flag its own unpinned setup");
+  assert.match(prompt, /Any other owner, or that action on a branch, still counts/);
   assert.match(prompt, /full commit SHA/);
   assert.match(prompt, /actions\/\*, github\/\*/, "GitHub's own actions on a tag are normal");
   assert.match(prompt, /\$\{\{ github\.event/, "the expression stays literal text");

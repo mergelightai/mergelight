@@ -41,6 +41,7 @@ There's no key or token to manage. The workflow's `id-token: write` permission p
 | `--base <branch>` | Add the workflows to this branch. Use the branch most pull requests go to |
 | `--skip-branches <a,b>` | Don't review pull requests from these branches, like `staging` into `main` |
 | `--relogin` | Log in to Codex again |
+| `--pin` | Pin to the latest release, instead of updating by itself |
 | `--yes` | Don't stop to ask whether the app is installed |
 
 **What the app can do:** post comments and checks, read and write code and workflows, and overwrite this repository's Actions secrets.
@@ -48,7 +49,9 @@ There's no key or token to manage. The workflow's `id-token: write` permission p
 - **Write access to code and workflows** is there for the setup page, which uses it with your own sign-in to open the pull request that adds the file. Review runs don't get it: their token only allows comments, checks and reading code, so a review can't push code.
 - **Secrets** let it save the refreshed Codex login. It can't read a secret's value.
 
-**Versions.** The setup page and `mergelight setup` pin the workflow to the exact commit of the latest release, like `mergelightai/mergelight@<commit> # v0.1.0`, because a tag can be moved. So an update never reaches you on its own: the review says when a newer release is out, and the setup page opens a pull request that updates the file. To get update pull requests from Dependabot instead, add this to `.github/dependabot.yml`:
+**Versions.** The setup page and `mergelight setup` use `@v0`, which moves to each new release, so fixes reach you without merging anything. A new release waits a day before `v0` moves, so a bad one can be pulled first. The catch: that step can read your AI login, so you're trusting each release as it comes.
+
+**To pin instead,** replace `@v0` in your workflows with the line from any [release](https://github.com/mergelightai/mergelight/releases), like `mergelightai/mergelight@<commit> # v0.1.1`, or run `mergelight setup owner/repo --pin`. A pinned repo never changes by itself: the review says when a newer release is out, and the setup page opens a pull request that updates it. To get update pull requests from Dependabot instead, add this to `.github/dependabot.yml`:
 
 ```yaml
 version: 2
@@ -60,8 +63,6 @@ updates:
     allow:
       - dependency-name: mergelightai/mergelight
 ```
-
-The example workflows in this repository use `@v0`, which always points to the latest release. That gets you fixes automatically, but also whatever is on that tag if this repository is ever compromised, with access to your AI login and your pull requests.
 
 **Optional: make it required.** In branch protection or a ruleset, require the **Mergelight** check. 🔴 then blocks the merge. 🟡 doesn't, unless your team sets `yellow-blocks: true` to make it wait for an approval.
 

@@ -6,7 +6,7 @@ import workflowFile from '../../../examples/mergelight.yml?raw';
 import refreshFile from '../../../examples/mergelight-refresh.yml?raw';
 import Ambient from '../sections/Ambient';
 import { Check, GitHubIcon, SURFACE, WELL } from '../ui';
-import { cleanUrl, finishSignIn, GitHubError, INSTALL_URL, mockClient, pinned, realClient, REFRESH_FILE, signInUrl, wakeTokenServer, type CheckStatus, type GitHubClient, type Repo, type RepoDetails, type SetupPr, type WorkflowFile } from './github';
+import { cleanUrl, finishSignIn, GitHubError, INSTALL_URL, isPinned, mockClient, pinned, realClient, REFRESH_FILE, signInUrl, wakeTokenServer, type CheckStatus, type GitHubClient, type Release, type Repo, type RepoDetails, type SetupPr, type WorkflowFile } from './github';
 
 const CHATGPT_SECURITY = 'https://chatgpt.com/settings/security';
 const TYPES_MARKER = 'types: [opened, synchronize, reopened, ready_for_review]';
@@ -134,12 +134,12 @@ export default function Setup() {
     }, () => setDetailsFailed(true));
   };
 
-  /** A repo already on another version only needs the version changed. Anything else in its file stays theirs. */
-  const updating = Boolean(details?.installed && details.installed.ref !== details.release.sha);
+  /** New repos follow a moving tag, which updates by itself. A pinned one only moves when someone asks. Anything else in its file stays theirs. */
+  const update = details?.installed && details.release && isPinned(details.installed) && details.installed.ref !== details.release.sha ? details.release : null;
   const workflow = useMemo(() => {
     if (!details) return workflowFile;
-    return pinned(details.installed && updating ? details.installed.content : workflowFor(scope, branch, details.skip), details.release);
-  }, [scope, branch, details, updating]);
+    return update && details.installed ? pinned(details.installed.content, update) : workflowFor(scope, branch, details.skip);
+  }, [scope, branch, details, update]);
   /**
    * The review, and on a private repo the job that keeps a ChatGPT login fresh. Without that job reviews refresh the
    * login themselves, and two at once can invalidate it. An API key needs no refreshing, and public repos can't use ChatGPT.
@@ -147,10 +147,11 @@ export default function Setup() {
   const files = useMemo<WorkflowFile[]>(() => {
     const list = [{ name: 'mergelight.yml', content: workflow }];
     if (!details || !repo) return list;
-    if (details.refresh) list.push({ name: REFRESH_FILE, content: pinned(details.refresh, details.release) });
-    else if (repo.isPrivate && !details.hasApiKey) list.push({ name: REFRESH_FILE, content: pinned(refreshFile, details.release) });
+    const version = (content: string) => (update ? pinned(content, update) : content);
+    if (details.refresh) list.push({ name: REFRESH_FILE, content: version(details.refresh) });
+    else if (repo.isPrivate && !details.hasApiKey) list.push({ name: REFRESH_FILE, content: version(refreshFile) });
     return list;
-  }, [workflow, details, repo]);
+  }, [workflow, details, repo, update]);
   const fileUrl = repo ? newFileUrl(repo.fullName, branch, workflow) : '#';
   const afterAdding = useCallback(() => setView(hasLogin ? 'live' : 'connect'), [hasLogin]);
 
@@ -161,7 +162,7 @@ export default function Setup() {
     setAddFailed(null);
     setFileOpen(false);
     try {
-      setPr(await client.proposeWorkflows(repo, branch, files, details.release));
+      setPr(await client.proposeWorkflows(repo, branch, files, update));
       afterAdding();
     } catch (err) {
       setAddFailed(err instanceof GitHubError && (err.status === 403 || err.status === 404) ? 'refused' : 'other');
@@ -237,11 +238,11 @@ export default function Setup() {
               {view === 'welcome' && <Welcome signingIn={signingIn} failed={signInFailed} installed={params.has('installation_id')} />}
               {view === 'repo' && <RepoStep repos={repos} onChoose={choose} failed={signInFailed} />}
               {view === 'add' && repo && (
-                <AddStep repo={repo} details={details} fileCount={files.length} branch={branch} setBranch={setBranch} scope={scope} setScope={setScope} fileOpen={fileOpen} onToggleFile={() => setFileOpen((v) => !v)} adding={adding} failed={addFailed} detailsFailed={detailsFailed} onRetry={() => choose(repo)} updating={updating} onAdd={() => void addToRepo()} fileUrl={fileUrl} onBack={adding ? () => undefined : back.add!} onByHand={() => { setFileOpen(false); setView('finish'); }} onContinue={afterAdding} />
+                <AddStep repo={repo} details={details} fileCount={files.length} branch={branch} setBranch={setBranch} scope={scope} setScope={setScope} fileOpen={fileOpen} onToggleFile={() => setFileOpen((v) => !v)} adding={adding} failed={addFailed} detailsFailed={detailsFailed} onRetry={() => choose(repo)} update={update} onAdd={() => void addToRepo()} fileUrl={fileUrl} onBack={adding ? () => undefined : back.add!} onByHand={() => { setFileOpen(false); setView('finish'); }} onContinue={afterAdding} />
               )}
               {view === 'finish' && repo && <FinishStep repo={repo} branch={branch} fileUrl={fileUrl} pr={pr} onBack={back.finish!} />}
               {view === 'connect' && repo && <ConnectStep repo={repo} pr={pr} status={status} onBack={back.connect!} onSkip={() => setView('live')} />}
-              {view === 'live' && repo && <LiveStep repo={repo} pr={pr} status={status} hasLogin={hasLogin} merged={merged} updatedTo={updating ? details?.release.tag ?? null : null} onAnother={anotherRepo} />}
+              {view === 'live' && repo && <LiveStep repo={repo} pr={pr} status={status} hasLogin={hasLogin} merged={merged} updatedTo={update?.tag ?? null} onAnother={anotherRepo} />}
             </Stage>
             <p className="mt-6 flex items-center justify-center gap-1.5 text-center text-[13px] text-faint">
               <LockIcon className="size-3.5 shrink-0" />
@@ -249,10 +250,10 @@ export default function Setup() {
             </p>
           </motion.div>
           <AnimatePresence mode="popLayout" initial={false}>
-            {wide && view === 'add' && fileOpen && <FileSide key="file" files={files} version={details?.release.tag} onClose={() => setFileOpen(false)} />}
+            {wide && view === 'add' && fileOpen && <FileSide key="file" files={files} version={update?.tag} onClose={() => setFileOpen(false)} />}
           </AnimatePresence>
         </div>
-        {!wide && <FileSheet open={view === 'add' && fileOpen} files={files} version={details?.release.tag} onClose={() => setFileOpen(false)} />}
+        {!wide && <FileSheet open={view === 'add' && fileOpen} files={files} version={update?.tag} onClose={() => setFileOpen(false)} />}
       </main>
     </div>
   );
@@ -593,14 +594,14 @@ function AddStep(props: {
   failed: 'refused' | 'other' | null;
   detailsFailed: boolean;
   onRetry: () => void;
-  updating: boolean;
+  update: Release | null;
   onAdd: () => void;
   fileUrl: string;
   onBack: () => void;
   onByHand: () => void;
   onContinue: () => void;
 }) {
-  const { repo, details, fileCount, branch, setBranch, scope, setScope, fileOpen, onToggleFile, adding, failed, detailsFailed, onRetry, updating, onAdd, fileUrl, onBack, onByHand, onContinue } = props;
+  const { repo, details, fileCount, branch, setBranch, scope, setScope, fileOpen, onToggleFile, adding, failed, detailsFailed, onRetry, update, onAdd, fileUrl, onBack, onByHand, onContinue } = props;
   const name = repo.fullName.split('/')[1]!;
 
   if (detailsFailed) {
@@ -615,18 +616,13 @@ function AddStep(props: {
     );
   }
 
-  if (details && updating) {
-    const { installed, release } = details;
-    const from = installed?.version;
+  if (details && update) {
     return (
       <div>
         <BackButton onClick={onBack} />
-        <Heading
-          title={`Update Mergelight on ${name}`}
-          sub={from ? `It's on ${from}, and ${release.tag} is out.` : `It's on ${installed?.ref}, a tag that can change. This locks it to ${release.tag}.`}
-        />
+        <Heading title={`Update Mergelight on ${name}`} sub={`It's pinned to ${details.installed?.version ?? 'an older version'}, and ${update.tag} is out.`} />
         <ul className="mt-3 divide-y divide-white/[0.06]">
-          <Fact icon={<Check className="size-4" />}>Moves it to the exact commit of {release.tag}, so it can't change without a PR</Fact>
+          <Fact icon={<Check className="size-4" />}>Moves the pin to the exact commit of {update.tag}</Fact>
           <Fact icon={<Check className="size-4" />}>{details.refresh ? 'Changes that one line in both files, and nothing else' : 'Changes that one line, and nothing else in your file'}</Fact>
           {!details.refresh && fileCount > 1 && <Fact icon={<Check className="size-4" />}>Adds the small job that keeps a ChatGPT login fresh</Fact>}
           <Fact center icon={<LockIcon className="size-4" />}>
@@ -645,10 +641,10 @@ function AddStep(props: {
         </ul>
         <button type="button" onClick={onAdd} disabled={adding} className={`${PRIMARY} mt-5 ${adding ? 'pointer-events-none opacity-70' : ''}`}>
           {adding && <Spinner />}
-          {adding ? 'Opening your PR...' : `Update to ${release.tag}`}
+          {adding ? 'Opening your PR...' : `Update to ${update.tag}`}
         </button>
-        <a href={`https://github.com/mergelightai/mergelight/releases/tag/${release.tag}`} target="_blank" rel="noreferrer" className="mt-4 flex items-center justify-center gap-1 text-[13px] text-muted transition-colors hover:text-fg">
-          What's new in {release.tag} <External />
+        <a href={`https://github.com/mergelightai/mergelight/releases/tag/${update.tag}`} target="_blank" rel="noreferrer" className="mt-4 flex items-center justify-center gap-1 text-[13px] text-muted transition-colors hover:text-fg">
+          What's new in {update.tag} <External />
         </a>
         {failed && (
           <div role="alert" className="mt-4 text-center text-[13px] leading-relaxed text-muted">
@@ -716,6 +712,9 @@ function AddStep(props: {
               </Fact>
             )}
             <Fact icon={<Check className="size-4" />}>Runs in your own GitHub Actions, on your AI plan</Fact>
+            {details.installed && (
+              <Fact icon={<Check className="size-4" />}>{isPinned(details.installed) ? `Pinned to ${details.installed.version ?? 'one version'}, so you choose when to update` : 'Gets new versions by itself'}</Fact>
+            )}
             {!already && (
               <Fact center={!pickFileBranch} tall={pickFileBranch} icon={<LockIcon className="size-4" />}>
                 <span className="flex items-center justify-between gap-3">
@@ -867,7 +866,7 @@ function FileView({ files, version, onClose }: { files: WorkflowFile[]; version?
           <li className="flex items-center gap-1.5"><Check className="size-3.5 text-lilac" /> Reads your code</li>
           <li className="flex items-center gap-1.5"><Check className="size-3.5 text-lilac" /> Posts reviews</li>
           <li className="flex items-center gap-1.5"><LockIcon className="size-3.5 text-lilac" /> Reviews can't push code</li>
-          {version && <li className="flex items-center gap-1.5"><LockIcon className="size-3.5 text-lilac" /> Locked to {version}</li>}
+          {version ? <li className="flex items-center gap-1.5"><LockIcon className="size-3.5 text-lilac" /> Pinned to {version}</li> : <li className="flex items-center gap-1.5"><Check className="size-3.5 text-lilac" /> Updates by itself</li>}
         </ul>
       </div>
       <div tabIndex={0} aria-label="The files' contents" className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-black/25 pb-7 font-mono text-[12px] leading-[20px] outline-none shadow-[inset_0_1px_0_rgb(255_255_255/0.06)] [mask-image:linear-gradient(to_bottom,black_calc(100%-28px),transparent)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-lilac">

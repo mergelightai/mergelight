@@ -17,4 +17,5 @@ jobs:
     if: github.event.review.state == 'approved'
     runs-on: ubuntu-latest
     steps:
+      # Not pinned, on purpose. mergelight.yml explains why. If you pin one, pin them all.
       - uses: mergelightai/mergelight@v0

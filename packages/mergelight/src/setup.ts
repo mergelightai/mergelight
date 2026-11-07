@@ -12,8 +12,10 @@ const BRANCH = "mergelight-setup";
 const WORKFLOWS = ["mergelight.yml", "mergelight-approve.yml", "mergelight-refresh.yml"];
 const SKIP_MARKER = "github.event.pull_request.head.repo.full_name == github.repository";
 const ACTION = "mergelightai/mergelight";
+/** The note in each template saying why it isn't pinned, which stops being true once it is. */
+const NOT_PINNED_NOTE = /^[ \t]*# Not pinned, on purpose[^\n]*\n(?:[ \t]*#[^\n]*\n)*/m;
 
-/** The release a workflow is pinned to. A tag can be moved, so the commit is what gets used. */
+/** The release a workflow is pinned to, if someone wants that. A tag can be moved, so the commit is what gets used. */
 export interface Pin {
   sha: string;
   tag: string;
@@ -29,6 +31,8 @@ export interface SetupOptions {
   relogin?: boolean;
   /** Don't stop to ask whether the app is installed. */
   yes?: boolean;
+  /** Pin to the latest release's commit, instead of following @v0 and getting each release by itself. */
+  pin?: boolean;
 }
 
 export interface SetupDeps {
@@ -54,7 +58,7 @@ export function workflowFiles(skipBranches: string[] = [], pin?: Pin): { name: s
     }
     if (pin) {
       if (!content.includes(`${ACTION}@v0`)) throw new Error(`${name} has changed: can't pin it.`);
-      content = content.replaceAll(`${ACTION}@v0`, () => `${ACTION}@${pin.sha} # ${pin.tag}`);
+      content = content.replace(NOT_PINNED_NOTE, "").replaceAll(`${ACTION}@v0`, () => `${ACTION}@${pin.sha} # ${pin.tag}`);
     }
     return { name, content };
   });
@@ -93,7 +97,7 @@ async function hasFile(deps: SetupDeps, repo: string, path: string, ref: string)
 /** Puts the workflows on a branch and opens a pull request. Returns its URL, or null if there's nothing to add. */
 async function openWorkflowPr(deps: SetupDeps, opts: SetupOptions, base: string): Promise<string | null> {
   const { repo } = opts;
-  const files = workflowFiles(opts.skipBranches, await latestPin(deps));
+  const files = workflowFiles(opts.skipBranches, opts.pin ? await latestPin(deps) : undefined);
 
   const missing: typeof files = [];
   for (const f of files) {

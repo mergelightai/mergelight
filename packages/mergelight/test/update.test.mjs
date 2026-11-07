@@ -13,13 +13,21 @@ test("compares versions as numbers", () => {
 
 const latest = (tag) => ({ get: async () => ({ tag_name: tag }) });
 
+const PINNED = "a".repeat(40);
+
+test("a moving tag gets each release by itself, so only a pinned commit hears about one", async () => {
+  assert.equal(await newerVersion(latest("v0.2.0"), "0.1.0", "v0"), null);
+  assert.equal(await newerVersion(latest("v0.2.0"), "0.1.0", "my-branch"), null);
+  assert.equal(await newerVersion(latest("v0.2.0"), "0.1.0", ""), null);
+});
+
 test("only speaks up when there's something newer", async () => {
-  assert.equal(await newerVersion(latest("v0.2.0"), "0.1.0"), "v0.2.0");
-  assert.equal(await newerVersion(latest("v0.1.0"), "0.1.0"), null);
+  assert.equal(await newerVersion(latest("v0.2.0"), "0.1.0", PINNED), "v0.2.0");
+  assert.equal(await newerVersion(latest("v0.1.0"), "0.1.0", PINNED), null);
 });
 
 test("a failed lookup never gets in the way of a review", async () => {
-  assert.equal(await newerVersion({ get: async () => { throw new Error("rate limited"); } }, "0.1.0"), null);
+  assert.equal(await newerVersion({ get: async () => { throw new Error("rate limited"); } }, "0.1.0", PINNED), null);
 });
 
 const review = {
