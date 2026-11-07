@@ -120,8 +120,8 @@ const SETUP_BODY = [
 ].join('\n');
 
 const updateTitle = (release: Release) => `Update Mergelight to ${release.tag}`;
-const updateBody = (release: Release) =>
-  `Moves the workflow to [${release.tag}](https://github.com/mergelightai/mergelight/releases/tag/${release.tag}), pinned to its exact commit. Nothing else in the file changes. This pull request reviews itself with the new version.`;
+const updateBody = (release: Release, addsRefresh: boolean) =>
+  `Moves the workflow to [${release.tag}](https://github.com/mergelightai/mergelight/releases/tag/${release.tag}), pinned to its exact commit. Only that line changes.${addsRefresh ? ' It also adds a small job that keeps a ChatGPT login fresh.' : ''} This pull request reviews itself with the new version.`;
 
 const toBase64 = (text: string) => btoa(String.fromCharCode(...new TextEncoder().encode(text)));
 const fromBase64 = (text: string) => new TextDecoder().decode(Uint8Array.from(atob(text.replace(/\s/g, '')), (c) => c.charCodeAt(0)));
@@ -311,7 +311,7 @@ export function realClient(token: string): GitHubClient {
       await call('POST', `${r}/git/refs`, { ref: `refs/heads/${head}`, sha: base.object.sha });
       try {
         await write(head, title);
-        const pull = await call<{ number: number; html_url: string; head: { sha: string } }>('POST', `${r}/pulls`, { title, head, base: branch, body: updating ? updateBody(release) : SETUP_BODY });
+        const pull = await call<{ number: number; html_url: string; head: { sha: string } }>('POST', `${r}/pulls`, { title, head, base: branch, body: updating ? updateBody(release, onBranch.some((current) => !current)) : SETUP_BODY });
         return { number: pull.number, url: pull.html_url, headSha: pull.head.sha };
       } catch (err) {
         // Don't leave an empty branch behind in their repo.
