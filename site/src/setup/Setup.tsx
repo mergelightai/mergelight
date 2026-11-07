@@ -45,18 +45,18 @@ function useWide(): boolean {
   );
 }
 
-type View = 'welcome' | 'repo' | 'review-app' | 'add' | 'finish' | 'connect' | 'live';
-const ORDER: View[] = ['welcome', 'repo', 'review-app', 'add', 'finish', 'connect', 'live'];
+type View = 'welcome' | 'settling' | 'repo' | 'review-app' | 'add' | 'finish' | 'connect' | 'live';
+const ORDER: View[] = ['welcome', 'settling', 'repo', 'review-app', 'add', 'finish', 'connect', 'live'];
 /** Where each view sits on the rail. Add and finish are the same step to the person. */
-const RAIL: Record<View, number> = { welcome: 0, repo: 1, 'review-app': 1, add: 2, finish: 2, connect: 3, live: 4 };
+const RAIL: Record<View, number> = { welcome: 0, settling: 1, repo: 1, 'review-app': 1, add: 2, finish: 2, connect: 3, live: 4 };
 
 export default function Setup() {
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
-  const [view, setView] = useState<View>('welcome');
-  const [client, setClient] = useState<GitHubClient | null>(null);
   const requested = params.get('setup_action') === 'request';
   const backFromInstall = params.has('installation_id') && !params.has('state') && !requested;
-  const [signingIn, setSigningIn] = useState(params.has('code') || backFromInstall);
+  // One skeleton from here until the right step is known, so steps that get skipped never show.
+  const [view, setView] = useState<View>(params.has('code') || backFromInstall ? 'settling' : 'welcome');
+  const [client, setClient] = useState<GitHubClient | null>(null);
   const [signInFailed, setSignInFailed] = useState(false);
   const [repos, setRepos] = useState<Repo[] | null>(null);
   const [repo, setRepo] = useState<Repo | null>(null);
@@ -75,14 +75,14 @@ export default function Setup() {
   const wide = useWide();
 
   const previous = useRef(view);
-  const direction = ORDER.indexOf(view) >= ORDER.indexOf(previous.current) ? 1 : -1;
+  const direction = view === 'settling' || previous.current === 'settling' ? 0 : ORDER.indexOf(view) >= ORDER.indexOf(previous.current) ? 1 : -1;
   useEffect(() => {
     previous.current = view;
   }, [view]);
 
   const start = useCallback((c: GitHubClient) => {
     setClient(c);
-    setView('repo');
+    setView('settling');
   }, []);
 
   // Sign-in needs the token server, so start waking it while the person reads the first screen.
@@ -109,16 +109,20 @@ export default function Setup() {
     finishSignIn(params)
       .then((token) => {
         if (token) start(realClient(token));
+        else setView('welcome');
       })
-      .catch(() => setSignInFailed(true))
-      .finally(() => {
-        setSigningIn(false);
-        cleanUrl();
-      });
+      .catch(() => {
+        setSignInFailed(true);
+        setView('welcome');
+      })
+      .finally(cleanUrl);
   }, [params, start, backFromInstall]);
 
   const loadRepos = useCallback(() => {
-    client?.repos().then(setRepos, () => setSignInFailed(true));
+    client?.repos().then(setRepos, () => {
+      setSignInFailed(true);
+      setView((v) => (v === 'settling' ? 'repo' : v));
+    });
   }, [client]);
   useEffect(loadRepos, [loadRepos]);
 
@@ -139,24 +143,28 @@ export default function Setup() {
     setMerged(false);
     setFileOpen(false);
     setAddFailed(null);
-    setView('add');
+    setView('settling');
     client?.details(r).then((d) => {
       setDetails(d);
       setBranch(d.base);
       setScope(d.skip.length > 1 ? 'new' : 'all');
       setHasLogin(d.hasLogin);
-      if (d.reviewApp === false) setView('review-app');
-    }, () => setDetailsFailed(true));
+      setView(d.reviewApp === false ? 'review-app' : 'add');
+    }, () => {
+      setDetailsFailed(true);
+      setView('add');
+    });
   };
 
   // Nobody should pick the same repo twice: not when there's only one, and not after a trip to GitHub for the review app.
   const autoPicked = useRef(false);
   useEffect(() => {
-    if (!repos?.length || autoPicked.current) return;
+    if (!repos || autoPicked.current) return;
     autoPicked.current = true;
     const remembered = takeRememberedRepo();
     const target = repos.find((r) => r.fullName === remembered) ?? (repos.length === 1 ? repos[0] : null);
     if (target) choose(target);
+    else setView('repo');
     // Only the first list counts, so `choose` doesn't need to be here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [repos]);
@@ -274,7 +282,8 @@ export default function Setup() {
         <div className="relative flex w-full items-start justify-center">
           <motion.div layout="position" transition={SPRING} className="z-10 w-full max-w-[460px] shrink-0">
             <Stage viewKey={view} direction={direction}>
-              {view === 'welcome' && <Welcome signingIn={signingIn} failed={signInFailed} requested={requested} />}
+              {view === 'welcome' && <Welcome failed={signInFailed} requested={requested} />}
+              {view === 'settling' && <SettlingStep />}
               {view === 'repo' && <RepoStep repos={repos} onChoose={choose} failed={signInFailed} />}
               {view === 'review-app' && repo && <ReviewAppStep repo={repo} onCheck={() => choose(repo)} onBack={back['review-app']!} />}
               {view === 'add' && repo && (
@@ -459,26 +468,15 @@ function Spinner({ className = 'size-[18px]' }: { className?: string }) {
   );
 }
 
-function Welcome({ signingIn, failed, requested }: { signingIn: boolean; failed: boolean; requested: boolean }) {
-  // Most sign-ins take a second. When one doesn't, say so before it looks stuck.
-  const [slow, setSlow] = useState(false);
-  useEffect(() => {
-    if (!signingIn) return;
-    const timer = setTimeout(() => setSlow(true), 4000);
-    return () => clearTimeout(timer);
-  }, [signingIn]);
-
+function Welcome({ failed, requested }: { failed: boolean; requested: boolean }) {
   return (
     <div className="py-2 text-center">
-      {/* Signing in can load this page twice in a row, so the logo holds still instead of restarting its animation. */}
-      <img src={signingIn ? '/logo.png' : '/logo-animated.svg'} alt="" width={84} height={84} className="mx-auto size-[84px] rounded-[20px] shadow-[0_0_0_1px_rgb(255_255_255/0.08),0_14px_40px_-12px_rgb(0_0_0/0.8)]" />
+      <img src="/logo-animated.svg" alt="" width={84} height={84} className="mx-auto size-[84px] rounded-[20px] shadow-[0_0_0_1px_rgb(255_255_255/0.08),0_14px_40px_-12px_rgb(0_0_0/0.8)]" />
       <h1 className="mt-5 text-[32px] font-semibold leading-[1.1] tracking-[-0.03em]">{requested ? 'Request sent' : 'Turn on Mergelight'}</h1>
       <p className="mx-auto mt-3 max-w-[320px] text-[15px] leading-relaxed text-muted [text-wrap:pretty]">
         {requested
           ? 'An owner of your org has to approve Mergelight, and GitHub has emailed them. Once they have, come back here to finish.'
-          : signingIn
-            ? 'Getting your repos from GitHub.'
-            : 'Real code review on the AI plan you already pay for. Three quick steps, nothing to install.'}
+          : 'Real code review on the AI plan you already pay for. Three quick steps, nothing to install.'}
       </p>
       {failed && <p className="mt-4 text-[13px] text-risk">GitHub sign-in didn't work. Please try again.</p>}
       {requested ? (
@@ -486,13 +484,33 @@ function Welcome({ signingIn, failed, requested }: { signingIn: boolean; failed:
           Already approved? Continue with GitHub
         </a>
       ) : (
-        <a href={signingIn ? undefined : signInUrl()} aria-disabled={signingIn} className={`${PRIMARY} mt-7 ${signingIn ? 'pointer-events-none opacity-70' : ''}`}>
-          {signingIn ? <Spinner /> : <GitHubIcon className="size-[18px]" />}
-          {signingIn ? 'Signing you in...' : 'Continue with GitHub'}
+        <a href={signInUrl()} className={`${PRIMARY} mt-7`}>
+          <GitHubIcon className="size-[18px]" /> Continue with GitHub
         </a>
       )}
-      {signingIn && slow && (
-        <motion.p role="status" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.3 }} className="mt-3 text-[13px] text-muted">
+    </div>
+  );
+}
+
+/** Holds the card while sign-in and the repo's details load. Most of the time it's on screen for about a second. */
+function SettlingStep() {
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setSlow(true), 4000);
+    return () => clearTimeout(timer);
+  }, []);
+  return (
+    <div role="status" aria-label="Loading">
+      <span className="block h-7 w-3/5 animate-pulse rounded-lg bg-white/[0.06]" />
+      <span className="mt-3 block h-4 w-4/5 animate-pulse rounded bg-white/[0.05]" style={{ animationDelay: '90ms' }} />
+      <div className="mt-6 space-y-3">
+        {[0, 1, 2].map((i) => (
+          <span key={i} className="block h-5 animate-pulse rounded bg-white/[0.05]" style={{ width: `${86 - i * 14}%`, animationDelay: `${(i + 2) * 90}ms` }} />
+        ))}
+      </div>
+      <span className="mt-6 block h-12 animate-pulse rounded-full bg-white/[0.06]" style={{ animationDelay: '450ms' }} />
+      {slow && (
+        <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.3 }} className="mt-3 text-center text-[13px] text-muted">
           This can take up to a minute.
         </motion.p>
       )}
