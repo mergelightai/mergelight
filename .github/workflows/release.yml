@@ -1,5 +1,6 @@
 # Releases whatever version packages/mergelight/package.json says, when that changes on main.
-# To release: bump the version in a pull request and merge it.
+# To release: bump the version in a pull request and merge it. People on @v0 get it a day later,
+# when roll-out.yml moves the tag.
 name: Release
 
 on:
@@ -11,6 +12,7 @@ on:
 
 permissions:
   contents: write
+  actions: write # Turns the roll-out schedule back on, in case GitHub paused it during a quiet spell.
 
 concurrency:
   group: release
@@ -33,8 +35,10 @@ jobs:
             echo "$tag is already released."
             exit 0
           fi
-          gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" --generate-notes
-          # The major tag moves, for people who choose automatic updates over a pinned commit.
-          major="${tag%%.*}"
-          git tag -f "$major" "$GITHUB_SHA"
-          git push -f origin "refs/tags/$major"
+          notes="To pin to this release instead of following \`@v0\`, use this line in your workflows:
+
+          \`\`\`yaml
+          - uses: mergelightai/mergelight@$GITHUB_SHA # $tag
+          \`\`\`"
+          gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" --generate-notes --notes "$notes"
+          gh workflow enable roll-out.yml

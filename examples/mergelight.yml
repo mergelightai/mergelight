@@ -27,6 +27,10 @@ jobs:
       group: mergelight-pr-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
+      # Not pinned, on purpose. @v0 moves to each new release, so fixes reach you without
+      # merging anything. The catch: this step can read your AI login, so you're trusting each
+      # release as it comes. To check every update yourself, pin it with the line from a release:
+      # https://github.com/mergelightai/mergelight/releases
       - uses: mergelightai/mergelight@v0
         with:
           # Neither set yet? The first pull request shows a link to connect ChatGPT.

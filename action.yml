@@ -209,6 +209,7 @@ runs:
         EFFORT: ${{ inputs.effort }}
         VERIFY_WITH: ${{ inputs.verify-with }}
         YELLOW_BLOCKS: ${{ inputs.yellow-blocks }}
+        MERGELIGHT_ACTION_REF: ${{ github.action_ref }}
       run: |
         set -euo pipefail
         args=(review "$GITHUB_REPOSITORY#$PR" --post --verify-with "$VERIFY_WITH" --out "$RUNNER_TEMP/mergelight-review.json")

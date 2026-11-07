@@ -17,6 +17,7 @@ jobs:
     concurrency:
       group: mergelight-refresh-login
     steps:
+      # Not pinned, on purpose. mergelight.yml explains why. If you pin one, pin them all.
       - uses: mergelightai/mergelight@v0
         with:
           codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}

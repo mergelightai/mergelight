@@ -1,0 +1,50 @@
+# Moves the major tag people follow, like v0, to the latest release once that's a day old. The wait
+# is there so a bad release can be pulled before it reaches anyone on @v0.
+#
+# To roll out sooner: run this by hand with "now" ticked.
+# To pull a bad release: mark it as a pre-release, or delete it. The tag goes back to the latest good
+# release on the next run. Run this by hand to do that right away.
+name: Roll out
+
+on:
+  schedule:
+    - cron: "41 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      now:
+        description: Don't wait for the release to be a day old
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+
+jobs:
+  roll-out:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Move the major tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOW: ${{ inputs.now }}
+        run: |
+          read -r tag age < <(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq '"\(.tag_name) \(now - (.published_at | fromdate) | floor)"')
+          major="${tag%%.*}"
+          target="$(git rev-parse "$tag^{commit}")"
+          current="$(git rev-parse -q --verify "refs/tags/$major^{commit}" || true)"
+          if [ "$current" = "$target" ]; then
+            echo "$major is already on $tag."
+          elif [ "$NOW" != "true" ] && [ "$age" -lt 86400 ]; then
+            echo "$tag is $age seconds old. $major moves once it's a day old."
+          else
+            git tag -f "$major" "$target"
+            git push -f origin "refs/tags/$major"
+            echo "$major moved to $tag."
+          fi

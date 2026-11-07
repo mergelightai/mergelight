@@ -23,7 +23,7 @@ export interface Repo {
   accessUrl: string;
 }
 
-/** A release of the Action. The commit is what gets used, because a tag can be moved. */
+/** A release of the Action. Pinning uses the commit, because a tag can be moved. */
 export interface Release {
   tag: string;
   sha: string;
@@ -51,7 +51,8 @@ export interface RepoDetails {
   installed: Installed | null;
   /** The refresh workflow on the base branch, if it's there. */
   refresh: string | null;
-  release: Release;
+  /** The latest release. Only a pinned repo needs it, so failing to read it doesn't stop a setup. */
+  release: Release | null;
 }
 
 /** A workflow file the setup pull request should end up with. */
@@ -60,16 +61,22 @@ export interface WorkflowFile {
   content: string;
 }
 
-const ACTION_USE = /mergelightai\/mergelight@([^\s#]+)(?:[ \t]*#[ \t]*(\S+))?/;
+/** Only a real step counts, so a pin line someone left in a comment isn't mistaken for what runs. */
+const ACTION_USE = /^([ \t]*(?:-[ \t]+)?uses:[ \t]*)["']?mergelightai\/mergelight@([^\s#"']+)["']?(?:[ \t]*#[ \t]*(\S+))?/m;
+/** The note in a new workflow saying why it isn't pinned, which stops being true once it is. */
+const NOT_PINNED_NOTE = /^[ \t]*# Not pinned, on purpose[^\n]*\n(?:[ \t]*#[^\n]*\n)*(?=[ \t]*(?:-[ \t]+)?uses:[ \t]*["']?mergelightai\/mergelight@)/gm;
 
 export function readInstalled(content: string): Installed | null {
   const m = content.match(ACTION_USE);
-  return m ? { ref: m[1]!, version: m[2] ?? null, content } : null;
+  return m ? { ref: m[2]!, version: m[3] ?? null, content } : null;
 }
 
-/** Points every use of the Action at this release's commit, and changes nothing else in the file. */
+/** A moving tag like v0 gets each release by itself. Only a pinned commit has anything to update. */
+export const isPinned = (installed: Installed) => /^[0-9a-f]{40}$/i.test(installed.ref);
+
+/** Points every use of the Action at this release's commit. The only other change is dropping that note. */
 export function pinned(content: string, release: Release): string {
-  return content.replace(new RegExp(ACTION_USE, 'g'), () => `mergelightai/mergelight@${release.sha} # ${release.tag}`);
+  return content.replace(NOT_PINNED_NOTE, '').replace(new RegExp(ACTION_USE, 'gm'), (_, before: string) => `${before}mergelightai/mergelight@${release.sha} # ${release.tag}`);
 }
 
 export interface SetupPr {
@@ -98,8 +105,9 @@ export interface GitHubClient {
   /**
    * Opens a pull request that adds or updates the workflow. A setup pull request that's open already gets
    * brought up to date instead of a second one. Null if the branch already has exactly this file.
+   * `update` is the release a pinned repo is moving to, when that's what this is.
    */
-  proposeWorkflows(repo: Repo, branch: string, files: WorkflowFile[], release: Release): Promise<SetupPr | null>;
+  proposeWorkflows(repo: Repo, branch: string, files: WorkflowFile[], update: Release | null): Promise<SetupPr | null>;
   /** The open pull request that adds the workflow, once someone has made it. */
   findSetupPr(repo: Repo): Promise<SetupPr | null>;
   hasWorkflow(repo: Repo, branch: string): Promise<boolean>;
@@ -119,9 +127,10 @@ const SETUP_BODY = [
   "It runs in your own GitHub Actions, on your AI plan. This pull request reviews itself, so you can see what you'll get. Merge it to keep reviews on.",
 ].join('\n');
 
+const SETUP_CHANGED = 'Update the Mergelight workflow';
 const updateTitle = (release: Release) => `Update Mergelight to ${release.tag}`;
-const updateBody = (release: Release) =>
-  `Moves the workflow to [${release.tag}](https://github.com/mergelightai/mergelight/releases/tag/${release.tag}), pinned to its exact commit. Nothing else in the file changes. This pull request reviews itself with the new version.`;
+const updateBody = (release: Release, addsRefresh: boolean) =>
+  `Moves the workflow to [${release.tag}](https://github.com/mergelightai/mergelight/releases/tag/${release.tag}), pinned to its exact commit. Only that line changes.${addsRefresh ? ' It also adds a small job that keeps a ChatGPT login fresh.' : ''} This pull request reviews itself with the new version.`;
 
 const toBase64 = (text: string) => btoa(String.fromCharCode(...new TextEncoder().encode(text)));
 const fromBase64 = (text: string) => new TextDecoder().decode(Uint8Array.from(atob(text.replace(/\s/g, '')), (c) => c.charCodeAt(0)));
@@ -260,7 +269,7 @@ export function realClient(token: string): GitHubClient {
         get<{ name: string }[]>(`/repos/${repo.fullName}/branches?per_page=100`),
         get<{ base: { ref: string }; head: { ref: string } }[]>(`/repos/${repo.fullName}/pulls?state=all&per_page=50`).catch(() => []),
         secretNames(repo),
-        latestRelease(),
+        latestRelease().catch(() => null),
       ]);
       const names = branches.map((b) => b.name);
       const base = pickBase(pulls.map((p) => ({ base: p.base.ref, head: p.head.ref })), repo.defaultBranch);
@@ -276,7 +285,7 @@ export function realClient(token: string): GitHubClient {
         release,
       };
     },
-    proposeWorkflows: async (repo, branch, files, release) => {
+    proposeWorkflows: async (repo, branch, files, update) => {
       const r = `/repos/${repo.fullName}`;
       /** Writes the files that differ on this branch. Returns the last commit, if anything changed. */
       const write = async (head: string, message: string): Promise<string | null> => {
@@ -298,20 +307,19 @@ export function realClient(token: string): GitHubClient {
       // One that's open already gets brought up to date, however old the version it was opened with.
       const open = await openSetupPull(repo);
       if (open) {
-        const commit = await write(open.head.ref, updateTitle(release));
+        const commit = await write(open.head.ref, update ? updateTitle(update) : SETUP_CHANGED);
         return { number: open.number, url: open.html_url, headSha: commit ?? open.head.sha };
       }
 
       const onBranch = await Promise.all(files.map((f) => workflowOn(repo, branch, f.name)));
       if (onBranch.every((current, i) => current?.content === files[i]!.content)) return null;
-      const updating = Boolean(onBranch[0]);
-      const title = updating ? updateTitle(release) : SETUP_TITLE;
+      const title = update ? updateTitle(update) : SETUP_TITLE;
       const base = await get<{ object: { sha: string } }>(`${r}/git/ref/heads/${branch.split('/').map(encodeURIComponent).join('/')}`);
       const head = `mergelight-setup-${Date.now().toString(36)}`;
       await call('POST', `${r}/git/refs`, { ref: `refs/heads/${head}`, sha: base.object.sha });
       try {
         await write(head, title);
-        const pull = await call<{ number: number; html_url: string; head: { sha: string } }>('POST', `${r}/pulls`, { title, head, base: branch, body: updating ? updateBody(release) : SETUP_BODY });
+        const pull = await call<{ number: number; html_url: string; head: { sha: string } }>('POST', `${r}/pulls`, { title, head, base: branch, body: update ? updateBody(update, onBranch.some((current) => !current)) : SETUP_BODY });
         return { number: pull.number, url: pull.html_url, headSha: pull.head.sha };
       } catch (err) {
         // Don't leave an empty branch behind in their repo.

@@ -2,9 +2,9 @@ import { readFileSync } from "node:fs";
 import type { GitHub } from "./publish/api.js";
 
 /**
- * People run a pinned commit of the Action, so a fix doesn't reach them by itself.
- * The review tells them when there's a newer release. It's only a hint, so anything
- * going wrong here just means no hint.
+ * A moving tag like @v0 gets each release by itself. A pinned commit doesn't, so the review
+ * tells those people when there's a newer release. It's only a hint, so anything going wrong
+ * here just means no hint.
  */
 
 const CURRENT = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
@@ -20,8 +20,9 @@ export function isNewer(candidate: string, than: string): boolean {
   return false;
 }
 
-/** The latest release's tag, if it's newer than the version running here. */
-export async function newerVersion(api: Pick<GitHub, "get">, current = CURRENT): Promise<string | null> {
+/** The latest release's tag, if this run is pinned to a commit and that release is newer. */
+export async function newerVersion(api: Pick<GitHub, "get">, current = CURRENT, ref = process.env.MERGELIGHT_ACTION_REF): Promise<string | null> {
+  if (!/^[0-9a-f]{40}$/i.test(ref ?? "")) return null;
   try {
     const { tag_name: tag } = await api.get<{ tag_name: string }>("/repos/mergelightai/mergelight/releases/latest");
     return isNewer(tag, current) ? tag : null;

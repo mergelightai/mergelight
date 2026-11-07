@@ -42,6 +42,7 @@ Options
   --base <branch>       For setup: add the workflows to this branch (default: the default branch)
   --skip-branches <a,b> For setup: don't review pull requests from these branches
   --relogin             For setup: log in to Codex again
+  --pin                 For setup: pin to the latest release, instead of updating by itself
   --yes                 For setup: don't stop to ask whether the app is installed
   --no-save             For connect: there's nowhere to save a login, so ask for the app instead
   -h, --help            Show this help
@@ -99,6 +100,7 @@ async function main(): Promise<number> {
       base: { type: "string" },
       "skip-branches": { type: "string" },
       relogin: { type: "boolean" },
+      pin: { type: "boolean" },
       yes: { type: "boolean" },
       "no-save": { type: "boolean" },
       help: { type: "boolean", short: "h" },
@@ -122,6 +124,7 @@ async function main(): Promise<number> {
           base: values.base,
           skipBranches: values["skip-branches"]?.split(",").map((b) => b.trim()).filter(Boolean),
           relogin: values.relogin,
+          pin: values.pin,
           yes: values.yes,
         },
         realDeps(),
