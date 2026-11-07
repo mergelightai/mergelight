@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { parsePatch, place } from "../dist/publish/diff-lines.js";
 import { closedBody, readClosed, reopenedBody, resolvedByPeople, threadAction } from "../dist/publish/closed.js";
 import { clean, failedSummaryBody, FINDING_MARKER_RE, inlineBody, isPendingSummary, pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "../dist/publish/markdown.js";
-import { checkConclusion, isYellowCheck, trustedComment } from "../dist/publish/publish.js";
+import { APPROVAL_MARKER, checkConclusion, isYellowCheck, syncApproval, trustedComment } from "../dist/publish/publish.js";
 import { decodeState, encodeState, nextState } from "../dist/publish/state.js";
 import { buildVerifierPrompt } from "../dist/prompt.js";
 import { assignIds } from "../dist/review.js";
@@ -410,3 +410,43 @@ test("with no top picks the list sits right under the count, and the footer has 
   assert.ok(!body.includes("#### To fix"), body);
   assert.ok(!body.includes('href="https://mergelight.dev"'), body);
 });
+
+function reviewsApi(reviews) {
+  const writes = [];
+  return { writes, list: async () => reviews, write: async (method, path, body) => (writes.push({ method, path, body }), { id: 1 }) };
+}
+const ours = (over) => ({ id: 7, state: "APPROVED", commit_id: "old", body: `${APPROVAL_MARKER}\nok`, user: { login: "mergelight-ai[bot]" }, ...over });
+
+test("green approves the commit, once", async () => {
+  const fresh = reviewsApi([]);
+  assert.equal(await syncApproval(fresh, 3, "green", "head"), "approved");
+  assert.equal(fresh.writes[0].path, "pulls/3/reviews");
+  assert.equal(fresh.writes[0].body.event, "APPROVE");
+  assert.equal(fresh.writes[0].body.commit_id, "head");
+  const again = reviewsApi([ours({ commit_id: "head" })]);
+  assert.equal(await syncApproval(again, 3, "green", "head"), "already");
+  assert.equal(again.writes.length, 0);
+});
+
+test("yellow and red take back Mergelight's approval, and never request changes", async () => {
+  for (const light of ["yellow", "red"]) {
+    const api = reviewsApi([ours(), ours({ id: 8, state: "DISMISSED" })]);
+    assert.equal(await syncApproval(api, 3, light, "head"), "dismissed");
+    assert.deepEqual(api.writes.map((w) => w.path), ["pulls/3/reviews/7/dismissals"]);
+    assert.ok(!api.writes.some((w) => w.body.event === "REQUEST_CHANGES"));
+  }
+});
+
+test("a person's approval is never touched, even if it quotes the marker", async () => {
+  const api = reviewsApi([ours({ user: { login: "someone" } }), { id: 9, state: "APPROVED", commit_id: "x", body: "lgtm", user: { login: "someone" } }]);
+  assert.equal(await syncApproval(api, 3, "red", "head"), "none");
+  assert.equal(api.writes.length, 0);
+});
+
+test("a refused approval only logs, because the check already has the result", async () => {
+  const logs = [];
+  const api = { list: async () => [], write: async () => { throw new Error("HTTP 422"); } };
+  assert.equal(await syncApproval(api, 3, "green", "head", (l) => logs.push(l)), "none");
+  assert.match(logs[0], /Couldn't update Mergelight's approval/);
+});
+
