@@ -255,8 +255,49 @@ export async function publishReview(
     },
   };
   await writeCheck(api, opts.checkRunId, review.pr.head_sha, check, log);
+  await syncApproval(api, n, review.light, review.pr.head_sha, log);
 
   return { summaryUrl, inline: inline.length, outside: outside.length, resolved, light: review.light };
+}
+
+export const APPROVAL_MARKER = "<!-- mergelight:approval -->";
+/** Only these post Mergelight's reviews, so a person's review that quotes the marker is never touched. */
+const OWN_REVIEWERS = new Set(["mergelight-ai[bot]", "github-actions[bot]"]);
+
+interface PrReview {
+  id: number;
+  state: string;
+  commit_id: string;
+  body: string | null;
+  user: { login: string } | null;
+}
+
+/**
+ * Green approves the pull request, like a reviewer would. Anything else takes back an approval Mergelight gave
+ * earlier, so an old approval can't stand next to a newer finding. Yellow and red never request changes, so a
+ * review from Mergelight never blocks a merge by itself. Failures only log: the check already carries the result.
+ */
+export async function syncApproval(api: Pick<GitHub, "list" | "write">, number: number, light: Light, headSha: string, log: (line: string) => void = () => {}): Promise<"approved" | "already" | "dismissed" | "none"> {
+  try {
+    const ours = (await api.list<PrReview>(`pulls/${number}/reviews`)).filter((r) => OWN_REVIEWERS.has(r.user?.login ?? "") && (r.body ?? "").includes(APPROVAL_MARKER));
+    const standing = ours.filter((r) => r.state === "APPROVED");
+    if (light === "green") {
+      if (standing.some((r) => r.commit_id === headSha)) return "already";
+      await api.write("POST", `pulls/${number}/reviews`, {
+        commit_id: headSha,
+        event: "APPROVE",
+        body: `${APPROVAL_MARKER}\n🟢 Mergelight found nothing that needs fixing in this commit.`,
+      });
+      return "approved";
+    }
+    for (const r of standing) {
+      await api.write("PUT", `pulls/${number}/reviews/${r.id}/dismissals`, { message: "A newer Mergelight review found something to look at.", event: "DISMISS" });
+    }
+    return standing.length ? "dismissed" : "none";
+  } catch (err) {
+    log(`Couldn't update Mergelight's approval: ${err instanceof Error ? err.message : String(err)}`);
+    return "none";
+  }
 }
 
 export async function reviewThreads(api: GitHub, number: number): Promise<ReviewThread[]> {
