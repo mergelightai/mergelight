@@ -1083,7 +1083,9 @@ function ConnectStep({ repo, pr, status, code, onBack, onSkip }: { repo: Repo; p
   const waiting = !failed && status?.title?.toLowerCase().includes('connect');
   // With a pull request open, the run that makes the code is on its way or already going.
   const coming = Boolean(pr) && !failed && !waiting;
-  const note = mode === 'apikey' ? "We'll move on when you're connected" : code ? 'Waiting for you to enter the code' : failed ? "Couldn't connect. Check that step 1 is on." : waiting ? 'Your code is ready on the pull request' : coming ? 'Getting your code' : "We'll move on when you're connected";
+  const note = mode === 'apikey' ? "We'll move on when you're connected" : code ? 'Waiting for you to enter the code' : failed ? "Couldn't connect. Check that step 1 is on." : waiting ? 'Your code is ready on the pull request' : "We'll move on when you're connected";
+  // The run takes a little while to make the code, so this has to look busy, not stuck.
+  const gettingCode = mode === 'chatgpt' && coming && !code;
 
   const copy = (text: string) => {
     void navigator.clipboard?.writeText(text).then(() => {
@@ -1162,7 +1164,14 @@ function ConnectStep({ repo, pr, status, code, onBack, onSkip }: { repo: Repo; p
 
       <div className={`${WELL} mt-6 px-4 py-3.5`}>
         <div role="status">
-          <Pulse tone={mode === 'chatgpt' && (code || failed || waiting) ? 'risk' : 'lilac'}>{note}</Pulse>
+          {gettingCode ? (
+            <span className="flex items-center gap-2.5">
+              <Spinner className="size-4 shrink-0 text-lilac" />
+              <span className="min-w-0 text-[14px] text-muted">Getting your code. Almost ready, hang tight.</span>
+            </span>
+          ) : (
+            <Pulse tone={mode === 'chatgpt' && (code || failed || waiting) ? 'risk' : 'lilac'}>{note}</Pulse>
+          )}
         </div>
       </div>
       <button type="button" onClick={onSkip} className="mx-auto mt-4 block text-[13px] text-faint transition-colors hover:text-muted">
