@@ -91,6 +91,30 @@ export interface CheckStatus {
   title: string | null;
 }
 
+/** The link and code for connecting ChatGPT, as the Action posted them on the pull request. */
+export interface ConnectCode {
+  url: string;
+  code: string;
+}
+
+/**
+ * Who can post for Mergelight. Anyone can comment on a public pull request, and entering someone else's
+ * code would sign them in on your plan, so nobody else's comment counts.
+ */
+const OWN_COMMENTERS = ['mergelight-ai[bot]', 'github-actions[bot]'];
+
+/**
+ * Finds the code in Mergelight's comment, if that comment is still asking for one. It has to be in the
+ * exact shape the Action writes, because a finished review's comment can quote text from the pull request.
+ */
+export function readConnectCode(comments: { user: { login: string } | null; body?: string | null }[]): ConnectCode | null {
+  const body = comments.filter((c) => OWN_COMMENTERS.includes(c.user?.login ?? '') && c.body?.includes('<!-- mergelight:summary -->')).at(-1)?.body;
+  if (!body?.includes('<!-- mergelight:pending -->')) return null;
+  const url = body.match(/^1\. Open (https:\/\/auth\.openai\.com\/\S+)$/m)?.[1];
+  const code = body.match(/^2\. Enter this code: `([A-Z0-9]{4}-[A-Z0-9]{4,})`$/m)?.[1];
+  return url && code ? { url, code } : null;
+}
+
 export class GitHubError extends Error {
   status: number;
   constructor(status: number) {
@@ -114,7 +138,10 @@ export interface GitHubClient {
   hasLogin(repo: Repo): Promise<boolean>;
   /** The Mergelight check on this commit, if a review has started. */
   checkStatus(repo: Repo, sha: string): Promise<CheckStatus | null>;
-  isMerged(repo: Repo, number: number): Promise<boolean>;
+  /** The code for connecting ChatGPT, while the pull request is waiting for someone to enter it. */
+  connectCode(repo: Repo, number: number): Promise<ConnectCode | null>;
+  /** Whether it's merged, and the commit it's on now. */
+  prState(repo: Repo, number: number): Promise<{ merged: boolean; headSha: string }>;
 }
 
 const WORKFLOWS = '.github/workflows';
@@ -335,7 +362,11 @@ export function realClient(token: string): GitHubClient {
       const latest = check_runs[0];
       return latest ? { status: latest.status, conclusion: latest.conclusion, title: latest.output.title } : null;
     },
-    isMerged: async (repo, number) => (await get<{ merged: boolean }>(`/repos/${repo.fullName}/pulls/${number}`)).merged,
+    connectCode: async (repo, number) => readConnectCode(await get<{ user: { login: string } | null; body?: string | null }[]>(`/repos/${repo.fullName}/issues/${number}/comments?per_page=100`)),
+    prState: async (repo, number) => {
+      const pull = await get<{ merged: boolean; head: { sha: string } }>(`/repos/${repo.fullName}/pulls/${number}`);
+      return { merged: pull.merged, headSha: pull.head.sha };
+    },
   };
 }
 
@@ -388,6 +419,7 @@ export function mockClient(): GitHubClient {
       if (checks < 7) return later({ status: 'in_progress', conclusion: null, title: 'Reviewing' });
       return later({ status: 'completed', conclusion: 'failure', title: '🔴 Blocked: 2 bugs, 1 risk to fix' });
     },
-    isMerged: () => later(checks >= 11),
+    connectCode: () => later(checks < 4 ? { url: 'https://auth.openai.com/codex/device', code: '2ZYY-TEST1' } : null),
+    prState: () => later({ merged: checks >= 11, headSha: 'abc' }),
   };
 }

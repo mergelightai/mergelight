@@ -56,6 +56,7 @@ export function connectedBody(account: string | null, secretName: string): strin
   return `🔌 Reviews on this repository now use ${who}. If that isn't yours, remove the \`${secretName}\` secret and push a commit to connect again.`;
 }
 
+/** The setup page shows the code too. It reads it from the two numbered lines, so they have to keep this shape. */
 export function connectBody(login: DeviceLogin, runUrl?: string): string {
   return [
     SUMMARY_MARKER,

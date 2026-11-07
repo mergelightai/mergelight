@@ -153,6 +153,12 @@ test("the comment gives the link, the code and where it came from", () => {
   assert.doesNotMatch(body, /[–—]/, "no dashes in copy");
 });
 
+test("the setup page can read the code, which needs these two lines exactly", () => {
+  const lines = connectBody({ url: "https://auth.openai.com/codex/device", code: "2ZYY-TEST1" }).split("\n");
+  assert.ok(lines.includes("1. Open https://auth.openai.com/codex/device"));
+  assert.ok(lines.includes("2. Enter this code: `2ZYY-TEST1`"));
+});
+
 test("every comment is the summary, so the review replaces it", () => {
   const login = { url: "https://auth.openai.com/codex/device", code: "2ZYY-TEST1" };
   for (const body of [connectBody(login), installAppBody(), connectFailedBody("x")]) assert.ok(body.startsWith(SUMMARY_MARKER));
