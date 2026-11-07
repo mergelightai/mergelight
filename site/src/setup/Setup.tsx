@@ -6,7 +6,7 @@ import workflowFile from '../../../examples/mergelight.yml?raw';
 import refreshFile from '../../../examples/mergelight-refresh.yml?raw';
 import Ambient from '../sections/Ambient';
 import { Check, GitHubIcon, SURFACE, WELL } from '../ui';
-import { cleanUrl, finishSignIn, GitHubError, INSTALL_URL, isPinned, mockClient, pinned, realClient, REFRESH_FILE, signInUrl, wakeTokenServer, type CheckStatus, type GitHubClient, type Release, type Repo, type RepoDetails, type SetupPr, type WorkflowFile } from './github';
+import { cleanUrl, finishSignIn, GitHubError, INSTALL_URL, isPinned, mockClient, pinned, realClient, REFRESH_FILE, signInUrl, wakeTokenServer, type CheckStatus, type ConnectCode, type GitHubClient, type Release, type Repo, type RepoDetails, type SetupPr, type WorkflowFile } from './github';
 
 const CHATGPT_SECURITY = 'https://chatgpt.com/settings/security';
 const TYPES_MARKER = 'types: [opened, synchronize, reopened, ready_for_review]';
@@ -66,6 +66,7 @@ export default function Setup() {
   const [addFailed, setAddFailed] = useState<'refused' | 'other' | null>(null);
   const [pr, setPr] = useState<SetupPr | null>(null);
   const [status, setStatus] = useState<CheckStatus | null>(null);
+  const [connectCode, setConnectCode] = useState<ConnectCode | null>(null);
   const [hasLogin, setHasLogin] = useState(false);
   const [merged, setMerged] = useState(false);
   const [detailsFailed, setDetailsFailed] = useState(false);
@@ -121,6 +122,7 @@ export default function Setup() {
     setDetails(null);
     setPr(null);
     setStatus(null);
+    setConnectCode(null);
     setHasLogin(false);
     setMerged(false);
     setFileOpen(false);
@@ -193,13 +195,23 @@ export default function Setup() {
   useEffect(() => {
     if ((view !== 'connect' && view !== 'live') || !client || !repo) return;
     return poll(async () => {
+      const current = pr ? await client.prState(repo, pr.number).catch(() => null) : null;
+      // A new commit is a new run, like the one that gets a new code after the last one ran out. This starts over on it.
+      if (pr && current && current.headSha !== pr.headSha) {
+        setStatus(null);
+        setPr({ ...pr, headSha: current.headSha });
+        return true;
+      }
       const check = pr ? await client.checkStatus(repo, pr.headSha).catch(() => null) : null;
       const login = view === 'connect' || !check ? await client.hasLogin(repo) : true;
-      const done = view === 'live' && pr ? await client.isMerged(repo, pr.number).catch(() => false) : false;
+      // ChatGPT logins only work on private repos, so a public one never has a code to show.
+      const code = view === 'connect' && pr && repo.isPrivate ? await client.connectCode(repo, pr.number).catch(() => null) : null;
+      const done = view === 'live' && Boolean(current?.merged);
       if (check) setStatus(check);
+      setConnectCode(code);
       setHasLogin(login);
       setMerged(done);
-      if (view === 'connect' && (login || isReviewing(check))) setView('live');
+      if (view === 'connect' && (login || (isReviewing(check) && !couldntFinish(check)))) setView('live');
       return view === 'live' && (done || !pr);
     });
   }, [view, client, repo, pr]);
@@ -209,6 +221,7 @@ export default function Setup() {
     setDetails(null);
     setPr(null);
     setStatus(null);
+    setConnectCode(null);
     setMerged(false);
     setView('repo');
   };
@@ -241,7 +254,7 @@ export default function Setup() {
                 <AddStep repo={repo} details={details} fileCount={files.length} branch={branch} setBranch={setBranch} scope={scope} setScope={setScope} fileOpen={fileOpen} onToggleFile={() => setFileOpen((v) => !v)} adding={adding} failed={addFailed} detailsFailed={detailsFailed} onRetry={() => choose(repo)} update={update} onAdd={() => void addToRepo()} fileUrl={fileUrl} onBack={adding ? () => undefined : back.add!} onByHand={() => { setFileOpen(false); setView('finish'); }} onContinue={afterAdding} />
               )}
               {view === 'finish' && repo && <FinishStep repo={repo} branch={branch} fileUrl={fileUrl} pr={pr} onBack={back.finish!} />}
-              {view === 'connect' && repo && <ConnectStep repo={repo} pr={pr} status={status} onBack={back.connect!} onSkip={() => setView('live')} />}
+              {view === 'connect' && repo && <ConnectStep repo={repo} pr={pr} status={status} code={connectCode} onBack={back.connect!} onSkip={() => setView('live')} />}
               {view === 'live' && repo && <LiveStep repo={repo} pr={pr} status={status} hasLogin={hasLogin} merged={merged} updatedTo={update?.tag ?? null} onAnother={anotherRepo} />}
             </Stage>
             <p className="mt-6 flex items-center justify-center gap-1.5 text-center text-[13px] text-faint">
@@ -279,6 +292,8 @@ function poll(check: () => Promise<boolean>, everyMs = 4000): () => void {
 const isReviewing = (s: CheckStatus | null) => Boolean(s && (s.status === 'completed' || /^review/i.test(s.title ?? '')));
 /** "Connected to ChatGPT" also completes a check, but the review is only just starting. */
 const isDone = (s: CheckStatus | null) => s?.status === 'completed' && !/^connected/i.test(s.title ?? '');
+/** What the check says when a login or a review ended early. It's completed, but nothing got reviewed. */
+const couldntFinish = (s: CheckStatus | null) => s?.status === 'completed' && /^couldn't review/i.test(s.title ?? '');
 /** Check titles start with a light emoji, and here the dot already shows it. */
 const plainTitle = (s: CheckStatus | null) => (s?.title ?? '').replace(/^[^\p{L}]+/u, '');
 
@@ -979,16 +994,25 @@ function FinishStep({ repo, branch, fileUrl, pr, onBack }: { repo: Repo; branch:
   );
 }
 
-function ConnectStep({ repo, pr, status, onBack, onSkip }: { repo: Repo; pr: SetupPr | null; status: CheckStatus | null; onBack: () => void; onSkip: () => void }) {
+function ConnectStep({ repo, pr, status, code, onBack, onSkip }: { repo: Repo; pr: SetupPr | null; status: CheckStatus | null; code: ConnectCode | null; onBack: () => void; onSkip: () => void }) {
   const [mode, setMode] = useState<'chatgpt' | 'apikey'>(repo.isPrivate ? 'chatgpt' : 'apikey');
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
   const prUrl = pr?.url ?? `https://github.com/${repo.fullName}/pulls`;
-  const waiting = status?.title?.toLowerCase().includes('connect');
+  const prLink = (
+    <a href={prUrl} target="_blank" rel="noreferrer" className="mt-1 flex w-fit items-center gap-1 text-[13.5px] text-lilac transition-colors hover:text-fg">
+      Open {pr ? `pull request #${pr.number}` : 'your pull requests'} <External />
+    </a>
+  );
+  const failed = couldntFinish(status);
+  const waiting = !failed && status?.title?.toLowerCase().includes('connect');
+  // With a pull request open, the run that makes the code is on its way or already going.
+  const coming = Boolean(pr) && !failed && !waiting;
+  const note = mode === 'apikey' ? "We'll move on when you're connected" : code ? 'Waiting for you to enter the code' : failed ? "Couldn't connect. Check that step 1 is on." : waiting ? 'Your code is ready on the pull request' : coming ? 'Getting your code' : "We'll move on when you're connected";
 
-  const copy = () => {
-    void navigator.clipboard?.writeText('OPENAI_API_KEY').then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+  const copy = (text: string) => {
+    void navigator.clipboard?.writeText(text).then(() => {
+      setCopied(text);
+      setTimeout(() => setCopied(null), 1500);
     });
   };
 
@@ -1013,18 +1037,44 @@ function ConnectStep({ repo, pr, status, onBack, onSkip }: { repo: Repo; pr: Set
             </a>
           </Numbered>
           <Numbered n={2}>
-            Enter the code we post on your pull request
-            <a href={prUrl} target="_blank" rel="noreferrer" className="mt-1 flex w-fit items-center gap-1 text-[13.5px] text-lilac transition-colors hover:text-fg">
-              Open {pr ? `pull request #${pr.number}` : 'your pull requests'} <External />
-            </a>
+            {code ? (
+              <>
+                Enter this code at OpenAI
+                <motion.span key={code.code} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.3 }} className={`${WELL} mt-2 flex items-center justify-between gap-3 py-2.5 pl-4 pr-2`}>
+                  <span className="select-all font-mono text-[20px] font-medium tracking-[0.06em] text-fg">{code.code}</span>
+                  <button type="button" onClick={() => copy(code.code)} className="shrink-0 rounded-lg px-2.5 py-1.5 text-[13px] text-muted transition-[background-color,color,transform] duration-100 hover:bg-white/[0.06] hover:text-fg active:scale-[0.97]">
+                    {copied === code.code ? 'Copied' : 'Copy'}
+                  </button>
+                </motion.span>
+                {/* Copies as it opens, so all that's left at OpenAI is pasting. */}
+                <a href={code.url} target="_blank" rel="noreferrer" onClick={() => copy(code.code)} className="mt-2 flex w-fit items-center gap-1 text-[13.5px] text-lilac transition-colors hover:text-fg">
+                  Open OpenAI <External />
+                </a>
+              </>
+            ) : failed ? (
+              <>
+                Then push a new commit to your pull request to get a new code
+                {prLink}
+              </>
+            ) : coming ? (
+              <>
+                Enter the code. It shows up here in a moment.
+                {prLink}
+              </>
+            ) : (
+              <>
+                Enter the code we post on your pull request
+                {prLink}
+              </>
+            )}
           </Numbered>
         </ol>
       ) : (
         <ol className="mt-6 space-y-4">
           <Numbered n={1}>
             Add a secret named{' '}
-            <button type="button" onClick={copy} title="Copy" className="rounded-md bg-white/[0.08] px-1.5 py-0.5 font-mono text-[12.5px] text-fg transition-colors hover:bg-white/[0.13]">
-              {copied ? 'Copied' : 'OPENAI_API_KEY'}
+            <button type="button" onClick={() => copy('OPENAI_API_KEY')} title="Copy" className="rounded-md bg-white/[0.08] px-1.5 py-0.5 font-mono text-[12.5px] text-fg transition-colors hover:bg-white/[0.13]">
+              {copied === 'OPENAI_API_KEY' ? 'Copied' : 'OPENAI_API_KEY'}
             </button>
             <a href={`https://github.com/${repo.fullName}/settings/secrets/actions/new`} target="_blank" rel="noreferrer" className="mt-1 flex w-fit items-center gap-1 text-[13.5px] text-lilac transition-colors hover:text-fg">
               Open GitHub secrets <External />
@@ -1035,7 +1085,9 @@ function ConnectStep({ repo, pr, status, onBack, onSkip }: { repo: Repo; pr: Set
       )}
 
       <div className={`${WELL} mt-6 px-4 py-3.5`}>
-        <Pulse tone={waiting ? 'risk' : 'lilac'}>{waiting ? 'Your code is ready on the pull request' : "We'll move on when you're connected"}</Pulse>
+        <div role="status">
+          <Pulse tone={mode === 'chatgpt' && (code || failed || waiting) ? 'risk' : 'lilac'}>{note}</Pulse>
+        </div>
       </div>
       <button type="button" onClick={onSkip} className="mx-auto mt-4 block text-[13px] text-faint transition-colors hover:text-muted">
         I've done this
@@ -1095,11 +1147,12 @@ function LiveStep({ repo, pr, status, hasLogin, merged, updatedTo, onAnother }: 
     );
   }
 
-  const done = isDone(status);
+  const failed = couldntFinish(status);
+  const done = isDone(status) && !failed;
   // A repo that's updating has had reviews before, so this one isn't its first.
   const review = updatedTo ? 'review' : 'first review';
   const Review = updatedTo ? 'Review' : 'First review';
-  const reviewTitle = done ? `${Review} done` : status ? `${Review} running` : hasLogin ? `Starting the ${review}` : `Waiting for the ${review} to start`;
+  const reviewTitle = failed ? `${Review} didn't finish` : done ? `${Review} done` : status ? `${Review} running` : hasLogin ? `Starting the ${review}` : `Waiting for the ${review} to start`;
   const reviewNote = updatedTo ? `reviewed this PR with ${updatedTo}` : 'reviewed this same PR, so you can see what a review looks like';
   const reviewingNote = updatedTo ? `reviewing this PR with ${updatedTo}` : 'reviewing this same PR, so you can see what a review looks like';
   return (
@@ -1110,7 +1163,7 @@ function LiveStep({ repo, pr, status, hasLogin, merged, updatedTo, onAnother }: 
           {updatedTo ? `It moves the workflow to ${updatedTo}.` : 'It adds what Mergelight needs to run.'}
         </Milestone>
         <Milestone state={done ? 'done' : 'now'} title={reviewTitle}>
-          {done ? `${plainTitle(status)}. It ${reviewNote}.` : `It's ${reviewingNote}. It usually takes 2 to 15 minutes.`}
+          {failed ? 'The Mergelight check on the PR says why, and the next push tries again.' : done ? `${plainTitle(status)}. It ${reviewNote}.` : `It's ${reviewingNote}. It usually takes 2 to 15 minutes.`}
         </Milestone>
         <Milestone last state={done ? 'now' : 'next'} title="Merge the PR">
           {updatedTo ? `After that, reviews on ${name} use the new version.` : `After that, new PRs on ${name} get reviewed by themselves.`} You can merge any time.
@@ -1120,7 +1173,7 @@ function LiveStep({ repo, pr, status, hasLogin, merged, updatedTo, onAnother }: 
         Open PR #{pr.number} <External className="size-4" />
       </a>
       {another}
-      <p className="mt-4 text-center text-[13px] leading-relaxed text-faint [text-wrap:pretty]">{done ? 'You can close this page. The PR stays open until you merge it.' : 'You can close this page. The review keeps running, and the result shows up on the PR.'}</p>
+      <p className="mt-4 text-center text-[13px] leading-relaxed text-faint [text-wrap:pretty]">{done || failed ? 'You can close this page. The PR stays open until you merge it.' : 'You can close this page. The review keeps running, and the result shows up on the PR.'}</p>
     </div>
   );
 }
