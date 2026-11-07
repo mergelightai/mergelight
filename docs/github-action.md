@@ -41,7 +41,7 @@ There's no key or token to manage. The workflow's `id-token: write` permission p
 | `--base <branch>` | Add the workflows to this branch. Use the branch most pull requests go to |
 | `--skip-branches <a,b>` | Don't review pull requests from these branches, like `staging` into `main` |
 | `--relogin` | Log in to Codex again |
-| `--pin` | Pin to the latest release, instead of updating by itself |
+| `--no-pin` | Follow `@v0` and get each release by itself, instead of pinning to the latest |
 | `--yes` | Don't stop to ask whether the app is installed |
 
 **There are two apps, so that a leak on our server can't reach your code or workflows.**
@@ -49,9 +49,9 @@ There's no key or token to manage. The workflow's `id-token: write` permission p
 - **Mergelight AI** posts comments and checks, reads code, and overwrites this repository's Actions secrets to save the refreshed Codex login. It can't read a secret's value, and it can't commit. Our server holds its private key.
 - **Mergelight Setup** can commit code and workflows, read secret names and read checks. The setup page uses it with your own sign-in to open the pull request that adds or updates the file. No private key for it exists, so it can't act unless you're signed in. You don't need it if you add the files by hand.
 
-**Versions.** The setup page and `mergelight setup` use `@v0`, which moves to each new release, so fixes reach you without merging anything. A new release waits a day before `v0` moves, so a bad one can be pulled first. The catch: that step can read your AI login, so you're trusting each release as it comes.
+**Versions.** The setup page and `mergelight setup` pin the workflows to the latest release's commit, like `mergelightai/mergelight@<commit> # v0.1.2`. That step can read your AI login, so new code only runs once you merge an update. A pinned repo never changes by itself: the review says when a newer release is out, and the setup page opens a pull request that updates it. Our own Action pins the actions it uses too.
 
-**To pin instead,** replace `@v0` in your workflows with the line from any [release](https://github.com/mergelightai/mergelight/releases), like `mergelightai/mergelight@<commit> # v0.1.1`, or run `mergelight setup owner/repo --pin`. A pinned repo never changes by itself: the review says when a newer release is out, and the setup page opens a pull request that updates it. To get update pull requests from Dependabot instead, add this to `.github/dependabot.yml`:
+**To get each release by itself instead,** use `@v0`, which the files in `examples/` do, or run `mergelight setup owner/repo --no-pin`. `v0` moves to a release a day after it's published, so a bad one can be pulled first, but you're trusting each release as it comes. To get update pull requests from Dependabot, add this to `.github/dependabot.yml`:
 
 ```yaml
 version: 2

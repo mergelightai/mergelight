@@ -32,7 +32,7 @@ export interface SetupOptions {
   relogin?: boolean;
   /** Don't stop to ask whether the app is installed. */
   yes?: boolean;
-  /** Pin to the latest release's commit, instead of following @v0 and getting each release by itself. */
+  /** Pin to the latest release's commit, which is the default. False follows @v0 and gets each release by itself. */
   pin?: boolean;
 }
 
@@ -59,7 +59,10 @@ export function workflowFiles(skipBranches: string[] = [], pin?: Pin): { name: s
     }
     if (pin) {
       if (!content.includes(`${ACTION}@v0`)) throw new Error(`${name} has changed: can't pin it.`);
-      content = content.replace(NOT_PINNED_NOTE, "").replaceAll(`${ACTION}@v0`, () => `${ACTION}@${pin.sha} # ${pin.tag}`);
+      content = content.replace(NOT_PINNED_NOTE, (note) => {
+        const indent = note.match(/^[ \t]*/)![0];
+        return `${indent}# Pinned to a release, so new code only runs here once you merge an update.\n${indent}# Mergelight says on your pull requests when a new version is out.\n`;
+      }).replaceAll(`${ACTION}@v0`, () => `${ACTION}@${pin.sha} # ${pin.tag}`);
     }
     return { name, content };
   });
@@ -99,7 +102,7 @@ async function hasFile(deps: SetupDeps, repo: string, path: string, ref: string)
 async function openWorkflowPr(deps: SetupDeps, opts: SetupOptions, base: string, isPrivate: boolean): Promise<string | null> {
   const { repo } = opts;
   // Only a ChatGPT login needs refreshing, and OpenAI allows those on private repositories only.
-  const files = workflowFiles(opts.skipBranches, opts.pin ? await latestPin(deps) : undefined).filter((f) => isPrivate || f.name !== REFRESH);
+  const files = workflowFiles(opts.skipBranches, opts.pin !== false ? await latestPin(deps) : undefined).filter((f) => isPrivate || f.name !== REFRESH);
 
   const missing: typeof files = [];
   for (const f of files) {

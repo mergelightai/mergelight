@@ -169,12 +169,18 @@ export default function Setup() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [repos]);
 
-  /** New repos follow a moving tag, which updates by itself. A pinned one only moves when someone asks. Anything else in its file stays theirs. */
+  /** A pinned repo only moves when someone asks, and anything else in its file stays theirs. */
   const update = details?.installed && details.release && isPinned(details.installed) && details.installed.ref !== details.release.sha ? details.release : null;
+  /**
+   * New repos are pinned to the latest release, so a bad release can't reach them by itself. If the release can't be
+   * read, they follow the moving tag instead, which still works.
+   */
+  const pinTo = update ?? (details && !details.installed ? details.release : null);
   const workflow = useMemo(() => {
     if (!details) return workflowFile;
-    return update && details.installed ? pinned(details.installed.content, update) : workflowFor(scope, branch, details.skip);
-  }, [scope, branch, details, update]);
+    if (update && details.installed) return pinned(details.installed.content, update);
+    return pinTo ? pinned(workflowFor(scope, branch, details.skip), pinTo) : workflowFor(scope, branch, details.skip);
+  }, [scope, branch, details, update, pinTo]);
   /**
    * The review, and on a private repo the job that keeps a ChatGPT login fresh. Without that job reviews refresh the
    * login themselves, and one that starts during another's refresh can fail. An API key needs no refreshing, and public repos can't use ChatGPT.
@@ -182,11 +188,11 @@ export default function Setup() {
   const files = useMemo<WorkflowFile[]>(() => {
     const list = [{ name: 'mergelight.yml', content: workflow }];
     if (!details || !repo) return list;
-    const version = (content: string) => (update ? pinned(content, update) : content);
+    const version = (content: string) => (pinTo ? pinned(content, pinTo) : content);
     if (details.refresh) list.push({ name: REFRESH_FILE, content: version(details.refresh) });
     else if (repo.isPrivate && !details.hasApiKey) list.push({ name: REFRESH_FILE, content: version(refreshFile) });
     return list;
-  }, [workflow, details, repo, update]);
+  }, [workflow, details, repo, pinTo]);
   const fileUrl = repo ? newFileUrl(repo.fullName, branch, workflow) : '#';
   const afterAdding = useCallback(() => setView(hasLogin ? 'live' : 'connect'), [hasLogin]);
 
@@ -299,10 +305,10 @@ export default function Setup() {
             </p>
           </motion.div>
           <AnimatePresence mode="popLayout" initial={false}>
-            {wide && view === 'add' && fileOpen && <FileSide key="file" files={files} version={update?.tag} onClose={() => setFileOpen(false)} />}
+            {wide && view === 'add' && fileOpen && <FileSide key="file" files={files} version={pinTo?.tag} onClose={() => setFileOpen(false)} />}
           </AnimatePresence>
         </div>
-        {!wide && <FileSheet open={view === 'add' && fileOpen} files={files} version={update?.tag} onClose={() => setFileOpen(false)} />}
+        {!wide && <FileSheet open={view === 'add' && fileOpen} files={files} version={pinTo?.tag} onClose={() => setFileOpen(false)} />}
       </main>
     </div>
   );
