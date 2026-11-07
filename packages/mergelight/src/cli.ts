@@ -4,7 +4,8 @@ import { parseArgs } from "node:util";
 import { currentRepo, fetchPullRequest, parsePrRef } from "./github.js";
 import { serve } from "./mcp/server.js";
 import { GitHub } from "./publish/api.js";
-import { approveCheck, failCheck, failSummary, previousFindings, publishReview, startCheck, startSummary } from "./publish/publish.js";
+import { approveCheck, CHECK_LOGIN_TITLE, failCheck, failSummary, previousFindings, publishReview, startCheck, startSummary } from "./publish/publish.js";
+import { LoginError, loginFailureMessage } from "./providers/codex.js";
 import { renderTerminal } from "./render.js";
 import { reviewPullRequest } from "./review.js";
 import { askForApp, connect, githubConnect } from "./connect.js";
@@ -197,6 +198,8 @@ async function main(): Promise<number> {
 
   const progress = progressPrinter();
   try {
+    // The login step already found this login can't be refreshed, so don't send every reviewer to find out.
+    if (process.env.MERGELIGHT_LOGIN_LOST === "1") throw new LoginError(loginFailureMessage(process.env.SECRET_NAME || undefined));
     const review = await reviewPullRequest(ref, {
       previous: values.post ? await previousFindings(api, ref.number) : undefined,
       at: values.at,
@@ -225,8 +228,9 @@ async function main(): Promise<number> {
     const message = err instanceof Error ? err.message : String(err);
     log(`mergelight: ${message}`);
     if (values.post && headSha) {
-      await failCheck(api, checkRunId, headSha, message, log).catch((e) => log(`Couldn't update the check: ${(e as Error).message}`));
-      await failSummary(api, ref.number).catch((e) => log(`Couldn't update the summary: ${(e as Error).message}`));
+      const login = err instanceof LoginError;
+      await failCheck(api, checkRunId, headSha, message, log, login ? CHECK_LOGIN_TITLE : undefined).catch((e) => log(`Couldn't update the check: ${(e as Error).message}`));
+      await failSummary(api, ref.number, login ? message : undefined).catch((e) => log(`Couldn't update the summary: ${(e as Error).message}`));
     }
     return 1;
   }

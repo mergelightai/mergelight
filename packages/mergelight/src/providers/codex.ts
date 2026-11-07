@@ -10,6 +10,16 @@ export type CodexResult = ModelResult;
 /** Codex's Linux sandbox (bubblewrap) can't start, so every command fails. */
 export class SandboxError extends Error {}
 
+/** The ChatGPT login didn't work. Worth saying plainly, because re-running usually fixes it. */
+export class LoginError extends Error {}
+
+/** What Codex says when a login is refused or can't be refreshed. */
+const LOGIN_FAILURE = /access token could not be refreshed|401 Unauthorized/i;
+
+export function loginFailureMessage(secretName = "CODEX_AUTH_JSON"): string {
+  return `The ChatGPT login didn't work, most likely because another review refreshed it at the same moment. Re-run this check to pick up the new one. If it fails again, the login has stopped working: delete the ${secretName} secret, then push, and this pull request shows a code to connect ChatGPT again.`;
+}
+
 const SANDBOX_FAILURE = /bwrap:|user namespace|new namespace|RTM_NEWADDR|uid map|sandbox.*(denied|not permitted)/i;
 
 function codexHome(): string {
@@ -126,6 +136,7 @@ export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
     }
     if (result.code !== 0) {
       const tail = (result.stderr || result.stdout).trim().split("\n").slice(-6).join("\n");
+      if (LOGIN_FAILURE.test(tail)) throw new LoginError(loginFailureMessage(process.env.SECRET_NAME || undefined));
       throw new Error(`Codex exited with code ${result.code}.${opts.logFile ? ` Log: ${opts.logFile}` : ""}\n${tail}`);
     }
     // Without a working sandbox Codex can't read the code and reviews the diff blind.

@@ -383,3 +383,12 @@ test("any other check error still stops review --post before it reviews", (t) =>
   assert.ok(!calls.includes("api repos/o/r/pulls/1"));
   assert.ok(!stderr.includes(SKIPPED));
 });
+
+test("a login failure says what happened and what to do, instead of just failing", () => {
+  const reason = "The ChatGPT login didn't work. Re-run this check.";
+  const body = failedSummaryBody(reason);
+  assert.ok(body.includes(SUMMARY_MARKER));
+  assert.ok(body.includes(reason));
+  assert.doesNotMatch(body, /couldn't review/);
+  assert.match(failedSummaryBody(), /couldn't review/);
+});

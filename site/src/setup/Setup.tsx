@@ -142,7 +142,7 @@ export default function Setup() {
   }, [scope, branch, details, update]);
   /**
    * The review, and on a private repo the job that keeps a ChatGPT login fresh. Without that job reviews refresh the
-   * login themselves, and two at once can invalidate it. An API key needs no refreshing, and public repos can't use ChatGPT.
+   * login themselves, and one that starts during another's refresh can fail. An API key needs no refreshing, and public repos can't use ChatGPT.
    */
   const files = useMemo<WorkflowFile[]>(() => {
     const list = [{ name: 'mergelight.yml', content: workflow }];

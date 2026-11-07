@@ -61,7 +61,8 @@ export function pendingSummaryBody(): string {
 
 export const isPendingSummary = (body: string | undefined) => Boolean(body?.includes(PENDING_MARKER));
 
-export function failedSummaryBody(): string {
+export function failedSummaryBody(loginReason?: string): string {
+  if (loginReason) return [SUMMARY_MARKER, "### ⚠️ Mergelight: the ChatGPT login didn't work", "", loginReason].join("\n");
   return [SUMMARY_MARKER, "### ⚠️ Mergelight couldn't review this pull request", "", "The Mergelight check has the reason. The next push tries again."].join("\n");
 }
 
