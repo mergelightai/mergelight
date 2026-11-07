@@ -130,7 +130,13 @@ export async function refreshLogin({
   // Refreshing uses up the saved refresh token, so never do it without somewhere to save the new one.
   const token = env.SECRETS_TOKEN || (await appToken());
   if (!token) {
-    log(`::warning::The Codex login is due for a refresh, but there's nowhere to save a new one. Install the Mergelight AI app and add "id-token: write".`);
+    const message = `The Codex login is due for a refresh, but there's nowhere to save a new one. Install the Mergelight AI app and add "id-token: write".`;
+    // Nobody reads a warning on a green scheduled job, and the login would run out with no sign. A review can still work.
+    if (event === "schedule" || event === "workflow_dispatch") {
+      log(`::error::${message}`);
+      return 1;
+    }
+    log(`::warning::${message}`);
     return 0;
   }
 

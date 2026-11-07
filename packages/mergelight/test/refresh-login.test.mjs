@@ -89,11 +89,20 @@ test("the app's token saves it when there's no secrets token", async () => {
   assert.deepEqual(s.calls.saved, ["app"]);
 });
 
-test("never refreshes with nowhere to save, because that would throw away a working login", async () => {
-  const s = setup({ event: "workflow_dispatch", msLeft: 100 * HOUR, secretsToken: "", appToken: null });
+test("the job fails with nowhere to save, and never refreshes, because that would throw away a working login", async () => {
+  for (const event of ["schedule", "workflow_dispatch"]) {
+    const s = setup({ event, msLeft: 100 * HOUR, secretsToken: "", appToken: null });
+    assert.equal(await s.run(), 1);
+    assert.equal(s.calls.refresh, 0);
+    assert.ok(said(s.calls, /::error::.*nowhere to save/));
+  }
+});
+
+test("a review with nowhere to save only warns, because it can still work", async () => {
+  const s = setup({ event: "pull_request", msLeft: HOUR / 2, secretsToken: "", appToken: null });
   assert.equal(await s.run(), 0);
   assert.equal(s.calls.refresh, 0);
-  assert.ok(said(s.calls, /nowhere to save/));
+  assert.ok(said(s.calls, /::warning::.*nowhere to save/));
 });
 
 test("a failed save doesn't stop the review, and the end of the run tries again", async () => {
