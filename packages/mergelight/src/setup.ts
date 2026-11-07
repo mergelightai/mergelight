@@ -9,7 +9,8 @@ import { run, runOk } from "./run.js";
 export const INSTALL_URL = "https://github.com/apps/mergelight-ai/installations/new";
 const SECRET = "CODEX_AUTH_JSON";
 const BRANCH = "mergelight-setup";
-const WORKFLOWS = ["mergelight.yml", "mergelight-approve.yml", "mergelight-refresh.yml"];
+const REFRESH = "mergelight-refresh.yml";
+const WORKFLOWS = ["mergelight.yml", "mergelight-approve.yml", REFRESH];
 const SKIP_MARKER = "github.event.pull_request.head.repo.full_name == github.repository";
 const ACTION = "mergelightai/mergelight";
 /** The note in each template saying why it isn't pinned, which stops being true once it is. */
@@ -95,9 +96,10 @@ async function hasFile(deps: SetupDeps, repo: string, path: string, ref: string)
 }
 
 /** Puts the workflows on a branch and opens a pull request. Returns its URL, or null if there's nothing to add. */
-async function openWorkflowPr(deps: SetupDeps, opts: SetupOptions, base: string): Promise<string | null> {
+async function openWorkflowPr(deps: SetupDeps, opts: SetupOptions, base: string, isPrivate: boolean): Promise<string | null> {
   const { repo } = opts;
-  const files = workflowFiles(opts.skipBranches, opts.pin ? await latestPin(deps) : undefined);
+  // Only a ChatGPT login needs refreshing, and OpenAI allows those on private repositories only.
+  const files = workflowFiles(opts.skipBranches, opts.pin ? await latestPin(deps) : undefined).filter((f) => isPrivate || f.name !== REFRESH);
 
   const missing: typeof files = [];
   for (const f of files) {
@@ -168,7 +170,7 @@ export async function setup(opts: SetupOptions, deps: SetupDeps): Promise<number
   }
 
   deps.log(`3 of 3: add the workflows to ${base}`);
-  const url = await openWorkflowPr(deps, opts, base);
+  const url = await openWorkflowPr(deps, opts, base, info.private);
   if (url) deps.log(`\nDone. Merge this to turn it on, it's reviewing itself now:\n${url}`);
   else deps.log(`\nDone. ${repo} already has the workflows on ${base}.`);
   return 0;

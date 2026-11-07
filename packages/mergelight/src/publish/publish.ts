@@ -84,6 +84,7 @@ export async function previousFindings(api: GitHub, number: number): Promise<Pri
 }
 
 export const CHECK_FAILED_TITLE = "Couldn't review this pull request";
+export const CHECK_LOGIN_TITLE = "The ChatGPT login didn't work";
 
 export interface CheckRun {
   id: number;
@@ -141,22 +142,22 @@ export async function startSummary(api: GitHub, number: number): Promise<PrComme
 }
 
 /** A first review that couldn't run shouldn't say "Reviewing" forever. An earlier round's results stay as they are. */
-export async function failSummary(api: GitHub, number: number): Promise<void> {
+export async function failSummary(api: GitHub, number: number, loginReason?: string): Promise<void> {
   const { summary } = await readPrReviewState(api, number);
-  if (summary && isPendingSummary(summary.body)) await api.write("PATCH", `issues/comments/${summary.id}`, { body: failedSummaryBody() });
+  if (summary && isPendingSummary(summary.body)) await api.write("PATCH", `issues/comments/${summary.id}`, { body: failedSummaryBody(loginReason) });
 }
 
 /**
  * A review that couldn't run ends neutral, so a broken login doesn't block
  * merging. The workflow job itself still fails, so it's visible.
  */
-export async function failCheck(api: GitHub, checkRunId: number | null, headSha: string, reason: string, log?: (line: string) => void): Promise<void> {
+export async function failCheck(api: GitHub, checkRunId: number | null, headSha: string, reason: string, log?: (line: string) => void, title = CHECK_FAILED_TITLE): Promise<void> {
   await writeCheck(api, checkRunId, headSha, {
     status: "completed",
     conclusion: "neutral",
     completed_at: new Date().toISOString(),
     output: {
-      title: CHECK_FAILED_TITLE,
+      title,
       summary: `${reason.slice(0, 2000)}\n\nThis check is neutral so a broken review doesn't block merging. The workflow log has the details.`,
     },
   }, log);

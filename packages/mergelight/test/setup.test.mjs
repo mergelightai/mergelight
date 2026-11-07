@@ -181,3 +181,11 @@ test("reuses a pull request from an earlier setup", async () => {
   assert.ok(f.logs.some((l) => l.includes("/pull/9")));
   assert.ok(!f.calls.some((c) => c.args.includes("POST") && c.args.includes("repos/acme/widgets/pulls")));
 });
+
+test("a public repository doesn't get the refresh job", async () => {
+  const f = fake({ isPrivate: false, secrets: ["CODEX_AUTH_JSON"] });
+  assert.equal(await setup({ repo: "acme/widgets", yes: true }, f.deps), 0);
+  const added = puts(f.calls).join();
+  assert.match(added, /mergelight\.yml/);
+  assert.doesNotMatch(added, /mergelight-refresh\.yml/);
+});

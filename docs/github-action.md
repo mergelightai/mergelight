@@ -25,7 +25,7 @@ OpenAI allows a ChatGPT login in CI only for trusted private automation, and say
 Go to **[mergelight.dev/setup](https://mergelight.dev/setup/)** and continue with GitHub. Everything happens in your browser, one step at a time:
 
 1. **Pick a repo.** If it isn't listed, add it on GitHub, and the list refreshes when you come back.
-2. **Add Mergelight.** Choose what it reviews: pull requests into one branch, or every pull request. With one branch, merges like `staging` into `main` are skipped, so code pushed straight to `staging` isn't reviewed. With every pull request, GitHub only runs the file on branches that have it, so other branches join once it's merged into them. The page then opens a pull request with the file, using your own sign-in in your browser. On a private repository it also adds the job that keeps a ChatGPT login fresh, because two reviews refreshing a login at once can invalidate it. It reviews itself, and you decide whether to merge. If GitHub refuses, the page offers GitHub's editor with the file filled in instead.
+2. **Add Mergelight.** Choose what it reviews: pull requests into one branch, or every pull request. With one branch, merges like `staging` into `main` are skipped, so code pushed straight to `staging` isn't reviewed. With every pull request, GitHub only runs the file on branches that have it, so other branches join once it's merged into them. The page then opens a pull request with the file, using your own sign-in in your browser. On a private repository it also adds the job that keeps a ChatGPT login fresh, because a review that starts while another is refreshing the login can fail. It reviews itself, and you decide whether to merge. If GitHub refuses, the page offers GitHub's editor with the file filled in instead.
 3. **Connect your AI,** if the repo isn't connected yet:
    - **ChatGPT plan** (private repositories): the pull request shows a link and a code. Enter the code, and the review starts. First turn on "Enable device code sign-in" in your [ChatGPT security settings](https://chatgpt.com/settings/security). It's in beta, and on a workspace an admin turns it on.
    - **OpenAI API key**: add it to the repository's secrets as `OPENAI_API_KEY`, then push a commit. OpenAI bills it per use, and it works on public repositories too.
@@ -68,7 +68,7 @@ updates:
 
 ## Set it up by hand
 
-**1. Install the app.** [Install Mergelight AI](https://github.com/apps/mergelight-ai/installations/new) on the repository. Skip it and everything still posts, as `github-actions[bot]`, but you then need `secrets-token`: a [fine-grained token](https://github.com/settings/personal-access-tokens/new) with **Secrets: Read and write**, or the login has to be redone by hand after about 8 days.
+**1. Install the app.** [Install Mergelight AI](https://github.com/apps/mergelight-ai/installations/new) on the repository. Skip it and everything still posts, as `github-actions[bot]`, but you then need `secrets-token`: a [fine-grained token](https://github.com/settings/personal-access-tokens/new) with **Secrets: Read and write**, or the login has to be redone by hand after about 10 days.
 
 **2. Make a login just for CI.** Don't copy your own `~/.codex/auth.json`: one login used on two machines breaks when either one refreshes it.
 
@@ -92,7 +92,7 @@ gh secret set CODEX_AUTH_JSON --repo owner/repo < ~/.codex-ci/auth.json && rm -r
 
 - [`mergelight.yml`](../examples/mergelight.yml) reviews every non-draft PR from this repository, and cancels an older review of the same PR when you push again.
 - [`mergelight-approve.yml`](../examples/mergelight-approve.yml) turns a 🟡 check green when someone approves the PR. Skip it if you work alone: GitHub doesn't let you approve your own PR.
-- [`mergelight-refresh.yml`](../examples/mergelight-refresh.yml) uses the login every third day so it stays fresh.
+- [`mergelight-refresh.yml`](../examples/mergelight-refresh.yml) refreshes the login every third day and saves it at once, so reviews rarely need to.
 
 They're separate files so a PR's merge box only shows the review, not skipped jobs.
 

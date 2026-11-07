@@ -17,8 +17,8 @@ inputs:
   secrets-token:
     description: >
       Only needed without the Mergelight AI app. A token that can update this repository's secrets
-      (fine-grained, "Secrets: read and write"). Codex refreshes a ChatGPT login about every 8 days,
-      and the refreshed login has to be saved back to the secret. The app does this on its own.
+      (fine-grained, "Secrets: read and write"). A ChatGPT login's token lasts 10 days, and each
+      refreshed login has to be saved back to the secret. The app does this on its own.
     required: false
   auth-secret-name:
     description: Name of the secret that holds the ChatGPT login.
@@ -111,8 +111,11 @@ runs:
         AUTH_JSON: ${{ inputs.codex-auth-json }}
         API_KEY: ${{ inputs.openai-api-key }}
         REPO_PRIVATE: ${{ github.event.repository.private }}
+        GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
+        # Not every event says whether the repository is private, so ask if this one didn't.
+        [ -n "$REPO_PRIVATE" ] || REPO_PRIVATE="$(gh api "repos/$GITHUB_REPOSITORY" --jq .private)"
         export CODEX_HOME="$RUNNER_TEMP/codex-home"
         mkdir -p -m 700 "$CODEX_HOME"
         echo "CODEX_HOME=$CODEX_HOME" >> "$GITHUB_ENV"
@@ -121,6 +124,7 @@ runs:
           echo "MERGELIGHT_CHATGPT=0"
           echo "MERGELIGHT_CONNECT=0"
           echo "MERGELIGHT_NO_LOGIN=0"
+          echo "MERGELIGHT_LOGIN_LOST=0"
         } >> "$GITHUB_ENV"
         if [ -n "$AUTH_JSON" ] && [ "$REPO_PRIVATE" = "true" ]; then
           printf 'cli_auth_credentials_store = "file"\n' > "$CODEX_HOME/config.toml"
@@ -144,17 +148,29 @@ runs:
         elif [ "$REPO_PRIVATE" = "true" ]; then
           echo "No Codex login yet, so there's nothing to keep fresh."
           echo "MERGELIGHT_NO_LOGIN=1" >> "$GITHUB_ENV"
+        elif [ "$GITHUB_EVENT_NAME" = "schedule" ] || [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+          # An API key needs no refreshing, and this job isn't given one anyway.
+          echo "A public repository has no ChatGPT login to keep fresh, so there's nothing to do."
+          echo "MERGELIGHT_NO_LOGIN=1" >> "$GITHUB_ENV"
         else
           echo "::error::Public repositories need openai-api-key. OpenAI allows a ChatGPT login in CI for private repositories only."
           exit 1
         fi
 
-    # Scheduled or manual run: just use the login once, so Codex refreshes it if it's due and the
-    # step below saves it. Keeps reviews from having to refresh it themselves.
-    - name: Keep the Codex login fresh
-      if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && env.MERGELIGHT_NO_LOGIN != '1'
+    # Refresh before anything uses the login, and save at once, so a review never does it halfway
+    # through while another starts from the old login. The job always refreshes. A review only does
+    # when its token could run out during it.
+    - name: Refresh the Codex login if it's due
+      if: >
+        env.MERGELIGHT_CHATGPT == '1' &&
+        (github.event_name == 'pull_request' || github.event_name == 'pull_request_target' ||
+        github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
       shell: bash
-      run: codex exec --skip-git-repo-check --sandbox read-only --ephemeral "Reply with the single word OK." > /dev/null
+      env:
+        SECRETS_TOKEN: ${{ inputs.secrets-token }}
+        SECRET_NAME: ${{ inputs.auth-secret-name }}
+        TOKEN_SERVER: ${{ inputs.token-server }}
+      run: node "$GITHUB_ACTION_PATH/packages/mergelight/scripts/refresh-login.mjs"
 
     # A login needs somewhere to be saved: the app with Secrets write approved, or a token that can
     # update secrets. Find out before asking anyone to enter a code. Being able to post isn't enough.
@@ -210,6 +226,7 @@ runs:
         VERIFY_WITH: ${{ inputs.verify-with }}
         YELLOW_BLOCKS: ${{ inputs.yellow-blocks }}
         MERGELIGHT_ACTION_REF: ${{ github.action_ref }}
+        SECRET_NAME: ${{ inputs.auth-secret-name }}
       run: |
         set -euo pipefail
         args=(review "$GITHUB_REPOSITORY#$PR" --post --verify-with "$VERIFY_WITH" --out "$RUNNER_TEMP/mergelight-review.json")
