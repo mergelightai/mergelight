@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { connect, connectBody, connectedAccount, connectedBody, connectFailedBody, installAppBody, parseDeviceLogin, withState } from "../dist/connect.js";
+import { connect, connectBody, connectedAccount, connectedBody, connectFailedBody, githubConnect, installAppBody, parseDeviceLogin, withState } from "../dist/connect.js";
 import { isPendingSummary, SUMMARY_MARKER } from "../dist/publish/markdown.js";
 import { ownSummary } from "../dist/publish/publish.js";
 import { decodeState, encodeState } from "../dist/publish/state.js";
@@ -186,3 +186,45 @@ test("the CLI really runs connect, instead of printing its help", () => {
     rmSync(bin, { recursive: true, force: true });
   }
 });
+
+function fakeApi(failWhile) {
+  const writes = [];
+  return {
+    writes,
+    list: async (path) => (path.startsWith("issues/") ? [{ id: 5, user: { login: "mergelight-ai[bot]", type: "Bot" }, author_association: "NONE", body: `${SUMMARY_MARKER}\nold code` }] : []),
+    viewer: async () => null,
+    write: async (method, path, body) => {
+      if (failWhile(path)) throw new Error("gh api failed: gh: Bad credentials (HTTP 401)");
+      writes.push({ method, path, body });
+      return { id: 9 };
+    },
+  };
+}
+
+test("a token that dies during the login: the comment still stops offering the dead code", async () => {
+  const env = { GH_TOKEN: "app", GITHUB_WORKFLOW_TOKEN: "workflow" };
+  const api = fakeApi(() => env.GH_TOKEN === "app");
+  const logs = [];
+  await githubConnect(api, 7, "abc", (l) => logs.push(l), env).failed("The code ran out.");
+  assert.equal(env.GH_TOKEN, "workflow");
+  assert.ok(api.writes.some((w) => w.path === "issues/comments/5" && /couldn't connect/.test(w.body.body)));
+  assert.ok(logs.includes("The code ran out."));
+});
+
+test("a failed comment doesn't stop the check from finishing, and it doesn't throw", async () => {
+  const env = { GH_TOKEN: "app" };
+  const api = fakeApi((path) => path.startsWith("issues/"));
+  const logs = [];
+  await githubConnect(api, 7, "abc", (l) => logs.push(l), env).failed("The code ran out.");
+  assert.ok(api.writes.some((w) => w.path === "check-runs" && w.body.conclusion === "neutral"));
+  assert.ok(logs.some((l) => l.startsWith("Couldn't update the comment")));
+});
+
+test("other errors don't switch tokens", async () => {
+  const env = { GH_TOKEN: "app", GITHUB_WORKFLOW_TOKEN: "workflow" };
+  const api = fakeApi(() => false);
+  api.write = async () => { throw new Error("gh api failed: HTTP 422"); };
+  await githubConnect(api, 7, "abc", () => {}, env).failed("The code ran out.");
+  assert.equal(env.GH_TOKEN, "app");
+});
+
