@@ -54,7 +54,9 @@ export default function Setup() {
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
   const [view, setView] = useState<View>('welcome');
   const [client, setClient] = useState<GitHubClient | null>(null);
-  const [signingIn, setSigningIn] = useState(params.has('code'));
+  const requested = params.get('setup_action') === 'request';
+  const backFromInstall = params.has('installation_id') && !params.has('state') && !requested;
+  const [signingIn, setSigningIn] = useState(params.has('code') || backFromInstall);
   const [signInFailed, setSignInFailed] = useState(false);
   const [repos, setRepos] = useState<Repo[] | null>(null);
   const [repo, setRepo] = useState<Repo | null>(null);
@@ -90,9 +92,19 @@ export default function Setup() {
     if (import.meta.env.DEV && params.has('mock')) start(mockClient());
   }, [params, start]);
 
+  // Back from installing the app or changing its repos. The sign-in lives only in this page's memory, so
+  // it's gone, but they just used GitHub, so getting a new one needs nothing from them. Replacing this
+  // address keeps the back button from landing here and bouncing them forward again. The id itself is
+  // never trusted or used: a made-up one only leads to an ordinary sign-in. Someone who hadn't signed in
+  // before arrives with a code too, but without the state that proves it was meant for this tab, so that
+  // code is never used. The new sign-in has the state.
+  useEffect(() => {
+    if (backFromInstall) window.location.replace(signInUrl());
+  }, [backFromInstall]);
+
   // Coming back from GitHub with a sign-in code.
   useEffect(() => {
-    if (!params.has('code')) return;
+    if (!params.has('code') || backFromInstall) return;
     finishSignIn(params)
       .then((token) => {
         if (token) start(realClient(token));
@@ -102,7 +114,7 @@ export default function Setup() {
         setSigningIn(false);
         cleanUrl();
       });
-  }, [params, start]);
+  }, [params, start, backFromInstall]);
 
   const loadRepos = useCallback(() => {
     client?.repos().then(setRepos, () => setSignInFailed(true));
@@ -235,7 +247,7 @@ export default function Setup() {
         <div className="relative flex w-full items-start justify-center">
           <motion.div layout="position" transition={SPRING} className="z-10 w-full max-w-[460px] shrink-0">
             <Stage viewKey={view} direction={direction}>
-              {view === 'welcome' && <Welcome signingIn={signingIn} failed={signInFailed} installed={params.has('installation_id')} />}
+              {view === 'welcome' && <Welcome signingIn={signingIn} failed={signInFailed} requested={requested} />}
               {view === 'repo' && <RepoStep repos={repos} onChoose={choose} failed={signInFailed} />}
               {view === 'add' && repo && (
                 <AddStep repo={repo} details={details} fileCount={files.length} branch={branch} setBranch={setBranch} scope={scope} setScope={setScope} fileOpen={fileOpen} onToggleFile={() => setFileOpen((v) => !v)} adding={adding} failed={addFailed} detailsFailed={detailsFailed} onRetry={() => choose(repo)} update={update} onAdd={() => void addToRepo()} fileUrl={fileUrl} onBack={adding ? () => undefined : back.add!} onByHand={() => { setFileOpen(false); setView('finish'); }} onContinue={afterAdding} />
@@ -417,7 +429,7 @@ function Spinner({ className = 'size-[18px]' }: { className?: string }) {
   );
 }
 
-function Welcome({ signingIn, failed, installed }: { signingIn: boolean; failed: boolean; installed: boolean }) {
+function Welcome({ signingIn, failed, requested }: { signingIn: boolean; failed: boolean; requested: boolean }) {
   // Most sign-ins take a second. When one doesn't, say so before it looks stuck.
   const [slow, setSlow] = useState(false);
   useEffect(() => {
@@ -428,16 +440,27 @@ function Welcome({ signingIn, failed, installed }: { signingIn: boolean; failed:
 
   return (
     <div className="py-2 text-center">
-      <img src="/logo-animated.svg" alt="" width={84} height={84} className="mx-auto size-[84px] rounded-[20px] shadow-[0_0_0_1px_rgb(255_255_255/0.08),0_14px_40px_-12px_rgb(0_0_0/0.8)]" />
-      <h1 className="mt-5 text-[32px] font-semibold leading-[1.1] tracking-[-0.03em]">Turn on Mergelight</h1>
+      {/* Signing in can load this page twice in a row, so the logo holds still instead of restarting its animation. */}
+      <img src={signingIn ? '/logo.png' : '/logo-animated.svg'} alt="" width={84} height={84} className="mx-auto size-[84px] rounded-[20px] shadow-[0_0_0_1px_rgb(255_255_255/0.08),0_14px_40px_-12px_rgb(0_0_0/0.8)]" />
+      <h1 className="mt-5 text-[32px] font-semibold leading-[1.1] tracking-[-0.03em]">{requested ? 'Request sent' : 'Turn on Mergelight'}</h1>
       <p className="mx-auto mt-3 max-w-[320px] text-[15px] leading-relaxed text-muted [text-wrap:pretty]">
-        {installed ? "It's installed. Sign in to finish setting up." : 'Real code review on the AI plan you already pay for. Three quick steps, nothing to install.'}
+        {requested
+          ? 'An owner of your org has to approve Mergelight, and GitHub has emailed them. Once they have, come back here to finish.'
+          : signingIn
+            ? 'Getting your repos from GitHub.'
+            : 'Real code review on the AI plan you already pay for. Three quick steps, nothing to install.'}
       </p>
       {failed && <p className="mt-4 text-[13px] text-risk">GitHub sign-in didn't work. Please try again.</p>}
-      <a href={signingIn ? undefined : signInUrl()} aria-disabled={signingIn} className={`${PRIMARY} mt-7 ${signingIn ? 'pointer-events-none opacity-70' : ''}`}>
-        {signingIn ? <Spinner /> : <GitHubIcon className="size-[18px]" />}
-        {signingIn ? 'Signing you in...' : 'Continue with GitHub'}
-      </a>
+      {requested ? (
+        <a href={signInUrl()} className="mt-6 inline-flex text-[13px] text-muted transition-colors hover:text-fg">
+          Already approved? Continue with GitHub
+        </a>
+      ) : (
+        <a href={signingIn ? undefined : signInUrl()} aria-disabled={signingIn} className={`${PRIMARY} mt-7 ${signingIn ? 'pointer-events-none opacity-70' : ''}`}>
+          {signingIn ? <Spinner /> : <GitHubIcon className="size-[18px]" />}
+          {signingIn ? 'Signing you in...' : 'Continue with GitHub'}
+        </a>
+      )}
       {signingIn && slow && (
         <motion.p role="status" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.3 }} className="mt-3 text-[13px] text-muted">
           This can take up to a minute.
@@ -538,9 +561,10 @@ function RepoStep({ repos, onChoose, failed }: { repos: Repo[] | null; onChoose:
         {repos && list.length === 0 && <p className="px-2 py-6 text-center text-[14px] text-faint">No repos match that.</p>}
       </div>
 
+      {/* Same tab: GitHub sends them back here after an install, and after a change because the app has "Redirect on update" on. */}
       {repos && (
-        <a href={INSTALL_URL} target="_blank" rel="noreferrer" className="mt-3 flex items-center justify-center gap-1 text-[13px] text-muted transition-colors hover:text-fg">
-          Don't see your repo? Add it on GitHub <External />
+        <a href={INSTALL_URL} className="mt-3 flex items-center justify-center gap-1 text-[13px] text-muted transition-colors hover:text-fg">
+          Don't see your repo? Add it on GitHub
         </a>
       )}
     </div>
