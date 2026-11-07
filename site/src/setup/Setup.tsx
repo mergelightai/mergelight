@@ -1098,7 +1098,12 @@ function LiveStep({ repo, pr, status, hasLogin, merged, updatedTo, onAnother }: 
   }
 
   const done = isDone(status);
-  const reviewTitle = done ? 'First review done' : status ? 'First review running' : hasLogin ? 'Starting the first review' : 'Waiting for the first review to start';
+  // A repo that's updating has had reviews before, so this one isn't its first.
+  const review = updatedTo ? 'review' : 'first review';
+  const Review = updatedTo ? 'Review' : 'First review';
+  const reviewTitle = done ? `${Review} done` : status ? `${Review} running` : hasLogin ? `Starting the ${review}` : `Waiting for the ${review} to start`;
+  const reviewNote = updatedTo ? `reviewed this PR with ${updatedTo}` : 'reviewed this same PR, so you can see what a review looks like';
+  const reviewingNote = updatedTo ? `reviewing this PR with ${updatedTo}` : 'reviewing this same PR, so you can see what a review looks like';
   return (
     <div>
       <Heading title="Your PR is open" sub={updatedTo ? `Merge it to update Mergelight on ${name}.` : `Merge it to turn on reviews for ${name}.`} />
@@ -1107,7 +1112,7 @@ function LiveStep({ repo, pr, status, hasLogin, merged, updatedTo, onAnother }: 
           {updatedTo ? `It moves the workflow to ${updatedTo}.` : 'It adds what Mergelight needs to run.'}
         </Milestone>
         <Milestone state={done ? 'done' : 'now'} title={reviewTitle}>
-          {done ? `${plainTitle(status)}. It reviewed this same PR, so you can see what a review looks like.` : "It's reviewing this same PR, so you can see what a review looks like. It usually takes 2 to 15 minutes."}
+          {done ? `${plainTitle(status)}. It ${reviewNote}.` : `It's ${reviewingNote}. It usually takes 2 to 15 minutes.`}
         </Milestone>
         <Milestone last state={done ? 'now' : 'next'} title="Merge the PR">
           {updatedTo ? `After that, reviews on ${name} use the new version.` : `After that, new PRs on ${name} get reviewed by themselves.`} You can merge any time.
