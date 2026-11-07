@@ -6,7 +6,7 @@ import workflowFile from '../../../examples/mergelight.yml?raw';
 import refreshFile from '../../../examples/mergelight-refresh.yml?raw';
 import Ambient from '../sections/Ambient';
 import { Check, GitHubIcon, SURFACE, WELL } from '../ui';
-import { cleanUrl, finishSignIn, GitHubError, INSTALL_URL, REVIEW_APP_URL, isPinned, mockClient, pinned, realClient, REFRESH_FILE, signInUrl, wakeTokenServer, type CheckStatus, type ConnectCode, type GitHubClient, type Release, type Repo, type RepoDetails, type SetupPr, type WorkflowFile } from './github';
+import { cleanUrl, finishSignIn, GitHubError, INSTALL_URL, rememberRepo, reviewAppUrl, takeRememberedRepo, isPinned, mockClient, pinned, realClient, REFRESH_FILE, signInUrl, wakeTokenServer, type CheckStatus, type ConnectCode, type GitHubClient, type Release, type Repo, type RepoDetails, type SetupPr, type WorkflowFile } from './github';
 
 const CHATGPT_SECURITY = 'https://chatgpt.com/settings/security';
 const TYPES_MARKER = 'types: [opened, synchronize, reopened, ready_for_review]';
@@ -148,6 +148,18 @@ export default function Setup() {
       if (d.reviewApp === false) setView('review-app');
     }, () => setDetailsFailed(true));
   };
+
+  // Nobody should pick the same repo twice: not when there's only one, and not after a trip to GitHub for the review app.
+  const autoPicked = useRef(false);
+  useEffect(() => {
+    if (!repos?.length || autoPicked.current) return;
+    autoPicked.current = true;
+    const remembered = takeRememberedRepo();
+    const target = repos.find((r) => r.fullName === remembered) ?? (repos.length === 1 ? repos[0] : null);
+    if (target) choose(target);
+    // Only the first list counts, so `choose` doesn't need to be here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repos]);
 
   /** New repos follow a moving tag, which updates by itself. A pinned one only moves when someone asks. Anything else in its file stays theirs. */
   const update = details?.installed && details.release && isPinned(details.installed) && details.installed.ref !== details.release.sha ? details.release : null;
@@ -999,11 +1011,11 @@ function ReviewAppStep({ repo, onCheck, onBack }: { repo: Repo; onCheck: () => v
   return (
     <div>
       <BackButton onClick={onBack} />
-      <Heading title="One more install" sub={`Add Mergelight AI to ${repo.fullName.split('/')[1]}. It's the app that posts the reviews.`} />
+      <Heading title="One more install" sub={`Mergelight AI posts the reviews. We've selected ${repo.fullName.split('/')[1]} for you, so just approve it on GitHub.`} />
       <p className="mt-4 text-[13px] leading-relaxed text-muted">
         Mergelight uses two apps. Mergelight AI can't change your code or workflows. Mergelight Setup can, but only while you're signed in here.
       </p>
-      <a href={REVIEW_APP_URL} className={`${PRIMARY} mt-6`}>
+      <a href={reviewAppUrl(repo)} onClick={() => rememberRepo(repo.fullName)} className={`${PRIMARY} mt-6`}>
         <GitHubIcon className="size-[18px]" /> Install Mergelight AI
       </a>
       <button type="button" onClick={onCheck} className="mx-auto mt-3 flex items-center justify-center text-[13px] text-muted transition-colors hover:text-fg">
