@@ -451,8 +451,6 @@ function RepoStep({ repos, onChoose, failed }: { repos: Repo[] | null; onChoose:
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
   const list = useMemo(() => (repos ?? []).filter((r) => r.fullName.toLowerCase().includes(query.trim().toLowerCase())), [repos, query]);
-  const accounts = useMemo(() => [...new Set((repos ?? []).map((r) => r.account))], [repos]);
-  const accessUrl = accounts.length === 1 ? repos![0]!.accessUrl : INSTALL_URL;
   useEffect(() => setActive(0), [query]);
 
   if (failed) {
@@ -541,7 +539,7 @@ function RepoStep({ repos, onChoose, failed }: { repos: Repo[] | null; onChoose:
       </div>
 
       {repos && (
-        <a href={accessUrl} target="_blank" rel="noreferrer" className="mt-3 flex items-center justify-center gap-1 text-[13px] text-muted transition-colors hover:text-fg">
+        <a href={INSTALL_URL} target="_blank" rel="noreferrer" className="mt-3 flex items-center justify-center gap-1 text-[13px] text-muted transition-colors hover:text-fg">
           Don't see your repo? Add it on GitHub <External />
         </a>
       )}
