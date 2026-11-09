@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { parsePatch, place } from "../dist/publish/diff-lines.js";
+import { mergeLight, tierOf } from "../dist/review.js";
 import { closedBody, readClosed, reopenedBody, resolvedByPeople, threadAction } from "../dist/publish/closed.js";
 import { clean, failedSummaryBody, FINDING_MARKER_RE, inlineBody, isPendingSummary, pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "../dist/publish/markdown.js";
 import { APPROVAL_MARKER, checkConclusion, isYellowCheck, syncApproval, trustedComment } from "../dist/publish/publish.js";
@@ -463,5 +464,23 @@ test("a fold-out title is safe HTML, keeps code, and mentions nobody", () => {
   assert.ok(summary.includes("<code>foo</code>"), summary);
   assert.ok(summary.includes("&amp; co"), summary);
   assert.ok(!/(^|[^\w`])@alice/.test(summary), summary);
+});
+
+test("minor risks and rare findings are left alone, but a major bug never is", () => {
+  const f = (over) => ({ class: "risk", severity: "major", likelihood: "plausible", recommendation: "fix", rank: null, ...over });
+  assert.equal(tierOf(f({})), "list", "a major risk stays");
+  assert.equal(tierOf(f({ severity: "minor" })), "hardening");
+  assert.equal(tierOf(f({ severity: "minor", rank: 1 })), "hardening", "even as a top pick");
+  assert.equal(tierOf(f({ severity: "minor", recommendation: "decide" })), "hardening");
+  assert.equal(tierOf(f({ likelihood: "rare" })), "hardening");
+  assert.equal(tierOf(f({ class: "bug", severity: "minor", likelihood: "rare" })), "hardening");
+  assert.equal(tierOf(f({ class: "bug", severity: "minor" })), "list", "a minor bug that really happens stays");
+  assert.equal(tierOf(f({ class: "bug", likelihood: "rare" })), "list", "a rare major bug stays, because it turns the check red");
+  assert.equal(tierOf(f({ class: "bug", likelihood: "rare", rank: 1 })), "post");
+});
+
+test("a pull request with only minor risks can go green", () => {
+  const only = [{ class: "risk", severity: "minor", recommendation: "fix", tier: tierOf({ class: "risk", severity: "minor", likelihood: "plausible", recommendation: "fix", rank: null }) }];
+  assert.equal(mergeLight(only), "green");
 });
 

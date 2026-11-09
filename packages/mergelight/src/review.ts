@@ -92,6 +92,10 @@ export function assignIds(
  * Codex's about 6.
  */
 export function tierOf(f: ModelFinding & { rank?: number | null }): Tier {
+  // Teams fixed few of these: 19% of minor risks and 10% of rare findings, against 45% of minor bugs. They stay
+  // readable in the collapsed section, and a major bug is never hidden, because it decides the red light.
+  const majorBug = f.class === "bug" && f.severity !== "minor";
+  if (!majorBug && ((f.class === "risk" && f.severity === "minor") || f.likelihood === "rare")) return "hardening";
   if (f.rank) return "post";
   if (f.recommendation === "fix") return "list";
   if (f.recommendation === "decide") return "decision";
