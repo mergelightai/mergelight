@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
 import { accessTokenExpiry, forceRefresh, isDue, refreshLogin } from "../scripts/refresh-login.mjs";
+import { maskLogin } from "../scripts/mask-login.mjs";
 
 const NOW = 1_800_000_000_000;
 const HOUR = 3_600_000;
@@ -139,7 +140,8 @@ test("the job fails visibly when it can't refresh, and says how to recover", asy
 test("logs never hold a token", async () => {
   const s = setup({ event: "pull_request", msLeft: 30 * 60_000 });
   await s.run();
-  const logs = s.calls.logs.join("\n");
+  // A hide command holds the token for the runner, which swallows the value.
+  const logs = s.calls.logs.filter((l) => !l.startsWith("::add-mask::")).join("\n");
   assert.doesNotMatch(logs, /old|new\b|h\.[A-Za-z0-9_-]+\.s/);
 });
 
@@ -236,3 +238,35 @@ test("a saved login it can't use is left alone", async () => {
     assert.equal(s.calls.refresh, 0);
   }
 });
+
+function masked(contents) {
+  const home = mkdtempSync(join(tmpdir(), "mergelight-mask-"));
+  if (contents !== undefined) writeFileSync(join(home, "auth.json"), contents);
+  const logs = [];
+  maskLogin({ env: { CODEX_HOME: home }, log: (l) => logs.push(l) });
+  return logs;
+}
+
+test("hides each token in the login, and nothing else", () => {
+  const logs = masked(JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: "aaa", refresh_token: "rrr", id_token: "iii", account_id: "acct" } }));
+  assert.deepEqual(logs, ["::add-mask::aaa", "::add-mask::rrr", "::add-mask::iii"]);
+});
+
+test("an API key login, a broken file or a missing file hides nothing and doesn't fail", () => {
+  assert.deepEqual(masked(JSON.stringify({ OPENAI_API_KEY: "k", tokens: null })), []);
+  assert.deepEqual(masked("not json"), []);
+  assert.deepEqual(masked(undefined), []);
+});
+
+test("a token with a line break can't start another workflow command", () => {
+  assert.deepEqual(masked(JSON.stringify({ tokens: { access_token: "x\n::set-output name=a::b" } })), []);
+});
+
+test("a refreshed login's new tokens are hidden before anything else is logged", async () => {
+  const s = setup({ event: "schedule", msLeft: HOUR });
+  assert.equal(await s.run(), 0);
+  const refreshed = s.calls.logs.indexOf("Refreshed the Codex login.");
+  const hidden = s.calls.logs.findIndex((l) => l === "::add-mask::new");
+  assert.ok(hidden >= 0 && hidden < refreshed, s.calls.logs.join("\n"));
+});
+
