@@ -92,9 +92,20 @@ jobs:
       - uses: acme/tool@main
       - uses: acme/../../evil@main
 `);
-  assert.deepEqual(actionsUsedBy(dir, ["src/app.ts", CHANGED]), ["acme/shared/.github/workflows/deploy.yml@v2", "acme/tool@main", "mergelightai/mergelight@v0"]);
+  assert.deepEqual(actionsUsedBy(dir, ["src/app.ts", CHANGED]), ["acme/shared/.github/workflows/deploy.yml@v2", "acme/tool@main"], "not our own action, whose code a customer can't fix");
   assert.deepEqual(actionsUsedBy(dir, ["src/app.ts"]), [], "only changed workflow files count");
   assert.deepEqual(actionsUsedBy(dir, [".github/workflows/deleted.yml"]), []);
+});
+
+test("our own action is skipped however it's written, and a lookalike isn't", () => {
+  const dir = checkoutWith(`
+      - uses: mergelightai/mergelight@${"a".repeat(40)} # v0.1.8
+      - uses: MergelightAI/Mergelight@v0
+      - uses: mergelightai/mergelight/sub@v0
+      - uses: mergelightai/mergelight-fake@v1
+      - uses: notmergelightai/mergelight@v1
+`);
+  assert.deepEqual(actionsUsedBy(dir, [CHANGED]), ["mergelightai/mergelight-fake@v1", "notmergelightai/mergelight@v1"]);
 });
 
 test("only files GitHub runs count, and a symlink is never followed", () => {
