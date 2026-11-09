@@ -272,10 +272,14 @@ await scenario('claude-button-and-paste', { comments: [comment(BOT, withState(co
   expect(!/claude setup-token/.test(t), 'no terminal needed');
   expect(await page.evaluate(() => [...document.querySelectorAll('a')].find((a) => a.textContent.includes('Open Claude'))?.href) === CLAUDE, 'the button opens the link from the run');
   await new Promise((r) => setTimeout(r, 900)); // The card changes height, and a click during that misses.
-  await page.type('input[aria-label="Code from Claude"]', 'abcdef123456#state789');
+  await page.type('input[aria-label="Code from Claude"]', 'abcdef123456');
+  await click('button', 'Connect');
+  await until((x) => /isn't the whole code/.test(x), 'the partial code warning');
+  expect(!world.posted?.length, 'a partial code never reaches the pull request');
+  await page.type('input[aria-label="Code from Claude"]', `#${'s'.repeat(43)}`);
   await click('button', 'Connect');
   await until((x) => /Connecting to Claude/.test(x), 'the connecting line');
-  expect(world.posted?.[0] === '<!-- mergelight:claude-code -->\nabcdef123456#state789', 'hands the code to the run as a comment');
+  expect(world.posted?.[0] === `abcdef123456#${'s'.repeat(43)}`, 'hands only the code to the run, as a comment');
 });
 
 for (const [name, comments, what] of [

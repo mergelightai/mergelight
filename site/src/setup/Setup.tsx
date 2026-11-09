@@ -1080,7 +1080,7 @@ function ConnectStep({ repo, pr, status, code: found, onBack, onSkip, onClaudeCo
   const code = found?.code ? found : null;
   const claudeUrl = found?.claudeUrl ?? null;
   const [pasted, setPasted] = useState('');
-  const [sending, setSending] = useState<'idle' | 'sending' | 'sent' | 'failed'>('idle');
+  const [sending, setSending] = useState<'idle' | 'sending' | 'sent' | 'failed' | 'incomplete'>('idle');
   const [mode, setMode] = useState<'chatgpt' | 'claude' | 'apikey' | 'anthropic'>(repo.isPrivate ? 'chatgpt' : 'apikey');
   const [copied, setCopied] = useState<string | null>(null);
   const prUrl = pr?.url ?? `https://github.com/${repo.fullName}/pulls`;
@@ -1101,6 +1101,11 @@ function ConnectStep({ repo, pr, status, code: found, onBack, onSkip, onClaudeCo
   const sendCode = () => {
     const value = pasted.trim();
     if (!value || sending === 'sending' || sending === 'sent') return;
+    // The run only reads a whole code, so a partial copy would wait until the link runs out.
+    if (!/^[\w.~-]{10,500}#[\w.~-]{20,500}$/.test(value)) {
+      setSending('incomplete');
+      return;
+    }
     setSending('sending');
     onClaudeCode(value).then(() => setSending('sent'), () => setSending('failed'));
   };
@@ -1189,6 +1194,7 @@ function ConnectStep({ repo, pr, status, code: found, onBack, onSkip, onClaudeCo
               </button>
             </span>
             {sending === 'failed' && <span className="mt-1 block text-[13px] text-risk">GitHub didn't take that. Please try again.</span>}
+            {sending === 'incomplete' && <span className="mt-1 block text-[13px] text-risk">That isn't the whole code. Copy it again from Claude's page.</span>}
           </Numbered>
         </ol>
       ) : (

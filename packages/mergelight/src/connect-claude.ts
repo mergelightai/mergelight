@@ -11,8 +11,6 @@ import { agentEnv } from "./providers/codex.js";
  * None of it passes through Mergelight.
  */
 
-/** Marks the comment the setup page writes. Someone without the page can type the command instead. */
-export const CLAUDE_CODE_MARKER = "<!-- mergelight:claude-code -->";
 const WAIT_MS = 16 * 60_000;
 const POLL_MS = 5_000;
 const LINK_WAIT_MS = 45_000;
@@ -41,10 +39,13 @@ export function parseClaudeToken(output: string): string | null {
   return plain(output).match(/\bsk-ant-oat[\w-]{20,}(?=\s)/)?.[0] ?? null;
 }
 
-/** The code in a comment, from the setup page or typed by hand. Anything else in the comment means it's not one. */
+/**
+ * The code in a comment. `claude setup-token` only takes `code#state`, and its state is 43 characters, so a
+ * comment that is exactly that shape is a code and needs no command around it. Any other words mean it's not one.
+ */
 export function readPastedCode(body: string): string | null {
-  const m = body.trim().match(/^(?:<!-- mergelight:claude-code -->\s*|\/claude-code\s+)([\w#.~-]{10,500})$/);
-  return m?.[1] ?? null;
+  const text = body.trim();
+  return /^[\w.~-]{10,500}#[\w.~-]{20,500}$/.test(text) ? text : null;
 }
 
 export interface ClaudeSignIn {

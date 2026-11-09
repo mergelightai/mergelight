@@ -58,9 +58,6 @@ export function connectedBody(account: string | null, secretName: string): strin
   return `🔌 Reviews on this repository now use ${who}. If that isn't yours, remove the \`${secretName}\` secret and push a commit to connect again.`;
 }
 
-const BUTTONS = "https://mergelight.dev/comment";
-const button = (href: string, file: string, alt: string) => `<a href="${href.replace(/"/g, "%22")}"><img src="${BUTTONS}/${file}.svg" alt="${alt}" height="40"></a>`;
-
 /** The setup page reads the link and code from this hidden line, so a change to how the comment looks can't break it. */
 export function connectData(login: DeviceLogin | null, claudeUrl?: string): string {
   return `<!-- mergelight:connect:v1 ${JSON.stringify({ url: login?.url ?? "", code: login?.code ?? "", claudeUrl: claudeUrl ?? null }).replace(/--/g, "\\u002d\\u002d")} -->`;
@@ -68,22 +65,18 @@ export function connectData(login: DeviceLogin | null, claudeUrl?: string): stri
 
 export function connectBody(login: DeviceLogin | null, runUrl?: string, claudeUrl?: string): string {
   const options = [
-    ...(login ? [{ title: "ChatGPT plan", action: button(login.url, "open-chatgpt", "Open ChatGPT"), then: `Then enter this code:<br>\`${login.code}\`` }] : []),
-    ...(claudeUrl ? [{ title: "Claude plan", action: button(claudeUrl, "open-claude", "Open Claude"), then: "Confirm, then comment with the code:<br>`/claude-code THE_CODE`" }] : []),
+    ...(login ? [{ name: "ChatGPT", steps: `[Open ChatGPT](${login.url}) and enter \`${login.code}\`` }] : []),
+    ...(claudeUrl ? [{ name: "Claude", steps: `[Open Claude](${claudeUrl}), confirm, and paste the code you get as a comment here` }] : []),
   ];
+  const only = options.length === 1 ? options[0] : null;
   const run = runUrl ? `[your own GitHub Actions run](${runUrl})` : "your own GitHub Actions run";
   return [
     SUMMARY_MARKER,
     PENDING_MARKER,
     connectData(login, claudeUrl),
-    login && !claudeUrl ? "### 🔌 Connect ChatGPT to start reviews" : "### 🔌 Connect your AI to start reviews",
+    `### 🔌 Connect ${only?.name ?? "your AI"} to start reviews`,
     "",
-    options.length > 1 ? "Mergelight reviews this pull request on your own plan. Pick one, and the review starts by itself." : "Mergelight reviews this pull request on your own plan. Connect it, and the review starts by itself.",
-    "",
-    `| ${options.map((o) => `**${o.title}**`).join(" | ")} |`,
-    `| ${options.map(() => ":--").join(" | ")} |`,
-    `| ${options.map((o) => o.action).join(" | ")} |`,
-    `| ${options.map((o) => o.then).join(" | ")} |`,
+    ...(only ? [`${only.steps}. The review then starts by itself.`] : ["Pick one, and the review starts by itself.", "", ...options.map((o) => `- **${o.name}:** ${o.steps}`)]),
     "",
     "<details><summary>Something not working?</summary>",
     "",

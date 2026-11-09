@@ -437,7 +437,7 @@ export function realClient(token: string): GitHubClient {
       return latest ? { status: latest.status, conclusion: latest.conclusion, title: latest.output.title } : null;
     },
     sendClaudeCode: async (repo, number, code) => {
-      await call('POST', `/repos/${repo.fullName}/issues/${number}/comments`, { body: `<!-- mergelight:claude-code -->\n${code}` });
+      await call('POST', `/repos/${repo.fullName}/issues/${number}/comments`, { body: code });
     },
     connectCode: async (repo, number) => readConnectCode(await get<{ user: { login: string } | null; body?: string | null }[]>(`/repos/${repo.fullName}/issues/${number}/comments?per_page=100`)),
     prState: async (repo, number) => {

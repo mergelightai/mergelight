@@ -246,12 +246,15 @@ test("finds the token in the terminal's output", () => {
   assert.equal(parseClaudeToken("no token here\n"), null);
 });
 
-test("a code counts only as the whole comment", () => {
-  assert.equal(readPastedCode("<!-- mergelight:claude-code -->\nabcdef123456#state789"), "abcdef123456#state789");
-  assert.equal(readPastedCode("/claude-code abcdef123456#state789"), "abcdef123456#state789");
-  assert.equal(readPastedCode("please run /claude-code abcdef123456"), null);
-  assert.equal(readPastedCode("/claude-code a b"), null);
-  assert.equal(readPastedCode("/claude-code short"), null);
+const CODE = `abcdef123456#${"s".repeat(43)}`;
+
+test("a code counts only as the whole comment, with no command needed", () => {
+  assert.equal(readPastedCode(CODE), CODE);
+  assert.equal(readPastedCode(`  ${CODE}\n`), CODE);
+  assert.equal(readPastedCode(`here it is ${CODE}`), null);
+  assert.equal(readPastedCode("abcdef123456"), null, "Claude refuses a code with no state");
+  assert.equal(readPastedCode("fixes issue#12"), null);
+  assert.equal(readPastedCode("see-the-branch#short"), null);
 });
 
 function codeWait(comments, writers = ["owner"]) {
@@ -262,11 +265,11 @@ function codeWait(comments, writers = ["owner"]) {
     run: () => waitForPastedCode(1000, { list: async () => comments, canWrite: async (l) => writers.includes(l), remove: async (id) => removed.push(id), sleep: async () => { t += 10_000; }, now: () => t }, 30_000, 5_000),
   };
 }
-const pasted = (id, login, at, body = "/claude-code abcdef123456") => ({ id, user: { login }, created_at: new Date(at).toISOString(), body });
+const pasted = (id, login, at, body = CODE) => ({ id, user: { login }, created_at: new Date(at).toISOString(), body });
 
 test("only a code from someone with write access counts, and it's removed once read", async () => {
-  const w = codeWait([pasted(1, "stranger", 2000, "/claude-code evilcode12345"), pasted(2, "owner", 3000)]);
-  assert.equal(await w.run(), "abcdef123456");
+  const w = codeWait([pasted(1, "stranger", 2000, `evilcode12345#${"e".repeat(43)}`), pasted(2, "owner", 3000)]);
+  assert.equal(await w.run(), CODE);
   assert.deepEqual(w.removed, [2]);
 });
 
@@ -364,21 +367,25 @@ test("the failure comment names ChatGPT only when ChatGPT was the only offer", (
   assert.match(both, /new link and code/);
 });
 
-test("the comment shows buttons, not long links, and keeps the data for the setup page hidden", () => {
+test("the comment uses plain links, says only what to do, and keeps the data for the setup page hidden", () => {
   const device = { url: "https://auth.openai.com/d", code: "AAAA-BBBB" };
   const both = connectBody(device, "https://github.com/run", LINK);
   assert.match(both, /Connect your AI to start reviews/);
-  assert.match(both, /<img src="https:\/\/mergelight\.dev\/comment\/open-chatgpt\.svg"/);
-  assert.match(both, /<img src="https:\/\/mergelight\.dev\/comment\/open-claude\.svg"/);
-  assert.match(both, /`AAAA-BBBB`/);
-  const visible = both.replace(/<a href="[^"]*">/g, "").replace(/<!--.*?-->/g, "");
+  assert.match(both, /^- \*\*ChatGPT:\*\* \[Open ChatGPT\]\(https:\/\/auth\.openai\.com\/d\) and enter `AAAA-BBBB`$/m);
+  assert.match(both, /^- \*\*Claude:\*\* \[Open Claude\]\(.+\), confirm, and paste the code you get as a comment here$/m);
+  assert.doesNotMatch(both, /<img|<table|^\|/m);
+  assert.doesNotMatch(both, /\/claude-code/);
+  const visible = both.replace(/\]\([^)]*\)/g, "]").replace(/<!--.*?-->/g, "");
   assert.ok(!visible.includes("oauth/authorize"), "no long link on show");
   const data = JSON.parse(both.match(/^<!-- mergelight:connect:v1 (\{.*\}) -->$/m)[1]);
   assert.deepEqual(data, { url: device.url, code: device.code, claudeUrl: LINK });
   const chatgptOnly = connectBody(device);
   assert.match(chatgptOnly, /Connect ChatGPT to start reviews/);
+  assert.match(chatgptOnly, /^\[Open ChatGPT\]/m);
   assert.doesNotMatch(chatgptOnly.replace(/<!--.*?-->/g, ""), /Claude/);
-  assert.match(connectBody(null, undefined, LINK), /Connect your AI/);
+  const claudeOnly = connectBody(null, undefined, LINK);
+  assert.match(claudeOnly, /Connect Claude to start reviews/);
+  assert.doesNotMatch(claudeOnly.replace(/<!--.*?-->/g, ""), /ChatGPT|OpenAI/);
 });
 
 test("a value can't end the hidden line early", () => {
