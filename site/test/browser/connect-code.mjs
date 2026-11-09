@@ -6,7 +6,8 @@ import { extname, join } from 'node:path';
 import puppeteer from 'puppeteer-core';
 
 const root = process.env.REPO ?? new URL('../../..', import.meta.url).pathname.replace(/\/$/, '');
-const { connectBody, connectFailedBody, withState } = await import(`${root}/packages/mergelight/dist/connect.js`);
+const { claudeSetupLink, connectBody, connectFailedBody, withState } = await import(`${root}/packages/mergelight/dist/connect.js`);
+const { claudeCodeRef } = await import(`${root}/packages/mergelight/dist/connect-claude.js`);
 const { pendingSummaryBody, SUMMARY_MARKER } = await import(`${root}/packages/mergelight/dist/publish/markdown.js`);
 const { CHECK_FAILED_TITLE } = await import(`${root}/packages/mergelight/dist/publish/publish.js`);
 
@@ -51,6 +52,7 @@ async function scenario(name, start, body) {
       if (u.pathname === '/sign-in') return json(req, { token: 'fake-token' });
       return req.respond({ status: 200, headers: cors, body: 'ok' });
     }
+    if (u.origin === 'https://github.com' && u.pathname === '/login/oauth/authorize') return req.respond({ status: 302, headers: { location: `${base}/setup/?code=c&state=${u.searchParams.get('state')}` } });
     if (u.origin === 'https://api.github.com') {
       if (m === 'OPTIONS') return req.respond({ status: 204, headers: cors });
       if (u.pathname === '/repos/mergelightai/mergelight/releases/latest') return json(req, { tag_name: 'v0.2.0' });
@@ -60,7 +62,8 @@ async function scenario(name, start, body) {
       if (m !== 'GET') {
         const data = req.postData() ? JSON.parse(req.postData()) : null;
         if (m === 'POST' && p === '/issues/7/comments') { (world.posted ??= []).push(data.body); return json(req, {}, 201); }
-        if (m === 'POST' && p === '/git/refs') return json(req, { ref: data.ref }, 201);
+        if (m === 'POST' && p === '/git/blobs') { world.blob = data; return json(req, { sha: 'blobsha' }, 201); }
+        if (m === 'POST' && p === '/git/refs') { (world.refs ??= []).push(data); return json(req, { ref: data.ref }, 201); }
         if (m === 'PUT' && p.startsWith('/contents/')) return json(req, { content: {}, commit: { sha: 'filesha' } }, 201);
         if (m === 'POST' && p === '/pulls') return json(req, { number: 7, html_url: 'https://github.com/acme/api/pull/7', head: { sha: world.head } }, 201);
         return json(req, {}, 404);
@@ -256,7 +259,9 @@ await scenario('claude-plan-public-repo', { isPrivate: false, checks: { headsha:
   expect(!/claude setup-token/.test(k), 'an API key needs only the secret');
 });
 
-const CLAUDE = 'https://claude.com/cai/oauth/authorize?code=true&code_challenge=abc';
+const CLAUDE = `https://claude.com/cai/oauth/authorize?code=true&code_challenge=abc&state=${'t'.repeat(43)}`;
+const WHOLE = `abcdef123456#${'s'.repeat(43)}`;
+const CLAUDE_COMMENT = () => comment(BOT, withState(connectBody({ url: DEVICE, code: CODE }, 'https://github.com/acme/api/actions/runs/1', CLAUDE, claudeSetupLink('acme/api', 7)), undefined));
 const OLD_COMMENT = ['<!-- mergelight:summary -->', '<!-- mergelight:pending -->', '### 🔌 Connect ChatGPT to start reviewing', '', `1. Open ${DEVICE}`, `2. Enter this code: \`${CODE}\``].join('\n');
 await scenario('comment-from-an-older-release', { comments: [comment(BOT, OLD_COMMENT)], checks: { headsha: WAITING } }, async ({ until, reach }) => {
   await reach();
@@ -264,7 +269,7 @@ await scenario('comment-from-an-older-release', { comments: [comment(BOT, OLD_CO
   expect(true, 'still reads the old layout');
 });
 
-await scenario('claude-button-and-paste', { comments: [comment(BOT, withState(connectBody({ url: DEVICE, code: CODE }, 'https://github.com/acme/api/actions/runs/1', CLAUDE), undefined))], checks: { headsha: WAITING } }, async ({ page, world, click, reach, until }) => {
+await scenario('claude-button-and-paste', { comments: [CLAUDE_COMMENT()], checks: { headsha: WAITING } }, async ({ page, world, click, reach, until }) => {
   await reach();
   await until((x) => x.includes(CODE), 'the code');
   await click('label', 'Claude plan');
@@ -276,10 +281,32 @@ await scenario('claude-button-and-paste', { comments: [comment(BOT, withState(co
   await click('button', 'Connect');
   await until((x) => /isn't the whole code/.test(x), 'the partial code warning');
   expect(!world.posted?.length, 'a partial code never reaches the pull request');
-  await page.type('input[aria-label="Code from Claude"]', `#${'s'.repeat(43)}`);
+  await page.type('input[aria-label="Code from Claude"]', WHOLE.slice('abcdef123456'.length));
   await click('button', 'Connect');
   await until((x) => /Connecting to Claude/.test(x), 'the connecting line');
-  expect(world.posted?.[0] === `abcdef123456#${'s'.repeat(43)}`, 'hands only the code to the run, as a comment');
+  const left = world.refs?.find((r) => r.ref.startsWith('refs/mergelight/'));
+  expect(left?.ref === `refs/${claudeCodeRef(CLAUDE)}` && left?.sha === 'blobsha', 'leaves the code at the exact place the run looks');
+  expect(world.blob?.content === WHOLE, 'leaves only the code');
+  expect(!world.posted?.length, 'nothing shows on the pull request');
+});
+
+await scenario('link-from-the-pull-request', { comments: [CLAUDE_COMMENT()], checks: { headsha: WAITING }, login: true }, async ({ page, world, until }) => {
+  const href = world.comments[0].body.match(/\[Connect on mergelight\.dev\]\((\S+?)\)/)?.[1];
+  expect(Boolean(href), 'the comment has the link');
+  await page.goto(href, { waitUntil: 'networkidle2' });
+  const t = await until((x) => /Paste the code Claude shows you/.test(x), 'the Claude step');
+  expect(/Open Claude/.test(t), 'opens on the Claude step');
+  expect(!/Which repo|Add to api/.test(t), 'nothing to pick or click through first');
+  expect(await page.evaluate(() => [...document.querySelectorAll('a')].find((a) => a.textContent.includes('Open Claude'))?.href) === CLAUDE, 'with the link from the run');
+  expect(/It works once/.test(t), 'says what the code can do');
+  await new Promise((r) => setTimeout(r, 2500));
+  expect(/Paste the code Claude shows you/.test(await page.evaluate(() => document.querySelector('main').innerText)), 'a repo with some other login saved still stays on this step');
+});
+
+await scenario('link-to-a-repo-they-cannot-see', {}, async ({ page, until }) => {
+  await page.goto(`${base}/setup/?repo=acme/secret&pr=7&connect=claude`, { waitUntil: 'networkidle2' });
+  await until((x) => x.includes('Which repo'), 'the list');
+  expect(true, 'falls back to picking a repo');
 });
 
 for (const [name, comments, what] of [

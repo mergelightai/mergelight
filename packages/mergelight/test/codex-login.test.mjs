@@ -125,6 +125,13 @@ test("a Claude login that doesn't work becomes a clear message", async () => {
   assert.match(result.message, /CLAUDE_CODE_OAUTH_TOKEN/);
 });
 
+test("a plan that hit its limit says so, not Claude's status word", async () => {
+  const { result } = await fakeClaude(JSON.stringify({ type: "result", subtype: "success", is_error: true, result: "You've hit your weekly limit" }), { MERGELIGHT_PROVIDER: "claude" });
+  assert.match(result.message, /Your Claude plan hit its usage limit/);
+  assert.match(result.message, /weekly limit/);
+  assert.doesNotMatch(result.message, /\(success\)/);
+});
+
 test("Claude runs with file tools only and without the runner's tokens", async () => {
   const { args, env } = await fakeClaude(refused, { GH_TOKEN: "FAKE_GH", CLAUDE_CODE_OAUTH_TOKEN: "FAKE_LOGIN" });
   assert.equal(args[args.indexOf("--tools") + 1], "Read,Grep,Glob");

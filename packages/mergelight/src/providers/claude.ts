@@ -85,10 +85,12 @@ export async function runClaude(opts: ModelOptions): Promise<ModelResult> {
     throw new Error(`Claude exited with code ${result.code} without a result.${opts.logFile ? ` Log: ${opts.logFile}` : ""}\n${tail}`);
   }
   if (parsed.is_error || parsed.subtype !== "success" || parsed.structured_output === undefined) {
-    checkLogin(`${result.stderr}\n${parsed.result ?? ""}`);
-    throw new Error(
-      `Claude didn't finish (${parsed.subtype ?? "no result"}).${opts.logFile ? ` Log: ${opts.logFile}` : ""}\n${scrubSecrets((parsed.result ?? "").slice(0, 400))}`,
-    );
+    const said = parsed.result ?? "";
+    checkLogin(`${result.stderr}\n${said}`);
+    // Claude calls a refused request a "success" with is_error set, so its status word can't go in the message.
+    const how = parsed.is_error ? "an error" : parsed.subtype === "success" ? "no structured answer" : (parsed.subtype ?? "no result");
+    const why = /\blimit\b/i.test(said) ? "Your Claude plan hit its usage limit." : `Claude didn't finish (${how}).`;
+    throw new Error(`${why}${opts.logFile ? ` Log: ${opts.logFile}` : ""}\n${scrubSecrets(said.slice(0, 400))}`);
   }
 
   // The served model is the one that wrote the most; small helper models may show up too.

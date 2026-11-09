@@ -7,6 +7,9 @@ const ACTION_REPO = 'mergelightai/mergelight';
 const TOKEN_SERVER = 'https://api.mergelight.dev';
 const STATE_KEY = 'mergelight.setup.state';
 const REPO_KEY = 'mergelight.setup.repo';
+const CONNECT_KEY = 'mergelight.setup.connect';
+/** The run looks every few seconds, and the code is spent once it's read. */
+const CODE_REF_LIFETIME_MS = 60_000;
 /** A sleeping server can take about a minute to wake up, so this is generous. */
 const SIGN_IN_TIMEOUT_MS = 120_000;
 
@@ -179,8 +182,8 @@ export interface GitHubClient {
   checkStatus(repo: Repo, sha: string): Promise<CheckStatus | null>;
   /** The code for connecting ChatGPT and the link for Claude, while the pull request is waiting for someone to use them. */
   connectCode(repo: Repo, number: number): Promise<ConnectCode | null>;
-  /** Hands the code from Claude's page to the waiting run, as a comment the run reads and removes. */
-  sendClaudeCode(repo: Repo, number: number, code: string): Promise<void>;
+  /** Leaves the code from Claude's page where the waiting run looks for it, out of sight of the pull request. */
+  sendClaudeCode(repo: Repo, claudeUrl: string, code: string): Promise<void>;
   /** Whether it's merged, and the commit it's on now. */
   prState(repo: Repo, number: number): Promise<{ merged: boolean; headSha: string }>;
 }
@@ -265,6 +268,47 @@ export function takeRememberedRepo(): string | null {
     const name = sessionStorage.getItem(REPO_KEY);
     sessionStorage.removeItem(REPO_KEY);
     return name;
+  } catch {
+    return null;
+  }
+}
+
+/** A link from a pull request that's waiting for Claude. It only says where to go: the page still needs that repo in the person's own list. */
+export interface ConnectLink {
+  repo: string;
+  pr: number;
+}
+
+export function readConnectLink(params: URLSearchParams): ConnectLink | null {
+  const repo = params.get('repo') ?? '';
+  const pr = Number(params.get('pr'));
+  return params.get('connect') === 'claude' && /^[\w.-]+\/[\w.-]+$/.test(repo) && Number.isInteger(pr) && pr > 0 ? { repo, pr } : null;
+}
+
+/** Keeps the link for the trip to GitHub, which only hands back the sign-in. */
+export function rememberConnect(link: ConnectLink): void {
+  try {
+    sessionStorage.setItem(CONNECT_KEY, JSON.stringify(link));
+  } catch {
+    /* Without storage they just pick the repo themselves. */
+  }
+}
+
+export function takeRememberedConnect(): ConnectLink | null {
+  try {
+    const raw = sessionStorage.getItem(CONNECT_KEY);
+    sessionStorage.removeItem(CONNECT_KEY);
+    return raw ? (JSON.parse(raw) as ConnectLink) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Must name the same place as `claudeCodeRef` in the Action. The browser test holds the two together. */
+function claudeCodeRef(claudeUrl: string): string | null {
+  try {
+    const state = new URL(claudeUrl).searchParams.get('state') ?? '';
+    return /^[\w-]{20,200}$/.test(state) ? `mergelight/claude-code/s${state}` : null;
   } catch {
     return null;
   }
@@ -436,8 +480,16 @@ export function realClient(token: string): GitHubClient {
       const latest = check_runs[0];
       return latest ? { status: latest.status, conclusion: latest.conclusion, title: latest.output.title } : null;
     },
-    sendClaudeCode: async (repo, number, code) => {
-      await call('POST', `/repos/${repo.fullName}/issues/${number}/comments`, { body: code });
+    sendClaudeCode: async (repo, claudeUrl, code) => {
+      const name = claudeCodeRef(claudeUrl);
+      if (!name) throw new GitHubError(422);
+      const git = `/repos/${repo.fullName}/git`;
+      // Anything left from an earlier sign-in is spent, so a tab closed early never leaves more than one behind.
+      const left = await get<{ ref: string }[]>(`${git}/matching-refs/mergelight/claude-code/`).catch(() => []);
+      await Promise.all(left.map((r) => call('DELETE', `${git}/${r.ref}`).catch(() => undefined)));
+      const { sha } = await call<{ sha: string }>('POST', `${git}/blobs`, { content: code, encoding: 'utf-8' });
+      await call('POST', `${git}/refs`, { ref: `refs/${name}`, sha });
+      setTimeout(() => void call('DELETE', `${git}/refs/${name}`).catch(() => undefined), CODE_REF_LIFETIME_MS);
     },
     connectCode: async (repo, number) => readConnectCode(await get<{ user: { login: string } | null; body?: string | null }[]>(`/repos/${repo.fullName}/issues/${number}/comments?per_page=100`)),
     prState: async (repo, number) => {

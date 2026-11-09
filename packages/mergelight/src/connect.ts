@@ -5,8 +5,7 @@ import type { GitHub } from "./publish/api.js";
 import { PENDING_MARKER, pendingSummaryBody, SUMMARY_MARKER } from "./publish/markdown.js";
 import { CHECK_FAILED_TITLE, readPrReviewState, writeCheck } from "./publish/publish.js";
 import { stateBlock } from "./publish/state.js";
-import { writeAccess } from "./publish/handled.js";
-import { shareClaudeToken, startClaudeSignIn, waitForPastedCode, type PastedComment } from "./connect-claude.js";
+import { claudeCodeRef, readCodeRef, shareClaudeToken, startClaudeSignIn, waitForPastedCode } from "./connect-claude.js";
 
 /**
  * Connects a repository to ChatGPT from its own pull request, with no terminal.
@@ -63,10 +62,17 @@ export function connectData(login: DeviceLogin | null, claudeUrl?: string): stri
   return `<!-- mergelight:connect:v1 ${JSON.stringify({ url: login?.url ?? "", code: login?.code ?? "", claudeUrl: claudeUrl ?? null }).replace(/--/g, "\\u002d\\u002d")} -->`;
 }
 
-export function connectBody(login: DeviceLogin | null, runUrl?: string, claudeUrl?: string): string {
+const SETUP_URL = "https://mergelight.dev/setup/";
+
+/** Opens the setup page on the step this pull request is waiting for. */
+export function claudeSetupLink(repo: string | undefined, number: number): string {
+  return repo ? `${SETUP_URL}?repo=${repo}&pr=${number}&connect=claude` : SETUP_URL;
+}
+
+export function connectBody(login: DeviceLogin | null, runUrl?: string, claudeUrl?: string, setupLink = SETUP_URL): string {
   const options = [
     ...(login ? [{ name: "ChatGPT", steps: `[Open ChatGPT](${login.url}) and enter \`${login.code}\`` }] : []),
-    ...(claudeUrl ? [{ name: "Claude", steps: `[Open Claude](${claudeUrl}), confirm, and paste the code you get as a comment here` }] : []),
+    ...(claudeUrl ? [{ name: "Claude", steps: `[Connect on mergelight.dev](${setupLink})` }] : []),
   ];
   const only = options.length === 1 ? options[0] : null;
   const run = runUrl ? `[your own GitHub Actions run](${runUrl})` : "your own GitHub Actions run";
@@ -248,10 +254,15 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
     stopLogin: () => running?.kill("SIGTERM"),
     startClaude: async () => {
       if (!(await workflowHasClaude(api, env))) return null;
-      const started = Date.now();
       const signIn = await startClaudeSignIn();
       if (!signIn) {
         log("Claude's sign-in didn't start, so only ChatGPT is offered.");
+        return null;
+      }
+      const ref = claudeCodeRef(signIn.url);
+      if (!ref) {
+        log("Claude's sign-in link wasn't the expected shape, so only ChatGPT is offered.");
+        signIn.stop();
         return null;
       }
       claudeOffered = true;
@@ -263,13 +274,7 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
           signIn.stop();
         },
         wait: async () => {
-          const canWrite = writeAccess(api);
-          const code = await waitForPastedCode(started, {
-            list: () => api.list<PastedComment>(`issues/${number}/comments`),
-            canWrite,
-            remove: (id) => api.write("DELETE", `issues/comments/${id}`, {}),
-            stopped: () => over,
-          });
+          const code = await waitForPastedCode({ read: () => readCodeRef((path) => api.get(path), ref), stopped: () => over });
           if (!code) return false;
           const token = await signIn.finish(code);
           if (!token) {
@@ -298,14 +303,14 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
         });
       }),
     showCode: async (login, claudeUrl) => {
-      await upsertSummary(api, number, connectBody(login, runUrl, claudeUrl));
+      await upsertSummary(api, number, connectBody(login, runUrl, claudeUrl, claudeSetupLink(env.GITHUB_REPOSITORY, number)));
       log("Posted the link and code on the pull request. Waiting for the login.");
       // The comment is what people need. A check that can't be written shouldn't end a login that can still work.
       try {
         const run = await writeCheck(api, null, headSha, {
           status: "in_progress",
           started_at: new Date().toISOString(),
-          output: { title: "Waiting for you to connect ChatGPT", summary: "Follow the link and code in the pull request's Mergelight comment." },
+          output: { title: claudeUrl ? "Waiting for you to connect your AI" : "Waiting for you to connect ChatGPT", summary: "Follow the steps in the pull request's Mergelight comment." },
         }, log);
         checkId = run?.id ?? null;
       } catch (err) {

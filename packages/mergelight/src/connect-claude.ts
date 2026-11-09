@@ -6,9 +6,9 @@ import { agentEnv } from "./providers/codex.js";
  * Connects a Claude plan from a pull request, with no terminal.
  *
  * The unmodified `claude setup-token` runs in the customer's own GitHub Actions run. It makes the link, the
- * person confirms on Claude's own page, and Claude shows them a code. That code comes back as a comment, is
- * useless without a secret that stays in this run, and the token it buys is saved as the repository's secret.
- * None of it passes through Mergelight.
+ * person confirms on Claude's own page, and Claude shows them a code. They paste it on the setup page, which
+ * leaves it in their repository for this run to read. The code is useless without a secret that stays in this
+ * run, and the token it buys is saved as the repository's secret. None of it passes through Mergelight.
  */
 
 const WAIT_MS = 16 * 60_000;
@@ -40,8 +40,7 @@ export function parseClaudeToken(output: string): string | null {
 }
 
 /**
- * The code in a comment. `claude setup-token` only takes `code#state`, and its state is 43 characters, so a
- * comment that is exactly that shape is a code and needs no command around it. Any other words mean it's not one.
+ * The code, if this is one. `claude setup-token` only takes `code#state`, and its state is 43 characters.
  */
 export function readPastedCode(body: string): string | null {
   const text = body.trim();
@@ -127,43 +126,45 @@ export function startClaudeSignIn(spawnImpl: SpawnLike = spawn as unknown as Spa
   });
 }
 
-export interface PastedComment {
-  id: number;
-  created_at: string;
-  user: { login: string } | null;
-  body?: string | null;
+/**
+ * Where the setup page leaves the code: a Git reference outside branches and tags, so it shows nowhere on the
+ * pull request and notifies nobody. Only someone with write access can make one. The name comes from this
+ * sign-in's own state, so a run only ever finds the code meant for it. Null if the link has no usable state.
+ */
+export function claudeCodeRef(claudeUrl: string): string | null {
+  try {
+    const state = new URL(claudeUrl).searchParams.get("state") ?? "";
+    return /^[\w-]{20,200}$/.test(state) ? `mergelight/claude-code/s${state}` : null;
+  } catch {
+    return null;
+  }
+}
+
+/** What's waiting at that reference, if the setup page has been there yet. */
+export async function readCodeRef(get: <T>(path: string) => Promise<T>, ref: string): Promise<string | null> {
+  const refs = await get<{ ref: string; object: { sha: string; type: string } }[]>(`git/matching-refs/${ref}`);
+  const found = refs.find((r) => r.ref === `refs/${ref}` && r.object.type === "blob");
+  if (!found) return null;
+  const blob = await get<{ content: string }>(`git/blobs/${found.object.sha}`);
+  return Buffer.from(blob.content, "base64").toString("utf8");
 }
 
 export interface WaitDeps {
-  list: () => Promise<PastedComment[]>;
-  canWrite: (login: string) => Promise<boolean>;
-  remove: (id: number) => Promise<unknown>;
+  read: () => Promise<string | null>;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
   /** Stops waiting, when the other login got there first. */
   stopped?: () => boolean;
 }
 
-/**
- * Waits for the code. Only someone who can write to the repository counts: otherwise a stranger's code would
- * connect the stranger's plan. Only a comment from after this run started counts, and it's removed once read.
- */
-export async function waitForPastedCode(since: number, deps: WaitDeps, timeoutMs = WAIT_MS, pollMs = POLL_MS): Promise<string | null> {
+/** Waits for the code. A failed read just waits for the next one, and anything that isn't a whole code doesn't count. */
+export async function waitForPastedCode(deps: WaitDeps, timeoutMs = WAIT_MS, pollMs = POLL_MS): Promise<string | null> {
   const now = deps.now ?? Date.now;
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const end = now() + timeoutMs;
-  const seen = new Set<number>();
   while (now() < end && !deps.stopped?.()) {
-    const comments = await deps.list().catch(() => []);
-    for (const c of comments) {
-      if (seen.has(c.id) || Date.parse(c.created_at) < since) continue;
-      const code = readPastedCode(c.body ?? "");
-      if (!code) continue;
-      seen.add(c.id);
-      if (!c.user || !(await deps.canWrite(c.user.login))) continue;
-      await deps.remove(c.id).catch(() => undefined);
-      return code;
-    }
+    const code = readPastedCode((await deps.read().catch(() => null)) ?? "");
+    if (code) return code;
     await sleep(pollMs);
   }
   return null;

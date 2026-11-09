@@ -6,8 +6,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { connect, connectBody, connectedAccount, connectedBody, connectFailedBody, githubConnect, installAppBody, parseDeviceLogin, withState } from "../dist/connect.js";
-import { parseClaudeLink, parseClaudeToken, readPastedCode, shareClaudeToken, startClaudeSignIn, waitForPastedCode } from "../dist/connect-claude.js";
+import { claudeSetupLink, connect, connectBody, connectedAccount, connectedBody, connectFailedBody, githubConnect, installAppBody, parseDeviceLogin, withState } from "../dist/connect.js";
+import { claudeCodeRef, parseClaudeLink, parseClaudeToken, readCodeRef, readPastedCode, shareClaudeToken, startClaudeSignIn, waitForPastedCode } from "../dist/connect-claude.js";
 import { isPendingSummary, PENDING_MARKER, SUMMARY_MARKER } from "../dist/publish/markdown.js";
 import { ownSummary } from "../dist/publish/publish.js";
 import { decodeState, encodeState } from "../dist/publish/state.js";
@@ -248,7 +248,7 @@ test("finds the token in the terminal's output", () => {
 
 const CODE = `abcdef123456#${"s".repeat(43)}`;
 
-test("a code counts only as the whole comment, with no command needed", () => {
+test("only a whole code counts", () => {
   assert.equal(readPastedCode(CODE), CODE);
   assert.equal(readPastedCode(`  ${CODE}\n`), CODE);
   assert.equal(readPastedCode(`here it is ${CODE}`), null);
@@ -257,25 +257,49 @@ test("a code counts only as the whole comment, with no command needed", () => {
   assert.equal(readPastedCode("see-the-branch#short"), null);
 });
 
-function codeWait(comments, writers = ["owner"]) {
-  const removed = [];
+function codeWait(values) {
   let t = 1000;
-  return {
-    removed,
-    run: () => waitForPastedCode(1000, { list: async () => comments, canWrite: async (l) => writers.includes(l), remove: async (id) => removed.push(id), sleep: async () => { t += 10_000; }, now: () => t }, 30_000, 5_000),
-  };
+  let i = 0;
+  return waitForPastedCode({
+    read: async () => {
+      const v = values[Math.min(i++, values.length - 1)];
+      if (v instanceof Error) throw v;
+      return v;
+    },
+    sleep: async () => { t += 10_000; },
+    now: () => t,
+  }, 30_000, 5_000);
 }
-const pasted = (id, login, at, body = CODE) => ({ id, user: { login }, created_at: new Date(at).toISOString(), body });
 
-test("only a code from someone with write access counts, and it's removed once read", async () => {
-  const w = codeWait([pasted(1, "stranger", 2000, `evilcode12345#${"e".repeat(43)}`), pasted(2, "owner", 3000)]);
-  assert.equal(await w.run(), CODE);
-  assert.deepEqual(w.removed, [2]);
+test("waits until the setup page has left a whole code, past any failed read", async () => {
+  assert.equal(await codeWait([null, new Error("GitHub hiccup"), CODE]), CODE);
 });
 
-test("a code from before this run, or from nobody allowed, never counts", async () => {
-  assert.equal(await codeWait([pasted(1, "owner", 500)]).run(), null);
-  assert.equal(await codeWait([pasted(1, "stranger", 2000)]).run(), null);
+test("anything that isn't a whole code never counts, and the wait ends", async () => {
+  assert.equal(await codeWait(["not a code"]), null);
+  assert.equal(await codeWait([null]), null);
+});
+
+test("the hidden reference comes from this sign-in's own state", () => {
+  const state = "a".repeat(43);
+  assert.equal(claudeCodeRef(`https://claude.com/x?code=true&state=${state}`), `mergelight/claude-code/s${state}`);
+  assert.equal(claudeCodeRef("https://claude.com/x?code=true"), null);
+  assert.equal(claudeCodeRef("https://claude.com/x?state=short"), null);
+  assert.equal(claudeCodeRef("https://claude.com/x?state=../../heads/main/aaaaaaaaaaaaaaa"), null, "can't point anywhere else");
+  assert.equal(claudeCodeRef("not a link"), null);
+});
+
+const gitRefs = (found, blobs = {}) => async (path) => {
+  if (path.startsWith("git/matching-refs/")) return found;
+  return { content: Buffer.from(blobs[path.replace("git/blobs/", "")] ?? "").toString("base64") };
+};
+
+test("reads the code only from a blob at exactly that reference", async () => {
+  const ref = "mergelight/claude-code/sabc";
+  assert.equal(await readCodeRef(gitRefs([{ ref: `refs/${ref}`, object: { sha: "b1", type: "blob" } }], { b1: CODE }), ref), CODE);
+  assert.equal(await readCodeRef(gitRefs([]), ref), null, "not there yet");
+  assert.equal(await readCodeRef(gitRefs([{ ref: `refs/${ref}-longer`, object: { sha: "b1", type: "blob" } }], { b1: CODE }), ref), null, "matching is by prefix, so the name is checked");
+  assert.equal(await readCodeRef(gitRefs([{ ref: `refs/${ref}`, object: { sha: "c1", type: "commit" } }]), ref), null);
 });
 
 test("the token is hidden first, then shared with the later steps", () => {
@@ -367,14 +391,16 @@ test("the failure comment names ChatGPT only when ChatGPT was the only offer", (
   assert.match(both, /new link and code/);
 });
 
-test("the comment uses plain links, says only what to do, and keeps the data for the setup page hidden", () => {
+test("the comment sends Claude to the setup page, and shows no code to paste", () => {
   const device = { url: "https://auth.openai.com/d", code: "AAAA-BBBB" };
-  const both = connectBody(device, "https://github.com/run", LINK);
+  const setup = claudeSetupLink("acme/api", 7);
+  assert.equal(setup, "https://mergelight.dev/setup/?repo=acme/api&pr=7&connect=claude");
+  const both = connectBody(device, "https://github.com/run", LINK, setup);
   assert.match(both, /Connect your AI to start reviews/);
   assert.match(both, /^- \*\*ChatGPT:\*\* \[Open ChatGPT\]\(https:\/\/auth\.openai\.com\/d\) and enter `AAAA-BBBB`$/m);
-  assert.match(both, /^- \*\*Claude:\*\* \[Open Claude\]\(.+\), confirm, and paste the code you get as a comment here$/m);
+  assert.ok(both.includes(`- **Claude:** [Connect on mergelight.dev](${setup})`));
   assert.doesNotMatch(both, /<img|<table|^\|/m);
-  assert.doesNotMatch(both, /\/claude-code/);
+  assert.doesNotMatch(both, /\/claude-code|as a comment|paste/i);
   const visible = both.replace(/\]\([^)]*\)/g, "]").replace(/<!--.*?-->/g, "");
   assert.ok(!visible.includes("oauth/authorize"), "no long link on show");
   const data = JSON.parse(both.match(/^<!-- mergelight:connect:v1 (\{.*\}) -->$/m)[1]);
@@ -383,7 +409,7 @@ test("the comment uses plain links, says only what to do, and keeps the data for
   assert.match(chatgptOnly, /Connect ChatGPT to start reviews/);
   assert.match(chatgptOnly, /^\[Open ChatGPT\]/m);
   assert.doesNotMatch(chatgptOnly.replace(/<!--.*?-->/g, ""), /Claude/);
-  const claudeOnly = connectBody(null, undefined, LINK);
+  const claudeOnly = connectBody(null, undefined, LINK, setup);
   assert.match(claudeOnly, /Connect Claude to start reviews/);
   assert.doesNotMatch(claudeOnly.replace(/<!--.*?-->/g, ""), /ChatGPT|OpenAI/);
 });

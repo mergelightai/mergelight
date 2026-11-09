@@ -6,7 +6,7 @@ import workflowFile from '../../../examples/mergelight.yml?raw';
 import refreshFile from '../../../examples/mergelight-refresh.yml?raw';
 import Ambient from '../sections/Ambient';
 import { Check, GitHubIcon, SURFACE, WELL } from '../ui';
-import { cleanUrl, finishSignIn, GitHubError, INSTALL_URL, rememberRepo, reviewAppUrl, takeRememberedRepo, isPinned, mockClient, pinned, realClient, REFRESH_FILE, signInUrl, wakeTokenServer, type CheckStatus, type ConnectCode, type GitHubClient, type Release, type Repo, type RepoDetails, type SetupPr, type WorkflowFile } from './github';
+import { cleanUrl, finishSignIn, GitHubError, INSTALL_URL, readConnectLink, rememberConnect, rememberRepo, reviewAppUrl, takeRememberedConnect, takeRememberedRepo, isPinned, mockClient, pinned, realClient, REFRESH_FILE, signInUrl, wakeTokenServer, type CheckStatus, type ConnectCode, type GitHubClient, type Release, type Repo, type RepoDetails, type SetupPr, type WorkflowFile } from './github';
 
 const CHATGPT_SECURITY = 'https://chatgpt.com/settings/security';
 const TYPES_MARKER = 'types: [opened, synchronize, reopened, ready_for_review, edited]';
@@ -54,8 +54,9 @@ export default function Setup() {
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
   const requested = params.get('setup_action') === 'request';
   const backFromInstall = params.has('installation_id') && !params.has('state') && !requested;
+  const connectLink = useMemo(() => readConnectLink(params), [params]);
   // One skeleton from here until the right step is known, so steps that get skipped never show.
-  const [view, setView] = useState<View>(params.has('code') || backFromInstall ? 'settling' : 'welcome');
+  const [view, setView] = useState<View>(params.has('code') || backFromInstall || connectLink ? 'settling' : 'welcome');
   const [client, setClient] = useState<GitHubClient | null>(null);
   const [signInFailed, setSignInFailed] = useState(false);
   const [repos, setRepos] = useState<Repo[] | null>(null);
@@ -72,6 +73,7 @@ export default function Setup() {
   const [hasLogin, setHasLogin] = useState(false);
   const [merged, setMerged] = useState(false);
   const [detailsFailed, setDetailsFailed] = useState(false);
+  const [startOnClaude, setStartOnClaude] = useState(false);
   const wide = useWide();
 
   const previous = useRef(view);
@@ -103,6 +105,13 @@ export default function Setup() {
     if (backFromInstall) window.location.replace(signInUrl());
   }, [backFromInstall]);
 
+  // From a pull request waiting for Claude. They were just on GitHub, so signing in needs nothing from them.
+  useEffect(() => {
+    if (!connectLink || backFromInstall || params.has('code')) return;
+    rememberConnect(connectLink);
+    window.location.replace(signInUrl());
+  }, [connectLink, backFromInstall, params]);
+
   // Coming back from GitHub with a sign-in code.
   useEffect(() => {
     if (!params.has('code') || backFromInstall) return;
@@ -132,8 +141,10 @@ export default function Setup() {
     return () => window.removeEventListener('focus', loadRepos);
   }, [loadRepos]);
 
-  const choose = (r: Repo) => {
+  /** `waitingPr` is the pull request whose comment sent them here, which skips straight to connecting it. */
+  const choose = (r: Repo, waitingPr?: number) => {
     setRepo(r);
+    setStartOnClaude(false);
     setDetailsFailed(false);
     setDetails(null);
     setPr(null);
@@ -149,7 +160,16 @@ export default function Setup() {
       setBranch(d.base);
       setScope(d.skip.length > 1 ? 'new' : 'all');
       setHasLogin(d.hasLogin);
-      setView(d.reviewApp === false ? 'review-app' : 'add');
+      const next = d.reviewApp === false ? 'review-app' : 'add';
+      if (!waitingPr) {
+        setView(next);
+        return;
+      }
+      client.prState(r, waitingPr).then(({ headSha }) => {
+        setPr({ number: waitingPr, url: `https://github.com/${r.fullName}/pull/${waitingPr}`, headSha });
+        setStartOnClaude(true);
+        setView('connect');
+      }, () => setView(next));
     }, () => {
       setDetailsFailed(true);
       setView('add');
@@ -162,8 +182,9 @@ export default function Setup() {
     if (!repos || autoPicked.current) return;
     autoPicked.current = true;
     const remembered = takeRememberedRepo();
-    const target = repos.find((r) => r.fullName === remembered) ?? (repos.length === 1 ? repos[0] : null);
-    if (target) choose(target);
+    const waiting = takeRememberedConnect();
+    const target = repos.find((r) => r.fullName === (waiting?.repo ?? remembered)) ?? (repos.length === 1 ? repos[0] : null);
+    if (target) choose(target, waiting?.repo === target.fullName ? waiting.pr : undefined);
     else setView('repo');
     // Only the first list counts, so `choose` doesn't need to be here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -250,7 +271,8 @@ export default function Setup() {
       setConnectCode(code);
       setHasLogin(login);
       setMerged(done);
-      if (view === 'connect' && (login || (isReviewing(check) && !couldntFinish(check)))) setView('live');
+      // A run that's still asking comes first, even if the repo has some other login saved.
+      if (view === 'connect' && ((login && !code) || (isReviewing(check) && !couldntFinish(check)))) setView('live');
       return view === 'live' && (done || !pr);
     });
   }, [view, client, repo, pr]);
@@ -296,7 +318,7 @@ export default function Setup() {
                 <AddStep repo={repo} details={details} fileCount={files.length} branch={branch} setBranch={setBranch} scope={scope} setScope={setScope} fileOpen={fileOpen} onToggleFile={() => setFileOpen((v) => !v)} adding={adding} failed={addFailed} detailsFailed={detailsFailed} onRetry={() => choose(repo)} update={update} onAdd={() => void addToRepo()} fileUrl={fileUrl} onBack={adding ? () => undefined : back.add!} onByHand={() => { setFileOpen(false); setView('finish'); }} onContinue={afterAdding} />
               )}
               {view === 'finish' && repo && <FinishStep repo={repo} branch={branch} fileUrl={fileUrl} pr={pr} onBack={back.finish!} />}
-              {view === 'connect' && repo && <ConnectStep repo={repo} pr={pr} status={status} code={connectCode} onBack={back.connect!} onSkip={() => setView('live')} onClaudeCode={(c) => client!.sendClaudeCode(repo, pr!.number, c)} />}
+              {view === 'connect' && repo && <ConnectStep repo={repo} pr={pr} status={status} code={connectCode} onBack={back.connect!} onSkip={() => setView('live')} startOnClaude={startOnClaude} onClaudeCode={(url, c) => client!.sendClaudeCode(repo, url, c)} />}
               {view === 'live' && repo && <LiveStep repo={repo} pr={pr} status={status} hasLogin={hasLogin} merged={merged} updatedTo={update?.tag ?? null} onAnother={anotherRepo} />}
             </Stage>
             <p className="mt-6 flex items-center justify-center gap-1.5 text-center text-[13px] text-faint">
@@ -1076,12 +1098,12 @@ function FinishStep({ repo, branch, fileUrl, pr, onBack }: { repo: Repo; branch:
   );
 }
 
-function ConnectStep({ repo, pr, status, code: found, onBack, onSkip, onClaudeCode }: { repo: Repo; pr: SetupPr | null; status: CheckStatus | null; code: ConnectCode | null; onBack: () => void; onSkip: () => void; onClaudeCode: (code: string) => Promise<void> }) {
+function ConnectStep({ repo, pr, status, code: found, onBack, onSkip, startOnClaude, onClaudeCode }: { repo: Repo; pr: SetupPr | null; status: CheckStatus | null; code: ConnectCode | null; onBack: () => void; onSkip: () => void; startOnClaude: boolean; onClaudeCode: (url: string, code: string) => Promise<void> }) {
   const code = found?.code ? found : null;
   const claudeUrl = found?.claudeUrl ?? null;
   const [pasted, setPasted] = useState('');
   const [sending, setSending] = useState<'idle' | 'sending' | 'sent' | 'failed' | 'incomplete'>('idle');
-  const [mode, setMode] = useState<'chatgpt' | 'claude' | 'apikey' | 'anthropic'>(repo.isPrivate ? 'chatgpt' : 'apikey');
+  const [mode, setMode] = useState<'chatgpt' | 'claude' | 'apikey' | 'anthropic'>(startOnClaude ? 'claude' : repo.isPrivate ? 'chatgpt' : 'apikey');
   const [copied, setCopied] = useState<string | null>(null);
   const prUrl = pr?.url ?? `https://github.com/${repo.fullName}/pulls`;
   const prLink = (
@@ -1106,8 +1128,9 @@ function ConnectStep({ repo, pr, status, code: found, onBack, onSkip, onClaudeCo
       setSending('incomplete');
       return;
     }
+    if (!claudeUrl) return;
     setSending('sending');
-    onClaudeCode(value).then(() => setSending('sent'), () => setSending('failed'));
+    onClaudeCode(claudeUrl, value).then(() => setSending('sent'), () => setSending('failed'));
   };
 
   const copy = (text: string) => {
@@ -1195,6 +1218,7 @@ function ConnectStep({ repo, pr, status, code: found, onBack, onSkip, onClaudeCo
             </span>
             {sending === 'failed' && <span className="mt-1 block text-[13px] text-risk">GitHub didn't take that. Please try again.</span>}
             {sending === 'incomplete' && <span className="mt-1 block text-[13px] text-risk">That isn't the whole code. Copy it again from Claude's page.</span>}
+            {sending !== 'failed' && sending !== 'incomplete' && <span className="mt-1 block text-[13px] text-muted">It works once, and goes straight to your repository.</span>}
           </Numbered>
         </ol>
       ) : (
