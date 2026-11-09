@@ -12,7 +12,7 @@ const { pendingSummaryBody, SUMMARY_MARKER } = await import(`${root}/packages/me
 const { CHECK_FAILED_TITLE } = await import(`${root}/packages/mergelight/dist/publish/publish.js`);
 
 const dist = process.env.DIST ?? new URL('../../dist', import.meta.url).pathname;
-const out = `${mkdtempSync(join(tmpdir(), 'mergelight-browser-'))}/`;
+const out = process.env.SHOTS ?? `${mkdtempSync(join(tmpdir(), 'mergelight-browser-'))}/`;
 const base = 'https://mergelight.dev';
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const browser = await puppeteer.launch({ executablePath: process.env.CHROME_PATH ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', headless: 'new', args: ['--no-sandbox'] });
@@ -248,14 +248,15 @@ await scenario('public-repo', { isPrivate: false, comments: [comment(BOT, askFor
 await scenario('claude-plan-public-repo', { isPrivate: false, checks: { headsha: WAITING } }, async ({ page, click, reach, until, shot }) => {
   await reach();
   await until((x) => /Connect your AI/.test(x), 'the Connect screen');
-  await click('label', 'Claude plan');
+  await click('label', 'Your plan');
   const t = await until((x) => /claude setup-token/.test(x), 'the Claude steps');
   await new Promise((r) => setTimeout(r, 900));
   await shot('claude');
-  expect(await page.evaluate(() => document.querySelector('input[type=radio]:checked')?.closest('label')?.innerText.includes('Claude plan')), 'the Claude plan card is the one selected');
+  expect(await page.evaluate(() => [...document.querySelectorAll('input[type=radio]:checked')].some((i) => i.closest('label')?.innerText.includes('Claude'))), 'a public repo lands on Claude, because ChatGPT plans are private only');
+  expect(/Private repos only/.test(t), 'and says why ChatGPT is closed');
   expect(/CLAUDE_CODE_OAUTH_TOKEN/.test(t), 'names the secret');
   expect(/Push any commit/.test(t), 'says how to start the review');
-  await click('label', 'Anthropic API key');
+  await click('label', 'API key');
   const k = await until((x) => /ANTHROPIC_API_KEY/.test(x), 'the Anthropic key steps');
   expect(!/claude setup-token/.test(k), 'an API key needs only the secret');
 });
@@ -273,7 +274,7 @@ await scenario('comment-from-an-older-release', { comments: [comment(BOT, OLD_CO
 await scenario('claude-button-and-paste', { comments: [CLAUDE_COMMENT()], checks: { headsha: WAITING } }, async ({ page, world, click, reach, until }) => {
   await reach();
   await until((x) => x.includes(CODE), 'the code');
-  await click('label', 'Claude plan');
+  await click('label', 'Claude');
   const t = await until((x) => /Open Claude/.test(x), 'the Claude button');
   expect(!/claude setup-token/.test(t), 'no terminal needed');
   expect(await page.evaluate(() => [...document.querySelectorAll('a')].find((a) => a.textContent.includes('Open Claude'))?.href) === CLAUDE, 'the button opens the link from the run');
@@ -291,7 +292,7 @@ await scenario('claude-button-and-paste', { comments: [CLAUDE_COMMENT()], checks
   expect(!world.posted?.length, 'nothing shows on the pull request');
 });
 
-await scenario('link-from-the-pull-request', { comments: [CLAUDE_COMMENT()], checks: { headsha: WAITING }, login: true }, async ({ page, world, until }) => {
+await scenario('link-from-the-pull-request', { comments: [CLAUDE_COMMENT()], checks: { headsha: WAITING }, login: true }, async ({ page, world, until, click, shot }) => {
   const href = world.comments[0].body.match(/\[Connect on mergelight\.dev\]\((\S+?)\)/)?.[1];
   expect(Boolean(href), 'the comment has the link');
   await page.goto(href, { waitUntil: 'networkidle2' });
@@ -302,6 +303,17 @@ await scenario('link-from-the-pull-request', { comments: [CLAUDE_COMMENT()], che
   expect(/It works once/.test(t), 'says what the code can do');
   await new Promise((r) => setTimeout(r, 2500));
   expect(/Paste the code Claude shows you/.test(await page.evaluate(() => document.querySelector('main').innerText)), 'a repo with some other login saved still stays on this step');
+  await shot('plan-claude');
+  await click('label', 'ChatGPT');
+  await until((x) => x.includes(CODE), 'the ChatGPT steps');
+  await wait(700);
+  await shot('plan-chatgpt');
+  await click('label', 'API key');
+  const keyed = await until((x) => /OPENAI_API_KEY/.test(x), 'the API key steps');
+  expect(/OpenAI/.test(keyed) && /Anthropic/.test(keyed) && !/Your plan.*ChatGPT/.test(keyed), 'the tiles name who bills for a key');
+  expect(await page.evaluate(() => document.querySelectorAll('[role=radiogroup] svg').length === 2), 'both AIs have their logo');
+  await wait(700);
+  await shot('key');
 });
 
 await scenario('link-to-a-repo-they-cannot-see', { comments: [CLAUDE_COMMENT()], checks: { headsha: WAITING }, onlyOther: true }, async ({ page, world, until, click }) => {
@@ -322,7 +334,7 @@ for (const [name, comments, what] of [
   await scenario(name, { comments, checks: { headsha: WAITING } }, async ({ page, click, reach, until }) => {
     await reach();
     await until((x) => /Connect your AI/.test(x), 'the Connect screen');
-    await click('label', 'Claude plan');
+    await click('label', 'Claude');
     await new Promise((r) => setTimeout(r, 1500));
     expect(!(await page.evaluate(() => [...document.querySelectorAll('a')].some((a) => a.textContent.includes('Open Claude')))), `ignores ${what}`);
   });
@@ -331,7 +343,7 @@ for (const [name, comments, what] of [
 await scenario('api-key-instead', { comments: [comment(BOT, askFor())], checks: { headsha: WAITING } }, async ({ until, click, reach, text }) => {
   await reach();
   await until((x) => x.includes(CODE), 'the code');
-  await click('label', 'OpenAI API key');
+  await click('label', 'API key');
   const t = await until((x) => /OPENAI_API_KEY/.test(x), 'the API key steps');
   expect(!t.includes(CODE), 'the code goes away on the API key tab');
   expect(/We'll move on when you're connected/.test(t), 'and the line fits that tab');

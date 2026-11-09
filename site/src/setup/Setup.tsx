@@ -2,8 +2,10 @@ import * as Dialog from '@radix-ui/react-dialog';
 import * as Select from '@radix-ui/react-select';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type Ref } from 'react';
+import { siClaude } from 'simple-icons';
 import workflowFile from '../../../examples/mergelight.yml?raw';
 import refreshFile from '../../../examples/mergelight-refresh.yml?raw';
+import { OPENAI_PATH } from '../brandIcons';
 import Ambient from '../sections/Ambient';
 import { Check, GitHubIcon, SURFACE, WELL } from '../ui';
 import type { ConnectLink } from './github';
@@ -13,6 +15,8 @@ const CHATGPT_SECURITY = 'https://chatgpt.com/settings/security';
 const TYPES_MARKER = 'types: [opened, synchronize, reopened, ready_for_review, edited]';
 const SKIP_MARKER = 'github.event.pull_request.head.repo.full_name == github.repository';
 const SPRING = { type: 'spring', bounce: 0, duration: 0.45 } as const;
+const OPENAI_MARK = { path: OPENAI_PATH, color: '#10A37F' };
+const CLAUDE_MARK = { path: siClaude.path, color: '#D97757' };
 
 /** What gets reviewed. New work is PRs into one branch, without merges from the other long-lived ones. */
 type Scope = 'new' | 'all';
@@ -682,19 +686,44 @@ function Fact({ icon, center = false, tall = false, children }: { icon: ReactNod
 }
 
 /** Two choices side by side. Real radio buttons, so arrow keys and screen readers just work. */
-function Choices<T extends string>({ label, options, value, onChange }: { label: string; options: { id: T; title: string; note: string; disabled?: boolean }[]; value: T; onChange: (v: T) => void }) {
+function Choices<T extends string>({ label, options, value, onChange, top = 'mt-5' }: { label: string; options: { id: T; title: string; note?: string; disabled?: boolean; icon?: { path: string; color: string } }[]; value: T; onChange: (v: T) => void; top?: string }) {
   return (
-    <div role="radiogroup" aria-label={label} className="mt-5 grid grid-cols-2 gap-2">
+    <div role="radiogroup" aria-label={label} className={`${top} grid grid-cols-2 gap-2`}>
       {options.map((o) => {
         const on = value === o.id;
         return (
           <label
             key={o.id}
-            className={`rounded-2xl p-3.5 transition-[background-color,box-shadow,transform] duration-150 has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-lilac ${o.disabled ? 'cursor-not-allowed opacity-40' : 'cursor-pointer active:scale-[0.98]'} ${on ? 'bg-white/[0.07] shadow-[inset_0_0_0_1.5px_rgb(184_156_255/0.75)]' : 'bg-white/[0.025] shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)] hover:bg-white/[0.05]'}`}
+            className={`flex flex-col justify-center rounded-2xl p-3.5 transition-[background-color,box-shadow,transform] duration-150 has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-lilac ${o.disabled ? 'cursor-not-allowed opacity-40' : 'cursor-pointer active:scale-[0.98]'} ${on ? 'bg-white/[0.07] shadow-[inset_0_0_0_1.5px_rgb(184_156_255/0.75)]' : 'bg-white/[0.025] shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)] hover:bg-white/[0.05]'}`}
           >
             <input type="radio" name={label} className="sr-only" checked={on} disabled={o.disabled} onChange={() => onChange(o.id)} />
-            <span className="block text-[14.5px] font-medium text-fg">{o.title}</span>
-            <span className="mt-1 block text-[12.5px] leading-snug text-muted [text-wrap:pretty]">{o.note}</span>
+            <span className="flex items-center gap-2.5">
+              {o.icon && (
+                <svg viewBox="0 0 24 24" aria-hidden="true" className="size-5 shrink-0" fill={o.icon.color} fillRule="evenodd">
+                  <path d={o.icon.path} />
+                </svg>
+              )}
+              <span className="block text-[14.5px] font-medium text-fg">{o.title}</span>
+            </span>
+            {o.note && <span className="mt-1 block text-[12.5px] leading-snug text-muted [text-wrap:pretty]">{o.note}</span>}
+          </label>
+        );
+      })}
+    </div>
+  );
+}
+
+/** One thing or the other, with a pill that slides between them. Real radio buttons, for the same reason as above. */
+function Segment<T extends string>({ label, options, value, onChange }: { label: string; options: { id: T; title: string }[]; value: T; onChange: (v: T) => void }) {
+  return (
+    <div role="radiogroup" aria-label={label} className="mt-5 flex rounded-xl bg-black/25 p-1 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.06)]">
+      {options.map((o) => {
+        const on = value === o.id;
+        return (
+          <label key={o.id} className={`relative flex h-9 flex-1 cursor-pointer items-center justify-center rounded-lg text-[14px] font-medium transition-colors duration-150 has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-1 has-[:focus-visible]:outline-lilac ${on ? 'text-fg' : 'text-muted hover:text-fg'}`}>
+            <input type="radio" name={label} className="sr-only" checked={on} onChange={() => onChange(o.id)} />
+            {on && <motion.span layoutId={`${label} pill`} transition={{ type: 'spring', bounce: 0, duration: 0.28 }} className="absolute inset-0 rounded-lg bg-white/[0.1] shadow-[0_0_0_1px_rgb(255_255_255/0.06)]" />}
+            <span className="relative">{o.title}</span>
           </label>
         );
       })}
@@ -1127,7 +1156,9 @@ function ConnectStep({ repo, pr, status, code: found, onBack, onSkip, startOnCla
   const claudeUrl = found?.claudeUrl ?? null;
   const [pasted, setPasted] = useState('');
   const [sending, setSending] = useState<'idle' | 'sending' | 'sent' | 'failed' | 'incomplete'>('idle');
-  const [mode, setMode] = useState<'chatgpt' | 'claude' | 'apikey' | 'anthropic'>(startOnClaude ? 'claude' : repo.isPrivate ? 'chatgpt' : 'apikey');
+  const [billing, setBilling] = useState<'plan' | 'key'>(startOnClaude || repo.isPrivate ? 'plan' : 'key');
+  const [provider, setProvider] = useState<'openai' | 'anthropic'>(startOnClaude ? 'anthropic' : 'openai');
+  const mode = billing === 'plan' ? (provider === 'openai' ? 'chatgpt' : 'claude') : provider === 'openai' ? 'apikey' : 'anthropic';
   const [copied, setCopied] = useState<string | null>(null);
   const prUrl = pr?.url ?? `https://github.com/${repo.fullName}/pulls`;
   const prLink = (
@@ -1165,19 +1196,24 @@ function ConnectStep({ repo, pr, status, code: found, onBack, onSkip, startOnCla
   };
 
   const secretName = mode === 'claude' ? 'CLAUDE_CODE_OAUTH_TOKEN' : mode === 'anthropic' ? 'ANTHROPIC_API_KEY' : 'OPENAI_API_KEY';
-  const options = [
-    { id: 'chatgpt' as const, title: 'ChatGPT plan', note: repo.isPrivate ? 'Uses the subscription you already have' : 'Private repos only, by OpenAI', disabled: !repo.isPrivate },
-    { id: 'claude' as const, title: 'Claude plan', note: 'Uses the subscription you already have', disabled: false },
-    { id: 'apikey' as const, title: 'OpenAI API key', note: 'Pay OpenAI per use', disabled: false },
-    { id: 'anthropic' as const, title: 'Anthropic API key', note: 'Pay Anthropic per use', disabled: false },
+  // OpenAI allows a ChatGPT login in CI on private repos only.
+  const chatgptClosed = billing === 'plan' && !repo.isPrivate;
+  const chooseBilling = (next: 'plan' | 'key') => {
+    setBilling(next);
+    if (next === 'plan' && !repo.isPrivate) setProvider('anthropic');
+  };
+  const providers = [
+    { id: 'openai' as const, title: billing === 'plan' ? 'ChatGPT' : 'OpenAI', icon: OPENAI_MARK, note: chatgptClosed ? 'Private repos only' : undefined, disabled: chatgptClosed },
+    { id: 'anthropic' as const, title: billing === 'plan' ? 'Claude' : 'Anthropic', icon: CLAUDE_MARK },
   ];
 
   return (
     <div>
       <BackButton onClick={onBack} />
-      <Heading title="Connect your AI" sub="Reviews run on your own account." />
+      <Heading title="Connect your AI" sub={billing === 'plan' ? 'Reviews use the subscription you already have.' : 'You pay your AI provider for each review.'} />
 
-      <Choices label="How to connect" options={options} value={mode} onChange={setMode} />
+      <Segment label="How to pay" options={[{ id: 'plan' as const, title: 'Your plan' }, { id: 'key' as const, title: 'API key' }]} value={billing} onChange={chooseBilling} />
+      <Choices label="Which AI" options={providers} value={provider} onChange={setProvider} top="mt-3" />
 
       {mode === 'chatgpt' ? (
         <ol className="mt-6 space-y-4">
