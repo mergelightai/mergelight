@@ -353,7 +353,15 @@ test("with ChatGPT's device sign-in off, Claude's link still reaches the pull re
 test("when both fail, it says so", async () => {
   const d = raced({ codexExit: 1, claudeOk: false });
   assert.equal(await connect(d), 1);
-  assert.match(d.events.at(-1), /^failed /);
+  assert.match(d.events.at(-1), /^failed .*ChatGPT code and the Claude link both ran out/);
+});
+
+test("the failure comment names ChatGPT only when ChatGPT was the only offer", () => {
+  assert.match(connectFailedBody("r"), /couldn't connect to ChatGPT/);
+  const both = connectFailedBody("r", true);
+  assert.match(both, /couldn't connect your AI/);
+  assert.doesNotMatch(both, /to ChatGPT/);
+  assert.match(both, /new link and code/);
 });
 
 test("the comment holds the Claude link on its own line, for the setup page", () => {
@@ -361,4 +369,3 @@ test("the comment holds the Claude link on its own line, for the setup page", ()
   assert.doesNotMatch(connectBody({ url: "https://auth.openai.com/d", code: "AAAA-BBBB" }), /Claude/);
   assert.match(connectBody(null, undefined, LINK), /Connect your AI/);
 });
-

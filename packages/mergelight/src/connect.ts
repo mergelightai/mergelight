@@ -102,14 +102,14 @@ export function installAppBody(): string {
   ].join("\n");
 }
 
-export function connectFailedBody(reason: string): string {
+export function connectFailedBody(reason: string, claudeOffered = false): string {
   return [
     SUMMARY_MARKER,
-    "### ⚠️ Mergelight couldn't connect to ChatGPT",
+    claudeOffered ? "### ⚠️ Mergelight couldn't connect your AI" : "### ⚠️ Mergelight couldn't connect to ChatGPT",
     "",
     reason,
     "",
-    "Push a new commit to try again. You can also use an OpenAI API key instead: https://mergelight.dev/setup",
+    claudeOffered ? "Push a new commit to get a new link and code. You can also use an API key instead: https://mergelight.dev/setup" : "Push a new commit to try again. You can also use an OpenAI API key instead: https://mergelight.dev/setup",
   ].join("\n");
 }
 
@@ -183,7 +183,9 @@ export async function connect(deps: ConnectDeps): Promise<number> {
     return 0;
   }
   await deps.failed(
-    shown
+    claude
+      ? "The ChatGPT code and the Claude link both ran out before anyone finished signing in."
+      : shown
       ? `The code ran out, or OpenAI refused it. Check that "Enable device code sign-in" is on in your [ChatGPT security settings](${CHATGPT_SECURITY_URL}).`
       : `Codex couldn't start a device login. "Enable device code sign-in" may be off in your [ChatGPT security settings](${CHATGPT_SECURITY_URL}), or for your workspace.`,
   );
@@ -227,6 +229,7 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
   const runUrl = env.GITHUB_RUN_ID ? `${env.GITHUB_SERVER_URL}/${env.GITHUB_REPOSITORY}/actions/runs/${env.GITHUB_RUN_ID}` : undefined;
   let checkId: number | null = null;
   let running: ChildProcess | null = null;
+  let claudeOffered = false;
   /**
    * The app's token dies if the app is removed during the login, which can wait 15 minutes. The comment
    * still has to change, or it keeps offering a dead code, and the workflow's own token can do that.
@@ -254,6 +257,7 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
         log("Claude's sign-in didn't start, so only ChatGPT is offered.");
         return null;
       }
+      claudeOffered = true;
       let over = false;
       return {
         url: signIn.url,
@@ -331,7 +335,7 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
     },
     failed: async (reason) => {
       // One failed write mustn't stop the other. Only the app that made a check can finish it.
-      await updateSummary(connectFailedBody(reason)).catch((err) => log(`Couldn't update the comment: ${err instanceof Error ? err.message : String(err)}`));
+      await updateSummary(connectFailedBody(reason, claudeOffered)).catch((err) => log(`Couldn't update the comment: ${err instanceof Error ? err.message : String(err)}`));
       await finish(CHECK_FAILED_TITLE, reason).catch((err) => log(`Couldn't finish the check: ${err instanceof Error ? err.message : String(err)}`));
       log(reason);
     },
