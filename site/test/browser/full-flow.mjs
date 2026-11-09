@@ -113,13 +113,13 @@ async function run(name, { login = false, apiKey = false, refuse = null, onBase 
     await wait(400);
   }
   const before = await text2();
-  await page.screenshot({ path: `${out}flow-${name}-1-add.png` });
+  await page.screenshot({ path: `${out}flow-${name}-1-add.png` }).catch(() => {});
   if (button) {
     await click('button', button);
     await wait(2200);
   }
   const after = await text2();
-  await page.screenshot({ path: `${out}flow-${name}-2-after.png` });
+  await page.screenshot({ path: `${out}flow-${name}-2-after.png` }).catch(() => {});
   const puts = writes.filter((w) => w.m === 'PUT');
   const put = puts[0];
   const file = put ? Buffer.from(put.body.content, 'base64').toString() : null;

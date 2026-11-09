@@ -104,7 +104,7 @@ async function scenario(name, { repos = ['acme/api'], signInFails = false, listF
     await page.mouse.click(at.x, at.y);
     return at;
   };
-  const shot = (what) => page.screenshot({ path: `${out}return-${name}-${what}.png` });
+  const shot = (what) => page.screenshot({ path: `${out}return-${name}-${what}.png` }).catch(() => {}); // Only a debugging aid, so it can't fail a run.
   const onList = (t, repo = 'new') => /Which repo should we review\?/.test(t) && t.includes(repo);
   const cleanAddress = () => { const u = new URL(page.url()); return !['code', 'state', 'iss'].some((k) => u.searchParams.has(k)); };
 
@@ -211,9 +211,6 @@ await scenario('slow-github-keeps-a-spinner', { authorizeDelay: 2500 }, async ({
   const going = page.goto(`${base}/setup/?installation_id=9&setup_action=install`, { waitUntil: 'domcontentloaded' }).catch(() => {});
   await wait(1500);
   // Straight from Chrome, because this is the moment the page can't be read the usual way.
-  const session = await page.createCDPSession();
-  const { data } = await session.send('Page.captureScreenshot', { format: 'png' });
-  writeFileSync(`${out}return-waiting.png`, Buffer.from(data, 'base64'));
   await going;
   await wait(3000);
   await settle();

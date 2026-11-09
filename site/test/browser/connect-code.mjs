@@ -105,7 +105,7 @@ async function scenario(name, start, body) {
     if (!at) throw new Error(`no ${selector} with ${label}: ${await text()}`);
     await page.mouse.click(at.x, at.y);
   };
-  const shot = (what) => page.screenshot({ path: `${out}code-${name}-${what}.png` });
+  const shot = (what) => page.screenshot({ path: `${out}code-${name}-${what}.png` }).catch(() => {}); // Only a debugging aid, so it can't fail a run.
   const reach = async () => {
     await page.bringToFront();
     await page.goto(`${base}/setup/`, { waitUntil: 'networkidle2' });
