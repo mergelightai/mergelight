@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { EventEmitter } from "node:events";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { connect, connectBody, connectedAccount, connectedBody, connectFailedBody, githubConnect, installAppBody, parseDeviceLogin, withState } from "../dist/connect.js";
+import { parseClaudeLink, parseClaudeToken, readPastedCode, shareClaudeToken, startClaudeSignIn, waitForPastedCode } from "../dist/connect-claude.js";
 import { isPendingSummary, SUMMARY_MARKER } from "../dist/publish/markdown.js";
 import { ownSummary } from "../dist/publish/publish.js";
 import { decodeState, encodeState } from "../dist/publish/state.js";
@@ -226,5 +228,137 @@ test("other errors don't switch tokens", async () => {
   api.write = async () => { throw new Error("gh api failed: HTTP 422"); };
   await githubConnect(api, 7, "abc", () => {}, env).failed("The code ran out.");
   assert.equal(env.GH_TOKEN, "app");
+});
+
+const LINK = "https://claude.com/cai/oauth/authorize?code=true&code_challenge=abc&state=s";
+const SCREEN = `\x1b[2JBrowser didn't open? Use the url below to sign in\n\x1b[36m${LINK}\x1b[0m\r\nPaste code here if prompted >`;
+const TOKEN = "sk-ant-oat01-abcdefghijklmnopqrstuvwxyz0123456789";
+
+test("only a whole link on Claude's own site counts", () => {
+  assert.equal(parseClaudeLink(SCREEN), LINK);
+  assert.equal(parseClaudeLink(LINK), null, "it could still be arriving");
+  assert.equal(parseClaudeLink("https://claude.com.evil.example/cai/oauth/authorize?code_challenge=a \n"), null);
+  assert.equal(parseClaudeLink("https://claude.com/other?x=1 \n"), null);
+});
+
+test("finds the token in the terminal's output", () => {
+  assert.equal(parseClaudeToken(`\x1b[32m${TOKEN}\x1b[0m\r\n`), TOKEN);
+  assert.equal(parseClaudeToken("no token here\n"), null);
+});
+
+test("a code counts only as the whole comment", () => {
+  assert.equal(readPastedCode("<!-- mergelight:claude-code -->\nabcdef123456#state789"), "abcdef123456#state789");
+  assert.equal(readPastedCode("/claude-code abcdef123456#state789"), "abcdef123456#state789");
+  assert.equal(readPastedCode("please run /claude-code abcdef123456"), null);
+  assert.equal(readPastedCode("/claude-code a b"), null);
+  assert.equal(readPastedCode("/claude-code short"), null);
+});
+
+function codeWait(comments, writers = ["owner"]) {
+  const removed = [];
+  let t = 1000;
+  return {
+    removed,
+    run: () => waitForPastedCode(1000, { list: async () => comments, canWrite: async (l) => writers.includes(l), remove: async (id) => removed.push(id), sleep: async () => { t += 10_000; }, now: () => t }, 30_000, 5_000),
+  };
+}
+const pasted = (id, login, at, body = "/claude-code abcdef123456") => ({ id, user: { login }, created_at: new Date(at).toISOString(), body });
+
+test("only a code from someone with write access counts, and it's removed once read", async () => {
+  const w = codeWait([pasted(1, "stranger", 2000, "/claude-code evilcode12345"), pasted(2, "owner", 3000)]);
+  assert.equal(await w.run(), "abcdef123456");
+  assert.deepEqual(w.removed, [2]);
+});
+
+test("a code from before this run, or from nobody allowed, never counts", async () => {
+  assert.equal(await codeWait([pasted(1, "owner", 500)]).run(), null);
+  assert.equal(await codeWait([pasted(1, "stranger", 2000)]).run(), null);
+});
+
+test("the token is hidden first, then shared with the later steps", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-share-"));
+  const file = join(dir, "env");
+  writeFileSync(file, "");
+  const printed = [];
+  shareClaudeToken(TOKEN, { GITHUB_ENV: file }, (l) => printed.push(l));
+  assert.deepEqual(printed, [`::add-mask::${TOKEN}`]);
+  assert.match(readFileSync(file, "utf8"), new RegExp(`MERGELIGHT_CLAUDE_TOKEN=${TOKEN}\\nMERGELIGHT_PROVIDER=claude\\nMERGELIGHT_CONNECT=0\\n`));
+  assert.throws(() => shareClaudeToken("x\nEVIL=1", { GITHUB_ENV: file }, () => {}));
+});
+
+function fakeTerminal(onWrite) {
+  const out = new EventEmitter();
+  out.setEncoding = () => {};
+  const child = new EventEmitter();
+  child.stdout = out;
+  child.stderr = null;
+  child.killed = false;
+  child.kill = () => { child.killed = true; };
+  child.stdin = { write: (text) => onWrite?.(text, out), on: () => {} };
+  return child;
+}
+
+test("the sign-in gives its link, sends the code, and ends with the token", async () => {
+  const written = [];
+  let spawned;
+  const child = fakeTerminal((text, out) => {
+    written.push(text);
+    if (text === "\r") out.emit("data", `Your token:\r\n${TOKEN}\r\n`);
+  });
+  const signIn = startClaudeSignIn((cmd, args) => { spawned = [cmd, ...args]; setImmediate(() => child.stdout.emit("data", SCREEN)); return child; }, { link: 1000, token: 2000 });
+  const s = await signIn;
+  assert.equal(s.url, LINK);
+  assert.equal(spawned[0], "script");
+  assert.match(spawned[2], /claude setup-token/);
+  assert.equal(await s.finish("abcdef123456"), TOKEN);
+  assert.deepEqual(written, ["abcdef123456", "\r"]);
+  assert.ok(child.killed, "nothing is left running");
+});
+
+test("no link in time means Claude just isn't offered", async () => {
+  const child = fakeTerminal();
+  assert.equal(await startClaudeSignIn(() => child, { link: 10, token: 10 }), null);
+  assert.ok(child.killed);
+});
+
+function raced({ codexExit, claudeOk, codexOutput = [CODEX] }) {
+  const d = deps(codexOutput, codexExit);
+  d.showCode = async (login, claudeUrl) => d.events.push(`show ${login?.code ?? "none"} ${claudeUrl ?? "-"}`);
+  d.connected = async (via) => d.events.push(`connected ${via}`);
+  d.startClaude = async () => ({ url: "CL", wait: async () => claudeOk, stop: () => d.events.push("claude stopped") });
+  return d;
+}
+
+test("Claude connecting first ends the ChatGPT login", async () => {
+  const d = raced({ codexExit: 1, claudeOk: true });
+  d.startLogin = async (onOutput) => { onOutput(CODEX); return new Promise((r) => setTimeout(() => r(1), 50)); };
+  assert.equal(await connect(d), 0);
+  assert.deepEqual(d.events, ["show 2ZYY-TEST1 CL", "stopped", "connected claude"]);
+});
+
+test("ChatGPT connecting first ends the Claude sign-in", async () => {
+  const d = raced({ codexExit: 0, claudeOk: false });
+  d.startClaude = async () => ({ url: "CL", wait: () => new Promise(() => {}), stop: () => d.events.push("claude stopped") });
+  assert.equal(await connect(d), 0);
+  assert.deepEqual(d.events, ["show 2ZYY-TEST1 CL", "claude stopped", "connected chatgpt"]);
+});
+
+test("with ChatGPT's device sign-in off, Claude's link still reaches the pull request", async () => {
+  const d = raced({ codexExit: 1, claudeOk: true, codexOutput: [] });
+  d.startClaude = async () => ({ url: "CL", wait: () => new Promise((r) => setTimeout(() => r(true), 30)), stop: () => {} });
+  assert.equal(await connect(d), 0);
+  assert.deepEqual(d.events, ["show none CL", "stopped", "connected claude"]);
+});
+
+test("when both fail, it says so", async () => {
+  const d = raced({ codexExit: 1, claudeOk: false });
+  assert.equal(await connect(d), 1);
+  assert.match(d.events.at(-1), /^failed /);
+});
+
+test("the comment holds the Claude link on its own line, for the setup page", () => {
+  assert.match(connectBody({ url: "https://auth.openai.com/d", code: "AAAA-BBBB" }, undefined, LINK), new RegExp(`^Claude: Open ${LINK.replace(/[?&]/g, "\\$&")}$`, "m"));
+  assert.doesNotMatch(connectBody({ url: "https://auth.openai.com/d", code: "AAAA-BBBB" }), /Claude/);
+  assert.match(connectBody(null, undefined, LINK), /Connect your AI/);
 });
 

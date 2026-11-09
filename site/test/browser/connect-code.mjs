@@ -69,6 +69,7 @@ async function scenario(name, start, body) {
       if (p === '/branches') return json(req, [{ name: 'main' }]);
       if (p === '/pulls') return json(req, []);
       if (p === '/pulls/7') return json(req, { merged: false, head: { sha: world.head } });
+      if (p === '/issues/7/comments' && req.method() === 'POST') { (world.posted ??= []).push(JSON.parse(req.postData()).body); return json(req, {}); }
       if (p === '/issues/7/comments') return world.commentsStatus === 200 ? json(req, world.comments) : json(req, { message: 'no' }, world.commentsStatus);
       if (p === '/actions/secrets') return json(req, { secrets: world.login ? [{ name: 'CODEX_AUTH_JSON' }] : [] });
       if (p.startsWith('/contents/')) return json(req, {}, 404);
@@ -240,9 +241,9 @@ await scenario('public-repo', { isPrivate: false, comments: [comment(BOT, askFor
   expect(!world.asked.includes('/issues/7/comments'), 'and never asks for one');
 });
 
-await scenario('claude-plan', { comments: [comment(BOT, askFor())], checks: { headsha: WAITING } }, async ({ page, click, reach, until, shot }) => {
+await scenario('claude-plan-public-repo', { isPrivate: false, checks: { headsha: WAITING } }, async ({ page, click, reach, until, shot }) => {
   await reach();
-  await until((x) => x.includes(CODE), 'the code');
+  await until((x) => /Connect your AI/.test(x), 'the Connect screen');
   await click('label', 'Claude plan');
   const t = await until((x) => /claude setup-token/.test(x), 'the Claude steps');
   await new Promise((r) => setTimeout(r, 900));
@@ -254,6 +255,34 @@ await scenario('claude-plan', { comments: [comment(BOT, askFor())], checks: { he
   const k = await until((x) => /ANTHROPIC_API_KEY/.test(x), 'the Anthropic key steps');
   expect(!/claude setup-token/.test(k), 'an API key needs only the secret');
 });
+
+const CLAUDE = 'https://claude.com/cai/oauth/authorize?code=true&code_challenge=abc';
+await scenario('claude-button-and-paste', { comments: [comment(BOT, withState(connectBody({ url: DEVICE, code: CODE }, 'https://github.com/acme/api/actions/runs/1', CLAUDE), undefined))], checks: { headsha: WAITING } }, async ({ page, world, click, reach, until }) => {
+  await reach();
+  await until((x) => x.includes(CODE), 'the code');
+  await click('label', 'Claude plan');
+  const t = await until((x) => /Open Claude/.test(x), 'the Claude button');
+  expect(!/claude setup-token/.test(t), 'no terminal needed');
+  expect(await page.evaluate(() => [...document.querySelectorAll('a')].find((a) => a.textContent.includes('Open Claude'))?.href) === CLAUDE, 'the button opens the link from the run');
+  await new Promise((r) => setTimeout(r, 900)); // The card changes height, and a click during that misses.
+  await page.type('input[aria-label="Code from Claude"]', 'abcdef123456#state789');
+  await click('button', 'Connect');
+  await until((x) => /Connecting to Claude/.test(x), 'the connecting line');
+  expect(world.posted?.[0] === '<!-- mergelight:claude-code -->\nabcdef123456#state789', 'hands the code to the run as a comment');
+});
+
+for (const [name, comments, what] of [
+  ['claude-link-from-a-stranger', [comment('attacker', withState(connectBody(null, undefined, CLAUDE), undefined))], "a stranger's Claude link"],
+  ['claude-link-to-another-site', [comment(BOT, withState(connectBody(null, undefined, 'https://claude.com.evil.example/x'), undefined))], 'a link that is not Claude'],
+]) {
+  await scenario(name, { comments, checks: { headsha: WAITING } }, async ({ page, click, reach, until }) => {
+    await reach();
+    await until((x) => /Connect your AI/.test(x), 'the Connect screen');
+    await click('label', 'Claude plan');
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(!(await page.evaluate(() => [...document.querySelectorAll('a')].some((a) => a.textContent.includes('Open Claude')))), `ignores ${what}`);
+  });
+}
 
 await scenario('api-key-instead', { comments: [comment(BOT, askFor())], checks: { headsha: WAITING } }, async ({ until, click, reach, text }) => {
   await reach();

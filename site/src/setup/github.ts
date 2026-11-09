@@ -110,8 +110,10 @@ export interface CheckStatus {
 
 /** The link and code for connecting ChatGPT, as the Action posted them on the pull request. */
 export interface ConnectCode {
+  /** Empty when only Claude is on offer. */
   url: string;
   code: string;
+  claudeUrl: string | null;
 }
 
 /**
@@ -129,7 +131,9 @@ export function readConnectCode(comments: { user: { login: string } | null; body
   if (!body?.includes('<!-- mergelight:pending -->')) return null;
   const url = body.match(/^1\. Open (https:\/\/auth\.openai\.com\/\S+)$/m)?.[1];
   const code = body.match(/^2\. Enter this code: `([A-Z0-9]{4}-[A-Z0-9]{4,})`$/m)?.[1];
-  return url && code ? { url, code } : null;
+  const claudeUrl = body.match(/^Claude: Open (https:\/\/claude\.(?:com|ai)\/\S+)$/m)?.[1] ?? null;
+  if (!(url && code) && !claudeUrl) return null;
+  return { url: url && code ? url : '', code: url && code ? code : '', claudeUrl };
 }
 
 export class GitHubError extends Error {
@@ -155,8 +159,10 @@ export interface GitHubClient {
   hasLogin(repo: Repo): Promise<boolean>;
   /** The Mergelight check on this commit, if a review has started. */
   checkStatus(repo: Repo, sha: string): Promise<CheckStatus | null>;
-  /** The code for connecting ChatGPT, while the pull request is waiting for someone to enter it. */
+  /** The code for connecting ChatGPT and the link for Claude, while the pull request is waiting for someone to use them. */
   connectCode(repo: Repo, number: number): Promise<ConnectCode | null>;
+  /** Hands the code from Claude's page to the waiting run, as a comment the run reads and removes. */
+  sendClaudeCode(repo: Repo, number: number, code: string): Promise<void>;
   /** Whether it's merged, and the commit it's on now. */
   prState(repo: Repo, number: number): Promise<{ merged: boolean; headSha: string }>;
 }
@@ -412,6 +418,9 @@ export function realClient(token: string): GitHubClient {
       const latest = check_runs[0];
       return latest ? { status: latest.status, conclusion: latest.conclusion, title: latest.output.title } : null;
     },
+    sendClaudeCode: async (repo, number, code) => {
+      await call('POST', `/repos/${repo.fullName}/issues/${number}/comments`, { body: `<!-- mergelight:claude-code -->\n${code}` });
+    },
     connectCode: async (repo, number) => readConnectCode(await get<{ user: { login: string } | null; body?: string | null }[]>(`/repos/${repo.fullName}/issues/${number}/comments?per_page=100`)),
     prState: async (repo, number) => {
       const pull = await get<{ merged: boolean; head: { sha: string } }>(`/repos/${repo.fullName}/pulls/${number}`);
@@ -469,7 +478,8 @@ export function mockClient(): GitHubClient {
       if (checks < 7) return later({ status: 'in_progress', conclusion: null, title: 'Reviewing' });
       return later({ status: 'completed', conclusion: 'failure', title: '🔴 Blocked: 2 bugs, 1 risk to fix' });
     },
-    connectCode: () => later(checks < 4 ? { url: 'https://auth.openai.com/codex/device', code: '2ZYY-TEST1' } : null),
+    sendClaudeCode: () => later(undefined),
+    connectCode: () => later(checks < 4 ? { url: 'https://auth.openai.com/codex/device', code: '2ZYY-TEST1', claudeUrl: 'https://claude.com/cai/oauth/authorize?code_challenge=x' } : null),
     prState: () => later({ merged: checks >= 11, headSha: 'abc' }),
   };
 }

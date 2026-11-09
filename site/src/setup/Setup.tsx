@@ -296,7 +296,7 @@ export default function Setup() {
                 <AddStep repo={repo} details={details} fileCount={files.length} branch={branch} setBranch={setBranch} scope={scope} setScope={setScope} fileOpen={fileOpen} onToggleFile={() => setFileOpen((v) => !v)} adding={adding} failed={addFailed} detailsFailed={detailsFailed} onRetry={() => choose(repo)} update={update} onAdd={() => void addToRepo()} fileUrl={fileUrl} onBack={adding ? () => undefined : back.add!} onByHand={() => { setFileOpen(false); setView('finish'); }} onContinue={afterAdding} />
               )}
               {view === 'finish' && repo && <FinishStep repo={repo} branch={branch} fileUrl={fileUrl} pr={pr} onBack={back.finish!} />}
-              {view === 'connect' && repo && <ConnectStep repo={repo} pr={pr} status={status} code={connectCode} onBack={back.connect!} onSkip={() => setView('live')} />}
+              {view === 'connect' && repo && <ConnectStep repo={repo} pr={pr} status={status} code={connectCode} onBack={back.connect!} onSkip={() => setView('live')} onClaudeCode={(c) => client!.sendClaudeCode(repo, pr!.number, c)} />}
               {view === 'live' && repo && <LiveStep repo={repo} pr={pr} status={status} hasLogin={hasLogin} merged={merged} updatedTo={update?.tag ?? null} onAnother={anotherRepo} />}
             </Stage>
             <p className="mt-6 flex items-center justify-center gap-1.5 text-center text-[13px] text-faint">
@@ -1076,7 +1076,11 @@ function FinishStep({ repo, branch, fileUrl, pr, onBack }: { repo: Repo; branch:
   );
 }
 
-function ConnectStep({ repo, pr, status, code, onBack, onSkip }: { repo: Repo; pr: SetupPr | null; status: CheckStatus | null; code: ConnectCode | null; onBack: () => void; onSkip: () => void }) {
+function ConnectStep({ repo, pr, status, code: found, onBack, onSkip, onClaudeCode }: { repo: Repo; pr: SetupPr | null; status: CheckStatus | null; code: ConnectCode | null; onBack: () => void; onSkip: () => void; onClaudeCode: (code: string) => Promise<void> }) {
+  const code = found?.code ? found : null;
+  const claudeUrl = found?.claudeUrl ?? null;
+  const [pasted, setPasted] = useState('');
+  const [sending, setSending] = useState<'idle' | 'sending' | 'sent' | 'failed'>('idle');
   const [mode, setMode] = useState<'chatgpt' | 'claude' | 'apikey' | 'anthropic'>(repo.isPrivate ? 'chatgpt' : 'apikey');
   const [copied, setCopied] = useState<string | null>(null);
   const prUrl = pr?.url ?? `https://github.com/${repo.fullName}/pulls`;
@@ -1092,6 +1096,14 @@ function ConnectStep({ repo, pr, status, code, onBack, onSkip }: { repo: Repo; p
   const note = mode !== 'chatgpt' ? "We'll move on when you're connected" : code ? 'Waiting for you to enter the code' : failed ? "Couldn't connect. Check that step 1 is on." : waiting ? 'Your code is ready on the pull request' : "We'll move on when you're connected";
   // The run takes a little while to make the code, so this has to look busy, not stuck.
   const gettingCode = mode === 'chatgpt' && coming && !code;
+  // A private repo's run offers Claude too, unless it was set up before that existed.
+  const gettingClaude = mode === 'claude' && repo.isPrivate && Boolean(pr) && !failed && !claudeUrl;
+  const sendCode = () => {
+    const value = pasted.trim();
+    if (!value || sending === 'sending' || sending === 'sent') return;
+    setSending('sending');
+    onClaudeCode(value).then(() => setSending('sent'), () => setSending('failed'));
+  };
 
   const copy = (text: string) => {
     void navigator.clipboard?.writeText(text).then(() => {
@@ -1156,6 +1168,29 @@ function ConnectStep({ repo, pr, status, code, onBack, onSkip }: { repo: Repo; p
             )}
           </Numbered>
         </ol>
+      ) : mode === 'claude' && (claudeUrl || gettingClaude) ? (
+        <ol className="mt-6 space-y-4">
+          <Numbered n={1}>
+            Confirm on Claude's page
+            {claudeUrl ? (
+              <a href={claudeUrl} target="_blank" rel="noreferrer" className="mt-1 flex w-fit items-center gap-1 text-[13.5px] text-lilac transition-colors hover:text-fg">
+                Open Claude <External />
+              </a>
+            ) : (
+              <span className="mt-1 block text-[13.5px] text-muted">The link shows up here in a moment.</span>
+            )}
+          </Numbered>
+          <Numbered n={2}>
+            Paste the code Claude shows you
+            <span className={`${WELL} mt-2 flex items-center gap-2 py-1.5 pl-4 pr-1.5`}>
+              <input aria-label="Code from Claude" value={pasted} disabled={!claudeUrl || sending === 'sent'} onChange={(e) => setPasted(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && sendCode()} placeholder="Paste here" autoComplete="off" spellCheck={false} className="min-w-0 flex-1 bg-transparent font-mono text-[14px] text-fg outline-none placeholder:text-faint" />
+              <button type="button" onClick={sendCode} disabled={!pasted.trim() || sending === 'sending' || sending === 'sent'} className="shrink-0 rounded-lg bg-white/[0.08] px-3 py-1.5 text-[13px] text-fg transition-colors hover:bg-white/[0.13] disabled:opacity-40">
+                Connect
+              </button>
+            </span>
+            {sending === 'failed' && <span className="mt-1 block text-[13px] text-risk">GitHub didn't take that. Please try again.</span>}
+          </Numbered>
+        </ol>
       ) : (
         <ol className="mt-6 space-y-4">
           {mode === 'claude' && (
@@ -1182,7 +1217,12 @@ function ConnectStep({ repo, pr, status, code, onBack, onSkip }: { repo: Repo; p
 
       <div className={`${WELL} mt-6 px-4 py-3.5`}>
         <div role="status">
-          {gettingCode ? (
+          {gettingClaude || (mode === 'claude' && sending === 'sent') ? (
+            <span className="flex items-center gap-2.5">
+              <Spinner className="size-4 shrink-0 text-lilac" />
+              <span className="min-w-0 text-[14px] text-muted">{sending === 'sent' ? 'Connecting to Claude. Almost ready, hang tight.' : 'Getting your Claude link. Almost ready, hang tight.'}</span>
+            </span>
+          ) : gettingCode ? (
             <span className="flex items-center gap-2.5">
               <Spinner className="size-4 shrink-0 text-lilac" />
               <span className="min-w-0 text-[14px] text-muted">Getting your code. Almost ready, hang tight.</span>

@@ -247,6 +247,12 @@ runs:
         fi
         echo "can_save=true" >> "$GITHUB_OUTPUT"
 
+    # Offered beside ChatGPT, so someone on a Claude plan can connect without a terminal.
+    - name: Install Claude Code for the sign-in
+      if: env.MERGELIGHT_CONNECT == '1'
+      shell: bash
+      run: npm install -g "@anthropic-ai/claude-code@${{ inputs.claude-code-version }}" --no-audit --no-fund --loglevel=error || echo "::warning::Couldn't install Claude Code, so only ChatGPT is offered."
+
     - name: Connect ChatGPT
       if: env.MERGELIGHT_CONNECT == '1'
       shell: bash
@@ -276,6 +282,14 @@ runs:
         TOKEN_SERVER: ${{ inputs.token-server }}
       run: bash "$GITHUB_ACTION_PATH/packages/mergelight/scripts/save-login.sh"
 
+    - name: Save the new Claude login
+      if: env.MERGELIGHT_CLAUDE_TOKEN != ''
+      shell: bash
+      env:
+        SECRETS_TOKEN: ${{ inputs.secrets-token }}
+        TOKEN_SERVER: ${{ inputs.token-server }}
+      run: bash "$GITHUB_ACTION_PATH/packages/mergelight/scripts/save-claude-login.sh"
+
     - name: Review
       if: (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && env.MERGELIGHT_NO_LOGIN != '1'
       shell: bash
@@ -288,7 +302,7 @@ runs:
         YELLOW_BLOCKS: ${{ inputs.yellow-blocks }}
         MERGELIGHT_ACTION_REF: ${{ github.action_ref }}
         SECRET_NAME: ${{ inputs.auth-secret-name }}
-        CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-code-oauth-token }}
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-code-oauth-token || env.MERGELIGHT_CLAUDE_TOKEN }}
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
       run: |
         set -euo pipefail

@@ -59,7 +59,7 @@ export function sandboxArgs(home = codexHome()): string[] {
 }
 
 /** Tokens the runner holds that a reviewing agent has no use for. It only needs its own login. */
-const HIDDEN_ENV = new Set(["GH_TOKEN", "GITHUB_TOKEN", "SECRETS_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_RUNTIME_TOKEN", "ACTIONS_RESULTS_URL", "ACTIONS_CACHE_URL"]);
+const HIDDEN_ENV = new Set(["GH_TOKEN", "GITHUB_TOKEN", "SECRETS_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_RUNTIME_TOKEN", "ACTIONS_RESULTS_URL", "ACTIONS_CACHE_URL", "MERGELIGHT_CLAUDE_TOKEN"]);
 
 export function agentEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(env).filter(([name]) => !HIDDEN_ENV.has(name)));
