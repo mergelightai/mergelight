@@ -340,7 +340,7 @@ export default function Setup() {
               )}
               {view === 'finish' && repo && <FinishStep repo={repo} branch={branch} fileUrl={fileUrl} pr={pr} onBack={back.finish!} />}
               {view === 'connect' && repo && <ConnectStep repo={repo} pr={pr} status={status} code={connectCode} onBack={back.connect!} onSkip={() => setView('live')} startOnClaude={startOnClaude} onClaudeCode={(url, c) => client!.sendClaudeCode(repo, url, c)} />}
-              {view === 'live' && repo && <LiveStep repo={repo} pr={shownPr} status={status} hasLogin={hasLogin} merged={merged} updatedTo={startOnClaude ? null : (update?.tag ?? null)} onAnother={anotherRepo} />}
+              {view === 'live' && repo && <LiveStep repo={repo} pr={shownPr} backTo={startOnClaude ? pr : null} status={status} hasLogin={hasLogin} merged={merged} updatedTo={startOnClaude ? null : (update?.tag ?? null)} onAnother={anotherRepo} />}
             </Stage>
             <p className="mt-6 flex items-center justify-center gap-1.5 text-center text-[13px] text-faint">
               <LockIcon className="size-3.5 shrink-0" />
@@ -1370,7 +1370,7 @@ function Milestone({ state, title, last = false, children }: { state: 'done' | '
   );
 }
 
-function LiveStep({ repo, pr, status, hasLogin, merged, updatedTo, onAnother }: { repo: Repo; pr: SetupPr | null; status: CheckStatus | null; hasLogin: boolean; merged: boolean; updatedTo: string | null; onAnother: () => void }) {
+function LiveStep({ repo, pr, backTo, status, hasLogin, merged, updatedTo, onAnother }: { repo: Repo; pr: SetupPr | null; backTo: SetupPr | null; status: CheckStatus | null; hasLogin: boolean; merged: boolean; updatedTo: string | null; onAnother: () => void }) {
   const name = repo.fullName.split('/')[1]!;
   const another = (
     <button type="button" onClick={onAnother} className={`${BUTTON} mt-3 text-fg shadow-[inset_0_0_0_1px_rgb(255_255_255/0.12)] hover:bg-white/[0.05]`}>
@@ -1387,9 +1387,17 @@ function LiveStep({ repo, pr, status, hasLogin, merged, updatedTo, onAnother }: 
         </motion.div>
         <h1 className="mt-4 text-[28px] font-semibold leading-[1.1] tracking-[-0.028em]">{updatedTo ? `You're on ${updatedTo}` : 'Mergelight is on'}</h1>
         <p className="mx-auto mt-2 max-w-[340px] text-[15px] leading-relaxed text-muted [text-wrap:pretty]">
-          {updatedTo ? `Reviews on ${name} now use the new version.` : `New PRs on ${name} get reviewed by themselves, and the results show up on the PR.`} You can close this page.
+          {updatedTo ? `Reviews on ${name} now use the new version.` : `New PRs on ${name} get reviewed by themselves, and the results show up on the PR.`}{backTo ? '' : ' You can close this page.'}
         </p>
-        <div className="mt-6">{another}</div>
+        <div className="mt-6">
+          {/* GitHub opens a comment's links in the same tab, so this is the way back. */}
+          {backTo && (
+            <a href={backTo.url} className={PRIMARY}>
+              Back to PR #{backTo.number}
+            </a>
+          )}
+          {another}
+        </div>
       </div>
     );
   }

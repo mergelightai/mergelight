@@ -334,6 +334,7 @@ await scenario('link-connects-on-a-repo-already-set-up', { comments: [CLAUDE_COM
   world.checks.headsha = { status: 'completed', conclusion: 'neutral', output: { title: 'Connected to Claude' } };
   const t = await until((x) => /Mergelight is on/.test(x), 'the done screen');
   expect(!/moves the workflow|Merge it to/.test(t), 'never calls this pull request an update or a setup');
+  expect(await page.evaluate(() => [...document.querySelectorAll('a')].find((a) => a.textContent.includes('Back to PR #7'))?.href) === 'https://github.com/acme/api/pull/7', 'has a button back to the pull request');
 });
 
 await scenario('link-to-a-repo-they-cannot-see', { comments: [CLAUDE_COMMENT()], checks: { headsha: WAITING }, onlyOther: true }, async ({ page, world, until, click }) => {
