@@ -157,6 +157,11 @@ runs:
           exit 1
         fi
 
+    - name: Hide the Codex login in the logs
+      if: env.MERGELIGHT_CHATGPT == '1'
+      shell: bash
+      run: node "$GITHUB_ACTION_PATH/packages/mergelight/scripts/mask-login.mjs"
+
     # Refresh before anything uses the login, and save at once, so a review never does it halfway
     # through while another starts from the old login. The job always refreshes. A review only does
     # when its token could run out during it.
@@ -205,6 +210,11 @@ runs:
         args=(connect "$GITHUB_REPOSITORY#$PR")
         [ "$CAN_SAVE" = "true" ] || args+=(--no-save)
         node "$GITHUB_ACTION_PATH/packages/mergelight/dist/cli.js" "${args[@]}"
+
+    - name: Hide the new Codex login in the logs
+      if: env.MERGELIGHT_CONNECT == '1'
+      shell: bash
+      run: node "$GITHUB_ACTION_PATH/packages/mergelight/scripts/mask-login.mjs"
 
     # Saved right away, so a pull request opened during this review doesn't ask for another code.
     - name: Save the new Codex login

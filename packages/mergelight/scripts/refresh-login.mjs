@@ -15,6 +15,7 @@ import { appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getAppToken } from "./app-token.mjs";
+import { maskLogin } from "./mask-login.mjs";
 
 const HOUR = 3_600_000;
 /** Longer than a review's 45 minute job limit, so Codex won't need to refresh during one. */
@@ -144,6 +145,7 @@ export async function refreshLogin({
   const reason = await refresh();
   const after = read()?.tokens;
   if (after?.refresh_token && after.access_token && after.access_token !== before.tokens.access_token) {
+    maskLogin({ env, log });
     log("Refreshed the Codex login.");
     if (save(token) !== 0) log("::warning::Couldn't save the refreshed Codex login yet. This run tries again when it ends.");
     return 0;
