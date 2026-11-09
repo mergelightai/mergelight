@@ -288,11 +288,15 @@ export default function Setup() {
       setConnectCode(code);
       setHasLogin(login);
       setMerged(done);
-      // A run that's still asking comes first, even if the repo has some other login saved.
-      if (view === 'connect' && ((login && !code) || (isReviewing(check) && !couldntFinish(check)))) setView('live');
+      // A run that's still asking comes first, even if the repo has some other login saved. Someone sent here by a
+      // pull request is connecting that run, so only that run going ahead ends this step, not a login from before.
+      if (view === 'connect' && ((login && !code && !startOnClaude) || (isReviewing(check) && !couldntFinish(check)))) setView('live');
       return view === 'live' && (done || !pr);
     });
-  }, [view, client, repo, pr]);
+  }, [view, client, repo, pr, startOnClaude]);
+
+  // A pull request's link can be any pull request. Only one on a repo without the workflow is the one that sets it up.
+  const shownPr = startOnClaude && details?.installed ? null : pr;
 
   const anotherRepo = () => {
     setRepo(null);
@@ -320,7 +324,7 @@ export default function Setup() {
           Mergelight
         </a>
         {/* The orb at the end only lights up once reviews are really on. */}
-        <Rail at={view === 'live' && pr && !merged ? 3 : RAIL[view]} />
+        <Rail at={view === 'live' && shownPr && !merged ? 3 : RAIL[view]} />
       </header>
 
       <main className="flex flex-1 justify-center px-4 pb-16 pt-[6vh] sm:pt-[9vh]">
@@ -336,7 +340,7 @@ export default function Setup() {
               )}
               {view === 'finish' && repo && <FinishStep repo={repo} branch={branch} fileUrl={fileUrl} pr={pr} onBack={back.finish!} />}
               {view === 'connect' && repo && <ConnectStep repo={repo} pr={pr} status={status} code={connectCode} onBack={back.connect!} onSkip={() => setView('live')} startOnClaude={startOnClaude} onClaudeCode={(url, c) => client!.sendClaudeCode(repo, url, c)} />}
-              {view === 'live' && repo && <LiveStep repo={repo} pr={pr} status={status} hasLogin={hasLogin} merged={merged} updatedTo={update?.tag ?? null} onAnother={anotherRepo} />}
+              {view === 'live' && repo && <LiveStep repo={repo} pr={shownPr} status={status} hasLogin={hasLogin} merged={merged} updatedTo={startOnClaude ? null : (update?.tag ?? null)} onAnother={anotherRepo} />}
             </Stage>
             <p className="mt-6 flex items-center justify-center gap-1.5 text-center text-[13px] text-faint">
               <LockIcon className="size-3.5 shrink-0" />
@@ -1170,11 +1174,14 @@ function ConnectStep({ repo, pr, status, code: found, onBack, onSkip, startOnCla
   const waiting = !failed && status?.title?.toLowerCase().includes('connect');
   // With a pull request open, the run that makes the code is on its way or already going.
   const coming = Boolean(pr) && !failed && !waiting;
+  const noteEnded = 'This link has ended';
   const note = mode !== 'chatgpt' ? "We'll move on when you're connected" : code ? 'Waiting for you to enter the code' : failed ? "Couldn't connect. Check that step 1 is on." : waiting ? 'Your code is ready on the pull request' : "We'll move on when you're connected";
   // The run takes a little while to make the code, so this has to look busy, not stuck.
   const gettingCode = mode === 'chatgpt' && coming && !code;
   // A private repo's run offers Claude too, unless it was set up before that existed.
   const gettingClaude = mode === 'claude' && repo.isPrivate && Boolean(pr) && !failed && !claudeUrl;
+  // A pull request's link means its run offered Claude, so no link now means that run has ended.
+  const claudeEnded = startOnClaude && mode === 'claude' && failed && !claudeUrl;
   const sendCode = () => {
     const value = pasted.trim();
     if (!value || sending === 'sending' || sending === 'sent') return;
@@ -1256,6 +1263,13 @@ function ConnectStep({ repo, pr, status, code: found, onBack, onSkip, startOnCla
             )}
           </Numbered>
         </ol>
+      ) : claudeEnded ? (
+        <ol className="mt-6 space-y-4">
+          <Numbered n={1}>
+            Push a new commit to your pull request to get a new link
+            {prLink}
+          </Numbered>
+        </ol>
       ) : mode === 'claude' && (claudeUrl || gettingClaude) ? (
         <ol className="mt-6 space-y-4">
           <Numbered n={1}>
@@ -1307,7 +1321,7 @@ function ConnectStep({ repo, pr, status, code: found, onBack, onSkip, startOnCla
 
       <div className={`${WELL} mt-6 px-4 py-3.5`}>
         <div role="status">
-          {gettingClaude || (mode === 'claude' && sending === 'sent') ? (
+          {gettingClaude || (mode === 'claude' && sending === 'sent' && !failed) ? (
             <span className="flex items-center gap-2.5">
               <Spinner className="size-4 shrink-0 text-lilac" />
               <span className="min-w-0 text-[14px] text-muted">{sending === 'sent' ? 'Connecting to Claude. Almost ready, hang tight.' : 'Getting your Claude link. Almost ready, hang tight.'}</span>
@@ -1318,7 +1332,7 @@ function ConnectStep({ repo, pr, status, code: found, onBack, onSkip, startOnCla
               <span className="min-w-0 text-[14px] text-muted">Getting your code. Almost ready, hang tight.</span>
             </span>
           ) : (
-            <Pulse tone={mode === 'chatgpt' && (code || failed || waiting) ? 'risk' : 'lilac'}>{note}</Pulse>
+            <Pulse tone={claudeEnded || (mode === 'chatgpt' && (code || failed || waiting)) ? 'risk' : 'lilac'}>{claudeEnded ? noteEnded : note}</Pulse>
           )}
         </div>
       </div>

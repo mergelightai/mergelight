@@ -76,7 +76,7 @@ async function scenario(name, start, body) {
       if (p === '/pulls/7') return json(req, { merged: false, head: { sha: world.head } });
       if (p === '/issues/7/comments') return world.commentsStatus === 200 ? json(req, world.comments) : json(req, { message: 'no' }, world.commentsStatus);
       if (p === '/actions/secrets') return json(req, { secrets: world.login ? [{ name: 'CODEX_AUTH_JSON' }] : [] });
-      if (p.startsWith('/contents/')) return json(req, {}, 404);
+      if (p.startsWith('/contents/')) return world.installed && p.endsWith('mergelight.yml') || (world.installed && p.includes('mergelight.yml?')) ? json(req, { sha: 'filesha', content: Buffer.from(`    steps:\n      - uses: mergelightai/mergelight@${'b'.repeat(40)} # v0.1.0\n`).toString('base64') }) : json(req, {}, 404);
       if (p.startsWith('/git/ref/heads/')) return json(req, { object: { sha: 'basesha' } });
       const run = p.match(/^\/commits\/([^/]+)\/check-runs/);
       if (run) return json(req, { check_runs: world.checks[run[1]] ? [world.checks[run[1]]] : [] });
@@ -314,6 +314,26 @@ await scenario('link-from-the-pull-request', { comments: [CLAUDE_COMMENT()], che
   expect(await page.evaluate(() => document.querySelectorAll('[role=radiogroup] svg').length === 2), 'both AIs have their logo');
   await wait(700);
   await shot('key');
+});
+
+await scenario('link-runs-out', { comments: [CLAUDE_COMMENT()], checks: { headsha: WAITING }, login: true }, async ({ page, world, until }) => {
+  await page.goto(claudeSetupLink('acme/api', 7), { waitUntil: 'networkidle2' });
+  await until((x) => /Paste the code Claude shows you/.test(x), 'the Claude step');
+  world.comments = [comment(BOT, connectFailedBody('The links ran out.', true))];
+  world.checks.headsha = FAILED;
+  const t = await until((x) => /get a new link/.test(x), 'the ended step');
+  expect(!/Your PR is open/.test(t), 'stays on this step, even with a login saved from before');
+  expect(/This link has ended/.test(t), 'says the link has ended');
+  expect(!/claude setup-token/.test(t), 'and offers no terminal steps');
+});
+
+await scenario('link-connects-on-a-repo-already-set-up', { comments: [CLAUDE_COMMENT()], checks: { headsha: WAITING }, login: true, installed: true }, async ({ page, world, until }) => {
+  await page.goto(claudeSetupLink('acme/api', 7), { waitUntil: 'networkidle2' });
+  await until((x) => /Paste the code Claude shows you/.test(x), 'the Claude step');
+  world.comments = [comment(BOT, withState(pendingSummaryBody(), undefined))];
+  world.checks.headsha = { status: 'completed', conclusion: 'neutral', output: { title: 'Connected to Claude' } };
+  const t = await until((x) => /Mergelight is on/.test(x), 'the done screen');
+  expect(!/moves the workflow|Merge it to/.test(t), 'never calls this pull request an update or a setup');
 });
 
 await scenario('link-to-a-repo-they-cannot-see', { comments: [CLAUDE_COMMENT()], checks: { headsha: WAITING }, onlyOther: true }, async ({ page, world, until, click }) => {
