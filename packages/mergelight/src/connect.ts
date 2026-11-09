@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { GitHub } from "./publish/api.js";
-import { PENDING_MARKER, pendingSummaryBody, SUMMARY_MARKER } from "./publish/markdown.js";
+import { FAILED_MARKER, PENDING_MARKER, pendingSummaryBody, SUMMARY_MARKER } from "./publish/markdown.js";
 import { CHECK_FAILED_TITLE, readPrReviewState, writeCheck } from "./publish/publish.js";
 import { stateBlock } from "./publish/state.js";
 import { claudeCodeRef, readCodeRef, shareClaudeToken, startClaudeSignIn, waitForPastedCode } from "./connect-claude.js";
@@ -108,6 +108,7 @@ export function installAppBody(): string {
 export function connectFailedBody(reason: string, claudeOffered = false): string {
   return [
     SUMMARY_MARKER,
+    FAILED_MARKER,
     claudeOffered ? "### ⚠️ Mergelight couldn't connect your AI" : "### ⚠️ Mergelight couldn't connect to ChatGPT",
     "",
     reason,

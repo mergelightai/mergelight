@@ -78,10 +78,17 @@ export function limitNotice(plan: string, resets: string | null): FailureNotice 
   };
 }
 
+/** Marks a summary that only says a run failed, so the next failure can say what's true now. */
+export const FAILED_MARKER = "<!-- mergelight:failed -->";
+const GENERAL_FAILURE = ["### ⚠️ Mergelight couldn't review this pull request", "", "The Mergelight check has the reason. The next push tries again."].join("\n");
+
 export function failedSummaryBody(notice?: FailureNotice): string {
-  if (notice) return [SUMMARY_MARKER, `### ${notice.heading}`, "", notice.body].join("\n");
-  return [SUMMARY_MARKER, "### ⚠️ Mergelight couldn't review this pull request", "", "The Mergelight check has the reason. The next push tries again."].join("\n");
+  if (notice) return [SUMMARY_MARKER, FAILED_MARKER, `### ${notice.heading}`, "", notice.body].join("\n");
+  return [SUMMARY_MARKER, FAILED_MARKER, GENERAL_FAILURE].join("\n");
 }
+
+/** Only at the very start, because a summary with results can quote text from the pull request. Earlier releases wrote no marker. */
+export const isFailedSummary = (body: string | undefined) => Boolean(body?.startsWith(`${SUMMARY_MARKER}\n${FAILED_MARKER}\n`) || body?.trim() === `${SUMMARY_MARKER}\n${GENERAL_FAILURE}`);
 
 export const LIGHT: Record<Light, { dot: string; label: string }> = {
   red: { dot: "🔴", label: "Blocked" },

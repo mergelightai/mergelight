@@ -4,7 +4,7 @@ import { GitHub, type ApiOptions } from "./api.js";
 import { commentableLines, place } from "./diff-lines.js";
 import { closedBody, readClosed, reopenedBody, resolvedByPeople, threadAction, threadFinding, type Handled, type ReviewThread } from "./closed.js";
 import type { FailureNotice } from "./markdown.js";
-import { failedSummaryBody, FINDING_MARKER_RE, headline, inlineBody, isPendingSummary, LIGHT, pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "./markdown.js";
+import { failedSummaryBody, FINDING_MARKER_RE, headline, inlineBody, isFailedSummary, isPendingSummary, LIGHT, pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "./markdown.js";
 import { readMarks, trustedComment, writeAccess, type Mark, type PrComment } from "./handled.js";
 import { decodeState, nextState, type ReviewState, type StateFinding } from "./state.js";
 import { newerVersion } from "../update.js";
@@ -144,10 +144,10 @@ export async function startSummary(api: GitHub, number: number): Promise<PrComme
   return summary ?? (await api.write<PrComment>("POST", `issues/${number}/comments`, { body: pendingSummaryBody() }));
 }
 
-/** A first review that couldn't run shouldn't say "Reviewing" forever. An earlier round's results stay as they are. */
+/** A first review that couldn't run shouldn't say "Reviewing" forever, and an older failure shouldn't outlive a newer reason. Real results stay. */
 export async function failSummary(api: GitHub, number: number, notice?: FailureNotice): Promise<void> {
   const { summary } = await readPrReviewState(api, number);
-  if (summary && isPendingSummary(summary.body)) await api.write("PATCH", `issues/comments/${summary.id}`, { body: failedSummaryBody(notice) });
+  if (summary && (isPendingSummary(summary.body) || isFailedSummary(summary.body))) await api.write("PATCH", `issues/comments/${summary.id}`, { body: failedSummaryBody(notice) });
 }
 
 /**

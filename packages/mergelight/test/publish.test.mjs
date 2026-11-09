@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { parsePatch, place } from "../dist/publish/diff-lines.js";
 import { mergeLight, tierOf } from "../dist/review.js";
 import { closedBody, readClosed, reopenedBody, resolvedByPeople, threadAction } from "../dist/publish/closed.js";
-import { clean, failedSummaryBody, limitNotice, loginNotice, FINDING_MARKER_RE, inlineBody, isPendingSummary, pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "../dist/publish/markdown.js";
+import { clean, failedSummaryBody, isFailedSummary, limitNotice, loginNotice, FINDING_MARKER_RE, inlineBody, isPendingSummary, pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "../dist/publish/markdown.js";
 import { APPROVAL_MARKER, checkConclusion, isYellowCheck, syncApproval, trustedComment, CHECK_FAILED_TITLE, checkLimitTitle, checkLoginTitle, isFailedCheckTitle } from "../dist/publish/publish.js";
 import { decodeState, encodeState, nextState } from "../dist/publish/state.js";
 import { buildVerifierPrompt } from "../dist/prompt.js";
@@ -407,6 +407,15 @@ test("a used-up plan says so and when it comes back, instead of the general fail
   assert.match(unknown, /your ChatGPT plan hit its limit/);
   assert.match(unknown, /once your plan has usage again/);
   assert.doesNotMatch(unknown, /Resets/);
+});
+
+test("a newer failure can replace an older one, but never real results", () => {
+  assert.ok(isFailedSummary(failedSummaryBody()));
+  assert.ok(isFailedSummary(failedSummaryBody(limitNotice("Claude", null))));
+  assert.ok(isFailedSummary(`${SUMMARY_MARKER}\n### ⚠️ Mergelight couldn't review this pull request\n\nThe Mergelight check has the reason. The next push tries again.`), "a failure written by an earlier release");
+  assert.ok(!isFailedSummary(pendingSummaryBody()));
+  assert.ok(!isFailedSummary(undefined));
+  assert.ok(!isFailedSummary(`${SUMMARY_MARKER}\nSafe to merge\n<!-- mergelight:failed -->\n`), "results that quote the marker stay");
 });
 
 test("every way a review can end early counts as failed", () => {
