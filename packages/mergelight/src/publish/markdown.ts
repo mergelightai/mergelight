@@ -209,7 +209,7 @@ export function summaryBody({ review: r, state, urls, marks = new Map(), handled
   }
 
   if (leftAlone.length) {
-    out.push("", `<details><summary>Left alone: ${plural(leftAlone.length, "finding")} not worth fixing</summary>`, "");
+    out.push("", `<details><summary>Left alone: ${plural(leftAlone.length, "smaller finding")}</summary>`, "");
     for (const f of leftAlone) out.push(`- ${clean(f.title)} ${where(f)}: ${clean(f.verdict)}`);
     out.push("", "</details>");
   }
