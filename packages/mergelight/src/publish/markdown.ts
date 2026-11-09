@@ -1,3 +1,4 @@
+import type { UpdateNotice } from "../update.js";
 import type { Finding, Light, Review } from "../types.js";
 import type { Handled } from "./closed.js";
 import type { Mark } from "./handled.js";
@@ -107,7 +108,7 @@ export interface SummaryInput {
   /** Inline findings that got fixed or whose thread someone resolved, by finding id. */
   handled?: Map<string, Handled>;
   /** A newer release of Mergelight, if this run isn't on the latest. */
-  update?: string | null;
+  update?: UpdateNotice | null;
 }
 
 /** A finding this review still reports, though someone marked it handled before the review finished. */
@@ -137,6 +138,21 @@ function fixLine(f: Finding, urls: Map<string, string>, mark?: Mark): string[] {
   ];
 }
 
+const NEWS_SHOWN = 4;
+
+/** At the top of the comment, because a pinned repo only gets new versions if someone notices and acts. */
+function updateBanner({ tag, current, news }: UpdateNotice): string[] {
+  const more = news.length - NEWS_SHOWN;
+  return [
+    "> [!IMPORTANT]",
+    `> **You're missing out: Mergelight ${tag} is out, and this repo is on ${current}.**`,
+    ...(news.length ? [">", ...news.slice(0, NEWS_SHOWN).map((n) => `> - ${clean(n)}`), ...(more > 0 ? [`> - and ${more} more`] : [])] : []),
+    ">",
+    "> **[Update now](https://mergelight.dev/setup/)**. It's one click, and only the version lines change.",
+    "",
+  ];
+}
+
 export function summaryBody({ review: r, state, urls, marks = new Map(), handled = new Map(), update }: SummaryInput, withState = true): string {
   const light = LIGHT[r.light];
   const top = r.findings.filter((f) => f.tier === "post").sort((a, b) => (a.rank ?? 9) - (b.rank ?? 9) || rank(a) - rank(b));
@@ -147,7 +163,7 @@ export function summaryBody({ review: r, state, urls, marks = new Map(), handled
   const done = state.findings.filter((f) => dropped.includes(f) || (f.status === "gone" && handled.has(f.id)));
   const gone = state.round > 1 ? state.findings.filter((f) => f.status === "gone" && f.tier !== "hardening" && !done.includes(f)) : [];
 
-  const out: string[] = [SUMMARY_MARKER, `### ${light.dot} Mergelight: ${light.label}`, "", clean(r.summary), "", `**${headline(r, done.length)}**`];
+  const out: string[] = [SUMMARY_MARKER, ...(update ? updateBanner(update) : []), `### ${light.dot} Mergelight: ${light.label}`, "", clean(r.summary), "", `**${headline(r, done.length)}**`];
 
   if (top.length) {
     out.push("", "#### To fix");
@@ -203,7 +219,6 @@ export function summaryBody({ review: r, state, urls, marks = new Map(), handled
     "",
     `<sub>Round ${state.round} · reviewed \`${r.pr.head_sha.slice(0, 7)}\` with ${who(r.provider)}${checkedBy} on your own plan · ${duration(r.stats.duration_ms)}</sub>`,
   );
-  if (update) out.push("", `<sub>Mergelight ${update} is out. <a href="https://mergelight.dev/setup/">Update it</a></sub>`);
 
   const tail = withState ? `\n${encodeState(state)}` : "";
   const room = MAX_BODY - tail.length;
