@@ -165,7 +165,8 @@ test("top picks and other findings worth fixing get their own sections, with det
   assert.ok(body.includes("**3 bugs to fix**"));
   const order = ["First pick", "Second pick", "#### Also worth fixing", "Listed one"].map((t) => body.indexOf(t));
   assert.deepEqual([...order].sort((a, b) => a - b), order);
-  assert.equal(body.match(/<summary>Details<\/summary>/g).length, 1);
+  assert.equal(body.match(/<details><summary>🔴 Bug: <b>Listed one<\/b> <code>[^<]+<\/code><\/summary>/g)?.length, 1, body);
+  assert.ok(!body.includes("<summary>Details</summary>"), body);
   assert.ok(body.includes("checked by Claude opus"));
   assert.equal(state.findings[0].how, "How.");
 });
@@ -448,5 +449,19 @@ test("a refused approval only logs, because the check already has the result", a
   const api = { list: async () => [], write: async () => { throw new Error("HTTP 422"); } };
   assert.equal(await syncApproval(api, 3, "green", "head", (l) => logs.push(l)), "none");
   assert.match(logs[0], /Couldn't update Mergelight's approval/);
+});
+
+test("a fold-out title is safe HTML, keeps code, and mentions nobody", () => {
+  const findings = [finding({ id: "5555555555", tier: "list", title: "<img src=x> breaks `foo` for @alice & co" })];
+  const review = {
+    pr: { owner: "o", repo: "r", number: 1, title: "t", url: "u", base_sha: "b", head_sha: "abcdef1234" },
+    provider: { name: "codex", model: null }, verifier: null, light: "yellow", summary: "Summary.", findings, stats: { duration_ms: 1000 },
+  };
+  const body = summaryBody({ review, state: nextState(null, findings, "abcdef1234", "yellow", new Map()), urls: new Map() }, false);
+  const summary = body.match(/<summary>.*<\/summary>/)[0];
+  assert.ok(summary.includes("&lt;img src=x&gt;"), summary);
+  assert.ok(summary.includes("<code>foo</code>"), summary);
+  assert.ok(summary.includes("&amp; co"), summary);
+  assert.ok(!/(^|[^\w`])@alice/.test(summary), summary);
 });
 

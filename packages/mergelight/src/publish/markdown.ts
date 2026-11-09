@@ -117,24 +117,31 @@ function markTag(mark: Mark | undefined): string {
   return mark.as === "fixed" ? " _(marked fixed, still found)_" : " _(marked won't fix, still reported)_";
 }
 
+const escapeHtml = (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+/** A title as HTML: escaped, with its `code` kept, and no one mentioned by accident. */
+const inlineHtml = (text: string) => clean(escapeHtml(text)).replace(/`([^`]+)`/g, "<code>$1</code>");
+
 /** A line for a finding worth fixing. Without an inline comment to link to, the details go here. */
 function fixLine(f: Finding, urls: Map<string, string>, mark?: Mark): string[] {
   const { dot, name } = label(f);
   const url = urls.get(f.id);
   const tag = markTag(mark);
   if (url) return [`- ${dot} ${name}: [${clean(f.title)}](${url}) ${where(f)}${tag}`];
+  // Markdown doesn't work inside <summary>, so this line is HTML.
+  const markNote = mark ? ` <i>(${mark.as === "fixed" ? "marked fixed, still found" : "marked won't fix, still reported"})</i>` : "";
   return [
-    `- ${dot} ${name}: **${clean(f.title)}** ${where(f)}${tag}`,
-    `  <details><summary>Details</summary>`,
     "",
-    `  ${clean(f.how_it_happens)}`,
+    `<details><summary>${dot} ${name}: <b>${inlineHtml(f.title)}</b> <code>${escapeHtml(where(f).replaceAll("`", ""))}</code>${markNote}</summary>`,
     "",
-    `  **What breaks:** ${clean(f.what_breaks)}`,
+    clean(f.how_it_happens),
     "",
-    `  **Smallest fix** (${f.fix_cost}): ${clean(f.fix)}`,
+    `**What breaks:** ${clean(f.what_breaks)}`,
     "",
-    `  **→ ${clean(f.verdict)}**`,
-    "  </details>",
+    `**Smallest fix** (${f.fix_cost}): ${clean(f.fix)}`,
+    "",
+    `**→ ${clean(f.verdict)}**`,
+    "",
+    "</details>",
   ];
 }
 
