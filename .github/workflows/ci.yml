@@ -1,0 +1,33 @@
+# Runs every test on every pull request, and before each release (release.yml calls this).
+name: Tests
+
+on:
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Package tests
+        working-directory: packages/mergelight
+        run: npm ci --no-audit --no-fund && npm test
+      - name: Token server tests
+        working-directory: packages/token-server
+        run: npm test
+      - name: Build the site
+        working-directory: site
+        run: npm ci --no-audit --no-fund && npm run build
+      - name: Browser tests
+        working-directory: site
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
+        run: npm run test:browser
