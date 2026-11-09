@@ -15,6 +15,8 @@ const REMOTE = /^([\w.-]+)\/([\w.-]+)((?:\/[\w.-]+)*)@([\w./-]+)$/;
 const OWN_SCRIPT = /(?:GITHUB_ACTION_PATH|github\.action_path)(?:\s*\}\}|\})?["']?\/([\w./-]+)/g;
 /** GitHub's own actions are widely read, and reading them would crowd out the rest. */
 const WELL_KNOWN = new Set(["actions", "github"]);
+/** The action running this review. A customer can't fix its code, so a finding about it would only be noise on their pull request. */
+const OURS = /^mergelightai\/mergelight(?:\/|@)/i;
 
 const MAX_ACTIONS = 6;
 const MAX_SCRIPTS = 6;
@@ -36,7 +38,7 @@ export function actionsUsedBy(dir: string, changedPaths: string[]): string[] {
     }
     for (const [, uses] of text.matchAll(USES)) {
       const remote = REMOTE.exec(uses!);
-      if (remote && !WELL_KNOWN.has(remote[1]!.toLowerCase()) && !uses!.includes("..")) used.add(uses!);
+      if (remote && !WELL_KNOWN.has(remote[1]!.toLowerCase()) && !OURS.test(uses!) && !uses!.includes("..")) used.add(uses!);
     }
   }
   return [...used];
