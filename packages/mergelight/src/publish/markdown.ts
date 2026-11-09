@@ -62,8 +62,24 @@ export function pendingSummaryBody(): string {
 
 export const isPendingSummary = (body: string | undefined) => Boolean(body?.includes(PENDING_MARKER));
 
-export function failedSummaryBody(loginReason?: string): string {
-  if (loginReason) return [SUMMARY_MARKER, "### ⚠️ Mergelight: the ChatGPT login didn't work", "", loginReason].join("\n");
+/** A failure with a known cause and a clear next step, instead of the general message. */
+export interface FailureNotice {
+  heading: string;
+  body: string;
+}
+
+export const loginNotice = (plan: string, reason: string): FailureNotice => ({ heading: `⚠️ Mergelight: the ${plan} login didn't work`, body: reason });
+
+export function limitNotice(plan: string, resets: string | null): FailureNotice {
+  const reason = `This pull request wasn't reviewed, because your ${plan} plan has no usage left.`;
+  return {
+    heading: `⏳ Mergelight: your ${plan} plan hit its limit`,
+    body: resets ? `${reason}\n\n**Resets:** ${resets}\n\nPush a new commit after that, and the review runs again.` : `${reason}\n\nPush a new commit once your plan has usage again, and the review runs again.`,
+  };
+}
+
+export function failedSummaryBody(notice?: FailureNotice): string {
+  if (notice) return [SUMMARY_MARKER, `### ${notice.heading}`, "", notice.body].join("\n");
   return [SUMMARY_MARKER, "### ⚠️ Mergelight couldn't review this pull request", "", "The Mergelight check has the reason. The next push tries again."].join("\n");
 }
 

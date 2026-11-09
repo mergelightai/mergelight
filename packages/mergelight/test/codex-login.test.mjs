@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { test } from "node:test";
 import { claudeEnv, runClaude } from "../dist/providers/claude.js";
-import { codexEnv, LoginError, loginFailureMessage, runCodex, SandboxError, sandboxArgs, scrubSecrets } from "../dist/providers/codex.js";
+import { codexEnv, LimitError, limitFrom, LoginError, loginFailureMessage, runCodex, SandboxError, sandboxArgs, scrubSecrets } from "../dist/providers/codex.js";
 
 /** Puts a stand-in codex first on the PATH that fails with this message, on a run with this login. */
 async function failingCodex(stderr, { stdout = "", chatgpt = "1" } = {}) {
@@ -125,11 +125,41 @@ test("a Claude login that doesn't work becomes a clear message", async () => {
   assert.match(result.message, /CLAUDE_CODE_OAUTH_TOKEN/);
 });
 
-test("a plan that hit its limit says so, not Claude's status word", async () => {
-  const { result } = await fakeClaude(JSON.stringify({ type: "result", subtype: "success", is_error: true, result: "You've hit your weekly limit" }), { MERGELIGHT_PROVIDER: "claude" });
-  assert.match(result.message, /Your Claude plan hit its usage limit/);
-  assert.match(result.message, /weekly limit/);
-  assert.doesNotMatch(result.message, /\(success\)/);
+test("a Claude plan that hit its limit says so, and when it comes back", async () => {
+  const { result } = await fakeClaude(JSON.stringify({ type: "result", subtype: "success", is_error: true, result: "You've hit your weekly limit \u00b7 resets 9am (UTC)" }), { MERGELIGHT_PROVIDER: "claude" });
+  assert.ok(result instanceof LimitError);
+  assert.equal(result.plan, "Claude");
+  assert.equal(result.resets, "9am (UTC)");
+  assert.equal(result.message, "Your Claude plan hit its usage limit. Resets: 9am (UTC).");
+});
+
+test("Claude's own answer talking about a limit isn't a used-up plan", async () => {
+  const { result } = await fakeClaude(JSON.stringify({ type: "result", subtype: "success", result: "This code says: You've hit your usage limit" }), { MERGELIGHT_PROVIDER: "claude" });
+  assert.ok(!(result instanceof LimitError));
+  assert.match(result.message, /no structured answer/);
+});
+
+test("a ChatGPT plan that hit its limit says so, from Codex's own error events", async () => {
+  for (const event of [{ type: "error", message: "You've hit your usage limit. Upgrade to Pro, or try again at 3:14 PM." }, { type: "turn.failed", error: { message: "You've hit your usage limit. Upgrade to Pro, or try again at 3:14 PM." } }]) {
+    const err = await failingCodex("", { stdout: `${JSON.stringify(event)}\n` });
+    assert.ok(err instanceof LimitError, event.type);
+    assert.equal(err.plan, "ChatGPT");
+    assert.match(err.resets, /^3:14 PM/);
+  }
+});
+
+test("Codex reading code that mentions a limit isn't a used-up plan", async () => {
+  const read = { type: "item.completed", item: { type: "command_execution", exit_code: 0, aggregated_output: "throw new Error(\"You've hit your usage limit.\")" } };
+  assert.ok(!(await failingCodex("", { stdout: `${JSON.stringify(read)}\n` }) instanceof LimitError));
+});
+
+test("reads every limit message the two programs write", () => {
+  assert.equal(limitFrom("You've hit your limit", "Claude").resets, null);
+  assert.equal(limitFrom("You\u2019ve hit your session limit \u00b7 resets Nov 12, 9am (UTC)", "Claude").resets, "Nov 12, 9am (UTC)");
+  assert.equal(limitFrom("You've hit your usage limit. To get more access now, send a request to your admin", "ChatGPT").resets, null);
+  assert.equal(limitFrom("rate limit exceeded", "Claude"), null);
+  assert.equal(limitFrom("the limit is 5", "ChatGPT"), null);
+  assert.doesNotMatch(limitFrom("You've hit your limit \u00b7 resets <b>@all</b>", "Claude").message, /[<@]/, "nothing that could be markup reaches the comment");
 });
 
 test("Claude runs with file tools only and without the runner's tokens", async () => {

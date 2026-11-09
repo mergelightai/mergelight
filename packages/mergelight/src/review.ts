@@ -12,7 +12,7 @@ import {
   type PriorFinding,
   type PromptInput,
 } from "./prompt.js";
-import { LoginError } from "./providers/codex.js";
+import { LimitError, LoginError } from "./providers/codex.js";
 import { claudeAvailable, runModel, TOOLING, type ProviderName } from "./providers/index.js";
 import { candidateSchema, reviewSchema } from "./schema.js";
 import type { Finding, Light, ModelFinding, ModelReview, Review, Tier } from "./types.js";
@@ -234,7 +234,7 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
     const failed: string[] = focuses.filter((_, i) => hunts[i]!.status === "rejected");
     if (failed.length === focuses.length) {
       const reasons = hunts.map((h) => (h as PromiseRejectedResult).reason);
-      throw reasons.find((r) => r instanceof LoginError) ?? reasons[0];
+      throw reasons.find((r) => r instanceof LoginError) ?? reasons.find((r) => r instanceof LimitError) ?? reasons[0];
     }
     const found: (Candidate & { focus: string })[] = hunts.flatMap((h) =>
       h.status === "fulfilled" ? h.value.candidates.map((c) => ({ ...c, focus: h.value.focus as string })) : [],

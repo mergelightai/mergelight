@@ -9,8 +9,8 @@ import { fileURLToPath } from "node:url";
 import { parsePatch, place } from "../dist/publish/diff-lines.js";
 import { mergeLight, tierOf } from "../dist/review.js";
 import { closedBody, readClosed, reopenedBody, resolvedByPeople, threadAction } from "../dist/publish/closed.js";
-import { clean, failedSummaryBody, FINDING_MARKER_RE, inlineBody, isPendingSummary, pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "../dist/publish/markdown.js";
-import { APPROVAL_MARKER, checkConclusion, isYellowCheck, syncApproval, trustedComment } from "../dist/publish/publish.js";
+import { clean, failedSummaryBody, limitNotice, loginNotice, FINDING_MARKER_RE, inlineBody, isPendingSummary, pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "../dist/publish/markdown.js";
+import { APPROVAL_MARKER, checkConclusion, isYellowCheck, syncApproval, trustedComment, CHECK_FAILED_TITLE, checkLimitTitle, checkLoginTitle, isFailedCheckTitle } from "../dist/publish/publish.js";
 import { decodeState, encodeState, nextState } from "../dist/publish/state.js";
 import { buildVerifierPrompt } from "../dist/prompt.js";
 import { assignIds } from "../dist/review.js";
@@ -388,11 +388,32 @@ test("any other check error still stops review --post before it reviews", (t) =>
 
 test("a login failure says what happened and what to do, instead of just failing", () => {
   const reason = "The ChatGPT login didn't work. Re-run this check.";
-  const body = failedSummaryBody(reason);
+  const body = failedSummaryBody(loginNotice("ChatGPT", reason));
   assert.ok(body.includes(SUMMARY_MARKER));
   assert.ok(body.includes(reason));
   assert.doesNotMatch(body, /couldn't review/);
   assert.match(failedSummaryBody(), /couldn't review/);
+  assert.match(failedSummaryBody(loginNotice("Claude", "r")), /the Claude login didn't work/);
+});
+
+test("a used-up plan says so and when it comes back, instead of the general failure", () => {
+  const body = failedSummaryBody(limitNotice("Claude", "9am (UTC)"));
+  assert.ok(body.includes(SUMMARY_MARKER), "the next round still finds it");
+  assert.ok(!isPendingSummary(body));
+  assert.match(body, /### ⏳ Mergelight: your Claude plan hit its limit/);
+  assert.match(body, /\*\*Resets:\*\* 9am \(UTC\)/);
+  assert.doesNotMatch(body, /couldn't review/);
+  const unknown = failedSummaryBody(limitNotice("ChatGPT", null));
+  assert.match(unknown, /your ChatGPT plan hit its limit/);
+  assert.match(unknown, /once your plan has usage again/);
+  assert.doesNotMatch(unknown, /Resets/);
+});
+
+test("every way a review can end early counts as failed", () => {
+  for (const title of [CHECK_FAILED_TITLE, checkLimitTitle("Claude"), checkLimitTitle("ChatGPT"), checkLoginTitle("ChatGPT"), checkLoginTitle("Claude")]) assert.ok(isFailedCheckTitle(title), title);
+  assert.ok(!isFailedCheckTitle("Safe to merge"));
+  assert.ok(!isFailedCheckTitle(undefined));
+  assert.match(checkLimitTitle("Claude"), /^Couldn't review/, "the setup page reads this start");
 });
 
 test("with no top picks the list sits right under the count, and the footer has no link", () => {

@@ -11,7 +11,42 @@ export type CodexResult = ModelResult;
 export class SandboxError extends Error {}
 
 /** The ChatGPT login didn't work. Worth saying plainly, because re-running usually fixes it. */
-export class LoginError extends Error {}
+export class LoginError extends Error {
+  plan: Plan;
+  constructor(message: string, plan: Plan = "ChatGPT") {
+    super(message);
+    this.plan = plan;
+  }
+}
+
+export type Plan = "ChatGPT" | "Claude";
+
+/** The plan has no usage left. Nothing is broken, so the person only needs to know that and when it comes back. */
+export class LimitError extends Error {
+  plan: Plan;
+  resets: string | null;
+  constructor(plan: Plan, resets: string | null) {
+    super(`Your ${plan} plan hit its usage limit.${resets ? ` Resets: ${resets}.` : ""}`);
+    this.plan = plan;
+    this.resets = resets;
+  }
+}
+
+/** Both programs start this sentence the same way. Only pass in their own errors: code under review can say anything. */
+const LIMIT_HIT = /you['\u2019]ve hit your\b[^\n]{0,40}\blimit\b/i;
+const WHEN = "[\\w :,()+-]{1,60}";
+
+/** The limit in a program's error output, if that's what the error is. Claude says "resets 9am (UTC)", Codex "try again at 3:14 PM". */
+export function limitFrom(text: string, plan: Plan): LimitError | null {
+  const line = text.split("\n").find((l) => LIMIT_HIT.test(l));
+  if (!line) return null;
+  const resets = line.match(new RegExp(`\\bresets\\s+(${WHEN})`, "i"))?.[1]?.trim();
+  if (resets) return new LimitError(plan, resets);
+  const retry = line.match(new RegExp(`\\btry again at\\s+(${WHEN})`, "i"))?.[1]?.trim();
+  // Codex prints the runner's clock with no zone, and a time with no zone reads as the person's own.
+  const zone = retry && new Date().getTimezoneOffset() === 0 && !/UTC|GMT/.test(retry) ? " UTC" : "";
+  return new LimitError(plan, retry ? `${retry}${zone}` : null);
+}
 
 /** What Codex says when a login is refused or can't be refreshed. */
 const LOGIN_FAILURE = /access token could not be refreshed|401 Unauthorized/i;
@@ -179,6 +214,8 @@ export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
     }
     if (result.code !== 0) {
       const tail = scrubSecrets((result.stderr || result.stdout).trim().split("\n").slice(-6).join("\n"));
+      const limit = limitFrom(`${result.stderr}\n${failures.join("\n")}`, "ChatGPT");
+      if (limit) throw limit;
       // Only a ChatGPT login: a refused API key has a different fix.
       if (process.env.MERGELIGHT_CHATGPT === "1" && LOGIN_FAILURE.test(`${result.stderr}\n${failures.join("\n")}`)) {
         throw new LoginError(loginFailureMessage(process.env.SECRET_NAME || undefined));

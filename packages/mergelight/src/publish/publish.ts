@@ -3,6 +3,7 @@ import type { PriorFinding } from "../prompt.js";
 import { GitHub, type ApiOptions } from "./api.js";
 import { commentableLines, place } from "./diff-lines.js";
 import { closedBody, readClosed, reopenedBody, resolvedByPeople, threadAction, threadFinding, type Handled, type ReviewThread } from "./closed.js";
+import type { FailureNotice } from "./markdown.js";
 import { failedSummaryBody, FINDING_MARKER_RE, headline, inlineBody, isPendingSummary, LIGHT, pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "./markdown.js";
 import { readMarks, trustedComment, writeAccess, type Mark, type PrComment } from "./handled.js";
 import { decodeState, nextState, type ReviewState, type StateFinding } from "./state.js";
@@ -84,7 +85,9 @@ export async function previousFindings(api: GitHub, number: number): Promise<Pri
 }
 
 export const CHECK_FAILED_TITLE = "Couldn't review this pull request";
-export const CHECK_LOGIN_TITLE = "The ChatGPT login didn't work";
+export const checkLoginTitle = (plan: string) => `The ${plan} login didn't work`;
+export const checkLimitTitle = (plan: string) => `${CHECK_FAILED_TITLE}: your ${plan} plan hit its limit`;
+export const isFailedCheckTitle = (title: string | null | undefined) => Boolean(title && (title.startsWith(CHECK_FAILED_TITLE) || /^The \w+ login didn't work$/.test(title)));
 
 export interface CheckRun {
   id: number;
@@ -142,9 +145,9 @@ export async function startSummary(api: GitHub, number: number): Promise<PrComme
 }
 
 /** A first review that couldn't run shouldn't say "Reviewing" forever. An earlier round's results stay as they are. */
-export async function failSummary(api: GitHub, number: number, loginReason?: string): Promise<void> {
+export async function failSummary(api: GitHub, number: number, notice?: FailureNotice): Promise<void> {
   const { summary } = await readPrReviewState(api, number);
-  if (summary && isPendingSummary(summary.body)) await api.write("PATCH", `issues/comments/${summary.id}`, { body: failedSummaryBody(loginReason) });
+  if (summary && isPendingSummary(summary.body)) await api.write("PATCH", `issues/comments/${summary.id}`, { body: failedSummaryBody(notice) });
 }
 
 /**
