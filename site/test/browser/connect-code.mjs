@@ -52,6 +52,7 @@ async function scenario(name, start, body) {
       if (u.pathname === '/sign-in') return json(req, { token: 'fake-token' });
       return req.respond({ status: 200, headers: cors, body: 'ok' });
     }
+    if (u.origin === 'https://github.com' && u.pathname === '/apps/mergelight-setup/installations/new') return req.respond({ status: 302, headers: { location: `${base}/setup/?installation_id=1&setup_action=install` } });
     if (u.origin === 'https://github.com' && u.pathname === '/login/oauth/authorize') return req.respond({ status: 302, headers: { location: `${base}/setup/?code=c&state=${u.searchParams.get('state')}` } });
     if (u.origin === 'https://api.github.com') {
       if (m === 'OPTIONS') return req.respond({ status: 204, headers: cors });
@@ -69,7 +70,7 @@ async function scenario(name, start, body) {
         return json(req, {}, 404);
       }
       if (u.pathname === '/user/installations') return json(req, { installations: [{ id: 1, html_url: 'https://github.com/settings/installations/1', account: { login: 'acme', avatar_url: `${base}/logo.png` } }] });
-      if (u.pathname === '/user/installations/1/repositories') return json(req, { repositories: [{ full_name: 'acme/api', private: world.isPrivate, default_branch: 'main', archived: false }, { full_name: 'acme/zzz-other', private: true, default_branch: 'main', archived: false }] });
+      if (u.pathname === '/user/installations/1/repositories') return json(req, { repositories: [{ full_name: 'acme/api', private: world.isPrivate, default_branch: 'main', archived: false }, { full_name: 'acme/zzz-other', private: true, default_branch: 'main', archived: false }].filter((r) => !world.onlyOther || r.full_name !== 'acme/api') });
       if (p === '/branches') return json(req, [{ name: 'main' }]);
       if (p === '/pulls') return json(req, []);
       if (p === '/pulls/7') return json(req, { merged: false, head: { sha: world.head } });
@@ -93,7 +94,7 @@ async function scenario(name, start, body) {
     const end = Date.now() + ms;
     let t = '';
     while (Date.now() < end) {
-      t = await text();
+      t = await text().catch(() => t); // The page can be between addresses during a trip to GitHub.
       if (test(t)) return t;
       await wait(150);
     }
@@ -303,10 +304,15 @@ await scenario('link-from-the-pull-request', { comments: [CLAUDE_COMMENT()], che
   expect(/Paste the code Claude shows you/.test(await page.evaluate(() => document.querySelector('main').innerText)), 'a repo with some other login saved still stays on this step');
 });
 
-await scenario('link-to-a-repo-they-cannot-see', {}, async ({ page, until }) => {
-  await page.goto(`${base}/setup/?repo=acme/secret&pr=7&connect=claude`, { waitUntil: 'networkidle2' });
-  await until((x) => x.includes('Which repo'), 'the list');
-  expect(true, 'falls back to picking a repo');
+await scenario('link-to-a-repo-they-cannot-see', { comments: [CLAUDE_COMMENT()], checks: { headsha: WAITING }, onlyOther: true }, async ({ page, world, until, click }) => {
+  await page.goto(claudeSetupLink('acme/api', 7), { waitUntil: 'networkidle2' });
+  const t = await until((x) => /Give Mergelight access to api/.test(x), 'the access step');
+  expect(!/Add to|Update Mergelight|Which repo/.test(t), 'never opens a different repo, even the only one on the list');
+  world.onlyOther = false;
+  await wait(800); // The screen slides in, and a click during that misses.
+  await click('a', 'Choose on GitHub');
+  const after = await until((x) => /Paste the code Claude shows you/.test(x), 'the Claude step after giving access');
+  expect(/Open Claude/.test(after), 'comes straight back to the pull request that sent them');
 });
 
 for (const [name, comments, what] of [

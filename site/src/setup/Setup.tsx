@@ -6,6 +6,7 @@ import workflowFile from '../../../examples/mergelight.yml?raw';
 import refreshFile from '../../../examples/mergelight-refresh.yml?raw';
 import Ambient from '../sections/Ambient';
 import { Check, GitHubIcon, SURFACE, WELL } from '../ui';
+import type { ConnectLink } from './github';
 import { cleanUrl, finishSignIn, GitHubError, INSTALL_URL, readConnectLink, rememberConnect, rememberRepo, reviewAppUrl, takeRememberedConnect, takeRememberedRepo, isPinned, mockClient, pinned, realClient, REFRESH_FILE, signInUrl, wakeTokenServer, type CheckStatus, type ConnectCode, type GitHubClient, type Release, type Repo, type RepoDetails, type SetupPr, type WorkflowFile } from './github';
 
 const CHATGPT_SECURITY = 'https://chatgpt.com/settings/security';
@@ -74,6 +75,7 @@ export default function Setup() {
   const [merged, setMerged] = useState(false);
   const [detailsFailed, setDetailsFailed] = useState(false);
   const [startOnClaude, setStartOnClaude] = useState(false);
+  const [missing, setMissing] = useState<ConnectLink | null>(null);
   const wide = useWide();
 
   const previous = useRef(view);
@@ -181,10 +183,21 @@ export default function Setup() {
   useEffect(() => {
     if (!repos || autoPicked.current) return;
     autoPicked.current = true;
-    const remembered = takeRememberedRepo();
     const waiting = takeRememberedConnect();
-    const target = repos.find((r) => r.fullName === (waiting?.repo ?? remembered)) ?? (repos.length === 1 ? repos[0] : null);
-    if (target) choose(target, waiting?.repo === target.fullName ? waiting.pr : undefined);
+    if (waiting) {
+      // A pull request's link opens that repo and no other, even if some other repo is the only one on the list.
+      const asked = repos.find((r) => r.fullName === waiting.repo);
+      if (asked) {
+        choose(asked, waiting.pr);
+      } else {
+        setMissing(waiting);
+        setView('repo');
+      }
+      return;
+    }
+    const remembered = takeRememberedRepo();
+    const target = repos.find((r) => r.fullName === remembered) ?? (repos.length === 1 ? repos[0] : null);
+    if (target) choose(target);
     else setView('repo');
     // Only the first list counts, so `choose` doesn't need to be here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -312,7 +325,7 @@ export default function Setup() {
             <Stage viewKey={view} direction={direction}>
               {view === 'welcome' && <Welcome failed={signInFailed} requested={requested} />}
               {view === 'settling' && <SettlingStep />}
-              {view === 'repo' && <RepoStep repos={repos} onChoose={choose} failed={signInFailed} />}
+              {view === 'repo' && <RepoStep repos={repos} onChoose={choose} failed={signInFailed} missing={missing} />}
               {view === 'review-app' && repo && <ReviewAppStep repo={repo} onCheck={() => choose(repo)} onBack={back['review-app']!} />}
               {view === 'add' && repo && (
                 <AddStep repo={repo} details={details} fileCount={files.length} branch={branch} setBranch={setBranch} scope={scope} setScope={setScope} fileOpen={fileOpen} onToggleFile={() => setFileOpen((v) => !v)} adding={adding} failed={addFailed} detailsFailed={detailsFailed} onRetry={() => choose(repo)} update={update} onAdd={() => void addToRepo()} fileUrl={fileUrl} onBack={adding ? () => undefined : back.add!} onByHand={() => { setFileOpen(false); setView('finish'); }} onContinue={afterAdding} />
@@ -546,7 +559,7 @@ function SettlingStep() {
   );
 }
 
-function RepoStep({ repos, onChoose, failed }: { repos: Repo[] | null; onChoose: (r: Repo) => void; failed: boolean }) {
+function RepoStep({ repos, onChoose, failed, missing }: { repos: Repo[] | null; onChoose: (r: Repo) => void; failed: boolean; missing: ConnectLink | null }) {
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
   const list = useMemo(() => (repos ?? []).filter((r) => r.fullName.toLowerCase().includes(query.trim().toLowerCase())), [repos, query]);
@@ -558,6 +571,17 @@ function RepoStep({ repos, onChoose, failed }: { repos: Repo[] | null; onChoose:
         <Heading title="Couldn't reach GitHub" sub="Your sign-in may have run out. Sign in again to pick up where you were." />
         <a href={signInUrl()} className={`${PRIMARY} mt-6`}>
           <GitHubIcon className="size-[18px]" /> Continue with GitHub
+        </a>
+      </div>
+    );
+  }
+
+  if (missing) {
+    return (
+      <div>
+        <Heading title={`Give Mergelight access to ${missing.repo.split('/')[1]}`} sub={`Your pull request is on ${missing.repo}, and Mergelight can't see that repo yet. Choose it on GitHub, and you'll come straight back here.`} />
+        <a href={INSTALL_URL} onClick={() => rememberConnect(missing)} className={`${PRIMARY} mt-6`}>
+          <GitHubIcon className="size-[18px]" /> Choose on GitHub
         </a>
       </div>
     );
