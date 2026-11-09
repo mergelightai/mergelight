@@ -51,7 +51,36 @@ function mcpServers(config: string): string[] {
 }
 
 /**
- * Runs the user's own logged-in Codex CLI, headless, in a read-only sandbox.
+ * Commands Codex runs can read the whole disk but not write or reach the network. Code under review can try to
+ * steer them, so the folder with the login is taken out of what they can read. Codex itself still reads it.
+ */
+export function sandboxArgs(home = codexHome()): string[] {
+  return ["-c", 'default_permissions="mergelight_review"', "-c", `permissions.mergelight_review.filesystem={":root"="read",${JSON.stringify(home)}="none"}`];
+}
+
+/** Tokens the runner holds that commands Codex runs have no use for. Codex only needs its own login. */
+const HIDDEN_ENV = new Set(["GH_TOKEN", "GITHUB_TOKEN", "SECRETS_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_RUNTIME_TOKEN", "ACTIONS_RESULTS_URL", "ACTIONS_CACHE_URL"]);
+
+export function codexEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(env).filter(([name]) => !HIDDEN_ENV.has(name)));
+}
+
+const JWT = /\beyJ[\w-]{10,}\.[\w-]{10,}\.[\w-]+/g;
+
+/** Takes login tokens out of text that's about to be posted, in case one got past the sandbox. */
+export function scrubSecrets(text: string, home = codexHome()): string {
+  let secrets: string[] = [];
+  try {
+    const { tokens, OPENAI_API_KEY: key } = JSON.parse(readFileSync(join(home, "auth.json"), "utf8")) as { tokens?: Record<string, unknown>; OPENAI_API_KEY?: unknown };
+    secrets = [...Object.values(tokens ?? {}), key].filter((v): v is string => typeof v === "string" && v.length >= 20);
+  } catch {
+    // No login file to compare with. The pattern below still applies.
+  }
+  return secrets.reduce((out, secret) => out.split(secret).join("[removed]"), text).replace(JWT, "[removed]");
+}
+
+/**
+ * Runs the user's own logged-in Codex CLI, headless, in a sandbox that can read but not write or reach the network.
  * Plugins, MCP servers, hooks and notifications are switched off for the run,
  * so code in a pull request can't steer the reviewer into the user's other tools.
  * Everything else (provider, model, login) is the user's own Codex setup.
@@ -65,7 +94,7 @@ export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
 
   const args = [
     "exec",
-    "--sandbox", "read-only",
+    ...sandboxArgs(),
     "--ephemeral",
     "--skip-git-repo-check",
     "--json",
@@ -134,13 +163,14 @@ export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
       input: opts.prompt,
       timeoutMs: opts.timeoutMs ?? 25 * 60_000,
       onStdout,
+      env: codexEnv(),
     });
     if (opts.logFile) {
       mkdirSync(join(opts.logFile, ".."), { recursive: true });
       writeFileSync(opts.logFile, `${result.stdout}\n--- stderr ---\n${result.stderr}`);
     }
     if (result.code !== 0) {
-      const tail = (result.stderr || result.stdout).trim().split("\n").slice(-6).join("\n");
+      const tail = scrubSecrets((result.stderr || result.stdout).trim().split("\n").slice(-6).join("\n"));
       // Only a ChatGPT login: a refused API key has a different fix.
       if (process.env.MERGELIGHT_CHATGPT === "1" && LOGIN_FAILURE.test(`${result.stderr}\n${failures.join("\n")}`)) {
         throw new LoginError(loginFailureMessage(process.env.SECRET_NAME || undefined));
@@ -151,7 +181,7 @@ export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
     // Better to fail loudly than to post a review that only looks at the diff.
     if (completed > 0 && sandboxFailures === completed) {
       throw new SandboxError(
-        `Codex couldn't run commands in its sandbox on this machine, so it can't read the code (${firstSandboxError || "every command failed"}). On Linux this usually means unprivileged user namespaces are blocked; see docs/github-action.md.`,
+        `Codex couldn't run commands in its sandbox on this machine, so it can't read the code (${scrubSecrets(firstSandboxError) || "every command failed"}). On Linux this usually means unprivileged user namespaces are blocked; see docs/github-action.md.`,
       );
     }
     let raw: string;
@@ -161,7 +191,7 @@ export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
       throw new Error(`Codex finished without a final answer.${opts.logFile ? ` Log: ${opts.logFile}` : ""}`);
     }
     return {
-      output: JSON.parse(raw),
+      output: JSON.parse(scrubSecrets(raw)),
       model: opts.model ?? configuredModel(config),
       commands,
       usage,

@@ -3,7 +3,7 @@ import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { test } from "node:test";
-import { LoginError, loginFailureMessage, runCodex, SandboxError } from "../dist/providers/codex.js";
+import { codexEnv, LoginError, loginFailureMessage, runCodex, SandboxError, sandboxArgs, scrubSecrets } from "../dist/providers/codex.js";
 
 /** Puts a stand-in codex first on the PATH that fails with this message, on a run with this login. */
 async function failingCodex(stderr, { stdout = "", chatgpt = "1" } = {}) {
@@ -60,3 +60,25 @@ test("other failures keep their own message", async () => {
 test("the message names the secret this repository uses", () => {
   assert.match(loginFailureMessage("MY_LOGIN"), /delete the MY_LOGIN secret/);
 });
+
+test("the sandbox can read everything except the login folder", () => {
+  const args = sandboxArgs('/tmp/co"dex');
+  assert.deepEqual(args.slice(0, 2), ["-c", 'default_permissions="mergelight_review"']);
+  assert.equal(args[3], 'permissions.mergelight_review.filesystem={":root"="read","/tmp/co\\"dex"="none"}');
+});
+
+test("commands Codex runs don't get the runner's tokens, and keep everything else", () => {
+  const env = codexEnv({ GH_TOKEN: "x", GITHUB_TOKEN: "x", ACTIONS_ID_TOKEN_REQUEST_TOKEN: "x", ACTIONS_ID_TOKEN_REQUEST_URL: "x", SECRETS_TOKEN: "x", PATH: "/bin", CODEX_HOME: "/h", MY_PROXY_URL: "u" });
+  assert.deepEqual(env, { PATH: "/bin", CODEX_HOME: "/h", MY_PROXY_URL: "u" });
+});
+
+test("login tokens are removed from anything about to be posted", () => {
+  const home = mkdtempSync(join(tmpdir(), "mergelight-scrub-"));
+  const secret = "rt_abcdefghijklmnopqrstuvwxyz";
+  writeFileSync(join(home, "auth.json"), JSON.stringify({ OPENAI_API_KEY: null, tokens: { refresh_token: secret, account_id: "short" } }));
+  const jwt = "eyJhbGciOiJSUzI1NiIs.eyJzdWIiOiIxMjM0NTY3.abcDEF_123-xyz";
+  const out = scrubSecrets(`see ${secret} and ${jwt} and short`, home);
+  assert.equal(out, "see [removed] and [removed] and short");
+  assert.equal(scrubSecrets(`only ${jwt}`, join(home, "missing")), "only [removed]");
+});
+
