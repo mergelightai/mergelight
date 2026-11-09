@@ -59,6 +59,7 @@ async function scenario(name, start, body) {
       world.asked.push(p);
       if (m !== 'GET') {
         const data = req.postData() ? JSON.parse(req.postData()) : null;
+        if (m === 'POST' && p === '/issues/7/comments') { (world.posted ??= []).push(data.body); return json(req, {}, 201); }
         if (m === 'POST' && p === '/git/refs') return json(req, { ref: data.ref }, 201);
         if (m === 'PUT' && p.startsWith('/contents/')) return json(req, { content: {}, commit: { sha: 'filesha' } }, 201);
         if (m === 'POST' && p === '/pulls') return json(req, { number: 7, html_url: 'https://github.com/acme/api/pull/7', head: { sha: world.head } }, 201);
@@ -69,7 +70,6 @@ async function scenario(name, start, body) {
       if (p === '/branches') return json(req, [{ name: 'main' }]);
       if (p === '/pulls') return json(req, []);
       if (p === '/pulls/7') return json(req, { merged: false, head: { sha: world.head } });
-      if (p === '/issues/7/comments' && req.method() === 'POST') { (world.posted ??= []).push(JSON.parse(req.postData()).body); return json(req, {}); }
       if (p === '/issues/7/comments') return world.commentsStatus === 200 ? json(req, world.comments) : json(req, { message: 'no' }, world.commentsStatus);
       if (p === '/actions/secrets') return json(req, { secrets: world.login ? [{ name: 'CODEX_AUTH_JSON' }] : [] });
       if (p.startsWith('/contents/')) return json(req, {}, 404);
