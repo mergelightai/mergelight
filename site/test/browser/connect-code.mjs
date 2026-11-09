@@ -257,6 +257,13 @@ await scenario('claude-plan-public-repo', { isPrivate: false, checks: { headsha:
 });
 
 const CLAUDE = 'https://claude.com/cai/oauth/authorize?code=true&code_challenge=abc';
+const OLD_COMMENT = ['<!-- mergelight:summary -->', '<!-- mergelight:pending -->', '### 🔌 Connect ChatGPT to start reviewing', '', `1. Open ${DEVICE}`, `2. Enter this code: \`${CODE}\``].join('\n');
+await scenario('comment-from-an-older-release', { comments: [comment(BOT, OLD_COMMENT)], checks: { headsha: WAITING } }, async ({ until, reach }) => {
+  await reach();
+  await until((x) => x.includes(CODE), 'the code from the old layout');
+  expect(true, 'still reads the old layout');
+});
+
 await scenario('claude-button-and-paste', { comments: [comment(BOT, withState(connectBody({ url: DEVICE, code: CODE }, 'https://github.com/acme/api/actions/runs/1', CLAUDE), undefined))], checks: { headsha: WAITING } }, async ({ page, world, click, reach, until }) => {
   await reach();
   await until((x) => x.includes(CODE), 'the code');

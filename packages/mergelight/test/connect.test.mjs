@@ -8,7 +8,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { connect, connectBody, connectedAccount, connectedBody, connectFailedBody, githubConnect, installAppBody, parseDeviceLogin, withState } from "../dist/connect.js";
 import { parseClaudeLink, parseClaudeToken, readPastedCode, shareClaudeToken, startClaudeSignIn, waitForPastedCode } from "../dist/connect-claude.js";
-import { isPendingSummary, SUMMARY_MARKER } from "../dist/publish/markdown.js";
+import { isPendingSummary, PENDING_MARKER, SUMMARY_MARKER } from "../dist/publish/markdown.js";
 import { ownSummary } from "../dist/publish/publish.js";
 import { decodeState, encodeState } from "../dist/publish/state.js";
 
@@ -155,10 +155,10 @@ test("the comment gives the link, the code and where it came from", () => {
   assert.doesNotMatch(body, /[–—]/, "no dashes in copy");
 });
 
-test("the setup page can read the code, which needs these two lines exactly", () => {
-  const lines = connectBody({ url: "https://auth.openai.com/codex/device", code: "2ZYY-TEST1" }).split("\n");
-  assert.ok(lines.includes("1. Open https://auth.openai.com/codex/device"));
-  assert.ok(lines.includes("2. Enter this code: `2ZYY-TEST1`"));
+test("the setup page can read the code from the hidden line", () => {
+  const body = connectBody({ url: "https://auth.openai.com/codex/device", code: "2ZYY-TEST1" });
+  assert.ok(body.includes(PENDING_MARKER));
+  assert.deepEqual(JSON.parse(body.match(/^<!-- mergelight:connect:v1 (\{.*\}) -->$/m)[1]), { url: "https://auth.openai.com/codex/device", code: "2ZYY-TEST1", claudeUrl: null });
 });
 
 test("every comment is the summary, so the review replaces it", () => {
@@ -364,8 +364,24 @@ test("the failure comment names ChatGPT only when ChatGPT was the only offer", (
   assert.match(both, /new link and code/);
 });
 
-test("the comment holds the Claude link on its own line, for the setup page", () => {
-  assert.match(connectBody({ url: "https://auth.openai.com/d", code: "AAAA-BBBB" }, undefined, LINK), new RegExp(`^Claude: Open ${LINK.replace(/[?&]/g, "\\$&")}$`, "m"));
-  assert.doesNotMatch(connectBody({ url: "https://auth.openai.com/d", code: "AAAA-BBBB" }), /Claude/);
+test("the comment shows buttons, not long links, and keeps the data for the setup page hidden", () => {
+  const device = { url: "https://auth.openai.com/d", code: "AAAA-BBBB" };
+  const both = connectBody(device, "https://github.com/run", LINK);
+  assert.match(both, /Connect your AI to start reviews/);
+  assert.match(both, /<img src="https:\/\/mergelight\.dev\/comment\/open-chatgpt\.svg"/);
+  assert.match(both, /<img src="https:\/\/mergelight\.dev\/comment\/open-claude\.svg"/);
+  assert.match(both, /`AAAA-BBBB`/);
+  const visible = both.replace(/<a href="[^"]*">/g, "").replace(/<!--.*?-->/g, "");
+  assert.ok(!visible.includes("oauth/authorize"), "no long link on show");
+  const data = JSON.parse(both.match(/^<!-- mergelight:connect:v1 (\{.*\}) -->$/m)[1]);
+  assert.deepEqual(data, { url: device.url, code: device.code, claudeUrl: LINK });
+  const chatgptOnly = connectBody(device);
+  assert.match(chatgptOnly, /Connect ChatGPT to start reviews/);
+  assert.doesNotMatch(chatgptOnly.replace(/<!--.*?-->/g, ""), /Claude/);
   assert.match(connectBody(null, undefined, LINK), /Connect your AI/);
+});
+
+test("a value can't end the hidden line early", () => {
+  const line = connectBody(null, undefined, "https://claude.com/a-->b").split("\n").find((l) => l.startsWith("<!-- mergelight:connect:v1"));
+  assert.equal(line.match(/-->/g).length, 1, "only the end of the line closes it");
 });

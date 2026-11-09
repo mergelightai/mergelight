@@ -122,6 +122,21 @@ export interface ConnectCode {
  */
 const OWN_COMMENTERS = ['mergelight-ai[bot]', 'github-actions[bot]'];
 
+/** The hidden line a run writes. Each value still has to be the exact shape it should be, whatever the comment says. */
+function readConnectData(body: string): ConnectCode | null {
+  const raw = body.match(/^<!-- mergelight:connect:v1 (\{.*\}) -->$/m)?.[1];
+  if (!raw) return null;
+  try {
+    const { url, code, claudeUrl } = JSON.parse(raw) as { url?: unknown; code?: unknown; claudeUrl?: unknown };
+    const device = typeof url === 'string' && typeof code === 'string' && /^https:\/\/auth\.openai\.com\/\S+$/.test(url) && /^[A-Z0-9]{4}-[A-Z0-9]{4,}$/.test(code);
+    const claude = typeof claudeUrl === 'string' && /^https:\/\/claude\.(?:com|ai)\/\S+$/.test(claudeUrl) ? claudeUrl : null;
+    if (!device && !claude) return null;
+    return { url: device ? (url as string) : '', code: device ? (code as string) : '', claudeUrl: claude };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Finds the code in Mergelight's comment, if that comment is still asking for one. It has to be in the
  * exact shape the Action writes, because a finished review's comment can quote text from the pull request.
@@ -129,6 +144,9 @@ const OWN_COMMENTERS = ['mergelight-ai[bot]', 'github-actions[bot]'];
 export function readConnectCode(comments: { user: { login: string } | null; body?: string | null }[]): ConnectCode | null {
   const body = comments.filter((c) => OWN_COMMENTERS.includes(c.user?.login ?? '') && c.body?.includes('<!-- mergelight:summary -->')).at(-1)?.body;
   if (!body?.includes('<!-- mergelight:pending -->')) return null;
+  const data = readConnectData(body);
+  if (data) return data;
+  // Releases before v0.1.10 only have these lines.
   const url = body.match(/^1\. Open (https:\/\/auth\.openai\.com\/\S+)$/m)?.[1];
   const code = body.match(/^2\. Enter this code: `([A-Z0-9]{4}-[A-Z0-9]{4,})`$/m)?.[1];
   const claudeUrl = body.match(/^Claude: Open (https:\/\/claude\.(?:com|ai)\/\S+)$/m)?.[1] ?? null;

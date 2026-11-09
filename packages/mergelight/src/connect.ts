@@ -58,37 +58,41 @@ export function connectedBody(account: string | null, secretName: string): strin
   return `🔌 Reviews on this repository now use ${who}. If that isn't yours, remove the \`${secretName}\` secret and push a commit to connect again.`;
 }
 
-/** The setup page shows the code and the Claude link too. It reads them from these exact lines, so they have to keep this shape. */
+const BUTTONS = "https://mergelight.dev/comment";
+const button = (href: string, file: string, alt: string) => `<a href="${href.replace(/"/g, "%22")}"><img src="${BUTTONS}/${file}.svg" alt="${alt}" height="40"></a>`;
+
+/** The setup page reads the link and code from this hidden line, so a change to how the comment looks can't break it. */
+export function connectData(login: DeviceLogin | null, claudeUrl?: string): string {
+  return `<!-- mergelight:connect:v1 ${JSON.stringify({ url: login?.url ?? "", code: login?.code ?? "", claudeUrl: claudeUrl ?? null }).replace(/--/g, "\\u002d\\u002d")} -->`;
+}
+
 export function connectBody(login: DeviceLogin | null, runUrl?: string, claudeUrl?: string): string {
-  const chatgpt = login
-    ? [
-        `1. Open ${login.url}`,
-        `2. Enter this code: \`${login.code}\``,
-        "",
-        "The review starts by itself once you're connected. The code lasts 15 minutes. If it runs out, push a new commit to get another.",
-        "",
-        `**If OpenAI refuses the code:** turn on "Enable device code sign-in" in your [ChatGPT security settings](${CHATGPT_SECURITY_URL}), or ask your workspace admin to.`,
-        "",
-      ]
-    : [];
-  const claude = claudeUrl
-    ? [
-        "#### Or use your Claude plan",
-        "",
-        `Claude: Open ${claudeUrl}`,
-        "",
-        "Confirm on Claude's page, then add a comment here with the code it shows: `/claude-code THE_CODE`",
-        "",
-      ]
-    : [];
+  const options = [
+    ...(login ? [{ title: "ChatGPT plan", action: button(login.url, "open-chatgpt", "Open ChatGPT"), then: `Then enter this code:<br>\`${login.code}\`` }] : []),
+    ...(claudeUrl ? [{ title: "Claude plan", action: button(claudeUrl, "open-claude", "Open Claude"), then: "Confirm, then comment with the code:<br>`/claude-code THE_CODE`" }] : []),
+  ];
+  const run = runUrl ? `[your own GitHub Actions run](${runUrl})` : "your own GitHub Actions run";
   return [
     SUMMARY_MARKER,
     PENDING_MARKER,
-    login ? "### 🔌 Connect ChatGPT to start reviewing" : "### 🔌 Connect your AI to start reviewing",
+    connectData(login, claudeUrl),
+    login && !claudeUrl ? "### 🔌 Connect ChatGPT to start reviews" : "### 🔌 Connect your AI to start reviews",
     "",
-    ...chatgpt,
-    ...claude,
-    `<sub>Reviews use the plan of whoever connects it, so only do this if you're setting up this repository. It comes from ${runUrl ? `[your own GitHub Actions run](${runUrl})` : "your own GitHub Actions run"}. The login is saved as this repository's secret and is never sent to Mergelight.</sub>`,
+    options.length > 1 ? "Mergelight reviews this pull request on your own plan. Pick one, and the review starts by itself." : "Mergelight reviews this pull request on your own plan. Connect it, and the review starts by itself.",
+    "",
+    `| ${options.map((o) => `**${o.title}**`).join(" | ")} |`,
+    `| ${options.map(() => ":--").join(" | ")} |`,
+    `| ${options.map((o) => o.action).join(" | ")} |`,
+    `| ${options.map((o) => o.then).join(" | ")} |`,
+    "",
+    "<details><summary>Something not working?</summary>",
+    "",
+    "- **The link or code ran out:** they last 15 minutes. Push a new commit to get new ones.",
+    ...(login ? [`- **OpenAI refuses the code:** turn on "Enable device code sign-in" in your [ChatGPT security settings](${CHATGPT_SECURITY_URL}), or ask your workspace admin to.`] : []),
+    "",
+    "</details>",
+    "",
+    `<sub>Reviews use the plan of whoever connects it, so only do this if you're setting up this repository. This comes from ${run}. The login is saved as this repository's secret and never reaches Mergelight.</sub>`,
   ].join("\n");
 }
 
