@@ -42,3 +42,10 @@ body {
 ::selection { background: rgb(184 156 255 / 0.35); }
 
 section[id] { scroll-margin-top: 88px; }
+
+/* The torn zigzag bottom edge of a receipt. */
+.receipt-edge {
+  --tooth: 14px;
+  -webkit-mask: conic-gradient(from -45deg at bottom, #0000, #000 1deg 89deg, #0000 90deg) 50% / var(--tooth) 100%;
+  mask: conic-gradient(from -45deg at bottom, #0000, #000 1deg 89deg, #0000 90deg) 50% / var(--tooth) 100%;
+}

@@ -2,6 +2,7 @@ import ClickSpark from './components/reactbits/ClickSpark';
 import Ambient from './sections/Ambient';
 import Nav from './sections/Nav';
 import Hero from './sections/Hero';
+import Bills from './sections/Bills';
 import Works from './sections/Works';
 import Triage from './sections/Triage';
 import Agent from './sections/Agent';
@@ -20,6 +21,7 @@ export default function App() {
         <Nav />
         <main>
           <Hero />
+          <Bills />
           <Works />
           <Triage />
           <Agent />
