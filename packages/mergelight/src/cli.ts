@@ -33,7 +33,8 @@ Options
   --yellow-blocks       With --post or post: a "needs a human" check waits for an approval
   --json                Print the review as JSON
   --out <file>          Also write the JSON review to a file
-  --model <name>        Codex model (default: your Codex config)
+  --provider <name>     Who hunts for problems: codex or claude (default: codex)
+  --model <name>        Model for the hunters (default: your Codex config, or opus on Claude)
   --effort <level>      Reasoning effort: low, medium, high (default: high)
   --verify-with <name>  Who checks the findings: claude or codex
                         (default: claude when Claude Code is installed)
@@ -95,6 +96,7 @@ async function main(): Promise<number> {
       model: { type: "string" },
       effort: { type: "string" },
       "verify-with": { type: "string" },
+      provider: { type: "string" },
       "verify-model": { type: "string" },
       keep: { type: "boolean" },
       by: { type: "string" },
@@ -147,6 +149,11 @@ async function main(): Promise<number> {
   }
   const dryRun = Boolean(values["dry-run"]);
 
+  const provider = values.provider;
+  if (provider !== undefined && provider !== "codex" && provider !== "claude") {
+    log(`mergelight: --provider must be codex or claude, not "${provider}"`);
+    return 1;
+  }
   const verifyWith = values["verify-with"];
   if (verifyWith !== undefined && verifyWith !== "codex" && verifyWith !== "claude") {
     log(`mergelight: --verify-with must be codex or claude, not "${verifyWith}"`);
@@ -204,6 +211,7 @@ async function main(): Promise<number> {
     const review = await reviewPullRequest(ref, {
       previous: values.post ? await previousFindings(api, ref.number) : undefined,
       at: values.at,
+      provider,
       model: values.model,
       effort: values.effort,
       verifyWith,

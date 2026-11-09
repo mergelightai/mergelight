@@ -58,17 +58,24 @@ export function sandboxArgs(home = codexHome()): string[] {
   return ["-c", 'default_permissions="mergelight_review"', "-c", `permissions.mergelight_review.filesystem={":root"="read",${JSON.stringify(home)}="none"}`];
 }
 
-/** Tokens the runner holds that commands Codex runs have no use for. Codex only needs its own login. */
+/** Tokens the runner holds that a reviewing agent has no use for. It only needs its own login. */
 const HIDDEN_ENV = new Set(["GH_TOKEN", "GITHUB_TOKEN", "SECRETS_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_RUNTIME_TOKEN", "ACTIONS_RESULTS_URL", "ACTIONS_CACHE_URL"]);
 
-export function codexEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+export function agentEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(env).filter(([name]) => !HIDDEN_ENV.has(name)));
 }
 
+/** Codex also has no use for a Claude login. */
+export function codexEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const { CLAUDE_CODE_OAUTH_TOKEN: _token, ANTHROPIC_API_KEY: _key, ...rest } = agentEnv(env);
+  return rest;
+}
+
 const JWT = /\beyJ[\w-]{10,}\.[\w-]{10,}\.[\w-]+/g;
+const ANTHROPIC_SECRET = /\bsk-ant-[\w-]{20,}/g;
 
 /** Takes login tokens out of text that's about to be posted, in case one got past the sandbox. */
-export function scrubSecrets(text: string, home = codexHome()): string {
+export function scrubSecrets(text: string, home = codexHome(), env: NodeJS.ProcessEnv = process.env): string {
   let secrets: string[] = [];
   try {
     const { tokens, OPENAI_API_KEY: key } = JSON.parse(readFileSync(join(home, "auth.json"), "utf8")) as { tokens?: Record<string, unknown>; OPENAI_API_KEY?: unknown };
@@ -76,7 +83,8 @@ export function scrubSecrets(text: string, home = codexHome()): string {
   } catch {
     // No login file to compare with. The pattern below still applies.
   }
-  return secrets.reduce((out, secret) => out.split(secret).join("[removed]"), text).replace(JWT, "[removed]");
+  secrets.push(...[env.CLAUDE_CODE_OAUTH_TOKEN, env.ANTHROPIC_API_KEY].filter((v): v is string => typeof v === "string" && v.length >= 20));
+  return secrets.reduce((out, secret) => out.split(secret).join("[removed]"), text).replace(JWT, "[removed]").replace(ANTHROPIC_SECRET, "[removed]");
 }
 
 /**

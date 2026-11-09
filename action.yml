@@ -1,5 +1,5 @@
 name: Mergelight
-description: AI code review on the ChatGPT plan you already pay for. Tells you which problems are worth fixing.
+description: AI code review on the Claude or ChatGPT plan you already pay for. Tells you which problems are worth fixing.
 author: Mergelight
 branding:
   icon: git-merge
@@ -14,6 +14,17 @@ inputs:
   openai-api-key:
     description: An OpenAI API key, billed per use. Works on public repositories too.
     required: false
+  claude-code-oauth-token:
+    description: A Claude plan's login, from "claude setup-token" on your computer, saved as a secret.
+    required: false
+  anthropic-api-key:
+    description: An Anthropic API key, billed per use. A Claude plan's login is used first if both are set.
+    required: false
+  provider:
+    description: >
+      Who reviews: claude or codex. Leave it empty and a repository with only a Claude login uses
+      Claude, and every other repository uses Codex.
+    required: false
   secrets-token:
     description: >
       Only needed without the Mergelight AI app. A token that can update this repository's secrets
@@ -24,20 +35,23 @@ inputs:
     description: Name of the secret that holds the ChatGPT login.
     default: CODEX_AUTH_JSON
   model:
-    description: Codex model to review with. Defaults to Codex's own default.
+    description: Model to review with. Defaults to Codex's own default, or opus on Claude.
     required: false
   effort:
     description: "Reasoning effort: low, medium or high."
     required: false
   verify-with:
-    description: "Who checks the findings: codex, or claude on a runner with Claude Code logged in."
-    default: codex
+    description: "Who checks the findings: claude or codex. Empty means whoever does the review. A Claude review is always checked by Claude."
+    required: false
   yellow-blocks:
     description: 'Set to "true" for a team: a "needs a human" check then waits for an approval. Leave it off if you work alone, since GitHub bars approving your own PR.'
     default: "false"
   codex-version:
     description: Version of the Codex CLI to install.
     default: "0.166.0"
+  claude-code-version:
+    description: Version of the Claude Code CLI to install.
+    default: "2.1.319"
   github-token:
     description: Token for posting comments and checks. Needs pull-requests and checks write.
     default: ${{ github.token }}
@@ -83,8 +97,44 @@ runs:
         BY: ${{ github.event.review.user.login }}
       run: node "$GITHUB_ACTION_PATH/packages/mergelight/dist/cli.js" approve "$GITHUB_REPOSITORY#$PR" --by "$BY"
 
-    - name: Install Codex
+    - name: Choose the reviewer
       if: github.event_name != 'pull_request_review'
+      shell: bash
+      env:
+        WANTED: ${{ inputs.provider }}
+        HAS_CLAUDE: ${{ (inputs.claude-code-oauth-token != '' || inputs.anthropic-api-key != '') && '1' || '' }}
+        HAS_CODEX: ${{ (inputs.codex-auth-json != '' || inputs.openai-api-key != '') && '1' || '' }}
+      run: |
+        provider="$WANTED"
+        if [ -z "$provider" ]; then
+          if [ -n "$HAS_CLAUDE" ] && [ -z "$HAS_CODEX" ]; then provider=claude; else provider=codex; fi
+        fi
+        if [ "$provider" != claude ] && [ "$provider" != codex ]; then
+          echo "::error::provider must be claude or codex, not \"$provider\"."
+          exit 1
+        fi
+        if [ "$provider" = claude ] && [ -z "$HAS_CLAUDE" ]; then
+          echo "::error::The provider is claude, but there's no Claude login. Set claude-code-oauth-token or anthropic-api-key."
+          exit 1
+        fi
+        echo "MERGELIGHT_PROVIDER=$provider" >> "$GITHUB_ENV"
+        # A job can run this Action more than once, so nothing carries over from an earlier run.
+        if [ "$provider" = claude ]; then
+          {
+            echo "MERGELIGHT_CHATGPT=0"
+            echo "MERGELIGHT_CONNECT=0"
+            echo "MERGELIGHT_NO_LOGIN=0"
+            echo "MERGELIGHT_LOGIN_LOST=0"
+          } >> "$GITHUB_ENV"
+        fi
+
+    - name: Install Claude Code
+      if: github.event_name != 'pull_request_review' && (env.MERGELIGHT_PROVIDER == 'claude' || inputs.verify-with == 'claude')
+      shell: bash
+      run: npm install -g "@anthropic-ai/claude-code@${{ inputs.claude-code-version }}" --no-audit --no-fund --loglevel=error
+
+    - name: Install Codex
+      if: github.event_name != 'pull_request_review' && env.MERGELIGHT_PROVIDER != 'claude'
       shell: bash
       run: npm install -g "@openai/codex@${{ inputs.codex-version }}" --no-audit --no-fund --loglevel=error
 
@@ -92,7 +142,7 @@ runs:
     # runners block through AppArmor. Without them Codex can't read the code. Same fix as
     # OpenAI's codex-action (PR #77). Self-hosted runners need this configured ahead of time.
     - name: Let the Codex sandbox start
-      if: github.event_name != 'pull_request_review' && runner.os == 'Linux'
+      if: github.event_name != 'pull_request_review' && env.MERGELIGHT_PROVIDER != 'claude' && runner.os == 'Linux'
       shell: bash
       run: |
         userns="$(sysctl -n kernel.unprivileged_userns_clone 2>/dev/null || true)"
@@ -105,7 +155,7 @@ runs:
         fi
 
     - name: Log in to Codex
-      if: github.event_name != 'pull_request_review'
+      if: github.event_name != 'pull_request_review' && env.MERGELIGHT_PROVIDER != 'claude'
       shell: bash
       env:
         AUTH_JSON: ${{ inputs.codex-auth-json }}
@@ -238,9 +288,12 @@ runs:
         YELLOW_BLOCKS: ${{ inputs.yellow-blocks }}
         MERGELIGHT_ACTION_REF: ${{ github.action_ref }}
         SECRET_NAME: ${{ inputs.auth-secret-name }}
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-code-oauth-token }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
       run: |
         set -euo pipefail
-        args=(review "$GITHUB_REPOSITORY#$PR" --post --verify-with "$VERIFY_WITH" --out "$RUNNER_TEMP/mergelight-review.json")
+        if [ "$MERGELIGHT_PROVIDER" = claude ]; then VERIFY_WITH=claude; fi
+        args=(review "$GITHUB_REPOSITORY#$PR" --post --provider "$MERGELIGHT_PROVIDER" --verify-with "${VERIFY_WITH:-$MERGELIGHT_PROVIDER}" --out "$RUNNER_TEMP/mergelight-review.json")
         [ -n "$MODEL" ] && args+=(--model "$MODEL")
         [ -n "$EFFORT" ] && args+=(--effort "$EFFORT")
         [ "$YELLOW_BLOCKS" = "true" ] && args+=(--yellow-blocks)

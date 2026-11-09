@@ -54,7 +54,7 @@ export interface RepoDetails {
   /** Long-lived branches, whose PRs usually don't need a review. */
   skip: string[];
   hasLogin: boolean;
-  /** An API key needs no refreshing, so such a repo doesn't need the refresh workflow. */
+  /** An API key or a Claude login needs no refreshing, so such a repo doesn't need the refresh workflow. */
   hasApiKey: boolean;
   /** What's on the base branch already, if anything. */
   installed: Installed | null;
@@ -164,6 +164,9 @@ export interface GitHubClient {
 const WORKFLOWS = '.github/workflows';
 const WORKFLOW_PATH = `${WORKFLOWS}/mergelight.yml`;
 export const REFRESH_FILE = 'mergelight-refresh.yml';
+/** The secrets that can run a review. Only a ChatGPT login has to be refreshed. */
+const NO_REFRESH_SECRETS = ['OPENAI_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'];
+const LOGIN_SECRETS = ['CODEX_AUTH_JSON', ...NO_REFRESH_SECRETS];
 const SETUP_TITLE = 'Add Mergelight code review';
 const SETUP_BODY = [
   'Adds what [Mergelight](https://mergelight.dev) needs to review your pull requests: the review itself, and a small job that keeps a ChatGPT login fresh.',
@@ -320,8 +323,7 @@ export function realClient(token: string): GitHubClient {
     return secrets.map((s) => s.name);
   };
   const hasLogin = async (repo: Repo) => {
-    const names = await secretNames(repo);
-    return names.includes('CODEX_AUTH_JSON') || names.includes('OPENAI_API_KEY');
+    return (await secretNames(repo)).some((n) => LOGIN_SECRETS.includes(n));
   };
 
   return {
@@ -352,8 +354,8 @@ export function realClient(token: string): GitHubClient {
         branches: names.includes(base) ? names : [base, ...names],
         base,
         skip: pickSkip(names),
-        hasLogin: secrets.includes('CODEX_AUTH_JSON') || secrets.includes('OPENAI_API_KEY'),
-        hasApiKey: secrets.includes('OPENAI_API_KEY'),
+        hasLogin: secrets.some((n) => LOGIN_SECRETS.includes(n)),
+        hasApiKey: secrets.some((n) => NO_REFRESH_SECRETS.includes(n)),
         installed: onBase && readInstalled(onBase.content),
         refresh: refresh?.content ?? null,
         release,

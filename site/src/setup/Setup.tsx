@@ -1077,7 +1077,7 @@ function FinishStep({ repo, branch, fileUrl, pr, onBack }: { repo: Repo; branch:
 }
 
 function ConnectStep({ repo, pr, status, code, onBack, onSkip }: { repo: Repo; pr: SetupPr | null; status: CheckStatus | null; code: ConnectCode | null; onBack: () => void; onSkip: () => void }) {
-  const [mode, setMode] = useState<'chatgpt' | 'apikey'>(repo.isPrivate ? 'chatgpt' : 'apikey');
+  const [mode, setMode] = useState<'chatgpt' | 'claude' | 'apikey' | 'anthropic'>(repo.isPrivate ? 'chatgpt' : 'apikey');
   const [copied, setCopied] = useState<string | null>(null);
   const prUrl = pr?.url ?? `https://github.com/${repo.fullName}/pulls`;
   const prLink = (
@@ -1089,7 +1089,7 @@ function ConnectStep({ repo, pr, status, code, onBack, onSkip }: { repo: Repo; p
   const waiting = !failed && status?.title?.toLowerCase().includes('connect');
   // With a pull request open, the run that makes the code is on its way or already going.
   const coming = Boolean(pr) && !failed && !waiting;
-  const note = mode === 'apikey' ? "We'll move on when you're connected" : code ? 'Waiting for you to enter the code' : failed ? "Couldn't connect. Check that step 1 is on." : waiting ? 'Your code is ready on the pull request' : "We'll move on when you're connected";
+  const note = mode !== 'chatgpt' ? "We'll move on when you're connected" : code ? 'Waiting for you to enter the code' : failed ? "Couldn't connect. Check that step 1 is on." : waiting ? 'Your code is ready on the pull request' : "We'll move on when you're connected";
   // The run takes a little while to make the code, so this has to look busy, not stuck.
   const gettingCode = mode === 'chatgpt' && coming && !code;
 
@@ -1100,9 +1100,12 @@ function ConnectStep({ repo, pr, status, code, onBack, onSkip }: { repo: Repo; p
     });
   };
 
+  const secretName = mode === 'claude' ? 'CLAUDE_CODE_OAUTH_TOKEN' : mode === 'anthropic' ? 'ANTHROPIC_API_KEY' : 'OPENAI_API_KEY';
   const options = [
     { id: 'chatgpt' as const, title: 'ChatGPT plan', note: repo.isPrivate ? 'Uses the subscription you already have' : 'Private repos only, by OpenAI', disabled: !repo.isPrivate },
+    { id: 'claude' as const, title: 'Claude plan', note: 'Uses the subscription you already have', disabled: false },
     { id: 'apikey' as const, title: 'OpenAI API key', note: 'Pay OpenAI per use', disabled: false },
+    { id: 'anthropic' as const, title: 'Anthropic API key', note: 'Pay Anthropic per use', disabled: false },
   ];
 
   return (
@@ -1155,16 +1158,25 @@ function ConnectStep({ repo, pr, status, code, onBack, onSkip }: { repo: Repo; p
         </ol>
       ) : (
         <ol className="mt-6 space-y-4">
-          <Numbered n={1}>
-            Add a secret named{' '}
-            <button type="button" onClick={() => copy('OPENAI_API_KEY')} title="Copy" className="rounded-md bg-white/[0.08] px-1.5 py-0.5 font-mono text-[12.5px] text-fg transition-colors hover:bg-white/[0.13]">
-              {copied === 'OPENAI_API_KEY' ? 'Copied' : 'OPENAI_API_KEY'}
+          {mode === 'claude' && (
+            <Numbered n={1}>
+              On your computer, run{' '}
+              <button type="button" onClick={() => copy('claude setup-token')} title="Copy" className="rounded-md bg-white/[0.08] px-1.5 py-0.5 font-mono text-[12.5px] text-fg transition-colors hover:bg-white/[0.13]">
+                {copied === 'claude setup-token' ? 'Copied' : 'claude setup-token'}
+              </button>
+              <span className="mt-1 block text-[13.5px] text-muted">It signs in to your Claude plan and shows a token that lasts a year.</span>
+            </Numbered>
+          )}
+          <Numbered n={mode === 'claude' ? 2 : 1}>
+            Add {mode === 'claude' ? 'that token as' : ''} a secret named{' '}
+            <button type="button" onClick={() => copy(secretName)} title="Copy" className="rounded-md bg-white/[0.08] px-1.5 py-0.5 font-mono text-[12.5px] text-fg transition-colors hover:bg-white/[0.13]">
+              {copied === secretName ? 'Copied' : secretName}
             </button>
             <a href={`https://github.com/${repo.fullName}/settings/secrets/actions/new`} target="_blank" rel="noreferrer" className="mt-1 flex w-fit items-center gap-1 text-[13.5px] text-lilac transition-colors hover:text-fg">
               Open GitHub secrets <External />
             </a>
           </Numbered>
-          <Numbered n={2}>Push any commit to your pull request to start the review</Numbered>
+          <Numbered n={mode === 'claude' ? 3 : 2}>Push any commit to your pull request to start the review</Numbered>
         </ol>
       )}
 

@@ -108,3 +108,37 @@ test("the refresh and its save come before the review, and the login step can ca
   assert.match(stepScript("Log in to Codex"), /MERGELIGHT_LOGIN_LOST=0/, "nothing carries over from an earlier run in the job");
   assert.doesNotMatch(action, /Reply with the single word OK/, "the job no longer spends plan quota on a model call");
 });
+
+function choose({ wanted = "", claude = "", codex = "" }) {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-choose-"));
+  const envFile = join(dir, "env");
+  writeFileSync(envFile, "");
+  const r = spawnSync("bash", ["-c", stepScript("Choose the reviewer")], { encoding: "utf8", env: { PATH: process.env.PATH, GITHUB_ENV: envFile, WANTED: wanted, HAS_CLAUDE: claude, HAS_CODEX: codex } });
+  const env = Object.fromEntries(readFileSync(envFile, "utf8").trim().split("\n").filter(Boolean).map((l) => l.split("=")));
+  return { code: r.status, out: r.stdout, env };
+}
+
+test("a repository with only a Claude login reviews with Claude, and nothing from an earlier run carries over", () => {
+  const r = choose({ claude: "1" });
+  assert.equal(r.code, 0);
+  assert.equal(r.env.MERGELIGHT_PROVIDER, "claude");
+  assert.equal(r.env.MERGELIGHT_CONNECT, "0");
+  assert.equal(r.env.MERGELIGHT_NO_LOGIN, "0");
+});
+
+test("Codex stays the choice when it has a login, or when there's no login at all", () => {
+  assert.equal(choose({ codex: "1" }).env.MERGELIGHT_PROVIDER, "codex");
+  assert.equal(choose({ claude: "1", codex: "1" }).env.MERGELIGHT_PROVIDER, "codex", "a repository that had Codex doesn't switch by itself");
+  assert.equal(choose({}).env.MERGELIGHT_PROVIDER, "codex", "no login still leads to the ChatGPT connect flow");
+});
+
+test("the provider input wins, and a wrong one says what's wrong", () => {
+  assert.equal(choose({ wanted: "claude", claude: "1", codex: "1" }).env.MERGELIGHT_PROVIDER, "claude");
+  const none = choose({ wanted: "claude", codex: "1" });
+  assert.equal(none.code, 1);
+  assert.match(none.out, /no Claude login/);
+  const typo = choose({ wanted: "gemini" });
+  assert.equal(typo.code, 1);
+  assert.match(typo.out, /provider must be claude or codex/);
+});
+

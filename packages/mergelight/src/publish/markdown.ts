@@ -220,7 +220,7 @@ export function summaryBody({ review: r, state, urls, marks = new Map(), handled
     out.push("", "</details>");
   }
 
-  const who = (p: { name: string; model: string | null }) => `${p.name === "codex" ? "Codex" : "Claude"}${p.model ? ` ${p.model}` : ""}`;
+  const who = (p: { name: string; model: string | null }) => `${p.name === "codex" ? "Codex" : "Claude"}${p.model ? ` ${p.model.replace(/^claude-/, "")}` : ""}`;
   const checkedBy = r.verifier && r.verifier.name !== r.provider.name ? `, checked by ${who(r.verifier)},` : "";
   out.push(
     "",

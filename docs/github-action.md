@@ -1,6 +1,6 @@
 # Mergelight GitHub Action
 
-Reviews every pull request with your own Codex login and posts:
+Reviews every pull request with your own Claude or Codex login and posts:
 
 - **One summary comment**, kept up to date on every push: what the PR does, what's worth fixing, what's your call, and what was left alone on purpose.
 - **Inline comments** for the few findings a senior reviewer would hold the merge for, at most 3 per review, each with how it happens, what breaks and the smallest fix. Anything else worth fixing is listed in the summary.
@@ -17,6 +17,8 @@ If the review itself can't run, for example because the login expired, the check
 |---|---|---|
 | **ChatGPT login** (`codex-auth-json`) | Private only | Your ChatGPT plan |
 | **OpenAI API key** (`openai-api-key`) | Any | Billed per use |
+| **Claude plan** (`claude-code-oauth-token`) | Any | Your Claude plan |
+| **Anthropic API key** (`anthropic-api-key`) | Any | Billed per use |
 
 OpenAI allows a ChatGPT login in CI only for trusted private automation, and says not to use it for public or open source repositories. The Action refuses a ChatGPT login on a public repository. See [OpenAI's guide](https://learn.chatgpt.com/docs/auth/ci-cd-auth).
 
@@ -28,6 +30,8 @@ Go to **[mergelight.dev/setup](https://mergelight.dev/setup/)** and continue wit
 2. **Add Mergelight.** Choose what it reviews: pull requests into one branch, or every pull request. With one branch, merges like `staging` into `main` are skipped, so code pushed straight to `staging` isn't reviewed. With every pull request, GitHub only runs the file on branches that have it, so other branches join once it's merged into them. The page then opens a pull request with the file, using your own sign-in in your browser. On a private repository it also adds the job that keeps a ChatGPT login fresh, because a review that starts while another is refreshing the login can fail. It reviews itself, and you decide whether to merge. If GitHub refuses, the page offers GitHub's editor with the file filled in instead.
 3. **Connect your AI,** if the repo isn't connected yet:
    - **ChatGPT plan** (private repositories): the pull request shows a link and a code. Enter the code, and the review starts. First turn on "Enable device code sign-in" in your [ChatGPT security settings](https://chatgpt.com/settings/security). It's in beta, and on a workspace an admin turns it on.
+   - **Claude plan**: run `claude setup-token` on your computer, add the token to the repository's secrets as `CLAUDE_CODE_OAUTH_TOKEN`, then push a commit. The token lasts about a year, so there's nothing to refresh.
+   - **Anthropic API key**: add it to the repository's secrets as `ANTHROPIC_API_KEY`, then push a commit. Anthropic bills it per use.
    - **OpenAI API key**: add it to the repository's secrets as `OPENAI_API_KEY`, then push a commit. OpenAI bills it per use, and it works on public repositories too.
 
 The first review runs on that same pull request, so you can see what a review looks like. The page follows it live, but you can close the page: the review keeps running, and the result shows up on the pull request. Merge the pull request to turn on reviews for new ones.

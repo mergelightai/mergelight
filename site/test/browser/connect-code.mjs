@@ -240,6 +240,21 @@ await scenario('public-repo', { isPrivate: false, comments: [comment(BOT, askFor
   expect(!world.asked.includes('/issues/7/comments'), 'and never asks for one');
 });
 
+await scenario('claude-plan', { comments: [comment(BOT, askFor())], checks: { headsha: WAITING } }, async ({ page, click, reach, until, shot }) => {
+  await reach();
+  await until((x) => x.includes(CODE), 'the code');
+  await click('label', 'Claude plan');
+  const t = await until((x) => /claude setup-token/.test(x), 'the Claude steps');
+  await new Promise((r) => setTimeout(r, 900));
+  await shot('claude');
+  expect(await page.evaluate(() => document.querySelector('input[type=radio]:checked')?.closest('label')?.innerText.includes('Claude plan')), 'the Claude plan card is the one selected');
+  expect(/CLAUDE_CODE_OAUTH_TOKEN/.test(t), 'names the secret');
+  expect(/Push any commit/.test(t), 'says how to start the review');
+  await click('label', 'Anthropic API key');
+  const k = await until((x) => /ANTHROPIC_API_KEY/.test(x), 'the Anthropic key steps');
+  expect(!/claude setup-token/.test(k), 'an API key needs only the secret');
+});
+
 await scenario('api-key-instead', { comments: [comment(BOT, askFor())], checks: { headsha: WAITING } }, async ({ until, click, reach, text }) => {
   await reach();
   await until((x) => x.includes(CODE), 'the code');

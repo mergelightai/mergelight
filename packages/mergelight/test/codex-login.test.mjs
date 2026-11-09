@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { test } from "node:test";
+import { claudeEnv, runClaude } from "../dist/providers/claude.js";
 import { codexEnv, LoginError, loginFailureMessage, runCodex, SandboxError, sandboxArgs, scrubSecrets } from "../dist/providers/codex.js";
 
 /** Puts a stand-in codex first on the PATH that fails with this message, on a run with this login. */
@@ -80,5 +81,55 @@ test("login tokens are removed from anything about to be posted", () => {
   const out = scrubSecrets(`see ${secret} and ${jwt} and short`, home);
   assert.equal(out, "see [removed] and [removed] and short");
   assert.equal(scrubSecrets(`only ${jwt}`, join(home, "missing")), "only [removed]");
+});
+
+test("Codex never gets a Claude login", () => {
+  assert.deepEqual(codexEnv({ PATH: "/bin", CLAUDE_CODE_OAUTH_TOKEN: "t", ANTHROPIC_API_KEY: "k", GH_TOKEN: "g" }), { PATH: "/bin" });
+});
+
+test("Claude gets its login and no runner tokens, and a plan comes before a paid key", () => {
+  assert.deepEqual(claudeEnv({ PATH: "/bin", GH_TOKEN: "g", ACTIONS_ID_TOKEN_REQUEST_TOKEN: "x", CLAUDE_CODE_OAUTH_TOKEN: "t", ANTHROPIC_API_KEY: "k" }), { PATH: "/bin", CLAUDE_CODE_OAUTH_TOKEN: "t" });
+  assert.deepEqual(claudeEnv({ PATH: "/bin", CLAUDE_CODE_OAUTH_TOKEN: "", ANTHROPIC_API_KEY: "k" }), { PATH: "/bin", ANTHROPIC_API_KEY: "k" });
+  assert.deepEqual(claudeEnv({ PATH: "/bin", CLAUDE_CODE_OAUTH_TOKEN: "", ANTHROPIC_API_KEY: "" }), { PATH: "/bin" });
+});
+
+test("Claude logins are removed from anything about to be posted", () => {
+  const token = "abcdefghijklmnopqrstuvwxyz0123";
+  assert.equal(scrubSecrets(`a ${token} b`, "/nonexistent", { CLAUDE_CODE_OAUTH_TOKEN: token }), "a [removed] b");
+  assert.equal(scrubSecrets("x sk-ant-oat01-abcdefghijklmnopqrstuvwxyz y", "/nonexistent", {}), "x [removed] y");
+});
+
+/** Puts a stand-in claude first on the PATH that prints this and records its arguments and environment. */
+async function fakeClaude(stdout, extraEnv = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-fake-claude-"));
+  writeFileSync(join(dir, "out"), stdout);
+  writeFileSync(join(dir, "claude"), `#!/usr/bin/env bash\ncat > /dev/null\nprintf '%s\\n' "$@" > "${dir}/args"\nenv > "${dir}/env"\ncat "${dir}/out"\nexit 1\n`);
+  chmodSync(join(dir, "claude"), 0o755);
+  const saved = { ...process.env };
+  process.env.PATH = `${dir}${delimiter}${saved.PATH}`;
+  Object.assign(process.env, extraEnv);
+  try {
+    const result = await runClaude({ cwd: dir, prompt: "p", schema: {} }).catch((e) => e);
+    return { result, args: readFileSync(join(dir, "args"), "utf8").split("\n"), env: readFileSync(join(dir, "env"), "utf8") };
+  } finally {
+    process.env = saved;
+  }
+}
+
+const refused = JSON.stringify({ type: "result", subtype: "success", is_error: true, result: "Invalid API key. Please run /login" });
+
+test("a Claude login that doesn't work becomes a clear message", async () => {
+  const { result } = await fakeClaude(refused, { MERGELIGHT_PROVIDER: "claude" });
+  assert.ok(result instanceof LoginError);
+  assert.match(result.message, /claude setup-token/);
+  assert.match(result.message, /CLAUDE_CODE_OAUTH_TOKEN/);
+});
+
+test("Claude runs with file tools only and without the runner's tokens", async () => {
+  const { args, env } = await fakeClaude(refused, { GH_TOKEN: "FAKE_GH", CLAUDE_CODE_OAUTH_TOKEN: "FAKE_LOGIN" });
+  assert.equal(args[args.indexOf("--tools") + 1], "Read,Grep,Glob");
+  assert.ok(args.includes("--restricted") && args.includes("--safe-mode") && args.includes("--strict-mcp-config"));
+  assert.ok(!env.includes("FAKE_GH"));
+  assert.ok(env.includes("FAKE_LOGIN"));
 });
 

@@ -21,10 +21,12 @@ import { cacheDir, prepareWorkspace } from "./workspace.js";
 export interface ReviewOptions {
   /** Review this commit of the PR instead of its latest one. */
   at?: string;
+  /** Who hunts for problems: codex, the default, or claude. */
+  provider?: ProviderName;
   model?: string;
   /** Reasoning effort for every Codex run. Defaults to high, whatever the user's Codex config says. */
   effort?: string;
-  /** Who checks and sorts the candidates. Defaults to Claude when Claude Code is installed, else Codex. */
+  /** Who checks and sorts the candidates. Defaults to Claude when the hunters are Claude or Claude Code is installed, else Codex. */
   verifyWith?: ProviderName;
   /** Model for the verifier. Defaults to the latest Opus on Claude, and to the hunters' model on Codex. */
   verifyModel?: string;
@@ -142,23 +144,25 @@ export interface Verified {
   cost_usd: number | null;
 }
 
+/** Tells the prompts which tools the agent has. Without a shell it can't run git diff, so a big diff goes into the checkout. */
+function forProvider(dir: string, input: PromptInput, provider: ProviderName): PromptInput {
+  const tooling = TOOLING[provider];
+  if (tooling !== "files" || !input.diffTruncated) return { ...input, tooling };
+  const diffFile = ".mergelight/pr.diff";
+  mkdirSync(join(dir, ".mergelight"), { recursive: true });
+  writeFileSync(join(dir, diffFile), input.diff);
+  return { ...input, tooling, diffFile };
+}
+
 /**
  * The verifier: tries to disprove every candidate, merges duplicates, rates the
  * rest and picks the few that matter most. Exported so the eval can replay the
  * same candidates through another model.
  */
 export async function verifyCandidates(dir: string, input: PromptInput, found: Candidate[], opts: VerifyOptions): Promise<Verified> {
-  const tooling = TOOLING[opts.provider];
-  let diffFile: string | undefined;
-  if (tooling === "files" && input.diffTruncated) {
-    // Without a shell the agent can't run git diff, so the full diff goes into the checkout.
-    diffFile = ".mergelight/pr.diff";
-    mkdirSync(join(dir, ".mergelight"), { recursive: true });
-    writeFileSync(join(dir, diffFile), input.diff);
-  }
   const result = await runModel(opts.provider, {
     cwd: dir,
-    prompt: buildVerifierPrompt({ ...input, tooling, diffFile }, found),
+    prompt: buildVerifierPrompt(forProvider(dir, input, opts.provider), found),
     schema: reviewSchema,
     model: opts.model,
     effort: opts.effort,
@@ -180,6 +184,8 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
   const started = Date.now();
   const progress = opts.onProgress ?? (() => {});
   const effort = opts.effort ?? DEFAULT_EFFORT;
+  const provider = opts.provider ?? "codex";
+  const hunterModel = provider === "claude" ? (opts.model ?? "opus") : opts.model;
 
   progress(`Reading ${ref.owner}/${ref.repo}#${ref.number}`);
   const pr = await fetchPullRequest(ref);
@@ -212,11 +218,11 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
     progress(`Hunting for problems (0 of ${focuses.length} areas done)`);
     const hunts = await Promise.allSettled(
       focuses.map(async (focus) => {
-        const result = await runModel("codex", {
+        const result = await runModel(provider, {
           cwd: ws.dir,
-          prompt: buildHunterPrompt(input, focus),
+          prompt: buildHunterPrompt(forProvider(ws.dir, input, provider), focus),
           schema: candidateSchema,
-          model: opts.model,
+          model: hunterModel,
           effort,
           logFile: log(`hunt-${focus}`),
         });
@@ -247,11 +253,11 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
       progress(`Sweeping ${uncovered.length} file${uncovered.length === 1 ? "" : "s"} the hunters didn't mention`);
       const sweeps = await Promise.allSettled(
         chunks.map((files, i) =>
-          runModel("codex", {
+          runModel(provider, {
             cwd: ws.dir,
-            prompt: buildSweepPrompt(input, files),
+            prompt: buildSweepPrompt(forProvider(ws.dir, input, provider), files),
             schema: candidateSchema,
-            model: opts.model,
+            model: hunterModel,
             effort,
             logFile: log(`sweep-${i + 1}`),
           }),
@@ -268,7 +274,7 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
 
     // Step 2: the verifier tries to disprove each candidate and sorts the rest.
     // Opus checks better than Codex: in the eval it posted a third less and kept the same finds.
-    const verifyWith = opts.verifyWith ?? ((await claudeAvailable()) ? "claude" : "codex");
+    const verifyWith = opts.verifyWith ?? (provider === "claude" || (await claudeAvailable()) ? "claude" : "codex");
     if (!opts.verifyWith && verifyWith === "codex") progress("Claude Code isn't installed, so Codex checks the findings");
     progress(`Checking ${found.length} candidate${found.length === 1 ? "" : "s"}${verifyWith === "codex" ? "" : ` with ${verifyWith}`}`);
     const verified = await verifyCandidates(ws.dir, input, found, {
@@ -279,7 +285,7 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
       onCommand: (cmd) => progress(`Checking ${found.length} candidates: ${cmd.replace(/\s+/g, " ").slice(0, 80)}`, true),
     });
     const firstHunt = hunts.find((h) => h.status === "fulfilled");
-    const hunterModel = firstHunt?.status === "fulfilled" ? firstHunt.value.model : null;
+    const servedModel = firstHunt?.status === "fulfilled" ? firstHunt.value.model : null;
 
     return {
       schema_version: 1,
@@ -292,7 +298,7 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
         base_sha: ws.mergeBase,
         head_sha: ws.headSha,
       },
-      provider: { name: "codex", model: hunterModel, effort },
+      provider: { name: provider, model: servedModel, effort },
       verifier: { name: verifyWith, model: verified.model, effort, cost_usd: verified.cost_usd },
       light: mergeLight(verified.findings),
       summary: verified.summary,
