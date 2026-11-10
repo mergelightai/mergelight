@@ -24,9 +24,12 @@ const ADA = "ghu_" + "a".repeat(36);
 const BO = "ghu_" + "b".repeat(36);
 /** Cy signed in to some other GitHub App, which is also installed on acme. That token is not a Mergelight sign-in. */
 const CY = "ghu_" + "c".repeat(36);
+/** Dee has no installs at all. */
+const DEE = "ghu_" + "d".repeat(36);
 const people = {
   [ADA]: { user: { id: 11, login: "ada" }, installations: [{ id: 501, account: ACME, repos: [{ id: 501, full_name: "acme/widgets" }, { id: 502, full_name: "acme/api" }] }, { id: 503, account: QUIET, repos: [{ id: 901, full_name: "quiet/site" }] }] },
   [BO]: { user: { id: 22, login: "bo" }, installations: [{ id: 601, account: OTHER, repos: [{ id: 777, full_name: "other/vault" }] }] },
+  [DEE]: { user: { id: 44, login: "dee" }, installations: [] },
   [CY]: { user: { id: 33, login: "cy" }, installations: [{ id: 701, app: "some-other-app", account: ACME, repos: [{ id: 501, full_name: "acme/widgets" }] }] },
 };
 
@@ -34,6 +37,8 @@ const json = (status, body) => new Response(JSON.stringify(body), { status });
 let githubCalls;
 /** Set to make the fake GitHub answer every call with this status, as when it limits a caller. */
 let githubAnswers;
+/** Set to make the fake GitHub refuse to list the repositories of install 503 with this status. */
+let brokenInstall;
 
 /** A fake GitHub: its signing keys for runs, and what each person's token is allowed to see. */
 const fetchImpl = async (url, init = {}) => {
@@ -47,6 +52,7 @@ const fetchImpl = async (url, init = {}) => {
   if (u.pathname === "/user") return json(200, who.user);
   if (u.pathname === "/user/installations") return json(200, { installations: who.installations.map(({ id, account, app = "mergelight-setup" }) => ({ id, account, app_slug: app })) });
   const m = /^\/user\/installations\/(\d+)\/repositories$/.exec(u.pathname);
+  if (m && brokenInstall && m[1] === "503") return json(brokenInstall, { message: "This installation has been suspended" });
   const installation = m && who.installations.find((i) => i.id === Number(m[1]));
   if (installation) return json(200, { repositories: installation.repos });
   return json(404, {});
@@ -96,6 +102,7 @@ beforeEach(async () => {
   resetJwksCache();
   githubCalls = [];
   githubAnswers = null;
+  brokenInstall = null;
   clock = NOW;
   api = createApi({ pool, publicUrl: PUBLIC_URL, origins: [SITE], fetchImpl, now: () => clock });
   for (const org of [ACME, OTHER, QUIET]) await deleteOrg(pool, org.id);
@@ -292,26 +299,38 @@ test("requests that aren't a sign-in don't use up the sign-ins everyone shares",
   assert.equal((await call("/v1/session", { method: "POST", token: ADA })).status, 201);
 });
 
-test("when GitHub asks the server to slow down, sign-ins stop for a minute instead of pushing on", async () => {
-  githubAnswers = 429;
-  const limited = await call("/v1/session", { method: "POST", token: ADA });
-  assert.equal(limited.status, 503);
-  assert.equal((await limited.json()).error, "github_limited");
-  const calls = githubCalls.length;
-  githubAnswers = null;
-  // Another person, straight after: GitHub isn't asked at all.
-  assert.equal((await call("/v1/session", { method: "POST", token: BO })).status, 503);
-  assert.equal(githubCalls.length, calls);
-  clock += 61_000;
-  assert.equal((await call("/v1/session", { method: "POST", token: BO })).status, 201);
+test("when GitHub limits one person, that sign-in waits a minute and nobody else is held back", async () => {
+  for (const answer of [429, { status: 403, headers: { "retry-after": "60" } }, { status: 403, headers: { "x-ratelimit-remaining": "0" } }]) {
+    clock += 120_000;
+    githubAnswers = answer;
+    const limited = await call("/v1/session", { method: "POST", token: ADA });
+    assert.equal(limited.status, 429);
+    assert.equal((await limited.json()).error, "github_limited");
+    const calls = githubCalls.length;
+    githubAnswers = null;
+    // The same sign-in straight after, and half a minute later: GitHub isn't asked again.
+    assert.equal((await call("/v1/session", { method: "POST", token: ADA })).status, 429);
+    clock += 30_000;
+    assert.equal((await call("/v1/session", { method: "POST", token: ADA })).status, 429);
+    assert.equal(githubCalls.length, calls);
+    // Someone else signs in as usual.
+    assert.equal((await call("/v1/session", { method: "POST", token: BO })).status, 201);
+  }
+  clock += 31_000;
+  assert.equal((await call("/v1/session", { method: "POST", token: ADA })).status, 201);
 });
 
-test("one person who used up their own allowance at GitHub doesn't hold anyone else back", async () => {
-  githubAnswers = { status: 403, headers: { "x-ratelimit-remaining": "0" } };
-  const own = await call("/v1/session", { method: "POST", token: ADA });
-  assert.equal(own.status, 429);
-  githubAnswers = null;
-  assert.equal((await call("/v1/session", { method: "POST", token: BO })).status, 201);
+test("someone with nothing to show gets no session, whichever app their token is from", async () => {
+  const res = await call("/v1/session", { method: "POST", token: DEE });
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { token: null, expires_at: null, user: { id: 44, login: "dee" }, orgs: [] });
+});
+
+test("one install GitHub won't list leaves the person's other orgs showing", async () => {
+  brokenInstall = 503;
+  const body = await signIn(ADA);
+  assert.deepEqual(body.orgs.map((o) => o.login), ["acme"]);
+  assert.equal((await call(`/v1/orgs/${ACME.id}/overview`, { token: body.token })).status, 200);
 });
 
 test("one session can't flood the server, and wrong methods get no further", async () => {

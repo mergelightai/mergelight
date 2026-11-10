@@ -151,7 +151,7 @@ function Reviews({ overview }: { overview: Overview }) {
 function NothingYet({ org }: { org: Org }) {
   return (
     <Card>
-      <h2 className="text-[19px] font-semibold tracking-[-0.01em]">No reviews here yet</h2>
+      <h2 className="text-[19px] font-semibold tracking-[-0.01em]">No reviews to show yet</h2>
       <p className="mt-2 max-w-xl text-[15px] leading-relaxed text-muted">
         The dashboard is on for {org.login}. Add one line to the Mergelight step in a repository's workflow, and its next review shows up here.
       </p>
@@ -161,6 +161,10 @@ function NothingYet({ org }: { org: Org }) {
       </pre>
       <p className="mt-4 max-w-xl text-[13px] leading-relaxed text-faint">
         A review then sends its numbers: the light, how many findings, which AI ran it and how long it took. It never sends code or what a finding says.
+      </p>
+      <p className="mt-4 max-w-xl text-[14px] leading-relaxed text-muted">
+        Already sending reviews? Then they are in repositories this sign-in can't see.{' '}
+        <a href={ADD_REPOS_URL} target="_blank" rel="noreferrer" className="text-fg underline decoration-white/30 underline-offset-4 hover:decoration-white">Add them on GitHub</a>, then sign in again.
       </p>
     </Card>
   );
@@ -272,7 +276,7 @@ export default function Dashboard() {
           <h2 className="text-[19px] font-semibold tracking-[-0.01em]">No repositories to show</h2>
           <p className="mt-2 max-w-xl text-[15px] leading-relaxed text-muted">
             The dashboard shows the repositories you gave Mergelight Setup access to on GitHub, and this sign-in has none.{' '}
-            <a href={ADD_REPOS_URL} className="text-fg underline decoration-white/30 underline-offset-4 hover:decoration-white">Add your org or repositories</a>, then sign in again.
+            <a href={ADD_REPOS_URL} target="_blank" rel="noreferrer" className="text-fg underline decoration-white/30 underline-offset-4 hover:decoration-white">Add your org or repositories</a>, then sign in again.
           </p>
         </Card>
       ) : (
@@ -302,7 +306,7 @@ export default function Dashboard() {
           {/* The page can only show what the sign-in's app is installed on, so the way to add more is always in reach. */}
           <p className="-mt-2 mb-6 text-[13px] text-faint">
             Don't see an org or a repository?{' '}
-            <a href={ADD_REPOS_URL} className="text-muted underline decoration-white/20 underline-offset-4 hover:text-fg">Add it on GitHub</a>, then sign in again.
+            <a href={ADD_REPOS_URL} target="_blank" rel="noreferrer" className="text-muted underline decoration-white/20 underline-offset-4 hover:text-fg">Add it on GitHub</a>, then sign in again.
           </p>
           {view.kind === 'loading' && (
             <p className="flex items-center justify-center gap-3 py-24 text-[15px] text-muted">

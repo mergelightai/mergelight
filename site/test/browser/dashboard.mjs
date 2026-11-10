@@ -131,6 +131,8 @@ const done = async (t) => {
   expect(/acme\/api 1 review/.test(after) && /acme\/widgets 2 reviews/.test(after), 'the repositories are listed');
   const add = await t.page.evaluate(() => [...document.querySelectorAll('a')].find((a) => a.textContent.includes('Add it on GitHub'))?.href);
   expect(add === 'https://github.com/apps/mergelight-setup/installations/new', 'the way to add a missing org or repository is on the page');
+  const newTab = await t.page.evaluate(() => [...document.querySelectorAll('a')].find((a) => a.textContent.includes('Add it on GitHub'))?.target);
+  expect(newTab === '_blank', 'and it opens in a new tab, so the dashboard stays where it is');
   const link = await t.page.evaluate(() => [...document.querySelectorAll('a')].find((a) => a.textContent.includes('#42'))?.href);
   expect(link === 'https://github.com/acme/widgets/pull/42', 'a review links to its pull request on GitHub');
   await t.shot('2-reviews');
@@ -146,7 +148,7 @@ const done = async (t) => {
   expect(/The dashboard isn't on for quiet/.test(await t.text()), 'an org that hasn\'t turned it on says so');
   await t.click('[role=tab]', 'fresh');
   await wait(500);
-  expect(/No reviews here yet/.test(await t.text()) && (await t.text()).includes(`server: ${SERVER}`), 'an org with no reviews yet shows the one line to add');
+  expect(/No reviews to show yet/.test(await t.text()) && /repositories this sign-in can't see/.test(await t.text()) && (await t.text()).includes(`server: ${SERVER}`), 'an org with no reviews yet shows the one line to add');
   await t.shot('3-nothing-yet');
 
   await t.page.reload({ waitUntil: 'networkidle2' });

@@ -23,8 +23,8 @@ const SIGN_INS_PER_MINUTE = 120;
 const MAX_LOOKUPS = 8;
 /** One GitHub token signs in once in this long. The page does it once per visit. */
 const SAME_TOKEN_EVERY_MS = 20_000;
-/** How long sign-ins stop after GitHub asks this server to slow down. */
-const GITHUB_PAUSE_MS = 60_000;
+/** How long a GitHub token waits after GitHub said it is being limited. */
+const LIMITED_TOKEN_WAITS_MS = 60_000;
 /** Requests a minute for one person, over all their sessions. */
 const REQUESTS_PER_MINUTE = 240;
 const RECENT_REVIEWS = 50;
@@ -77,11 +77,10 @@ const keyOf = (token: string) => createHash("sha256").update(token).digest("hex"
 export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP, fetchImpl = fetch, now = () => Date.now() }: PeopleOptions) {
   const sessions = new Map<string, Session>();
   const persons = new Map<number, PersonState>();
-  /** GitHub tokens that signed in a moment ago, by hash, with when. */
-  const recent = new Map<string, number>();
+  /** GitHub tokens that signed in a moment ago, by hash, with when each may sign in again. */
+  const waits = new Map<string, number>();
   let signIns = { start: 0, n: 0 };
   let lookups = 0;
-  let pausedUntil = 0;
 
   function json(status: number, body: unknown, cors: Record<string, string>): Response {
     return new Response(body === null ? null : JSON.stringify(body), {
@@ -122,25 +121,25 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
     const githubToken = bearer(request);
     // Anything that isn't shaped like a GitHub sign-in is turned away before it costs anyone anything.
     if (!looksLikePersonToken(githubToken)) throw new HttpError(401, "sign_in_failed", "That isn't a GitHub sign-in.");
-    if (at < pausedUntil) throw new HttpError(503, "github_limited", "GitHub is limiting sign-ins right now. Try again in a minute.");
 
     if (at - signIns.start >= 60_000) {
       signIns = { start: at, n: 0 };
       // Once a minute, what ran out is dropped.
       for (const [key, s] of sessions) if (s.expiresAt <= at) drop(key);
-      for (const [hash, when] of recent) if (at - when >= SAME_TOKEN_EVERY_MS) recent.delete(hash);
+      for (const [hash, until] of waits) if (until <= at) waits.delete(hash);
     }
     const hash = keyOf(githubToken);
-    if (at - (recent.get(hash) ?? -Infinity) < SAME_TOKEN_EVERY_MS) throw new HttpError(429, "too_many_requests", "This sign-in was just used. Try again in a moment.");
+    if (at < (waits.get(hash) ?? 0)) throw new HttpError(429, "too_many_requests", "This sign-in was just used. Try again in a moment.");
     if (++signIns.n > SIGN_INS_PER_MINUTE || lookups >= MAX_LOOKUPS) throw new HttpError(429, "too_many_requests", "Too many sign-ins right now. Try again in a minute.");
-    recent.set(hash, at);
+    waits.set(hash, at + SAME_TOKEN_EVERY_MS);
 
     let found: Awaited<ReturnType<typeof lookUp>>;
     lookups++;
     try {
       found = await lookUp(githubToken, fetchImpl, signInApp);
     } catch (err) {
-      if (err instanceof HttpError && err.code === "github_limited") pausedUntil = at + GITHUB_PAUSE_MS;
+      // GitHub limits per person, so only this token waits longer. Everyone else signs in as usual.
+      if (err instanceof HttpError && err.code === "github_limited") waits.set(hash, at + LIMITED_TOKEN_WAITS_MS);
       throw err;
     } finally {
       lookups--;
@@ -154,6 +153,10 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
       const connected = await withOrg(pool, r.id, async (db) => ((await db.query("select 1 from orgs where id = $1", [r.id])).rowCount ?? 0) > 0);
       orgs.push({ id: r.id, login: r.login, connected, repos: r.repos.size });
     }
+
+    // Nothing to show means nothing to hold a session for. This also keeps a token that another app
+    // got for someone with no Mergelight installs from ever holding one.
+    if (!reach.length) return { status: 200, body: { token: null, expires_at: null, user: person, orgs: [] } };
 
     if (sessions.size >= MAX_SESSIONS) throw new HttpError(503, "busy", "The server is busy. Try again in a minute.");
     const state = persons.get(person.id) ?? { keys: [], window: { start: at, n: 0 } };

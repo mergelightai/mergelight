@@ -44,10 +44,10 @@ async function ask(fetchImpl: typeof fetch, token: string, path: string, signal:
     signal,
   });
   if (res.status === 401) throw new HttpError(401, "sign_in_failed", "GitHub didn't accept this sign-in. Sign in again.");
-  // GitHub is asking this server to slow down, whoever is asking. The caller stops all sign-ins for a while.
-  if (res.status === 429 || (res.status === 403 && res.headers.has("retry-after"))) throw new HttpError(503, "github_limited", "GitHub is limiting sign-ins right now. Try again in a minute.");
-  // This one person used up their own allowance at GitHub. Nobody else is held back for it.
-  if (res.status === 403 && res.headers.get("x-ratelimit-remaining") === "0") throw new HttpError(429, "too_many_requests", "GitHub is limiting this account right now. Try again later.");
+  // GitHub is limiting this person's token. The caller makes this sign-in wait, and nobody else.
+  if (res.status === 429 || (res.status === 403 && (res.headers.has("retry-after") || res.headers.get("x-ratelimit-remaining") === "0"))) {
+    throw new HttpError(429, "github_limited", "GitHub is limiting this account right now. Try again in a minute.");
+  }
   if (!res.ok) throw new HttpError(502, "github_error", `GitHub answered ${res.status}.`);
   return res.json();
 }
@@ -74,13 +74,19 @@ export async function lookUp(token: string, fetchImpl: typeof fetch = fetch, app
       const { id, account } = installation as { id?: unknown; account?: { id?: unknown; login?: unknown } | null };
       if (!isId(id) || !account || !isId(account.id) || !isLogin(account.login)) continue;
       const repos = new Map<number, string>();
-      for (let page = 1; page <= MAX_REPO_PAGES; page++) {
-        const { repositories } = (await ask(fetchImpl, token, `/user/installations/${id}/repositories?per_page=100&page=${page}`, signal)) as { repositories?: unknown };
-        const list = Array.isArray(repositories) ? repositories : [];
-        for (const repo of list as { id?: unknown; full_name?: unknown }[]) {
-          if (isId(repo.id) && isRepoName(repo.full_name)) repos.set(repo.id, repo.full_name);
+      try {
+        for (let page = 1; page <= MAX_REPO_PAGES; page++) {
+          const { repositories } = (await ask(fetchImpl, token, `/user/installations/${id}/repositories?per_page=100&page=${page}`, signal)) as { repositories?: unknown };
+          const list = Array.isArray(repositories) ? repositories : [];
+          for (const repo of list as { id?: unknown; full_name?: unknown }[]) {
+            if (isId(repo.id) && isRepoName(repo.full_name)) repos.set(repo.id, repo.full_name);
+          }
+          if (list.length < 100) break;
         }
-        if (list.length < 100) break;
+      } catch (err) {
+        // One install GitHub won't list, a suspended one for example, leaves the person's other orgs showing.
+        if (!(err instanceof HttpError && err.code === "github_error")) throw err;
+        continue;
       }
       reach.push({ id: account.id, login: account.login, repos });
     }

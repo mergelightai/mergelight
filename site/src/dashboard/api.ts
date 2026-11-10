@@ -26,8 +26,9 @@ export interface Org {
 }
 
 export interface Session {
-  token: string;
-  expires_at: string;
+  /** Null when the sign-in has nothing to show: the server keeps no session then. */
+  token: string | null;
+  expires_at: string | null;
   user: { id: number; login: string };
   orgs: Org[];
 }
@@ -115,7 +116,7 @@ export async function finishSignIn(params: URLSearchParams): Promise<Session | n
   // The GitHub token lives in this one variable, for this one call.
   const { token } = (await res.json()) as { token: string };
   const session = await serverSession(token);
-  remember(session);
+  if (session.token) remember(session);
   return session;
 }
 
@@ -133,7 +134,7 @@ export function rememberedSession(): Session | null {
   try {
     const raw = sessionStorage.getItem(SESSION_KEY);
     const session = raw ? (JSON.parse(raw) as Session) : null;
-    if (!session || typeof session.token !== 'string' || !Array.isArray(session.orgs) || Date.parse(session.expires_at) <= Date.now()) return null;
+    if (!session || typeof session.token !== 'string' || typeof session.expires_at !== 'string' || !Array.isArray(session.orgs) || Date.parse(session.expires_at) <= Date.now()) return null;
     return session;
   } catch {
     return null;
@@ -153,5 +154,6 @@ export async function loadOverview(session: Session, orgId: number): Promise<Ove
 
 export async function signOut(session: Session): Promise<void> {
   remember(null);
+  if (!session.token) return;
   await fetch(`${SERVER}/v1/session`, { method: 'DELETE', headers: { authorization: `Bearer ${session.token}` }, signal: AbortSignal.timeout(TIMEOUT_MS) }).catch(() => undefined);
 }
