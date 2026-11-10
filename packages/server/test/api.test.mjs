@@ -3,7 +3,7 @@ import { createSign, generateKeyPairSync, randomUUID } from "node:crypto";
 import { after, before, beforeEach, test } from "node:test";
 import pg from "pg";
 import { handle as tokenServer, resetJwksCache } from "../../token-server/src/token.js";
-import { audienceOf, createApi, MAX_BODY, parseReview } from "../dist/api.js";
+import { audienceOf, createApi, MAX_BODY, parseReview, RATE_MAX } from "../dist/api.js";
 import { assertRowRulesHold, connectOrg, createPool, deleteOrg, migrate, withOrg } from "../dist/db.js";
 import { createDataServer } from "../dist/server.js";
 import { startPostgres } from "./postgres.mjs";
@@ -139,7 +139,7 @@ test("a connected org's review is stored with the repository and run from the si
   assert.equal(review.pr, 42);
   assert.equal(review.light, "yellow");
   assert.deepEqual([review.bugs, review.risks, review.hardening, review.major], [2, 1, 3, 1]);
-  assert.deepEqual([review.inline, review.listed, review.decisions], [2, 1, 0]);
+  assert.deepEqual([review.tier_post, review.tier_list, review.tier_decision], [2, 1, 0]);
   assert.deepEqual([review.provider, review.model, review.verifier], ["claude", "opus", "claude"]);
 });
 
@@ -161,6 +161,33 @@ test("the same run can't count twice, and a new attempt counts once more", async
   assert.deepEqual(await again.json(), { stored: false });
   assert.equal((await post(makeToken({ run_attempt: "2" }))).status, 201);
   assert.equal((await rowsOf(ACME.id, "select 1 from reviews")).length, 2);
+});
+
+test("two review jobs in one run each get their row: another pull request, or another AI", async () => {
+  await connectOrg(pool, ACME.id, ACME.login);
+  assert.equal((await post(makeToken())).status, 201);
+  assert.equal((await post(makeToken(), { ...REVIEW, pr: 43 })).status, 201);
+  assert.equal((await post(makeToken(), { ...REVIEW, provider: "codex" })).status, 201);
+  assert.equal((await post(makeToken(), { ...REVIEW, provider: "codex" })).status, 200);
+  assert.equal((await rowsOf(ACME.id, "select 1 from reviews")).length, 3);
+});
+
+test("a run can't report numbers for another pull request than the one GitHub signed it for", async () => {
+  await connectOrg(pool, ACME.id, ACME.login);
+  const wrong = await post(makeToken({ ref: "refs/pull/41/merge" }));
+  assert.equal(wrong.status, 400);
+  assert.match((await wrong.json()).message, /isn't the one this run is for/);
+  assert.deepEqual(await rowsOf(ACME.id, "select * from reviews"), []);
+
+  assert.equal((await post(makeToken({ ref: "refs/pull/42/merge" }))).status, 201);
+  // A pull_request_target run is signed for the base branch, which names no pull request.
+  assert.equal((await post(makeToken({ ref: "refs/heads/main", event_name: "pull_request_target", run_id: "9005" }))).status, 201);
+});
+
+test("a model name with a context suffix is kept", async () => {
+  await connectOrg(pool, ACME.id, ACME.login);
+  assert.equal((await post(makeToken(), { ...REVIEW, model: "claude-opus-5-5[1m]" })).status, 201);
+  assert.equal((await rowsOf(ACME.id, "select model from reviews"))[0].model, "claude-opus-5-5[1m]");
 });
 
 test("a token works once", async () => {
@@ -322,14 +349,14 @@ test("a review that isn't plain numbers is refused, and nothing is stored", asyn
 
 test("parseReview keeps only the fields it knows, and a missing model is fine", () => {
   const parsed = parseReview({ ...REVIEW, model: null, verifier: undefined, note: "ignore me", title: "secret code" });
-  assert.deepEqual(Object.keys(parsed).sort(), ["additions", "bugs", "decisions", "deletions", "duration_ms", "files_changed", "hardening", "inline", "light", "listed", "major", "model", "pr", "provider", "risks", "sha", "verifier"]);
+  assert.deepEqual(Object.keys(parsed).sort(), ["additions", "bugs", "deletions", "duration_ms", "files_changed", "hardening", "light", "major", "model", "pr", "provider", "risks", "sha", "tier_decision", "tier_list", "tier_post", "verifier"]);
   assert.equal(parsed.model, null);
   assert.equal(parsed.verifier, null);
 });
 
 test("an org that sends too many requests in a minute is slowed down, and other orgs aren't", async () => {
   await connectOrg(pool, ACME.id, ACME.login);
-  for (let i = 0; i < 120; i++) assert.equal((await get(makeToken())).status, 200);
+  for (let i = 0; i < RATE_MAX; i++) assert.equal((await get(makeToken())).status, 200);
   const refused = makeToken();
   assert.equal((await get(refused)).status, 429);
   assert.equal((await get(makeToken({ repository_owner_id: String(OTHER.id) }))).status, 200);

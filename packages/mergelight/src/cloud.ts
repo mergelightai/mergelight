@@ -45,6 +45,9 @@ export interface ReviewNumbers {
   deletions: number;
 }
 
+/** The server checks a model's name against the same alphabet. */
+const MODEL_NAME = /^[\w.:/[\]-]{1,100}$/;
+
 export function reviewNumbers(review: Review): ReviewNumbers {
   const n = (keep: (f: Review["findings"][number]) => boolean) => review.findings.filter(keep).length;
   const model = review.provider.model;
@@ -57,7 +60,8 @@ export function reviewNumbers(review: Review): ReviewNumbers {
     major: n((f) => f.severity === "major"),
     provider: review.provider.name,
     // A model name outside this plain alphabet isn't sent at all, so nothing typed into a setting can travel as text.
-    model: model && /^[\w.:/-]{1,100}$/.test(model) ? model : null,
+    // The brackets are for names like "sonnet[1m]".
+    model: model && MODEL_NAME.test(model) ? model : null,
     verifier: review.verifier?.name ?? null,
     duration_ms: Math.round(review.stats.duration_ms),
     files_changed: review.stats.files_changed,
@@ -94,7 +98,8 @@ function defaults(deps: CloudDeps) {
     env,
     fetchImpl: deps.fetchImpl ?? fetch,
     log: deps.log ?? (() => {}),
-    mask: deps.mask ?? ((value: string) => void (env.GITHUB_ACTIONS === "true" && process.stdout.write(`::add-mask::${value}\n`))),
+    // To stderr, where GitHub reads commands too, so it never lands in the review's JSON on stdout.
+    mask: deps.mask ?? ((value: string) => void (env.GITHUB_ACTIONS === "true" && process.stderr.write(`::add-mask::${value}\n`))),
     deadlineMs: deps.deadlineMs ?? DEADLINE_MS,
   };
 }
@@ -136,6 +141,18 @@ async function readAnswer(res: Response): Promise<unknown> {
 
 const drop = (res: Response) => res.body?.cancel().catch(() => {});
 
+/** Keeps a path in the server's address, for a server mounted under one, like https://example.com/mergelight. */
+export function endpoint(server: URL, path: string): URL {
+  return new URL(server.pathname.replace(/\/+$/, "") + path, server.origin);
+}
+
+/** The server is off without a word when it isn't set. A setting that can't be used gets a line, or a typo would look like "on". */
+function serverOrSay(d: Deps): URL | null {
+  const server = serverUrl(d.env);
+  if (!server && d.env.MERGELIGHT_SERVER?.trim()) d.log("The Mergelight server setting isn't an https:// address, so the server is off for this review.");
+  return server;
+}
+
 /**
  * One question to the server, tried twice, each try with its own token, all inside one deadline.
  * A redirect is an error: the token is for this server and goes nowhere else.
@@ -145,7 +162,7 @@ async function call(d: Deps, server: URL, path: string, init: { method: string; 
   const late = () => new Error(`no answer within ${Math.round(d.deadlineMs / 1000)} seconds`);
   for (let attempt = 1; ; attempt++) {
     try {
-      const res = await d.fetchImpl(new URL(path, server), {
+      const res = await d.fetchImpl(endpoint(server, path), {
         method: init.method,
         headers: { authorization: `Bearer ${await oidcToken(d, server, signal)}`, ...(init.body ? { "content-type": "application/json" } : {}) },
         body: init.body,
@@ -168,7 +185,7 @@ async function call(d: Deps, server: URL, path: string, init: { method: string; 
 /** True when this repository's org uses the dashboard. False for everyone else, and whenever the server can't be asked. */
 export async function cloudConnected(deps: CloudDeps = {}): Promise<boolean> {
   const d = defaults(deps);
-  const server = serverUrl(d.env);
+  const server = serverOrSay(d);
   if (!server) return false;
   try {
     const res = await call(d, server, "/v1/context", { method: "GET" });

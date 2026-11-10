@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { audienceFor, cloudConnected, reportReview, reviewNumbers, serverUrl } from "../dist/cloud.js";
+import { audienceFor, cloudConnected, endpoint, reportReview, reviewNumbers, serverUrl } from "../dist/cloud.js";
 import { agentEnv } from "../dist/providers/codex.js";
 
 const env = {
@@ -55,6 +55,30 @@ test("the numbers hold no text from the review: no title, summary, finding or fi
     deletions: 14,
   });
   assert.doesNotMatch(JSON.stringify(numbers), /Secret|src\//);
+});
+
+test("a model name with a context suffix is sent as it is", () => {
+  assert.equal(reviewNumbers({ ...review, provider: { ...review.provider, model: "claude-opus-5-5[1m]" } }).model, "claude-opus-5-5[1m]");
+  assert.equal(reviewNumbers({ ...review, provider: { ...review.provider, model: "sonnet[1m]" } }).model, "sonnet[1m]");
+});
+
+test("a server mounted under a path is asked under that path", async () => {
+  assert.equal(endpoint(new URL("https://example.com/mergelight/"), "/v1/context").href, "https://example.com/mergelight/v1/context");
+  assert.equal(endpoint(new URL("https://example.com"), "/v1/reviews").href, "https://example.com/v1/reviews");
+  const s = setup(json(200, { connected: true }));
+  assert.equal(await cloudConnected({ ...s.deps, env: { ...env, MERGELIGHT_SERVER: "https://server.test/mergelight" } }), true);
+  assert.equal(s.calls[1].url, "https://server.test/mergelight/v1/context");
+  // The token is still made for the server's address alone.
+  assert.equal(new URL(s.calls[0].url).searchParams.get("audience"), "https://server.test");
+});
+
+test("a server setting that can't be used says so, instead of looking like it is on", async () => {
+  for (const bad of ["data.example.com", "http://data.example.com", "not a url"]) {
+    const s = setup(json(200, { connected: true }));
+    assert.equal(await cloudConnected({ ...s.deps, env: { ...env, MERGELIGHT_SERVER: bad } }), false, bad);
+    assert.match(s.lines[0], /isn't an https:\/\/ address/, bad);
+    assert.equal(s.calls.length, 0, bad);
+  }
 });
 
 test("a model name that isn't a plain name is not sent", () => {

@@ -32,7 +32,8 @@ const EVENTS = new Set(["pull_request", "pull_request_target"]);
 
 export const MAX_BODY = 8192;
 const RATE_WINDOW_MS = 60_000;
-const RATE_MAX = 120;
+/** A review asks twice, so this is 300 reviews a minute for one org. Far above real use, and still a ceiling. */
+export const RATE_MAX = 600;
 /** Far more tokens than can be live at once. Past it, new ones are refused rather than forgotten. */
 const MAX_SEEN = 200_000;
 /** Expired token ids are dropped every this many requests. */
@@ -54,9 +55,10 @@ export interface ReviewRow {
   risks: number;
   hardening: number;
   major: number;
-  inline: number;
-  listed: number;
-  decisions: number;
+  /** Findings per tier, as the review sorted them: its top picks, the rest worth fixing, and those for a human to decide. */
+  tier_post: number;
+  tier_list: number;
+  tier_decision: number;
   provider: Provider;
   model: string | null;
   verifier: Provider | null;
@@ -74,6 +76,8 @@ interface Caller {
   runAttempt: number;
   /** owner/name, as GitHub signed it. */
   repo: string;
+  /** The pull request the run is for, when GitHub's token names it. A run on pull_request_target has none. */
+  pr: number | null;
 }
 
 export interface ApiOptions {
@@ -108,7 +112,8 @@ export function parseReview(body: unknown): ReviewRow {
   if (!isRecord(tiers) || !count(tiers.post) || !count(tiers.list) || !count(tiers.decision)) throw bad("tiers");
   if (!count(major)) throw bad("major count");
   if (!oneOf(PROVIDERS, provider)) throw bad("provider");
-  if (model != null && (typeof model !== "string" || !/^[\w.:/-]{1,100}$/.test(model))) throw bad("model");
+  // The brackets are for names like "sonnet[1m]".
+  if (model != null && (typeof model !== "string" || !/^[\w.:/[\]-]{1,100}$/.test(model))) throw bad("model");
   if (verifier != null && !oneOf(PROVIDERS, verifier)) throw bad("verifier");
   if (!count(duration_ms, MAX_INT)) throw bad("duration_ms");
   if (!count(files_changed, MAX_INT)) throw bad("files_changed");
@@ -117,7 +122,7 @@ export function parseReview(body: unknown): ReviewRow {
   return {
     pr, sha, light,
     bugs: counts.bug, risks: counts.risk, hardening: counts.hardening,
-    major, inline: tiers.post, listed: tiers.list, decisions: tiers.decision,
+    major, tier_post: tiers.post, tier_list: tiers.list, tier_decision: tiers.decision,
     provider, model: model ?? null, verifier: verifier ?? null,
     duration_ms, files_changed, additions, deletions,
   };
@@ -178,7 +183,9 @@ export function createApi({ pool, publicUrl, fetchImpl = fetch, now = () => Date
     // The limit comes first, so an org that is being slowed down can't fill the list of used tokens for everyone.
     limit(orgId, at);
     useOnce(jti, claims.exp * 1000 + 60_000, at);
-    return { orgId, repoId, runId, runAttempt, repo };
+    // On a pull_request run GitHub signs "refs/pull/<number>/merge".
+    const pull = typeof claims.ref === "string" ? /^refs\/pull\/(\d{1,10})\/merge$/.exec(claims.ref) : null;
+    return { orgId, repoId, runId, runAttempt, repo, pr: pull ? Number(pull[1]) : null };
   }
 
   /** What a review needs before it starts. For now only whether the org uses the dashboard at all. */
@@ -197,6 +204,8 @@ export function createApi({ pool, publicUrl, fetchImpl = fetch, now = () => Date
       throw new HttpError(400, "bad_request", "The review isn't JSON.");
     }
     const r = parseReview(body);
+    // A run can't report numbers for another pull request than the one GitHub signed it for.
+    if (who.pr !== null && r.pr !== who.pr) throw new HttpError(400, "bad_request", "The review's pull request number isn't the one this run is for.");
 
     const stored = await withOrg(pool, who.orgId, async (db) => {
       // Nothing is kept for an org that hasn't turned the dashboard on.
@@ -207,11 +216,11 @@ export function createApi({ pool, publicUrl, fetchImpl = fetch, now = () => Date
         [who.orgId, who.repoId, who.repo],
       );
       const inserted = await db.query(
-        `insert into reviews (org_id, repo_id, run_id, run_attempt, pr, sha, light, bugs, risks, hardening, major, inline, listed, decisions,
+        `insert into reviews (org_id, repo_id, run_id, run_attempt, pr, sha, light, bugs, risks, hardening, major, tier_post, tier_list, tier_decision,
                               provider, model, verifier, duration_ms, files_changed, additions, deletions)
          values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
-         on conflict (org_id, repo_id, run_id, run_attempt) do nothing`,
-        [who.orgId, who.repoId, who.runId, who.runAttempt, r.pr, r.sha, r.light, r.bugs, r.risks, r.hardening, r.major, r.inline, r.listed, r.decisions,
+         on conflict (org_id, repo_id, run_id, run_attempt, pr, provider) do nothing`,
+        [who.orgId, who.repoId, who.runId, who.runAttempt, r.pr, r.sha, r.light, r.bugs, r.risks, r.hardening, r.major, r.tier_post, r.tier_list, r.tier_decision,
          r.provider, r.model, r.verifier, r.duration_ms, r.files_changed, r.additions, r.deletions],
       );
       return (inserted.rowCount ?? 0) > 0;

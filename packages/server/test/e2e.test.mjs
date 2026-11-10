@@ -107,6 +107,6 @@ test("after it does: connected, and the review's numbers land in the org's rows"
   assert.equal(await cloudConnected(deps), true);
   assert.equal(await reportReview(review, deps), true);
 
-  const rows = await withOrg(pool, 1001, async (db) => (await db.query("select r.name, v.pr, v.light, v.bugs, v.risks, v.major, v.inline, v.decisions, v.provider, v.model, v.verifier from reviews v join repos r on r.org_id = v.org_id and r.id = v.repo_id")).rows);
-  assert.deepEqual(rows, [{ name: "acme/widgets", pr: 42, light: "red", bugs: 1, risks: 1, major: 1, inline: 1, decisions: 1, provider: "codex", model: "gpt-5.5-codex", verifier: null }]);
+  const rows = await withOrg(pool, 1001, async (db) => (await db.query("select r.name, v.pr, v.light, v.bugs, v.risks, v.major, v.tier_post, v.tier_decision, v.provider, v.model, v.verifier from reviews v join repos r on r.org_id = v.org_id and r.id = v.repo_id")).rows);
+  assert.deepEqual(rows, [{ name: "acme/widgets", pr: 42, light: "red", bugs: 1, risks: 1, major: 1, tier_post: 1, tier_decision: 1, provider: "codex", model: "gpt-5.5-codex", verifier: null }]);
 });

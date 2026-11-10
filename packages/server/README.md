@@ -30,7 +30,7 @@ A server that is down, slow or hostile can't stop or change a review. Each of th
 - **A token works once.** A copied token is worth nothing. The server keeps the used ones in memory, so this holds for one server between restarts. GitHub's tokens expire within minutes, which bounds the rest.
 - **Runs aren't trusted.** Someone who can push a branch can change the workflow in their pull request and send anything from it. So a run can read its own org's data and add numbers about its own repository, and nothing else. Every field is checked, and no free text is kept.
 - **The database keeps orgs apart by itself.** Every table has row-level security, forced for the table's owner too. The server names the org once per request, inside a transaction, and a query that names none sees no rows. The server refuses to start as a database role that can bypass this.
-- **Limits.** 8 KB per request, 120 requests a minute per org, 30 seconds per request.
+- **Limits.** 8 KB per request, 600 requests a minute per org, 30 seconds per request.
 - **Logs** hold error names only. Never a token, a body or a row.
 
 The tests in `test/` try each of these on a real Postgres, including reading and writing another org's rows on purpose.

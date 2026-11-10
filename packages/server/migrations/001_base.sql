@@ -31,7 +31,8 @@ create table reviews (
   id bigint generated always as identity primary key,
   org_id bigint not null references orgs (id) on delete cascade,
   repo_id bigint not null,
-  -- GitHub's run, from the signed token, so a retry of the same request can't count twice.
+  -- GitHub's run, from the signed token. With the pull request and the AI it makes the row's key, so a
+  -- retry of the same request can't count twice, while two review jobs in one run each get their row.
   run_id bigint not null,
   run_attempt integer not null,
   pr integer not null,
@@ -41,9 +42,11 @@ create table reviews (
   risks integer not null,
   hardening integer not null,
   major integer not null,
-  inline integer not null,
-  listed integer not null,
-  decisions integer not null,
+  -- Findings per tier, as the review sorted them: its top picks, the rest worth fixing, and those for
+  -- a human to decide. Not the number of comments posted, which can be lower.
+  tier_post integer not null,
+  tier_list integer not null,
+  tier_decision integer not null,
   provider text not null check (provider in ('codex', 'claude')),
   model text,
   verifier text check (verifier in ('codex', 'claude')),
@@ -53,7 +56,7 @@ create table reviews (
   deletions integer not null,
   created_at timestamptz not null default now(),
   foreign key (org_id, repo_id) references repos (org_id, id) on delete cascade,
-  unique (org_id, repo_id, run_id, run_attempt)
+  unique (org_id, repo_id, run_id, run_attempt, pr, provider)
 );
 create index reviews_org_time on reviews (org_id, created_at desc);
 create index reviews_repo_pr on reviews (org_id, repo_id, pr);
