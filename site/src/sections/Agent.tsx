@@ -3,7 +3,7 @@ import TextType from '../components/reactbits/TextType';
 import SpotlightCard from '../components/reactbits/SpotlightCard';
 import { Check, Container, SectionHead } from '../ui';
 
-const COMMAND = 'npx mergelight init';
+const COMMAND = 'npx @mergelight/cli init';
 
 const output = [
   'MCP server and skill added for Claude Code',

@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { init, serverCommand } from "../dist/init.js";
 
 const skillDir = join(dirname(fileURLToPath(import.meta.url)), "..", "skills", "mergelight");
-const NPX = "/x/node_modules/mergelight/dist/cli.js";
+const NPX = "/x/node_modules/@mergelight/cli/dist/cli.js";
 
 function fake({ agents = [], cursor = false, cursorConfig, fail = [], cliPath = NPX } = {}) {
   const home = mkdtempSync(join(tmpdir(), "mergelight-init-"));
@@ -35,7 +35,8 @@ function fake({ agents = [], cursor = false, cursorConfig, fail = [], cliPath = 
 }
 
 test("an installed copy starts through npx, and a clone runs its own file", () => {
-  assert.deepEqual(serverCommand(NPX), { command: "npx", args: ["-y", "mergelight", "mcp"] });
+  assert.deepEqual(serverCommand(NPX), { command: "npx", args: ["-y", "@mergelight/cli", "mcp"] });
+  assert.equal(serverCommand("/x/node_modules/mergelight/dist/cli.js").command, "node", "only the real package name counts as installed");
   assert.deepEqual(serverCommand("/home/me/mergelight/packages/mergelight/dist/cli.js"), { command: "node", args: ["/home/me/mergelight/packages/mergelight/dist/cli.js", "mcp"] });
 });
 
@@ -43,11 +44,11 @@ test("adds the server and the skill to every agent it finds", async () => {
   const f = fake({ agents: ["claude", "codex", "gh"], cursor: true });
   assert.equal(await init(f.deps), 0);
   assert.ok(f.calls.includes("claude mcp remove --scope user mergelight"), "an old entry goes first, so a second run works");
-  assert.ok(f.calls.includes("claude mcp add --scope user mergelight -- npx -y mergelight mcp"));
-  assert.ok(f.calls.includes("codex mcp add mergelight -- npx -y mergelight mcp"));
+  assert.ok(f.calls.includes("claude mcp add --scope user mergelight -- npx -y @mergelight/cli mcp"));
+  assert.ok(f.calls.includes("codex mcp add mergelight -- npx -y @mergelight/cli mcp"));
   for (const dir of [".claude/skills", ".agents/skills", ".cursor/skills"]) assert.ok(existsSync(join(f.home, dir, "mergelight", "SKILL.md")), dir);
   const cursor = JSON.parse(readFileSync(join(f.home, ".cursor", "mcp.json"), "utf8"));
-  assert.deepEqual(cursor.mcpServers.mergelight, { type: "stdio", command: "npx", args: ["-y", "mergelight", "mcp"] });
+  assert.deepEqual(cursor.mcpServers.mergelight, { type: "stdio", command: "npx", args: ["-y", "@mergelight/cli", "mcp"] });
   assert.equal(f.logs.filter((l) => l.startsWith("✓")).length, 3);
   assert.match(f.logs.at(-1), /Handle the Mergelight findings/);
 });

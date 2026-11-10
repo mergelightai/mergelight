@@ -20,10 +20,12 @@ export interface InitDeps {
 }
 
 const DOCS = "https://github.com/mergelightai/mergelight/blob/main/docs/agents.md";
+/** The name on npm. Plain "mergelight" was refused there for being too close to an older package. */
+const PACKAGE = "@mergelight/cli";
 
 /** An installed copy starts through npx, so it keeps working when the package moves. A clone runs its own file. */
 export function serverCommand(cliPath: string): { command: string; args: string[] } {
-  return /[\\/]node_modules[\\/]mergelight[\\/]/.test(cliPath) ? { command: "npx", args: ["-y", "mergelight", "mcp"] } : { command: "node", args: [cliPath, "mcp"] };
+  return /[\\/]node_modules[\\/]@mergelight[\\/]cli[\\/]/.test(cliPath) ? { command: "npx", args: ["-y", PACKAGE, "mcp"] } : { command: "node", args: [cliPath, "mcp"] };
 }
 
 async function has(deps: InitDeps, cmd: string): Promise<boolean> {
