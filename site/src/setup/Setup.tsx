@@ -220,15 +220,15 @@ export default function Setup() {
     return pinTo ? pinned(workflowFor(scope, branch, details.skip), pinTo) : workflowFor(scope, branch, details.skip);
   }, [scope, branch, details, update, pinTo]);
   /**
-   * The review, and on a private repo the job that keeps a ChatGPT login fresh. Without that job reviews refresh the
-   * login themselves, and one that starts during another's refresh can fail. An API key needs no refreshing, and public repos can't use ChatGPT.
+   * The review, and the job that keeps a ChatGPT login fresh. Without that job reviews refresh the login themselves,
+   * and one that starts during another's refresh can fail. An API key needs no refreshing.
    */
   const files = useMemo<WorkflowFile[]>(() => {
     const list = [{ name: 'mergelight.yml', content: workflow }];
     if (!details || !repo) return list;
     const version = (content: string) => (pinTo ? pinned(content, pinTo) : content);
     if (details.refresh) list.push({ name: REFRESH_FILE, content: version(details.refresh) });
-    else if (repo.isPrivate && !details.hasApiKey) list.push({ name: REFRESH_FILE, content: version(refreshFile) });
+    else if (!details.hasApiKey) list.push({ name: REFRESH_FILE, content: version(refreshFile) });
     return list;
   }, [workflow, details, repo, pinTo]);
   const fileUrl = repo ? newFileUrl(repo.fullName, branch, workflow) : '#';
@@ -281,8 +281,7 @@ export default function Setup() {
       }
       const check = pr ? await client.checkStatus(repo, pr.headSha).catch(() => null) : null;
       const login = view === 'connect' || !check ? await client.hasLogin(repo) : true;
-      // ChatGPT logins only work on private repos, so a public one never has a code to show.
-      const code = view === 'connect' && pr && repo.isPrivate ? await client.connectCode(repo, pr.number).catch(() => null) : null;
+      const code = view === 'connect' && pr ? await client.connectCode(repo, pr.number).catch(() => null) : null;
       const done = view === 'live' && Boolean(current?.merged);
       if (check) setStatus(check);
       setConnectCode(code);
@@ -358,6 +357,24 @@ export default function Setup() {
 }
 
 /** Runs now, then every few seconds while the tab is visible, until it returns true. */
+/** How long a run may stay silent before the page says so. */
+const LONG_WAIT_MS = 120_000;
+
+/** True once `waiting` has held for a long time. A change of `key` starts the clock again. */
+function useLongWait(waiting: boolean, key: string): boolean {
+  const [long, setLong] = useState(false);
+  useEffect(() => {
+    setLong(false);
+    if (!waiting) return;
+    const since = Date.now();
+    const timer = setInterval(() => {
+      if (Date.now() - since >= LONG_WAIT_MS) setLong(true);
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [waiting, key]);
+  return long;
+}
+
 function poll(check: () => Promise<boolean>, everyMs = 4000): () => void {
   let stopped = false;
   let timer: ReturnType<typeof setTimeout>;
@@ -1160,7 +1177,7 @@ function ConnectStep({ repo, pr, status, code: found, onBack, onSkip, startOnCla
   const claudeUrl = found?.claudeUrl ?? null;
   const [pasted, setPasted] = useState('');
   const [sending, setSending] = useState<'idle' | 'sending' | 'sent' | 'failed' | 'incomplete'>('idle');
-  const [billing, setBilling] = useState<'plan' | 'key'>(startOnClaude || repo.isPrivate ? 'plan' : 'key');
+  const [billing, setBilling] = useState<'plan' | 'key'>('plan');
   const [provider, setProvider] = useState<'openai' | 'anthropic'>(startOnClaude ? 'anthropic' : 'openai');
   const mode = billing === 'plan' ? (provider === 'openai' ? 'chatgpt' : 'claude') : provider === 'openai' ? 'apikey' : 'anthropic';
   const [copied, setCopied] = useState<string | null>(null);
@@ -1178,8 +1195,8 @@ function ConnectStep({ repo, pr, status, code: found, onBack, onSkip, startOnCla
   const note = mode !== 'chatgpt' ? "We'll move on when you're connected" : code ? 'Waiting for you to enter the code' : failed ? "Couldn't connect. Check that step 1 is on." : waiting ? 'Your code is ready on the pull request' : "We'll move on when you're connected";
   // The run takes a little while to make the code, so this has to look busy, not stuck.
   const gettingCode = mode === 'chatgpt' && coming && !code;
-  // A private repo's run offers Claude too, unless it was set up before that existed.
-  const gettingClaude = mode === 'claude' && repo.isPrivate && Boolean(pr) && !failed && !claudeUrl;
+  // The run offers Claude too. Once it has posted without a Claude link, none is coming: the repo was set up before that existed.
+  const gettingClaude = mode === 'claude' && Boolean(pr) && !failed && !found;
   // A pull request's link means its run offered Claude, so no link now means that run has ended.
   const claudeEnded = startOnClaude && mode === 'claude' && failed && !claudeUrl;
   const sendCode = () => {
@@ -1203,24 +1220,23 @@ function ConnectStep({ repo, pr, status, code: found, onBack, onSkip, startOnCla
   };
 
   const secretName = mode === 'claude' ? 'CLAUDE_CODE_OAUTH_TOKEN' : mode === 'anthropic' ? 'ANTHROPIC_API_KEY' : 'OPENAI_API_KEY';
-  // OpenAI allows a ChatGPT login in CI on private repos only.
-  const chatgptClosed = billing === 'plan' && !repo.isPrivate;
-  const chooseBilling = (next: 'plan' | 'key') => {
-    setBilling(next);
-    if (next === 'plan' && !repo.isPrivate) setProvider('anthropic');
-  };
   const providers = [
-    { id: 'openai' as const, title: billing === 'plan' ? 'ChatGPT' : 'OpenAI', icon: OPENAI_MARK, note: chatgptClosed ? 'Private repos only' : undefined, disabled: chatgptClosed },
+    { id: 'openai' as const, title: billing === 'plan' ? 'ChatGPT' : 'OpenAI', icon: OPENAI_MARK },
     { id: 'anthropic' as const, title: billing === 'plan' ? 'Claude' : 'Anthropic', icon: CLAUDE_MARK },
   ];
+  // A run answers in under a minute. Past this, something stopped it, and a spinner would only keep people waiting.
+  const busy = gettingCode || gettingClaude || (mode === 'claude' && sending === 'sent' && !failed);
+  const slow = useLongWait(busy, `${mode} ${pr?.headSha ?? ''} ${sending}`);
+  const slowNote = mode === 'chatgpt' ? "No code came yet. Check that the Mergelight run started on your pull request." : sending === 'sent' ? "Claude hasn't answered yet. Check the Mergelight run on your pull request." : 'No link came from your pull request, so connect by hand with these steps.';
 
   return (
     <div>
       <BackButton onClick={onBack} />
       <Heading title="Connect your AI" sub={billing === 'plan' ? 'Reviews use the subscription you already have.' : 'You pay your AI provider for each review.'} />
 
-      <Segment label="How to pay" options={[{ id: 'plan' as const, title: 'Your plan' }, { id: 'key' as const, title: 'API key' }]} value={billing} onChange={chooseBilling} />
+      <Segment label="How to pay" options={[{ id: 'plan' as const, title: 'Your plan' }, { id: 'key' as const, title: 'API key' }]} value={billing} onChange={setBilling} />
       <Choices label="Which AI" options={providers} value={provider} onChange={setProvider} top="mt-3" />
+      {mode === 'claude' && <p className="mt-3 text-[13px] leading-snug text-muted [text-wrap:pretty]">Reviews run on Opus, which uses a lot of a Claude plan. On a small plan, a few reviews can use up the week.</p>}
 
       {mode === 'chatgpt' ? (
         <ol className="mt-6 space-y-4">
@@ -1270,7 +1286,7 @@ function ConnectStep({ repo, pr, status, code: found, onBack, onSkip, startOnCla
             {prLink}
           </Numbered>
         </ol>
-      ) : mode === 'claude' && (claudeUrl || gettingClaude) ? (
+      ) : mode === 'claude' && (claudeUrl || (gettingClaude && !slow)) ? (
         <ol className="mt-6 space-y-4">
           <Numbered n={1}>
             Confirm on Claude's page
@@ -1321,7 +1337,14 @@ function ConnectStep({ repo, pr, status, code: found, onBack, onSkip, startOnCla
 
       <div className={`${WELL} mt-6 px-4 py-3.5`}>
         <div role="status">
-          {gettingClaude || (mode === 'claude' && sending === 'sent' && !failed) ? (
+          {slow ? (
+            <span className="block">
+              <Pulse tone="risk">{slowNote}</Pulse>
+              <a href={pr ? `${pr.url}/checks` : prUrl} target="_blank" rel="noreferrer" className="mt-2 flex w-fit items-center gap-1 text-[13.5px] text-lilac transition-colors hover:text-fg">
+                Open the run on GitHub <External />
+              </a>
+            </span>
+          ) : gettingClaude || (mode === 'claude' && sending === 'sent' && !failed) ? (
             <span className="flex items-center gap-2.5">
               <Spinner className="size-4 shrink-0 text-lilac" />
               <span className="min-w-0 text-[14px] text-muted">{sending === 'sent' ? 'Connecting to Claude. Almost ready, hang tight.' : 'Getting your Claude link. Almost ready, hang tight.'}</span>

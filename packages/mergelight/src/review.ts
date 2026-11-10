@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { actionsUsedBy, fetchActionSources } from "./action-source.js";
+import { actionsUsedBy, fetchActionSources, notRead, type NotRead } from "./action-source.js";
 import { fetchPullRequest, type PrRef } from "./github.js";
 import {
   buildHunterPrompt,
@@ -209,10 +209,12 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
     // Step 1: hunters, one per area, in parallel. One failing doesn't sink the review.
     const addedTo = ws.changedFiles.filter((f) => f.added > 0).map((f) => f.path);
     const focuses = focusesFor(addedTo);
+    let unread: NotRead[] = [];
     if (focuses.includes("supply")) {
       const uses = actionsUsedBy(ws.dir, addedTo);
       if (uses.length) progress("Reading the source of the actions these workflows use");
       input.actionSources = await fetchActionSources(uses);
+      unread = notRead(input.actionSources);
     }
     let done = 0;
     progress(`Hunting for problems (0 of ${focuses.length} areas done)`);
@@ -303,6 +305,7 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
       light: mergeLight(verified.findings),
       summary: verified.summary,
       findings: verified.findings,
+      ...(unread.length ? { not_read: unread } : {}),
       stats: {
         duration_ms: Date.now() - started,
         diff_chars: ws.diff.length,

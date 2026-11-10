@@ -40,6 +40,11 @@ async function scenario(name, start, body) {
   const world = { comments: [], checks: {}, head: 'headsha', login: false, isPrivate: true, commentsStatus: 200, asked: [], ...start };
   const json = (req, data, code = 200) => req.respond({ status: code, contentType: 'application/json', headers: cors, body: JSON.stringify(data) });
   await page.evaluateOnNewDocument(() => {
+    // Lets a test jump ahead in time, for the things the page only says after a long wait.
+    const real = Date.now.bind(Date);
+    let ahead = 0;
+    Date.now = () => real() + ahead;
+    window.__skipAhead = (ms) => { ahead += ms; };
     window.__copied = [];
     Object.defineProperty(navigator, 'clipboard', { value: { writeText: async (t) => { window.__copied.push(t); } } });
   });
@@ -237,28 +242,43 @@ await scenario('comments-cant-be-read', { commentsStatus: 403, checks: { headsha
   expect(/Enter the code we post on your pull request/.test(t) && /Open pull request #7/.test(t), 'falls back to the pull request');
 });
 
-await scenario('public-repo', { isPrivate: false, comments: [comment(BOT, askFor())], checks: { headsha: WAITING } }, async ({ world, until, reach, text }) => {
+await scenario('public-repo', { isPrivate: false, comments: [comment(BOT, askFor())], checks: { headsha: WAITING } }, async ({ page, until, reach }) => {
   await reach();
-  await until((x) => /Connect your AI/.test(x), 'the connect screen');
-  await new Promise((r) => setTimeout(r, 5000));
-  expect(!(await text()).includes(CODE), "doesn't show a code");
-  expect(!world.asked.includes('/issues/7/comments'), 'and never asks for one');
+  const t = await until((x) => x.includes(CODE), 'the code on a public repo');
+  expect(!/Private repos only/.test(t), 'a ChatGPT plan is open to public repositories');
+  expect(await page.evaluate(() => [...document.querySelectorAll('input[type=radio]')].every((i) => !i.disabled)), 'and no choice is switched off');
 });
 
-await scenario('claude-plan-public-repo', { isPrivate: false, checks: { headsha: WAITING } }, async ({ page, click, reach, until, shot }) => {
+await scenario('claude-plan-by-hand', { isPrivate: false, comments: [comment(BOT, askFor())], checks: { headsha: WAITING } }, async ({ click, reach, until, shot }) => {
   await reach();
-  await until((x) => /Connect your AI/.test(x), 'the Connect screen');
-  await click('label', 'Your plan');
-  const t = await until((x) => /claude setup-token/.test(x), 'the Claude steps');
+  await until((x) => x.includes(CODE), 'the code');
+  await click('label', 'Claude');
+  const t = await until((x) => /claude setup-token/.test(x), 'the steps by hand');
   await new Promise((r) => setTimeout(r, 900));
   await shot('claude');
-  expect(await page.evaluate(() => [...document.querySelectorAll('input[type=radio]:checked')].some((i) => i.closest('label')?.innerText.includes('Claude'))), 'a public repo lands on Claude, because ChatGPT plans are private only');
-  expect(/Private repos only/.test(t), 'and says why ChatGPT is closed');
+  expect(!/Getting your Claude link/.test(t), "doesn't wait for a link that a run without Claude will never send");
+  expect(/uses a lot of a Claude plan/.test(t), 'warns about small plans');
   expect(/CLAUDE_CODE_OAUTH_TOKEN/.test(t), 'names the secret');
   expect(/Push any commit/.test(t), 'says how to start the review');
   await click('label', 'API key');
   const k = await until((x) => /ANTHROPIC_API_KEY/.test(x), 'the Anthropic key steps');
   expect(!/claude setup-token/.test(k), 'an API key needs only the secret');
+  expect(!/uses a lot of a Claude plan/.test(k), 'and the plan warning is gone');
+});
+
+await scenario('run-never-starts', { comments: [], checks: {} }, async ({ page, click, reach, until }) => {
+  await reach();
+  const t = await until((x) => /Getting your code/.test(x), 'the wait for a code');
+  expect(!/No code came yet/.test(t), 'says nothing while the wait is still normal');
+  await page.evaluate(() => window.__skipAhead(130_000));
+  const late = await until((x) => /No code came yet/.test(x), 'the long wait message');
+  expect(!/Almost ready/.test(late), 'stops saying almost ready');
+  expect(await page.evaluate(() => [...document.querySelectorAll('a')].find((a) => a.textContent.includes('Open the run on GitHub'))?.href) === 'https://github.com/acme/api/pull/7/checks', 'links to the run');
+  await click('label', 'Claude');
+  await until((x) => /Getting your Claude link/.test(x), 'the wait for a Claude link starts over');
+  await page.evaluate(() => window.__skipAhead(130_000));
+  const byHand = await until((x) => /connect by hand/.test(x), 'the long wait for Claude');
+  expect(/claude setup-token/.test(byHand), 'offers the steps by hand');
 });
 
 const CLAUDE = `https://claude.com/cai/oauth/authorize?code=true&code_challenge=abc&state=${'t'.repeat(43)}`;

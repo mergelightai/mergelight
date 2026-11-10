@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { parsePatch, place } from "../dist/publish/diff-lines.js";
 import { mergeLight, tierOf } from "../dist/review.js";
 import { closedBody, readClosed, reopenedBody, resolvedByPeople, threadAction } from "../dist/publish/closed.js";
-import { clean, failedSummaryBody, isFailedSummary, limitNotice, loginNotice, FINDING_MARKER_RE, inlineBody, isPendingSummary, pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "../dist/publish/markdown.js";
+import { clean, failedSummaryBody, isFailedSummary, limitNotice, notReadLine, loginNotice, FINDING_MARKER_RE, inlineBody, isPendingSummary, pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "../dist/publish/markdown.js";
 import { APPROVAL_MARKER, checkConclusion, isYellowCheck, syncApproval, trustedComment, CHECK_FAILED_TITLE, checkLimitTitle, checkLoginTitle, isFailedCheckTitle } from "../dist/publish/publish.js";
 import { decodeState, encodeState, nextState } from "../dist/publish/state.js";
 import { buildVerifierPrompt } from "../dist/prompt.js";
@@ -514,3 +514,14 @@ test("a pull request with only minor risks can go green", () => {
   assert.equal(mergeLight(only), "green");
 });
 
+
+test("the comment says which actions' code wasn't read", () => {
+  assert.equal(notReadLine(undefined), null);
+  assert.equal(notReadLine([]), null);
+  assert.equal(notReadLine([{ uses: "acme/tool@v1", why: "program" }]), "<sub>Not read: the code that `acme/tool@v1` runs (a Node or Docker action, so only its definition was read).</sub>");
+  const both = notReadLine([{ uses: "a/b@v1", why: "program" }, { uses: "c/d@v2", why: "program" }, { uses: "x/y@v3", why: "unreadable" }]);
+  assert.match(both, /`a\/b@v1`, `c\/d@v2` run \(a Node or Docker action, so only their definitions were read\), and `x\/y@v3` \(couldn't be read\)\./);
+  const many = notReadLine(Array.from({ length: 6 }, (_, i) => ({ uses: `a/t${i}@v1`, why: "unreadable" })));
+  assert.match(many, /`a\/t3@v1` and 2 more/);
+  assert.doesNotMatch(notReadLine([{ uses: "a/b@v1`<img>", why: "unreadable" }]), /<img>/);
+});

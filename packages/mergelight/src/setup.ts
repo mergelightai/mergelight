@@ -99,10 +99,9 @@ async function hasFile(deps: SetupDeps, repo: string, path: string, ref: string)
 }
 
 /** Puts the workflows on a branch and opens a pull request. Returns its URL, or null if there's nothing to add. */
-async function openWorkflowPr(deps: SetupDeps, opts: SetupOptions, base: string, isPrivate: boolean): Promise<string | null> {
+async function openWorkflowPr(deps: SetupDeps, opts: SetupOptions, base: string): Promise<string | null> {
   const { repo } = opts;
-  // Only a ChatGPT login needs refreshing, and OpenAI allows those on private repositories only.
-  const files = workflowFiles(opts.skipBranches, opts.pin !== false ? await latestPin(deps) : undefined).filter((f) => isPrivate || f.name !== REFRESH);
+  const files = workflowFiles(opts.skipBranches, opts.pin !== false ? await latestPin(deps) : undefined);
 
   const missing: typeof files = [];
   for (const f of files) {
@@ -162,10 +161,6 @@ export async function setup(opts: SetupOptions, deps: SetupDeps): Promise<number
   if (secrets.some((s) => s.name === SECRET) && !opts.relogin) {
     deps.log(`  ${repo} already has one.`);
   } else {
-    if (!info.private) {
-      deps.log(`  OpenAI allows a ChatGPT login in CI for private repositories only. For ${repo}, set openai-api-key in the workflow.`);
-      return 1;
-    }
     const auth = await deps.codexLogin();
     checkAuthJson(auth);
     await deps.gh(["secret", "set", SECRET, "--repo", repo], auth);
@@ -173,7 +168,7 @@ export async function setup(opts: SetupOptions, deps: SetupDeps): Promise<number
   }
 
   deps.log(`3 of 3: add the workflows to ${base}`);
-  const url = await openWorkflowPr(deps, opts, base, info.private);
+  const url = await openWorkflowPr(deps, opts, base);
   if (url) deps.log(`\nDone. Merge this to turn it on, it's reviewing itself now:\n${url}`);
   else deps.log(`\nDone. ${repo} already has the workflows on ${base}.`);
   return 0;

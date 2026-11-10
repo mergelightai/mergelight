@@ -65,6 +65,7 @@ export const FOCUS = {
     brief: `Money, stored data and the outside world. Look for:
 - billing and payments: wrong amounts, double charges, missed charges, credits, refunds, proration, time zones and month ends, webhook ordering and retries, idempotency
 - writes that leave data inconsistent: partial updates, missing transactions where a crash or error between two writes matters, values that silently get dropped, overwritten or rounded
+- two runs of the same code at once: two requests, a retry, a webhook delivered twice, a job that starts before the last one ends. State that one run reads and writes back later, like a balance, a counter, a stock level, a token that works once or a check before an insert, is lost or used twice when another run changes it in between
 - migrations and rollbacks that fail on real data or lose it
 - deletes that leave orphans behind, or cleanup that misses files, caches or records
 - calls to external services whose failures, limits or edge cases are not handled where it matters`,
