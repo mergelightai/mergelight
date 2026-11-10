@@ -289,7 +289,11 @@ export default function Setup() {
       setMerged(done);
       // A run that's still asking comes first, even if the repo has some other login saved. Someone sent here by a
       // pull request is connecting that run, so only that run going ahead ends this step, not a login from before.
-      if (view === 'connect' && ((login && !code && !startOnClaude) || (isReviewing(check) && !couldntFinish(check)))) setView('live');
+      if (view === 'connect' && ((login && !code && !startOnClaude) || (isReviewing(check) && !couldntFinish(check)))) {
+        // The run has what it needs, and the next screen can send them back to GitHub at once, so the code goes now.
+        void client.clearClaudeCodes(repo).catch(() => undefined);
+        setView('live');
+      }
       return view === 'live' && (done || !pr);
     });
   }, [view, client, repo, pr, startOnClaude]);

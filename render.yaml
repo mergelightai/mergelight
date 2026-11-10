@@ -1,10 +1,10 @@
 # The Mergelight token server. Create it once from this file in Render's dashboard (New > Blueprint).
 services:
   - type: web
-    name: mergelight-token
+    name: mergelight
     runtime: node
     region: virginia
-    plan: free # Sleeps when idle. Move to a paid plan before customers depend on it.
+    plan: starter # A paid size, so it doesn't sleep. On the free plan the first sign-in after a quiet spell waited for it to wake.
     rootDir: packages/token-server
     buildCommand: npm install
     startCommand: node src/server.js
