@@ -11,7 +11,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { HttpError } from "../../token-server/dist/token.js";
 import { isId, withOrg, type Pool } from "./db.js";
-import { lookUp, looksLikePersonToken, type Person, type Reach } from "./github.js";
+import { DEFAULT_SIGN_IN_APP, lookUp, looksLikePersonToken, type Person, type Reach } from "./github.js";
 
 const SESSION_MS = 60 * 60_000;
 const MAX_SESSIONS = 20_000;
@@ -46,6 +46,8 @@ export interface PeopleOptions {
   pool: Pool;
   /** Sites whose pages may call this API from a browser, like "https://mergelight.dev". */
   origins: string[];
+  /** The GitHub App people sign in with. Only its tokens count as a sign-in. */
+  signInApp?: string;
   fetchImpl?: typeof fetch;
   now?: () => number;
 }
@@ -72,7 +74,7 @@ const bearer = (request: Request): string => {
 /** Sessions are kept under a hash, so the list in memory holds nothing that could be used as a token. */
 const keyOf = (token: string) => createHash("sha256").update(token).digest("hex");
 
-export function createPeopleApi({ pool, origins, fetchImpl = fetch, now = () => Date.now() }: PeopleOptions) {
+export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP, fetchImpl = fetch, now = () => Date.now() }: PeopleOptions) {
   const sessions = new Map<string, Session>();
   const persons = new Map<number, PersonState>();
   /** GitHub tokens that signed in a moment ago, by hash, with when. */
@@ -136,7 +138,7 @@ export function createPeopleApi({ pool, origins, fetchImpl = fetch, now = () => 
     let found: Awaited<ReturnType<typeof lookUp>>;
     lookups++;
     try {
-      found = await lookUp(githubToken, fetchImpl);
+      found = await lookUp(githubToken, fetchImpl, signInApp);
     } catch (err) {
       if (err instanceof HttpError && err.code === "github_limited") pausedUntil = at + GITHUB_PAUSE_MS;
       throw err;
@@ -144,6 +146,14 @@ export function createPeopleApi({ pool, origins, fetchImpl = fetch, now = () => 
       lookups--;
     }
     const { person, reach } = found;
+
+    // Which of the person's accounts use the dashboard. Each is asked inside that org's own rows.
+    // This comes before the session exists, so a failure here leaves nothing behind.
+    const orgs = [];
+    for (const r of reach) {
+      const connected = await withOrg(pool, r.id, async (db) => ((await db.query("select 1 from orgs where id = $1", [r.id])).rowCount ?? 0) > 0);
+      orgs.push({ id: r.id, login: r.login, connected, repos: r.repos.size });
+    }
 
     if (sessions.size >= MAX_SESSIONS) throw new HttpError(503, "busy", "The server is busy. Try again in a minute.");
     const state = persons.get(person.id) ?? { keys: [], window: { start: at, n: 0 } };
@@ -157,13 +167,6 @@ export function createPeopleApi({ pool, origins, fetchImpl = fetch, now = () => 
     const expiresAt = at + SESSION_MS;
     sessions.set(key, { person, reach: new Map(reach.map((r) => [r.id, r])), expiresAt });
     state.keys.push(key);
-
-    // Which of the person's accounts use the dashboard. Each is asked inside that org's own rows.
-    const orgs = [];
-    for (const r of reach) {
-      const connected = await withOrg(pool, r.id, async (db) => ((await db.query("select 1 from orgs where id = $1", [r.id])).rowCount ?? 0) > 0);
-      orgs.push({ id: r.id, login: r.login, connected, repos: r.repos.size });
-    }
     return { status: 201, body: { token, expires_at: new Date(expiresAt).toISOString(), user: person, orgs } };
   }
 

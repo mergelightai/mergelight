@@ -4,9 +4,10 @@ import '../index.css';
 import Setup from './Setup';
 
 // GitHub sends every sign-in back to this page, the one address the app knows. A sign-in that the
-// dashboard started carries its own mark in the state, and is passed on there untouched.
+// dashboard started carries its own mark in the state, and is passed on there untouched. That goes
+// for one the person cancelled too, which comes back with an error and no code.
 const params = new URLSearchParams(window.location.search);
-if (params.has('code') && params.get('state')?.startsWith('dash.')) {
+if (params.get('state')?.startsWith('dash.')) {
   window.location.replace(`/dashboard/${window.location.search}`);
 } else {
   createRoot(document.getElementById('root')!).render(

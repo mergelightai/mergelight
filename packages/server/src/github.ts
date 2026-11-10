@@ -8,8 +8,10 @@ import { HttpError } from "../../token-server/dist/token.js";
 import { isId } from "./db.js";
 
 const API = "https://api.github.com";
-/** A GitHub App's token for a person, like the one "Sign in with GitHub" on mergelight.dev hands out. */
-const PERSON_TOKEN = /^gh[a-z]_[A-Za-z0-9_]{20,255}$/;
+/** A GitHub App's token for a person, like the one "Sign in with GitHub" on mergelight.dev hands out. Personal tokens and OAuth app tokens start differently. */
+const PERSON_TOKEN = /^ghu_[A-Za-z0-9_]{20,255}$/;
+/** The GitHub App people sign in to the dashboard with. A server someone else hosts names its own. */
+export const DEFAULT_SIGN_IN_APP = "mergelight-setup";
 /** Everything asked about one sign-in must fit in this. */
 const DEADLINE_MS = 20_000;
 const MAX_ORGS = 30;
@@ -42,8 +44,10 @@ async function ask(fetchImpl: typeof fetch, token: string, path: string, signal:
     signal,
   });
   if (res.status === 401) throw new HttpError(401, "sign_in_failed", "GitHub didn't accept this sign-in. Sign in again.");
-  // GitHub is asking this server to slow down. The caller stops asking for a while.
-  if (res.status === 429 || (res.status === 403 && res.headers.get("x-ratelimit-remaining") === "0")) throw new HttpError(503, "github_limited", "GitHub is limiting sign-ins right now. Try again in a minute.");
+  // GitHub is asking this server to slow down, whoever is asking. The caller stops all sign-ins for a while.
+  if (res.status === 429 || (res.status === 403 && res.headers.has("retry-after"))) throw new HttpError(503, "github_limited", "GitHub is limiting sign-ins right now. Try again in a minute.");
+  // This one person used up their own allowance at GitHub. Nobody else is held back for it.
+  if (res.status === 403 && res.headers.get("x-ratelimit-remaining") === "0") throw new HttpError(429, "too_many_requests", "GitHub is limiting this account right now. Try again later.");
   if (!res.ok) throw new HttpError(502, "github_error", `GitHub answered ${res.status}.`);
   return res.json();
 }
@@ -52,7 +56,7 @@ async function ask(fetchImpl: typeof fetch, token: string, path: string, signal:
  * Who the token belongs to, and which accounts and repositories they reach through the app they
  * signed in with. Everything GitHub returns is checked before it is used.
  */
-export async function lookUp(token: string, fetchImpl: typeof fetch = fetch): Promise<{ person: Person; reach: Reach[] }> {
+export async function lookUp(token: string, fetchImpl: typeof fetch = fetch, app = DEFAULT_SIGN_IN_APP): Promise<{ person: Person; reach: Reach[] }> {
   if (!looksLikePersonToken(token)) throw new HttpError(401, "sign_in_failed", "That isn't a GitHub sign-in.");
   const signal = AbortSignal.timeout(DEADLINE_MS);
   try {
@@ -60,8 +64,13 @@ export async function lookUp(token: string, fetchImpl: typeof fetch = fetch): Pr
     if (!isId(user.id) || !isLogin(user.login)) throw new HttpError(502, "github_error", "GitHub's answer about the person couldn't be read.");
 
     const { installations } = (await ask(fetchImpl, token, "/user/installations?per_page=100", signal)) as { installations?: unknown };
+    // GitHub lists the installs of the app that made the token. A token made for any other app is not
+    // a sign-in here: otherwise every app a person ever authorized could read their dashboard.
+    const all = (Array.isArray(installations) ? installations : []) as { app_slug?: unknown }[];
+    const ours = all.filter((i) => i.app_slug === app);
+    if (all.length && !ours.length) throw new HttpError(401, "sign_in_failed", "That sign-in isn't Mergelight's.");
     const reach: Reach[] = [];
-    for (const installation of Array.isArray(installations) ? installations.slice(0, MAX_ORGS) : []) {
+    for (const installation of ours.slice(0, MAX_ORGS)) {
       const { id, account } = installation as { id?: unknown; account?: { id?: unknown; login?: unknown } | null };
       if (!isId(id) || !account || !isId(account.id) || !isLogin(account.login)) continue;
       const repos = new Map<number, string>();

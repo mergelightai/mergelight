@@ -9,6 +9,9 @@ const TOKEN_SERVER = 'https://api.mergelight.dev';
 /** Where the numbers live. A build for a server you host yourself sets VITE_MERGELIGHT_SERVER. */
 export const SERVER: string = (import.meta.env.VITE_MERGELIGHT_SERVER as string | undefined) ?? 'https://mergelight-server.onrender.com';
 
+/** Where a person adds an org or a repository to what the dashboard can show them. */
+export const ADD_REPOS_URL = 'https://github.com/apps/mergelight-setup/installations/new';
+
 const STATE_KEY = 'mergelight.dashboard.state';
 const SESSION_KEY = 'mergelight.dashboard.session';
 const TIMEOUT_MS = 30_000;
@@ -77,7 +80,7 @@ export function signInUrl(): string {
 /** Takes the sign-in code out of the address bar, so a reload or a shared link never carries it. */
 export function tidyAddress(): void {
   const url = new URL(window.location.href);
-  for (const key of ['code', 'state', 'iss']) url.searchParams.delete(key);
+  for (const key of ['code', 'state', 'iss', 'error', 'error_description', 'error_uri']) url.searchParams.delete(key);
   window.history.replaceState(null, '', url.pathname + url.search);
 }
 

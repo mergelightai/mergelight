@@ -129,6 +129,8 @@ const done = async (t) => {
   expect(/opus, 6m 52s/.test(after) && /codex, 1m 35s/.test(after), 'and which AI ran it and how long it took');
   expect(/Latest 3 reviews 3 Safe to merge 1 Needs a human 1 Blocked 1/.test(after), `the counts add up (${after.slice(0, 160)})`);
   expect(/acme\/api 1 review/.test(after) && /acme\/widgets 2 reviews/.test(after), 'the repositories are listed');
+  const add = await t.page.evaluate(() => [...document.querySelectorAll('a')].find((a) => a.textContent.includes('Add it on GitHub'))?.href);
+  expect(add === 'https://github.com/apps/mergelight-setup/installations/new', 'the way to add a missing org or repository is on the page');
   const link = await t.page.evaluate(() => [...document.querySelectorAll('a')].find((a) => a.textContent.includes('#42'))?.href);
   expect(link === 'https://github.com/acme/widgets/pull/42', 'a review links to its pull request on GitHub');
   await t.shot('2-reviews');
@@ -167,6 +169,20 @@ const done = async (t) => {
   expect(/Continue with GitHub/.test(await t.text()), 'a code with a state this tab never sent is not used');
   expect(t.exchanges.length === 0, 'the code is not even swapped for a GitHub token');
   expect(t.calls.length === 0, 'and nothing is sent to the server');
+  await done(t);
+}
+
+{
+  const t = await open('cancelled');
+  await t.page.goto(`${base}/dashboard/`, { waitUntil: 'networkidle2' });
+  const state = await t.page.evaluate(() => new URL([...document.querySelectorAll('a')].find((a) => a.textContent.includes('Continue with GitHub')).href).searchParams.get('state'));
+  // What GitHub does when the person presses Cancel: an error, the state, and no code.
+  await t.page.goto(`${base}/setup/?error=access_denied&error_description=The+user+has+denied+your+application+access.&state=${encodeURIComponent(state)}`, { waitUntil: 'networkidle2' });
+  await wait(500);
+  expect(new URL(t.page.url()).pathname === '/dashboard/', 'a cancelled sign-in comes back to the dashboard, not the setup page');
+  expect(/Sign-in was cancelled/.test(await t.text()) && /Continue with GitHub/.test(await t.text()), 'and says so, with the way to try again');
+  expect(!/error=/.test(t.page.url()), 'the error is taken out of the address bar');
+  expect(t.exchanges.length === 0 && t.calls.length === 0, 'nothing is sent anywhere');
   await done(t);
 }
 

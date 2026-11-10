@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { GitHubIcon, SURFACE, WELL } from '../ui';
-import { finishSignIn, loadOverview, NotConnected, rememberedSession, SERVER, SignedOut, signInUrl, signOut, tidyAddress, type Light, type Org, type Overview, type Review, type Session } from './api';
+import { ADD_REPOS_URL, finishSignIn, loadOverview, NotConnected, rememberedSession, SERVER, SignedOut, signInUrl, signOut, tidyAddress, type Light, type Org, type Overview, type Review, type Session } from './api';
 
 const LIGHTS: Record<Light, { label: string; dot: string; text: string }> = {
   green: { label: 'Safe to merge', dot: 'bg-mint', text: 'text-mint' },
@@ -55,7 +55,7 @@ function Card({ children, className = '' }: { children: ReactNode; className?: s
   return <section className={`${SURFACE} p-6 sm:p-7 ${className}`}>{children}</section>;
 }
 
-function SignIn({ failed }: { failed: boolean }) {
+function SignIn({ failed, cancelled }: { failed: boolean; cancelled: boolean }) {
   return (
     <div className="mx-auto w-full max-w-[460px] py-2 text-center">
       <img src="/logo-animated.svg" alt="" width={84} height={84} className="mx-auto size-[84px] rounded-[20px] shadow-[0_0_0_1px_rgb(255_255_255/0.08),0_14px_40px_-12px_rgb(0_0_0/0.8)]" />
@@ -64,6 +64,7 @@ function SignIn({ failed }: { failed: boolean }) {
         See what Mergelight found across your repositories. You only see repositories GitHub shows you.
       </p>
       {failed && <p className="mt-4 text-[13px] text-risk">Sign-in didn't work. Please try again.</p>}
+      {cancelled && !failed && <p className="mt-4 text-[13px] text-muted">Sign-in was cancelled.</p>}
       <a href={signInUrl()} className={`${PRIMARY} mt-7`}>
         <GitHubIcon className="size-[18px]" /> Continue with GitHub
       </a>
@@ -183,12 +184,17 @@ export default function Dashboard() {
   const [session, setSession] = useState<Session | null>(() => (params.has('code') ? null : rememberedSession()));
   const [signingIn, setSigningIn] = useState(params.has('code'));
   const [failed, setFailed] = useState(false);
+  // GitHub sends a cancelled sign-in back with an error and no code.
+  const [cancelled] = useState(() => params.has('error') && !params.has('code'));
   const [orgId, setOrgId] = useState<number | null>(null);
   const [view, setView] = useState<View>({ kind: 'loading' });
 
   // Coming back from GitHub with a sign-in code.
   useEffect(() => {
-    if (!params.has('code')) return;
+    if (!params.has('code')) {
+      if (params.has('error')) tidyAddress();
+      return;
+    }
     let gone = false;
     finishSignIn(params)
       .then((s) => !gone && setSession(s))
@@ -237,7 +243,7 @@ export default function Dashboard() {
     return (
       <Shell>
         <div className="pt-[6vh] sm:pt-[9vh]">
-          <SignIn failed={failed} />
+          <SignIn failed={failed} cancelled={cancelled} />
         </div>
       </Shell>
     );
@@ -265,7 +271,8 @@ export default function Dashboard() {
         <Card>
           <h2 className="text-[19px] font-semibold tracking-[-0.01em]">No repositories to show</h2>
           <p className="mt-2 max-w-xl text-[15px] leading-relaxed text-muted">
-            GitHub shows this sign-in no repositories with Mergelight. <a href="/setup/" className="text-fg underline decoration-white/30 underline-offset-4 hover:decoration-white">Turn Mergelight on</a> for a repository first.
+            The dashboard shows the repositories you gave Mergelight Setup access to on GitHub, and this sign-in has none.{' '}
+            <a href={ADD_REPOS_URL} className="text-fg underline decoration-white/30 underline-offset-4 hover:decoration-white">Add your org or repositories</a>, then sign in again.
           </p>
         </Card>
       ) : (
@@ -292,6 +299,11 @@ export default function Dashboard() {
               </div>
             )}
           </div>
+          {/* The page can only show what the sign-in's app is installed on, so the way to add more is always in reach. */}
+          <p className="-mt-2 mb-6 text-[13px] text-faint">
+            Don't see an org or a repository?{' '}
+            <a href={ADD_REPOS_URL} className="text-muted underline decoration-white/20 underline-offset-4 hover:text-fg">Add it on GitHub</a>, then sign in again.
+          </p>
           {view.kind === 'loading' && (
             <p className="flex items-center justify-center gap-3 py-24 text-[15px] text-muted">
               <Spinner /> Loading reviews

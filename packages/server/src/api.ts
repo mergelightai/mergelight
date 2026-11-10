@@ -90,6 +90,8 @@ export interface ApiOptions {
   publicUrl: string;
   /** Sites whose pages may use the dashboard's side of the API from a browser. */
   origins?: string[];
+  /** The GitHub App people sign in to the dashboard with. */
+  signInApp?: string;
   fetchImpl?: typeof fetch;
   now?: () => number;
 }
@@ -135,10 +137,10 @@ export function parseReview(body: unknown): ReviewRow {
   };
 }
 
-export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"], fetchImpl = fetch, now = () => Date.now() }: ApiOptions): (request: Request) => Promise<Response> {
+export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"], signInApp, fetchImpl = fetch, now = () => Date.now() }: ApiOptions): (request: Request) => Promise<Response> {
   const audience = audienceOf(publicUrl);
   /** The dashboard's side: signed-in people. Runs and people never share a route or a kind of token. */
-  const people = createPeopleApi({ pool, origins, fetchImpl, now });
+  const people = createPeopleApi({ pool, origins, signInApp, fetchImpl, now });
   /** The path the server is mounted under, if any. A proxy may strip it or pass it on, so both forms are routed. */
   const mount = new URL(audience).pathname.replace(/\/+$/, "");
   /** Token ids already used, with when each expires. A token works once, so a copied one is worth nothing. */

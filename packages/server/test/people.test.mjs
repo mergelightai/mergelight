@@ -22,9 +22,12 @@ const QUIET = { id: 3003, login: "quiet" };
 /** GitHub tokens of two people. Ada reaches acme/widgets and acme/api, and the org "quiet". Bo reaches only other/vault. */
 const ADA = "ghu_" + "a".repeat(36);
 const BO = "ghu_" + "b".repeat(36);
+/** Cy signed in to some other GitHub App, which is also installed on acme. That token is not a Mergelight sign-in. */
+const CY = "ghu_" + "c".repeat(36);
 const people = {
   [ADA]: { user: { id: 11, login: "ada" }, installations: [{ id: 501, account: ACME, repos: [{ id: 501, full_name: "acme/widgets" }, { id: 502, full_name: "acme/api" }] }, { id: 503, account: QUIET, repos: [{ id: 901, full_name: "quiet/site" }] }] },
   [BO]: { user: { id: 22, login: "bo" }, installations: [{ id: 601, account: OTHER, repos: [{ id: 777, full_name: "other/vault" }] }] },
+  [CY]: { user: { id: 33, login: "cy" }, installations: [{ id: 701, app: "some-other-app", account: ACME, repos: [{ id: 501, full_name: "acme/widgets" }] }] },
 };
 
 const json = (status, body) => new Response(JSON.stringify(body), { status });
@@ -38,11 +41,11 @@ const fetchImpl = async (url, init = {}) => {
   if (u.pathname.endsWith("/.well-known/jwks")) return json(200, { keys: [{ ...oidc.publicKey.export({ format: "jwk" }), kid: KID }] });
   assert.equal(u.origin, "https://api.github.com");
   githubCalls.push(u.pathname);
-  if (githubAnswers) return json(githubAnswers, { message: "slow down" });
+  if (githubAnswers) return new Response(JSON.stringify({ message: "slow down" }), typeof githubAnswers === "number" ? { status: githubAnswers } : githubAnswers);
   const who = people[(init.headers?.authorization ?? "").replace("Bearer ", "")];
   if (!who) return json(401, { message: "Bad credentials" });
   if (u.pathname === "/user") return json(200, who.user);
-  if (u.pathname === "/user/installations") return json(200, { installations: who.installations.map(({ id, account }) => ({ id, account })) });
+  if (u.pathname === "/user/installations") return json(200, { installations: who.installations.map(({ id, account, app = "mergelight-setup" }) => ({ id, account, app_slug: app })) });
   const m = /^\/user\/installations\/(\d+)\/repositories$/.exec(u.pathname);
   const installation = m && who.installations.find((i) => i.id === Number(m[1]));
   if (installation) return json(200, { repositories: installation.repos });
@@ -187,10 +190,25 @@ test("a sign-in GitHub refuses is refused, and a token that isn't GitHub's never
   assert.equal(refused.status, 401);
   assert.equal((await refused.json()).error, "sign_in_failed");
   githubCalls = [];
-  for (const bad of [undefined, "hello", "ghu_short", "ghp_" + "a".repeat(10) + " injected", "Bearer x"]) {
+  for (const bad of [undefined, "hello", "ghu_short", "ghp_" + "a".repeat(36), "gho_" + "a".repeat(36), "ghu_" + "a".repeat(10) + " injected", "Bearer x"]) {
     assert.equal((await call("/v1/session", { method: "POST", token: bad })).status, 401, String(bad));
   }
   assert.deepEqual(githubCalls, []);
+});
+
+test("a token another GitHub App got for the same person is not a sign-in", async () => {
+  const res = await call("/v1/session", { method: "POST", token: CY });
+  assert.equal(res.status, 401);
+  assert.match((await res.json()).message, /isn't Mergelight's/);
+  // The repositories of that other app's install are never asked for.
+  assert.deepEqual(githubCalls, ["/user", "/user/installations"]);
+});
+
+test("a server someone else hosts signs people in with its own app", async () => {
+  const own = createApi({ pool, publicUrl: PUBLIC_URL, origins: [SITE], signInApp: "some-other-app", fetchImpl, now: () => clock });
+  const ask = (token) => own(new Request("https://server.test/v1/session", { method: "POST", headers: { authorization: `Bearer ${token}`, origin: SITE } }));
+  assert.equal((await ask(CY)).status, 201);
+  assert.equal((await ask(ADA)).status, 401);
 });
 
 test("signing out ends the session", async () => {
@@ -285,6 +303,14 @@ test("when GitHub asks the server to slow down, sign-ins stop for a minute inste
   assert.equal((await call("/v1/session", { method: "POST", token: BO })).status, 503);
   assert.equal(githubCalls.length, calls);
   clock += 61_000;
+  assert.equal((await call("/v1/session", { method: "POST", token: BO })).status, 201);
+});
+
+test("one person who used up their own allowance at GitHub doesn't hold anyone else back", async () => {
+  githubAnswers = { status: 403, headers: { "x-ratelimit-remaining": "0" } };
+  const own = await call("/v1/session", { method: "POST", token: ADA });
+  assert.equal(own.status, 429);
+  githubAnswers = null;
   assert.equal((await call("/v1/session", { method: "POST", token: BO })).status, 201);
 });
 
