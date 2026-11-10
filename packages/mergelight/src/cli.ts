@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { currentRepo, fetchPullRequest, parsePrRef } from "./github.js";
 import { serve } from "./mcp/server.js";
+import { cloudConnected, reportReview } from "./cloud.js";
 import { GitHub } from "./publish/api.js";
 import { approveCheck, checkLimitTitle, checkLoginTitle, failCheck, failSummary, previousFindings, publishReview, startCheck, startSummary } from "./publish/publish.js";
 import { LimitError, LoginError, loginFailureMessage } from "./providers/codex.js";
@@ -216,6 +217,9 @@ async function main(): Promise<number> {
     await startSummary(api, ref.number).catch((e) => log(`Couldn't post the summary yet: ${(e as Error).message}`));
   }
 
+  // Teams that use the dashboard: ask the server first, so nothing is sent for anyone else.
+  const onDashboard = values.post && !dryRun ? await cloudConnected({ log }) : false;
+
   const progress = progressPrinter();
   try {
     // The login step already found this login can't be refreshed, so don't send every reviewer to find out.
@@ -240,6 +244,7 @@ async function main(): Promise<number> {
     if (values.post) {
       const result = await publishReview(review, { dryRun, log, checkRunId, yellowBlocks: values["yellow-blocks"] });
       log(`Posted: ${result.inline} inline, ${result.outside} in the summary only, ${result.resolved} resolved. ${result.summaryUrl ?? ""}`);
+      if (onDashboard) await reportReview(review, { log });
       // The check carries the verdict; the job itself only fails on errors.
       return 0;
     }

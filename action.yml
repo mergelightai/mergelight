@@ -61,6 +61,14 @@ inputs:
       Needs the app installed and "id-token: write". Without them, or with this empty, the run posts
       as github-actions[bot].
     default: https://api.mergelight.dev/token
+  server:
+    description: >
+      Address of a Mergelight server, for teams that use the dashboard. Empty means off, and then
+      nothing about a review leaves your runner. With it, each run first shows the server GitHub's
+      signed token, which names the repository, branch, workflow and who started the run. If your
+      org turned the dashboard on, the run then sends the review's numbers (how many findings, the
+      light, how long it took). Never code, finding text or your AI login. Needs "id-token: write".
+    default: ""
 
 runs:
   using: composite
@@ -292,6 +300,7 @@ runs:
         VERIFY_WITH: ${{ inputs.verify-with }}
         YELLOW_BLOCKS: ${{ inputs.yellow-blocks }}
         MERGELIGHT_ACTION_REF: ${{ github.action_ref }}
+        MERGELIGHT_SERVER: ${{ inputs.server }}
         SECRET_NAME: ${{ inputs.auth-secret-name }}
         CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-code-oauth-token || env.MERGELIGHT_CLAUDE_TOKEN }}
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}

@@ -211,6 +211,69 @@ test("random key ids don't refetch GitHub's keys every time", async () => {
   assert.equal(calls.filter((c) => c.url.endsWith("/jwks")).length, 1);
 });
 
+test("requests that arrive together share one fetch of GitHub's keys, and it has a deadline", async () => {
+  let fetches = 0;
+  let signal;
+  let release;
+  const gate = new Promise((resolve) => (release = resolve));
+  const slow = async (url, init) => {
+    fetches++;
+    signal = init?.signal;
+    await gate;
+    return json(200, { keys: [{ ...oidc.publicKey.export({ format: "jwk" }), kid: KID }] });
+  };
+  const all = Promise.all(Array.from({ length: 20 }, () => verifyOidcToken(makeToken(), slow, NOW)));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(fetches, 1);
+  assert.ok(signal instanceof AbortSignal, "the fetch can be given up on");
+  release();
+  assert.equal((await all).length, 20);
+  assert.equal(fetches, 1);
+});
+
+test("after GitHub's keys can't be read, nobody asks again for a while", async () => {
+  let fetches = 0;
+  const down = async () => {
+    fetches++;
+    return json(503, {});
+  };
+  for (let i = 0; i < 5; i++) {
+    await assert.rejects(verifyOidcToken(makeToken(), down, NOW + i), (err) => err.status === 502 && err.code === "jwks_unavailable");
+  }
+  assert.equal(fetches, 1);
+
+  // Later it tries again, and a working answer is used.
+  const { calls, fetchImpl } = fakeGitHub();
+  assert.equal((await verifyOidcToken(makeToken(), fetchImpl, NOW + 11_000)).repository, "acme/widgets");
+  assert.equal(calls.length, 1);
+});
+
+test("a key the server already holds is used while GitHub can't be asked, for a day at most", async () => {
+  const HOUR = 60 * 60_000;
+  const { fetchImpl } = fakeGitHub();
+  await verifyOidcToken(makeToken(), fetchImpl, NOW);
+
+  let fetches = 0;
+  const down = async () => {
+    fetches++;
+    return json(503, {});
+  };
+  // The list is over an hour old, so the server asks again. GitHub is down, and the token still passes.
+  const later = NOW + HOUR + 1000;
+  const fresh = (at) => makeToken({ exp: Math.floor(at / 1000) + 300, nbf: Math.floor(at / 1000) - 10 });
+  assert.equal((await verifyOidcToken(fresh(later), down, later)).repository, "acme/widgets");
+  assert.equal(fetches, 1);
+  // Straight after, nobody asks GitHub again, and callers aren't turned away.
+  assert.equal((await verifyOidcToken(fresh(later + 2000), down, later + 2000)).repository, "acme/widgets");
+  assert.equal(fetches, 1);
+  // A key the server has never seen gets no such pass, and a forged token is still refused.
+  await assert.rejects(verifyOidcToken(makeToken({ exp: Math.floor(later / 1000) + 300 }, { header: { kid: "unknown" } }), down, later + 3000), (err) => err.status === 502);
+  await assert.rejects(verifyOidcToken(makeToken({ exp: Math.floor(later / 1000) + 300 }, { key: attacker.privateKey }), down, later + 4000), (err) => err.status === 401);
+  // After a day without GitHub, the held key isn't trusted any more.
+  const dayLater = NOW + 25 * HOUR;
+  await assert.rejects(verifyOidcToken(fresh(dayLater), down, dayLater), (err) => err.status === 502 && err.code === "jwks_unavailable");
+});
+
 function signInRequest(body, { origin = "https://mergelight.dev", method = "POST" } = {}) {
   return new Request("https://token.test/sign-in", {
     method,
