@@ -14,7 +14,7 @@ npx @mergelight/cli init
 
 Then ask your agent: "Handle the Mergelight findings on this PR." See [Mergelight in your coding agent](https://github.com/mergelightai/mergelight/blob/main/docs/agents.md).
 
-**One review from your terminal.**
+**One review from your terminal.** It uses your Codex login, or your Claude login with `--provider claude`.
 
 ```bash
 npx @mergelight/cli review https://github.com/owner/repo/pull/123
@@ -35,7 +35,8 @@ How likely a problem is and how bad it is are rated separately, so a small probl
 
 - Node 20 or newer
 - [GitHub CLI](https://cli.github.com), logged in (`gh auth login`)
-- One of these, logged in with your own plan: the [Codex CLI](https://github.com/openai/codex) (`codex login`) or [Claude Code](https://claude.com/claude-code)
+- The [Codex CLI](https://github.com/openai/codex), logged in with your ChatGPT plan (`codex login`). It looks for the problems by default.
+- Or [Claude Code](https://claude.com/claude-code), logged in with your Claude plan. With only Claude Code installed, add `--provider claude` to every `review` command.
 - With both installed, Codex looks for problems and Claude checks them. `--provider claude` makes Claude do both.
 
 ## Usage
