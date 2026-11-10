@@ -11,55 +11,43 @@ It uses your own `gh` login. Nothing is sent to Mergelight, and no model runs: r
 
 You need Node 20 or newer and the [GitHub CLI](https://cli.github.com), logged in (`gh auth login`).
 
-**1. Build it.**
+**1. Run this once:**
 
 ```bash
-git clone https://github.com/mergelightai/mergelight ~/mergelight
+npx mergelight init
 ```
 
-```bash
-cd ~/mergelight/packages/mergelight && npm ci && npm run build
-```
+It adds the MCP server and the skill to each agent it finds: Claude Code, Codex and Cursor. It only writes where each agent keeps its own settings, and running it again replaces what it added.
 
-**2. Add the server and the skill to your agent.**
+**2. By hand, if you'd rather.** The server is `npx -y mergelight mcp`, and the skill is the folder `skills/mergelight` in the package.
 
 Claude Code:
 
 ```bash
-claude mcp add --scope user mergelight -- node ~/mergelight/packages/mergelight/dist/cli.js mcp
-```
-
-```bash
-mkdir -p ~/.claude/skills && cp -R ~/mergelight/packages/mergelight/skills/mergelight ~/.claude/skills/
+claude mcp add --scope user mergelight -- npx -y mergelight mcp
 ```
 
 Codex:
 
 ```bash
-codex mcp add mergelight -- node ~/mergelight/packages/mergelight/dist/cli.js mcp
+codex mcp add mergelight -- npx -y mergelight mcp
 ```
 
-```bash
-mkdir -p ~/.agents/skills && cp -R ~/mergelight/packages/mergelight/skills/mergelight ~/.agents/skills/
-```
-
-Cursor: add this to `~/.cursor/mcp.json`, with the full path to your clone:
+Cursor: add this to `~/.cursor/mcp.json`:
 
 ```json
 {
   "mcpServers": {
     "mergelight": {
       "type": "stdio",
-      "command": "node",
-      "args": ["/full/path/to/mergelight/packages/mergelight/dist/cli.js", "mcp"]
+      "command": "npx",
+      "args": ["-y", "mergelight", "mcp"]
     }
   }
 }
 ```
 
-```bash
-mkdir -p ~/.cursor/skills && cp -R ~/mergelight/packages/mergelight/skills/mergelight ~/.cursor/skills/
-```
+Copy the skill folder to `~/.claude/skills`, `~/.agents/skills` or `~/.cursor/skills`.
 
 **3. Ask your agent:** "Handle the Mergelight findings on this PR."
 

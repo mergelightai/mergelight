@@ -10,6 +10,7 @@ import { limitNotice, loginNotice } from "./publish/markdown.js";
 import { renderTerminal } from "./render.js";
 import { reviewPullRequest } from "./review.js";
 import { askForApp, connect, githubConnect } from "./connect.js";
+import { init, realInitDeps } from "./init.js";
 import { realDeps, setup } from "./setup.js";
 import type { Review } from "./types.js";
 
@@ -19,6 +20,7 @@ Usage
   mergelight review <pr> [options]       Review a pull request
   mergelight post <review.json>          Post a saved review to its pull request
   mergelight approve <pr> --by <login>   Turn a "needs a human" check green after approval
+  mergelight init                        Add Mergelight to your coding agents: Claude Code, Codex and Cursor
   mergelight mcp                         Run the MCP server, so your coding agent can read findings
   mergelight setup <owner/repo>          Set up the GitHub Action on a repository
   mergelight connect <pr>                In the Action: connect ChatGPT from the pull request
@@ -134,6 +136,15 @@ async function main(): Promise<number> {
         },
         realDeps(),
       );
+    } catch (err) {
+      log(`mergelight: ${err instanceof Error ? err.message : String(err)}`);
+      return 1;
+    }
+  }
+
+  if (command === "init") {
+    try {
+      return await init(realInitDeps());
     } catch (err) {
       log(`mergelight: ${err instanceof Error ? err.message : String(err)}`);
       return 1;
