@@ -2,7 +2,7 @@
 // Picks eval PRs from collect.mjs output and reviews each one with Mergelight
 // at the commit the other bots reviewed, so the results line up.
 //
-//   node eval/run.mjs owner/repo [--count 20] [--concurrency 3] [--include 377] [--provider claude] [--model name] [--effort level]
+//   node eval/run.mjs owner/repo [--count 20] [--concurrency 3] [--include 377] [--provider claude] [--model name] [--verify-model name] [--effort level]
 
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -24,6 +24,7 @@ const { values, positionals } = parseArgs({
     reuse: { type: "boolean", default: false },
     provider: { type: "string" },
     model: { type: "string" },
+    "verify-model": { type: "string" },
     effort: { type: "string" },
   },
 });
@@ -66,6 +67,7 @@ function review(pr) {
     const args = [cli, "review", `${repoArg}#${pr.number}`, "--at", pr.at, "--json", "--out", out];
     if (values.provider) args.push("--provider", values.provider);
     if (values.model) args.push("--model", values.model);
+    if (values["verify-model"]) args.push("--verify-model", values["verify-model"]);
     if (values.effort) args.push("--effort", values.effort);
     const child = spawn("node", args, {
       stdio: ["ignore", "ignore", "pipe"],
