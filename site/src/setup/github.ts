@@ -348,13 +348,13 @@ export function realClient(token: string): GitHubClient {
     return (res.status === 204 ? undefined : await res.json()) as T;
   };
   const get = <T,>(path: string) => call<T>('GET', path);
-  /** The sign-in code this page left in the repository, until it's removed. */
-  let ownCode: string | null = null;
+  /** The sign-in code this page left in each repository, until it's removed. */
+  const ownCodes = new Map<string, string>();
   /** Removes that code, and only that one: someone else may be connecting the same repository right now. */
   const clearClaudeCode = async (repo: Repo): Promise<void> => {
-    const name = ownCode;
+    const name = ownCodes.get(repo.fullName);
     if (!name) return;
-    ownCode = null;
+    ownCodes.delete(repo.fullName);
     await call('DELETE', `/repos/${repo.fullName}/git/refs/${name}`).catch(() => undefined);
   };
   /** The workflow file on a branch, if it's there. Only a missing file counts as missing: any other failure stops whoever asked. */
@@ -500,8 +500,9 @@ export function realClient(token: string): GitHubClient {
       await Promise.all(left.map((r) => call('DELETE', `${git}/${r.ref}`).catch(() => undefined)));
       const { sha } = await call<{ sha: string }>('POST', `${git}/blobs`, { content: code, encoding: 'utf-8' });
       await call('POST', `${git}/refs`, { ref: `refs/${name}`, sha });
-      ownCode = name;
-      setTimeout(() => void clearClaudeCode(repo), CODE_REF_LIFETIME_MS);
+      ownCodes.set(repo.fullName, name);
+      // A newer code for the same repository has its own timer, so this one only removes what it left.
+      setTimeout(() => void (ownCodes.get(repo.fullName) === name && clearClaudeCode(repo)), CODE_REF_LIFETIME_MS);
     },
     clearClaudeCode,
     connectCode: async (repo, number) => readConnectCode(await get<{ user: { login: string } | null; body?: string | null }[]>(`/repos/${repo.fullName}/issues/${number}/comments?per_page=100`)),
