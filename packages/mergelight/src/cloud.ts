@@ -211,7 +211,7 @@ export async function reportReview(review: Review, deps: CloudDeps = {}): Promis
     // One id for this report, the same on both tries, so the server keeps it once.
     const body = JSON.stringify({ ...reviewNumbers(review), report_id: randomUUID() });
     const res = await call(d, server, "/v1/reviews", { method: "POST", body });
-    if (!res.ok) d.log(`The Mergelight server answered ${res.status} to the review's numbers. The review itself is posted.`);
+    d.log(res.ok ? "Sent this review's numbers to the Mergelight server." : `The Mergelight server answered ${res.status} to the review's numbers. The review itself is posted.`);
     return res.ok;
   } catch (err) {
     d.log(`Couldn't send the review's numbers to the Mergelight server (${(err as Error).message}). The review itself is posted.`);

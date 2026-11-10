@@ -6,7 +6,7 @@ import { after, before, beforeEach, test } from "node:test";
 import pg from "pg";
 import { handle as tokenServer, resetJwksCache } from "../../token-server/src/token.js";
 import { audienceOf, createApi, MAX_BODY, parseReview, RATE_MAX } from "../dist/api.js";
-import { assertRowRulesHold, connectOrg, createPool, deleteOrg, migrate, withOrg } from "../dist/db.js";
+import { assertRowRulesHold, connectOrg, createPool, deleteOrg, migrate, parseConnectOrgs, withOrg } from "../dist/db.js";
 import { createDataServer } from "../dist/server.js";
 import { startPostgres } from "./postgres.mjs";
 
@@ -386,6 +386,30 @@ test("a server mounted under a path answers there, and only takes tokens made fo
   assert.equal((await ask("/mergelight/v1/context", "https://server.test")).status, 401);
   assert.equal((await ask("/mergelight/v1/context", "https://server.test/other")).status, 401);
   assert.equal((await ask("/mergelightx/v1/context", "https://server.test/mergelight")).status, 404);
+});
+
+test("CONNECT_ORGS names orgs by GitHub's number, and a typo stops the start instead of meaning no orgs", () => {
+  assert.deepEqual(parseConnectOrgs(undefined), []);
+  assert.deepEqual(parseConnectOrgs(" "), []);
+  assert.deepEqual(parseConnectOrgs("1001:acme, 2002:other-org ,"), [{ id: 1001, login: "acme" }, { id: 2002, login: "other-org" }]);
+  for (const bad of ["acme", "acme:1001", "1001", "0:acme", "1001:acme;drop", "1001:acme 2002:other"]) {
+    assert.throws(() => parseConnectOrgs(bad), /CONNECT_ORGS has an entry/, bad);
+  }
+});
+
+test("the server turns the dashboard on for the orgs in CONNECT_ORGS when it starts", async () => {
+  const server = fileURLToPath(new URL("../dist/server.js", import.meta.url));
+  const env = { ...process.env, DATABASE_URL: postgres.url, PUBLIC_URL: PUBLIC_URL, PORT: "0", CONNECT_ORGS: `${ACME.id}:${ACME.login}` };
+  const bad = spawnSync(process.execPath, [server], { env: { ...env, CONNECT_ORGS: "acme" }, encoding: "utf8", timeout: 20_000 });
+  assert.equal(bad.status, 1);
+  assert.match(bad.stderr, /Can't start: CONNECT_ORGS has an entry/);
+  assert.deepEqual(await rowsOf(ACME.id, "select login from orgs"), []);
+
+  // A good value: the server starts and keeps running, so it is stopped once it has said so.
+  const ok = spawnSync(process.execPath, [server], { env, encoding: "utf8", timeout: 4000, killSignal: "SIGTERM" });
+  assert.match(ok.stdout, /The dashboard is on for: acme/);
+  assert.match(ok.stdout, /Mergelight server listening/);
+  assert.deepEqual((await rowsOf(ACME.id, "select login from orgs")).map((r) => r.login), ["acme"]);
 });
 
 test("the admin command refuses a database role that can skip the row rules", () => {

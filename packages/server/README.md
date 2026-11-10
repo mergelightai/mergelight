@@ -47,7 +47,7 @@ DATABASE_URL=postgres://... PUBLIC_URL=https://your-server.example npm start
 
 `npm start` runs the built files, so run `npm run build` first (`npm test` builds too). The database role must not be a superuser. Tables are created on start. `PUBLIC_URL` is the address workflows reach the server at, and it must match the Action's `server` input.
 
-Until sign-in exists, turn the dashboard on for an org from the server's host:
+Until sign-in exists, the operator turns the dashboard on for an org. Either set `CONNECT_ORGS` on the server, as `<github-account-id>:<login>` with commas between orgs, and it is done at each start. Or run the admin command on the server's host:
 
 ```bash
 gh api users/<login> --jq .id

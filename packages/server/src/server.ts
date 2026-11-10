@@ -5,13 +5,16 @@
 //   PUBLIC_URL     The address workflows reach this server at, like https://data.example.com.
 //                  Tokens must be made for exactly this address, so one made for another server is refused.
 //   PORT           Port to listen on. The host sets it.
+// Optional:
+//   CONNECT_ORGS   Orgs to turn the dashboard on for at start, as "id:login,id:login" with GitHub's
+//                  number for each account. It stands in until sign-in exists.
 //
 // This server holds no GitHub key. The app's private key stays on the token server.
 
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { fileURLToPath } from "node:url";
 import { createApi, MAX_BODY } from "./api.js";
-import { assertRowRulesHold, createPool, migrate } from "./db.js";
+import { assertRowRulesHold, connectOrg, createPool, migrate, parseConnectOrgs } from "./db.js";
 
 async function readBody(req: IncomingMessage): Promise<Buffer> {
   const chunks: Buffer[] = [];
@@ -58,14 +61,17 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   let api: (request: Request) => Promise<Response>;
   try {
     api = createApi({ pool, publicUrl: PUBLIC_URL });
+    const orgs = parseConnectOrgs(process.env.CONNECT_ORGS);
     await assertRowRulesHold(pool);
     await migrate(pool);
+    for (const org of orgs) await connectOrg(pool, org.id, org.login);
+    if (orgs.length) console.log(`The dashboard is on for: ${orgs.map((o) => o.login).join(", ")}`);
   } catch (err) {
     console.error(`Can't start: ${(err as Error).message}`);
     process.exit(1);
   }
   const server = createDataServer(api);
-  server.listen(Number(process.env.PORT) || 10001, "0.0.0.0", () => console.log("Mergelight server listening"));
+  server.listen(process.env.PORT ? Number(process.env.PORT) : 10001, "0.0.0.0", () => console.log("Mergelight server listening"));
   // Finish requests in flight when the host restarts it for a deploy.
   process.on("SIGTERM", () => server.close(() => void pool.end().then(() => process.exit(0))));
 }

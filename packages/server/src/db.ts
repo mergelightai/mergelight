@@ -97,6 +97,24 @@ export async function connectOrg(pool: Pool, orgId: number, login: string): Prom
   await withOrg(pool, orgId, (db) => db.query("insert into orgs (id, login) values ($1, $2) on conflict (id) do update set login = excluded.login", [orgId, login]));
 }
 
+/**
+ * Orgs the operator turns the dashboard on for when the server starts: "id:login,id:login", with
+ * GitHub's number for each account. It stands in until sign-in exists. A value that can't be read
+ * stops the start, so a typo isn't taken for "no orgs".
+ */
+export function parseConnectOrgs(value: string | undefined): { id: number; login: string }[] {
+  return (value ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const match = /^(\d{1,18}):([\w.-]{1,100})$/.exec(entry);
+      const id = match ? Number(match[1]) : NaN;
+      if (!match || !isId(id)) throw new Error(`CONNECT_ORGS has an entry that isn't "<github-account-id>:<login>": ${entry.slice(0, 60)}`);
+      return { id, login: match[2]! };
+    });
+}
+
 /** Removes everything stored for an org: its repositories and reviews go with it. Returns whether anything was there. */
 export async function deleteOrg(pool: Pool, orgId: number): Promise<boolean> {
   return withOrg(pool, orgId, async (db) => ((await db.query("delete from orgs where id = $1", [orgId])).rowCount ?? 0) > 0);

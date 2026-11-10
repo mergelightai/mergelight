@@ -148,7 +148,7 @@ test("sends the numbers with a new token, and nothing but the numbers", async ()
   const { report_id, ...numbers } = JSON.parse(sent.init.body);
   assert.deepEqual(numbers, reviewNumbers(review));
   assert.match(report_id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
-  assert.equal(s.lines.length, 0);
+  assert.deepEqual(s.lines, ["Sent this review's numbers to the Mergelight server."]);
 });
 
 test("a server error is tried once more, with a token of its own", async () => {

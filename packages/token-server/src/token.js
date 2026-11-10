@@ -38,6 +38,8 @@ const JWKS_TTL_MS = 60 * 60_000;
 const JWKS_MIN_REFRESH_MS = 60_000;
 const JWKS_FETCH_TIMEOUT_MS = 10_000;
 const JWKS_RETRY_AFTER_MS = 10_000;
+/** How long a key we already hold stays good while GitHub can't be asked for a new list. */
+const JWKS_MAX_STALE_MS = 24 * 60 * 60_000;
 
 export class HttpError extends Error {
   constructor(status, code, message) {
@@ -137,11 +139,22 @@ async function signingKey(kid, fetchImpl, now) {
   if (now - jwksCache.fetchedAt >= JWKS_MIN_REFRESH_MS) {
     // Anyone can send a token-shaped request, so these fetches must not pile up: requests that arrive
     // together share one, it has a deadline, and after a failure nobody tries again for a while.
-    if (now - jwksFailedAt < JWKS_RETRY_AFTER_MS) throw new HttpError(502, "jwks_unavailable", "Couldn't read GitHub's signing keys.");
+    // A key this server already holds is used while GitHub can't be asked, so one failed fetch doesn't
+    // turn every caller away. An unknown key never is: it waits for a list that names it.
+    const held = known && now - jwksCache.fetchedAt < JWKS_MAX_STALE_MS ? known : null;
+    if (now - jwksFailedAt < JWKS_RETRY_AFTER_MS) {
+      if (held) return held;
+      throw new HttpError(502, "jwks_unavailable", "Couldn't read GitHub's signing keys.");
+    }
     jwksRefresh ??= refreshJwks(fetchImpl, now).finally(() => {
       jwksRefresh = null;
     });
-    await jwksRefresh;
+    try {
+      await jwksRefresh;
+    } catch (err) {
+      if (held) return held;
+      throw err;
+    }
   }
   return jwksCache.keys.get(kid);
 }
