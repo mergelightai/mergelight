@@ -184,6 +184,8 @@ export interface GitHubClient {
   connectCode(repo: Repo, number: number): Promise<ConnectCode | null>;
   /** Leaves the code from Claude's page where the waiting run looks for it, out of sight of the pull request. */
   sendClaudeCode(repo: Repo, claudeUrl: string, code: string): Promise<void>;
+  /** Removes the sign-in code this page left in the repository, once the run has connected. */
+  clearClaudeCode(repo: Repo): Promise<void>;
   /** Whether it's merged, and the commit it's on now. */
   prState(repo: Repo, number: number): Promise<{ merged: boolean; headSha: string }>;
 }
@@ -346,6 +348,15 @@ export function realClient(token: string): GitHubClient {
     return (res.status === 204 ? undefined : await res.json()) as T;
   };
   const get = <T,>(path: string) => call<T>('GET', path);
+  /** The sign-in code this page left in each repository, until it's removed. */
+  const ownCodes = new Map<string, string>();
+  /** Removes that code, and only that one: someone else may be connecting the same repository right now. */
+  const clearClaudeCode = async (repo: Repo): Promise<void> => {
+    const name = ownCodes.get(repo.fullName);
+    if (!name) return;
+    ownCodes.delete(repo.fullName);
+    await call('DELETE', `/repos/${repo.fullName}/git/refs/${name}`).catch(() => undefined);
+  };
   /** The workflow file on a branch, if it's there. Only a missing file counts as missing: any other failure stops whoever asked. */
   const workflowOn = async (repo: Repo, branch: string, name = 'mergelight.yml'): Promise<{ sha: string; content: string } | null> => {
     try {
@@ -489,8 +500,11 @@ export function realClient(token: string): GitHubClient {
       await Promise.all(left.map((r) => call('DELETE', `${git}/${r.ref}`).catch(() => undefined)));
       const { sha } = await call<{ sha: string }>('POST', `${git}/blobs`, { content: code, encoding: 'utf-8' });
       await call('POST', `${git}/refs`, { ref: `refs/${name}`, sha });
-      setTimeout(() => void call('DELETE', `${git}/refs/${name}`).catch(() => undefined), CODE_REF_LIFETIME_MS);
+      ownCodes.set(repo.fullName, name);
+      // A newer code for the same repository has its own timer, so this one only removes what it left.
+      setTimeout(() => void (ownCodes.get(repo.fullName) === name && clearClaudeCode(repo)), CODE_REF_LIFETIME_MS);
     },
+    clearClaudeCode,
     connectCode: async (repo, number) => readConnectCode(await get<{ user: { login: string } | null; body?: string | null }[]>(`/repos/${repo.fullName}/issues/${number}/comments?per_page=100`)),
     prState: async (repo, number) => {
       const pull = await get<{ merged: boolean; head: { sha: string } }>(`/repos/${repo.fullName}/pulls/${number}`);
@@ -549,6 +563,7 @@ export function mockClient(): GitHubClient {
       return later({ status: 'completed', conclusion: 'failure', title: '🔴 Blocked: 2 bugs, 1 risk to fix' });
     },
     sendClaudeCode: () => later(undefined),
+    clearClaudeCode: () => later(undefined),
     connectCode: () => later(checks < 4 ? { url: 'https://auth.openai.com/codex/device', code: '2ZYY-TEST1', claudeUrl: 'https://claude.com/cai/oauth/authorize?code_challenge=x' } : null),
     prState: () => later({ merged: checks >= 11, headSha: 'abc' }),
   };

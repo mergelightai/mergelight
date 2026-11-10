@@ -69,6 +69,7 @@ async function scenario(name, start, body) {
         const data = req.postData() ? JSON.parse(req.postData()) : null;
         if (m === 'POST' && p === '/issues/7/comments') { (world.posted ??= []).push(data.body); return json(req, {}, 201); }
         if (m === 'POST' && p === '/git/blobs') { world.blob = data; return json(req, { sha: 'blobsha' }, 201); }
+        if (m === 'DELETE' && p.startsWith('/git/refs/mergelight/claude-code/')) { (world.removed ??= []).push(p.replace('/git/', '')); world.refs = (world.refs ?? []).filter((r) => r.ref !== p.replace('/git/', '')); return req.respond({ status: 204, headers: cors }); }
         if (m === 'POST' && p === '/git/refs') { (world.refs ??= []).push(data); return json(req, { ref: data.ref }, 201); }
         if (m === 'PUT' && p.startsWith('/contents/')) return json(req, { content: {}, commit: { sha: 'filesha' } }, 201);
         if (m === 'POST' && p === '/pulls') return json(req, { number: 7, html_url: 'https://github.com/acme/api/pull/7', head: { sha: world.head } }, 201);
@@ -76,6 +77,7 @@ async function scenario(name, start, body) {
       }
       if (u.pathname === '/user/installations') return json(req, { installations: [{ id: 1, html_url: 'https://github.com/settings/installations/1', account: { login: 'acme', avatar_url: `${base}/logo.png` } }] });
       if (u.pathname === '/user/installations/1/repositories') return json(req, { repositories: [{ full_name: 'acme/api', private: world.isPrivate, default_branch: 'main', archived: false }, { full_name: 'acme/zzz-other', private: true, default_branch: 'main', archived: false }].filter((r) => !world.onlyOther || r.full_name !== 'acme/api') });
+      if (p === '/git/matching-refs/mergelight/claude-code/') return json(req, (world.refs ?? []).filter((r) => r.ref.startsWith('refs/mergelight/claude-code/')));
       if (p === '/branches') return json(req, [{ name: 'main' }]);
       if (p === '/pulls') return json(req, []);
       if (p === '/pulls/7') return json(req, { merged: false, head: { sha: world.head } });
@@ -310,6 +312,12 @@ await scenario('claude-button-and-paste', { comments: [CLAUDE_COMMENT()], checks
   expect(left?.ref === `refs/${claudeCodeRef(CLAUDE)}` && left?.sha === 'blobsha', 'leaves the code at the exact place the run looks');
   expect(world.blob?.content === WHOLE, 'leaves only the code');
   expect(!world.posted?.length, 'nothing shows on the pull request');
+  expect(!world.removed?.length, 'keeps the code in place while the run still has to read it');
+  world.comments = [comment(BOT, withState(pendingSummaryBody(), undefined))];
+  world.checks.headsha = { status: 'completed', conclusion: 'neutral', output: { title: 'Connected to Claude' } };
+  const end = Date.now() + 14000;
+  while (Date.now() < end && !world.removed?.length) await new Promise((r) => setTimeout(r, 200));
+  expect(world.removed?.[0] === `refs/${claudeCodeRef(CLAUDE)}` && world.removed.length === 1, 'removes its own code as soon as the run has connected, before anyone can leave the page');
 });
 
 await scenario('link-from-the-pull-request', { comments: [CLAUDE_COMMENT()], checks: { headsha: WAITING }, login: true }, async ({ page, world, until, click, shot }) => {
@@ -347,7 +355,7 @@ await scenario('link-runs-out', { comments: [CLAUDE_COMMENT()], checks: { headsh
   expect(!/claude setup-token/.test(t), 'and offers no terminal steps');
 });
 
-await scenario('link-connects-on-a-repo-already-set-up', { comments: [CLAUDE_COMMENT()], checks: { headsha: WAITING }, login: true, installed: true }, async ({ page, world, until }) => {
+await scenario('link-connects-on-a-repo-already-set-up', { comments: [CLAUDE_COMMENT()], checks: { headsha: WAITING }, login: true, installed: true, refs: [{ ref: 'refs/mergelight/claude-code/sleftover' }] }, async ({ page, world, until }) => {
   await page.goto(claudeSetupLink('acme/api', 7), { waitUntil: 'networkidle2' });
   await until((x) => /Paste the code Claude shows you/.test(x), 'the Claude step');
   world.comments = [comment(BOT, withState(pendingSummaryBody(), undefined))];
@@ -355,6 +363,7 @@ await scenario('link-connects-on-a-repo-already-set-up', { comments: [CLAUDE_COM
   const t = await until((x) => /Mergelight is on/.test(x), 'the done screen');
   expect(!/moves the workflow|Merge it to/.test(t), 'never calls this pull request an update or a setup');
   expect(await page.evaluate(() => [...document.querySelectorAll('a')].find((a) => a.textContent.includes('Back to PR #7'))?.href) === 'https://github.com/acme/api/pull/7', 'has a button back to the pull request');
+  expect(!world.removed?.length, "leaves a code alone that this page didn't send, because someone else may be connecting");
 });
 
 await scenario('link-to-a-repo-they-cannot-see', { comments: [CLAUDE_COMMENT()], checks: { headsha: WAITING }, onlyOther: true }, async ({ page, world, until, click }) => {
