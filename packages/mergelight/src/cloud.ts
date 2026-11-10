@@ -6,16 +6,17 @@ import type { Review } from "./types.js";
  * This program talks to the server, before the reviewing model starts and after it has finished.
  * The model never does: it has no network, no tool for it and no token.
  *
- * A run proves which repository it is with GitHub's OIDC token, so there is no key to store. The
- * token is asked for with its own audience, which the token server refuses, and each one is used once.
+ * A run proves which repository it is with GitHub's OIDC token, so there is no key to store. Each
+ * token is made for the one server it goes to, so no other server accepts it, and it is used once.
  *
- * Whatever goes wrong here must not stop or change the review.
+ * Whatever goes wrong here must not stop or change the review. A server that is down, slow or
+ * hostile costs a review a few seconds at most.
  */
 
-/** Who the OIDC token is made for. Not the token server's audience, on purpose. */
-export const AUDIENCE = "mergelight-data";
-
-const TIMEOUT_MS = 15_000;
+/** Everything one question to the server may take: asking GitHub for tokens, both tries, and reading the answer. */
+const DEADLINE_MS = 10_000;
+/** The answers are a few hundred bytes. Anything far past that isn't one, and isn't read. */
+const MAX_ANSWER = 64 * 1024;
 
 export interface CloudDeps {
   env?: Record<string, string | undefined>;
@@ -23,6 +24,8 @@ export interface CloudDeps {
   log?: (line: string) => void;
   /** Hides a value in the run's log. */
   mask?: (value: string) => void;
+  /** For tests. */
+  deadlineMs?: number;
 }
 
 /** What the server stores about one review: numbers and names from short fixed lists. No code, no finding text, no file paths. */
@@ -77,6 +80,14 @@ export function serverUrl(env: Record<string, string | undefined>): URL | null {
   return url.protocol === "https:" || (url.protocol === "http:" && local) ? url : null;
 }
 
+/**
+ * Who the OIDC token is made for: the server's own address. Another Mergelight server refuses it,
+ * and so does the token server, so a token can't be passed on to get anything anywhere else.
+ */
+export function audienceFor(server: URL): string {
+  return server.origin;
+}
+
 function defaults(deps: CloudDeps) {
   const env = deps.env ?? process.env;
   return {
@@ -84,16 +95,19 @@ function defaults(deps: CloudDeps) {
     fetchImpl: deps.fetchImpl ?? fetch,
     log: deps.log ?? (() => {}),
     mask: deps.mask ?? ((value: string) => void (env.GITHUB_ACTIONS === "true" && process.stdout.write(`::add-mask::${value}\n`))),
+    deadlineMs: deps.deadlineMs ?? DEADLINE_MS,
   };
 }
 
+type Deps = ReturnType<typeof defaults>;
+
 /** A new OIDC token from GitHub. The server takes each one once, so every request asks for its own. */
-async function oidcToken(d: ReturnType<typeof defaults>): Promise<string> {
+async function oidcToken(d: Deps, server: URL, signal: AbortSignal): Promise<string> {
   const { ACTIONS_ID_TOKEN_REQUEST_URL: at, ACTIONS_ID_TOKEN_REQUEST_TOKEN: bearer } = d.env;
   if (!at || !bearer) throw new Error('the workflow needs "id-token: write" in its permissions');
   const url = new URL(at);
-  url.searchParams.set("audience", AUDIENCE);
-  const res = await d.fetchImpl(url, { headers: { authorization: `Bearer ${bearer}` }, signal: AbortSignal.timeout(TIMEOUT_MS) });
+  url.searchParams.set("audience", audienceFor(server));
+  const res = await d.fetchImpl(url, { headers: { authorization: `Bearer ${bearer}` }, signal });
   if (!res.ok) throw new Error(`GitHub answered ${res.status} for the OIDC token`);
   const { value } = (await res.json()) as { value?: string };
   if (!value) throw new Error("GitHub returned no OIDC token");
@@ -101,18 +115,51 @@ async function oidcToken(d: ReturnType<typeof defaults>): Promise<string> {
   return value;
 }
 
-/** One request to the server, tried twice. Each try has its own token. */
-async function call(d: ReturnType<typeof defaults>, server: URL, path: string, init: { method: string; body?: string }): Promise<Response> {
+/** Reads a small JSON answer. A larger one is dropped unread, so a server can't fill this process's memory. */
+async function readAnswer(res: Response): Promise<unknown> {
+  const reader = res.body?.getReader();
+  if (!reader) return null;
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.length;
+    if (size > MAX_ANSWER) {
+      await reader.cancel().catch(() => {});
+      throw new Error("its answer is too large");
+    }
+    chunks.push(value);
+  }
+  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
+const drop = (res: Response) => res.body?.cancel().catch(() => {});
+
+/**
+ * One question to the server, tried twice, each try with its own token, all inside one deadline.
+ * A redirect is an error: the token is for this server and goes nowhere else.
+ */
+async function call(d: Deps, server: URL, path: string, init: { method: string; body?: string }): Promise<{ status: number; ok: boolean; answer: unknown }> {
+  const signal = AbortSignal.timeout(d.deadlineMs);
+  const late = () => new Error(`no answer within ${Math.round(d.deadlineMs / 1000)} seconds`);
   for (let attempt = 1; ; attempt++) {
     try {
       const res = await d.fetchImpl(new URL(path, server), {
         method: init.method,
-        headers: { authorization: `Bearer ${await oidcToken(d)}`, ...(init.body ? { "content-type": "application/json" } : {}) },
+        headers: { authorization: `Bearer ${await oidcToken(d, server, signal)}`, ...(init.body ? { "content-type": "application/json" } : {}) },
         body: init.body,
-        signal: AbortSignal.timeout(TIMEOUT_MS),
+        redirect: "error",
+        signal,
       });
-      if (res.status < 500 || attempt === 2) return res;
+      if (res.status >= 500 && attempt === 1) {
+        await drop(res);
+        continue;
+      }
+      if (!res.ok) await drop(res);
+      return { status: res.status, ok: res.ok, answer: res.ok ? await readAnswer(res) : null };
     } catch (err) {
+      if (signal.aborted) throw late();
       if (attempt === 2) throw err;
     }
   }
@@ -129,7 +176,7 @@ export async function cloudConnected(deps: CloudDeps = {}): Promise<boolean> {
       d.log(`The Mergelight server answered ${res.status}. The review runs without it.`);
       return false;
     }
-    return ((await res.json()) as { connected?: unknown }).connected === true;
+    return (res.answer as { connected?: unknown } | null)?.connected === true;
   } catch (err) {
     d.log(`Couldn't reach the Mergelight server (${(err as Error).message}). The review runs without it.`);
     return false;

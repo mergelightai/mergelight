@@ -211,6 +211,43 @@ test("random key ids don't refetch GitHub's keys every time", async () => {
   assert.equal(calls.filter((c) => c.url.endsWith("/jwks")).length, 1);
 });
 
+test("requests that arrive together share one fetch of GitHub's keys, and it has a deadline", async () => {
+  let fetches = 0;
+  let signal;
+  let release;
+  const gate = new Promise((resolve) => (release = resolve));
+  const slow = async (url, init) => {
+    fetches++;
+    signal = init?.signal;
+    await gate;
+    return json(200, { keys: [{ ...oidc.publicKey.export({ format: "jwk" }), kid: KID }] });
+  };
+  const all = Promise.all(Array.from({ length: 20 }, () => verifyOidcToken(makeToken(), slow, NOW)));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(fetches, 1);
+  assert.ok(signal instanceof AbortSignal, "the fetch can be given up on");
+  release();
+  assert.equal((await all).length, 20);
+  assert.equal(fetches, 1);
+});
+
+test("after GitHub's keys can't be read, nobody asks again for a while", async () => {
+  let fetches = 0;
+  const down = async () => {
+    fetches++;
+    return json(503, {});
+  };
+  for (let i = 0; i < 5; i++) {
+    await assert.rejects(verifyOidcToken(makeToken(), down, NOW + i), (err) => err.status === 502 && err.code === "jwks_unavailable");
+  }
+  assert.equal(fetches, 1);
+
+  // Later it tries again, and a working answer is used.
+  const { calls, fetchImpl } = fakeGitHub();
+  assert.equal((await verifyOidcToken(makeToken(), fetchImpl, NOW + 11_000)).repository, "acme/widgets");
+  assert.equal(calls.length, 1);
+});
+
 function signInRequest(body, { origin = "https://mergelight.dev", method = "POST" } = {}) {
   return new Request("https://token.test/sign-in", {
     method,

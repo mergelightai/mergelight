@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { AUDIENCE, cloudConnected, reportReview, reviewNumbers, serverUrl } from "../dist/cloud.js";
+import { audienceFor, cloudConnected, reportReview, reviewNumbers, serverUrl } from "../dist/cloud.js";
 import { agentEnv } from "../dist/providers/codex.js";
 
 const env = {
@@ -87,14 +87,21 @@ test("asks GitHub for a token made for the server, hides it, and asks the server
   assert.equal(await cloudConnected(s.deps), true);
 
   const oidc = new URL(s.calls[0].url);
-  assert.equal(oidc.searchParams.get("audience"), AUDIENCE);
-  assert.notEqual(AUDIENCE, "mergelight");
+  // Made for this one server: its own address, which no other server and not the token server accepts.
+  assert.equal(oidc.searchParams.get("audience"), "https://server.test");
   assert.equal(oidc.searchParams.get("api-version"), "2.0");
   assert.equal(s.calls[0].init.headers.authorization, "Bearer request-token");
   assert.equal(s.calls[1].url, "https://server.test/v1/context");
   assert.equal(s.calls[1].init.method, "GET");
   assert.equal(s.calls[1].init.headers.authorization, "Bearer oidc-1");
+  assert.equal(s.calls[1].init.redirect, "error");
   assert.deepEqual(s.masked, ["oidc-1"]);
+});
+
+test("the token's audience is the server's address alone, whatever path or case the setting has", () => {
+  assert.equal(audienceFor(serverUrl({ MERGELIGHT_SERVER: "https://Data.Example.com:443/some/path?x=1" })), "https://data.example.com");
+  assert.equal(audienceFor(serverUrl({ MERGELIGHT_SERVER: "http://127.0.0.1:10001/" })), "http://127.0.0.1:10001");
+  assert.notEqual(audienceFor(serverUrl({ MERGELIGHT_SERVER: "https://mergelight" })), "mergelight");
 });
 
 test("an org that isn't on the dashboard, or an odd answer, counts as not connected", async () => {
@@ -136,6 +143,57 @@ test("a server that is down or refuses never throws: the review goes on", async 
   const refused = setup(json(404, { error: "not_connected" }));
   assert.equal(await reportReview(review, refused.deps), false);
   assert.match(refused.lines[0], /answered 404/);
+});
+
+/** A server that takes the request and never answers. Only the caller giving up ends it. */
+const stalled = (url, init) =>
+  new Promise((_, reject) => {
+    // Stands in for the open connection, which is what keeps a real process waiting.
+    const open = setTimeout(() => {}, 10_000);
+    init.signal.addEventListener("abort", () => (clearTimeout(open), reject(init.signal.reason)), { once: true });
+  });
+
+test("a server that never answers costs one short deadline, not one per try", async () => {
+  const s = setup(json(200, {}));
+  let asked = 0;
+  const fetchImpl = (url, init) => (String(url).startsWith("https://server.test") ? (asked++, stalled(url, init)) : s.deps.fetchImpl(url, init));
+  const started = Date.now();
+  assert.equal(await cloudConnected({ ...s.deps, fetchImpl, deadlineMs: 80 }), false);
+  assert.equal(await reportReview(review, { ...s.deps, fetchImpl, deadlineMs: 80 }), false);
+  assert.ok(Date.now() - started < 1500, "both gave up at their deadline");
+  assert.equal(asked, 2, "no second try once the deadline has passed");
+  assert.match(s.lines[0], /no answer within/);
+  assert.match(s.lines[1], /The review itself is posted/);
+});
+
+test("GitHub being slow to hand out a token is inside the same deadline", async () => {
+  const s = setup(json(200, { connected: true }));
+  const started = Date.now();
+  assert.equal(await cloudConnected({ ...s.deps, fetchImpl: stalled, deadlineMs: 80 }), false);
+  assert.ok(Date.now() - started < 1500);
+});
+
+test("an answer far larger than a real one is dropped, not read into memory", async () => {
+  let pulled = 0;
+  let cancelled = false;
+  const endless = () =>
+    new Response(
+      new ReadableStream({
+        pull(controller) {
+          pulled++;
+          controller.enqueue(new Uint8Array(16 * 1024));
+        },
+        cancel() {
+          cancelled = true;
+        },
+      }),
+      { status: 200 },
+    );
+  const s = setup(endless);
+  assert.equal(await cloudConnected(s.deps), false);
+  assert.match(s.lines[0], /its answer is too large/);
+  assert.ok(cancelled, "the rest of the answer was refused");
+  assert.ok(pulled < 20, `read ${pulled} chunks`);
 });
 
 test("without id-token: write it says so and goes on", async () => {

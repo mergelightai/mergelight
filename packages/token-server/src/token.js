@@ -36,6 +36,8 @@ const SITE_ORIGIN = "https://mergelight.dev";
 const CLOCK_SKEW_S = 30;
 const JWKS_TTL_MS = 60 * 60_000;
 const JWKS_MIN_REFRESH_MS = 60_000;
+const JWKS_FETCH_TIMEOUT_MS = 10_000;
+const JWKS_RETRY_AFTER_MS = 10_000;
 
 export class HttpError extends Error {
   constructor(status, code, message) {
@@ -105,10 +107,27 @@ export async function createAppJwt(env, now = Date.now()) {
 }
 
 let jwksCache = { keys: new Map(), fetchedAt: 0 };
+/** The refresh in flight, shared by every request that needs it. */
+let jwksRefresh = null;
+let jwksFailedAt = -Infinity;
 
 /** For tests. */
 export function resetJwksCache() {
   jwksCache = { keys: new Map(), fetchedAt: 0 };
+  jwksRefresh = null;
+  jwksFailedAt = -Infinity;
+}
+
+async function refreshJwks(fetchImpl, now) {
+  try {
+    const res = await fetchImpl(`${OIDC_ISSUER}/.well-known/jwks`, { signal: AbortSignal.timeout(JWKS_FETCH_TIMEOUT_MS) });
+    if (!res.ok) throw new Error(`GitHub answered ${res.status}`);
+    const { keys } = await res.json();
+    jwksCache = { keys: new Map(keys.filter((k) => k.kty === "RSA" && k.kid).map((k) => [k.kid, k])), fetchedAt: now };
+  } catch {
+    jwksFailedAt = now;
+    throw new HttpError(502, "jwks_unavailable", "Couldn't read GitHub's signing keys.");
+  }
 }
 
 async function signingKey(kid, fetchImpl, now) {
@@ -116,10 +135,13 @@ async function signingKey(kid, fetchImpl, now) {
   if (known && now - jwksCache.fetchedAt < JWKS_TTL_MS) return known;
   // An unknown kid can mean GitHub rotated its keys, but random kids must not make us refetch every time.
   if (now - jwksCache.fetchedAt >= JWKS_MIN_REFRESH_MS) {
-    const res = await fetchImpl(`${OIDC_ISSUER}/.well-known/jwks`);
-    if (!res.ok) throw new HttpError(502, "jwks_unavailable", "Couldn't read GitHub's signing keys.");
-    const { keys } = await res.json();
-    jwksCache = { keys: new Map(keys.filter((k) => k.kty === "RSA" && k.kid).map((k) => [k.kid, k])), fetchedAt: now };
+    // Anyone can send a token-shaped request, so these fetches must not pile up: requests that arrive
+    // together share one, it has a deadline, and after a failure nobody tries again for a while.
+    if (now - jwksFailedAt < JWKS_RETRY_AFTER_MS) throw new HttpError(502, "jwks_unavailable", "Couldn't read GitHub's signing keys.");
+    jwksRefresh ??= refreshJwks(fetchImpl, now).finally(() => {
+      jwksRefresh = null;
+    });
+    await jwksRefresh;
   }
   return jwksCache.keys.get(kid);
 }

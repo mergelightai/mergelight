@@ -15,10 +15,17 @@ import { HttpError, verifyOidcToken } from "../../token-server/src/token.js";
 import { isId, withOrg } from "./db.js";
 
 /**
- * Not the token server's audience, on purpose. A token made for this server is refused there,
- * so nothing that reaches this server can be turned into an app token.
+ * Who a token must be made for: this server's own public address, like "https://data.example.com".
+ * A token made for another Mergelight server is refused here, so a server someone else runs can't
+ * pass a token it received on to this one. And no address equals the token server's audience, so
+ * nothing that reaches this server can be turned into an app token.
  */
-export const AUDIENCE = "mergelight-data";
+export function audienceOf(publicUrl) {
+  const url = new URL(publicUrl);
+  const local = url.hostname === "localhost" || url.hostname === "127.0.0.1";
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && local)) throw new Error("The server's public address must start with https://");
+  return url.origin;
+}
 
 /** Only runs that review a pull request talk to this server. */
 const EVENTS = new Set(["pull_request", "pull_request_target"]);
@@ -72,7 +79,8 @@ export function parseReview(body) {
   };
 }
 
-export function createApi({ pool, fetchImpl = fetch, now = () => Date.now() }) {
+export function createApi({ pool, publicUrl, fetchImpl = fetch, now = () => Date.now() }) {
+  const audience = audienceOf(publicUrl);
   /** Token ids already used, with when each expires. A token works once, so a copied one is worth nothing. */
   const seen = new Map();
   /** Requests per org in the current minute. */
@@ -109,7 +117,7 @@ export function createApi({ pool, fetchImpl = fetch, now = () => Date.now() }) {
     const auth = request.headers.get("authorization") ?? "";
     if (!auth.startsWith("Bearer ")) throw new HttpError(401, "invalid_token", "Send GitHub's OIDC token as a Bearer token.");
     const at = now();
-    const claims = await verifyOidcToken(auth.slice("Bearer ".length), fetchImpl, at, AUDIENCE);
+    const claims = await verifyOidcToken(auth.slice("Bearer ".length), fetchImpl, at, audience);
     if (!EVENTS.has(claims.event_name)) throw new HttpError(403, "event_not_allowed", `Runs triggered by ${claims.event_name} don't use the server.`);
 
     const orgId = digits(claims.repository_owner_id);
@@ -121,8 +129,9 @@ export function createApi({ pool, fetchImpl = fetch, now = () => Date.now() }) {
       throw new HttpError(401, "invalid_token", "GitHub's OIDC token names no repository.");
     }
     if (typeof claims.jti !== "string" || !claims.jti || claims.jti.length > 200) throw new HttpError(401, "invalid_token", "GitHub's OIDC token has no id.");
-    useOnce(claims.jti, claims.exp * 1000 + 60_000, at);
+    // The limit comes first, so an org that is being slowed down can't fill the list of used tokens for everyone.
     limit(orgId, at);
+    useOnce(claims.jti, claims.exp * 1000 + 60_000, at);
     return { orgId, repoId, runId, runAttempt, repo: name[0] };
   }
 

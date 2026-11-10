@@ -3,7 +3,7 @@ import { createSign, generateKeyPairSync, randomUUID } from "node:crypto";
 import { after, before, beforeEach, test } from "node:test";
 import pg from "pg";
 import { handle as tokenServer, resetJwksCache } from "../../token-server/src/token.js";
-import { AUDIENCE, createApi, MAX_BODY, parseReview } from "../src/api.js";
+import { audienceOf, createApi, MAX_BODY, parseReview } from "../src/api.js";
 import { assertRowRulesHold, connectOrg, createPool, deleteOrg, migrate, withOrg } from "../src/db.js";
 import { createDataServer } from "../src/server.js";
 import { startPostgres } from "./postgres.mjs";
@@ -12,6 +12,8 @@ const NOW = Date.parse("2026-11-10T12:00:00Z");
 const SECONDS = Math.floor(NOW / 1000);
 const ISSUER = "https://token.actions.githubusercontent.com";
 const KID = "test-kid";
+/** Where this server says it lives. Tokens must be made for exactly this. */
+const PUBLIC_URL = "https://server.test";
 const oidc = generateKeyPairSync("rsa", { modulusLength: 2048 });
 const attacker = generateKeyPairSync("rsa", { modulusLength: 2048 });
 
@@ -25,7 +27,7 @@ function makeToken(claims = {}, { key = oidc.privateKey } = {}) {
   const head = b64({ alg: "RS256", kid: KID });
   const body = b64({
     iss: ISSUER,
-    aud: AUDIENCE,
+    aud: PUBLIC_URL,
     exp: SECONDS + 300,
     nbf: SECONDS - 10,
     jti: randomUUID(),
@@ -70,6 +72,7 @@ const REVIEW = {
 let postgres;
 let pool;
 let api;
+let clock;
 
 const get = (token) => api(new Request("https://server.test/v1/context", { headers: token ? { authorization: `Bearer ${token}` } : {} }));
 const post = (token, body = REVIEW) =>
@@ -89,7 +92,8 @@ after(async () => {
 
 beforeEach(async () => {
   resetJwksCache();
-  api = createApi({ pool, fetchImpl, now: () => NOW });
+  clock = NOW;
+  api = createApi({ pool, publicUrl: PUBLIC_URL, fetchImpl, now: () => clock });
   for (const org of [ACME, OTHER]) await deleteOrg(pool, org.id);
 });
 
@@ -176,6 +180,8 @@ test("tokens that don't prove a pull request run in a repository are refused", a
     "signed by someone else": [makeToken({}, { key: attacker.privateKey }), 401],
     "made for the token server": [makeToken({ aud: "mergelight" }), 401],
     "made for another service": [makeToken({ aud: "sts.amazonaws.com" }), 401],
+    "made for another Mergelight server": [makeToken({ aud: "https://someone-elses-server.test" }), 401],
+    "made for this server's name without https": [makeToken({ aud: "server.test" }), 401],
     "expired": [makeToken({ exp: SECONDS - 120 }), 401],
     "from a scheduled run": [makeToken({ event_name: "schedule" }), 403],
     "from a manual run": [makeToken({ event_name: "workflow_dispatch" }), 403],
@@ -203,6 +209,14 @@ test("a token made for this server gets nothing from the token server", async ()
   );
   assert.equal(res.status, 401);
   assert.match((await res.json()).message, /wrong audience/);
+});
+
+test("the server's address must be https, and is its origin alone", () => {
+  assert.equal(audienceOf("https://Data.Example.com/some/path"), "https://data.example.com");
+  assert.equal(audienceOf("http://127.0.0.1:10001"), "http://127.0.0.1:10001");
+  assert.throws(() => audienceOf("http://data.example.com"), /https/);
+  assert.throws(() => audienceOf("mergelight"));
+  assert.throws(() => createApi({ pool }));
 });
 
 test("one org can't read or write another org's rows, even with SQL that asks for them", async () => {
@@ -315,10 +329,15 @@ test("parseReview keeps only the fields it knows, and a missing model is fine", 
 
 test("an org that sends too many requests in a minute is slowed down, and other orgs aren't", async () => {
   await connectOrg(pool, ACME.id, ACME.login);
-  let last;
-  for (let i = 0; i < 121; i++) last = await get(makeToken());
-  assert.equal(last.status, 429);
+  for (let i = 0; i < 120; i++) assert.equal((await get(makeToken())).status, 200);
+  const refused = makeToken();
+  assert.equal((await get(refused)).status, 429);
   assert.equal((await get(makeToken({ repository_owner_id: String(OTHER.id) }))).status, 200);
+
+  // A refused request doesn't go on the list of used tokens, so a slowed org can't fill that list for everyone.
+  clock += 61_000;
+  assert.equal((await get(refused)).status, 200);
+  assert.equal((await get(refused)).status, 401);
 });
 
 test("unknown paths and wrong methods get no further", async () => {

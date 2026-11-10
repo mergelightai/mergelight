@@ -2,6 +2,8 @@
 //
 // Required environment:
 //   DATABASE_URL   A Postgres address. The role must not be a superuser, or the row rules don't hold.
+//   PUBLIC_URL     The address workflows reach this server at, like https://data.example.com.
+//                  Tokens must be made for exactly this address, so one made for another server is refused.
 //   PORT           Port to listen on. The host sets it.
 //
 // This server holds no GitHub key. The app's private key stays on the token server.
@@ -46,19 +48,23 @@ export function createDataServer(api) {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  if (!process.env.DATABASE_URL) {
-    console.error("DATABASE_URL isn't set.");
-    process.exit(1);
+  for (const name of ["DATABASE_URL", "PUBLIC_URL"]) {
+    if (!process.env[name]) {
+      console.error(`${name} isn't set.`);
+      process.exit(1);
+    }
   }
   const pool = createPool(process.env.DATABASE_URL);
+  let api;
   try {
+    api = createApi({ pool, publicUrl: process.env.PUBLIC_URL });
     await assertRowRulesHold(pool);
     await migrate(pool);
   } catch (err) {
     console.error(`Can't start: ${err.message}`);
     process.exit(1);
   }
-  const server = createDataServer(createApi({ pool }));
+  const server = createDataServer(api);
   server.listen(Number(process.env.PORT) || 10001, "0.0.0.0", () => console.log("Mergelight server listening"));
   // Finish requests in flight when the host restarts it for a deploy.
   process.on("SIGTERM", () => server.close(() => pool.end().then(() => process.exit(0))));

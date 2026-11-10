@@ -66,8 +66,11 @@ before(async () => {
   pool = createPool(postgres.url);
   await migrate(pool);
   const jwks = async () => new Response(JSON.stringify({ keys: [{ ...oidc.publicKey.export({ format: "jwk" }), kid: KID }] }), { status: 200 });
-  server = createDataServer(createApi({ pool, fetchImpl: jwks }));
+  // The server's own address is part of what it checks, and the port is only known once it listens.
+  let api;
+  server = createDataServer((request) => api(request));
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  api = createApi({ pool, publicUrl: `http://127.0.0.1:${server.address().port}`, fetchImpl: jwks });
 
   deps = {
     env: {
