@@ -6,7 +6,8 @@ import RotatingText from '../components/reactbits/RotatingText';
 import StarBorder from '../components/reactbits/StarBorder';
 import Magnet from '../components/reactbits/Magnet';
 import { EARLY, GITHUB } from '../links';
-import { GitHubIcon } from '../ui';
+import { REVIEW_BILLS } from '../bills';
+import { GitHubIcon, usd } from '../ui';
 
 export default function Hero() {
   return (
@@ -71,7 +72,11 @@ export default function Hero() {
             subscription. No per-review bill, no per-file overage. Just reviews that know when to stop.
           </p>
 
-          <div className="mt-10 flex flex-wrap items-center gap-4">
+          <a href="#bills" className="mt-5 inline-block text-[15px] text-muted underline decoration-white/20 underline-offset-4 transition-colors hover:text-fg">
+            Our AI review bill last month: <span className="font-medium text-peach">{usd(REVIEW_BILLS, true)}</span>. 2 developers.
+          </a>
+
+          <div className="mt-8 flex flex-wrap items-center gap-4">
             <Magnet padding={50} magnetStrength={5}>
               <StarBorder as="a" href={EARLY} color="#3fe8b8" radius={999} backgroundColor="#0e0c18" textColor="#eceaf4">
                 Get early access

@@ -1,4 +1,34 @@
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
+import { animate, motion, useMotionValue, useReducedMotion, useTransform } from 'motion/react';
+import type { SimpleIcon } from 'simple-icons';
+
+export const usd = (n: number, cents = false) =>
+  '$' + n.toLocaleString('en-US', { minimumFractionDigits: cents ? 2 : 0, maximumFractionDigits: cents ? 2 : 0 });
+
+/** A dollar amount that counts from `from` to `to` once `start` is true. */
+export function Ticker({ from, to, start, cents = false, delay = 0, duration = 2.2 }: { from: number; to: number; start: boolean; cents?: boolean; delay?: number; duration?: number }) {
+  const reduce = useReducedMotion();
+  const mv = useMotionValue(reduce ? to : from);
+  const text = useTransform(mv, (v) => usd(v, cents));
+  useEffect(() => {
+    if (reduce) {
+      mv.set(to);
+      return;
+    }
+    if (!start) return;
+    const c = animate(mv, to, { duration, delay, ease: [0.45, 0, 0.2, 1] });
+    return () => c.stop();
+  }, [start, to, delay, duration, reduce, mv]);
+  return <motion.span className="tabular-nums">{text}</motion.span>;
+}
+
+export function BrandIcon({ icon, color, className = 'size-5' }: { icon: SimpleIcon; color?: string; className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className={className} fill={color ?? `#${icon.hex}`}>
+      <path d={icon.path} />
+    </svg>
+  );
+}
 
 /** The MagicBento dark card: surface gradient, hairline edge, top highlight and drop shadow. */
 export const SURFACE =

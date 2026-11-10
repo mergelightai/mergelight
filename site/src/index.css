@@ -43,6 +43,13 @@ body {
 
 section[id] { scroll-margin-top: 88px; }
 
+/* The torn zigzag bottom edge of a receipt. */
+.receipt-edge {
+  --tooth: 14px;
+  -webkit-mask: conic-gradient(from -45deg at bottom, #0000, #000 1deg 89deg, #0000 90deg) 50% / var(--tooth) 100%;
+  mask: conic-gradient(from -45deg at bottom, #0000, #000 1deg 89deg, #0000 90deg) 50% / var(--tooth) 100%;
+}
+
 /* The setup page's dropdown grows out of its trigger. */
 .setup-pop {
   transform-origin: var(--radix-select-content-transform-origin);
