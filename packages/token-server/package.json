@@ -5,7 +5,12 @@
   "description": "Gives a workflow a short-lived Mergelight AI app token for its own repository.",
   "engines": { "node": ">=22" },
   "scripts": {
-    "start": "node src/server.js",
-    "test": "node --test test/*.test.mjs"
+    "build": "tsc -p .",
+    "start": "node dist/server.js",
+    "test": "tsc -p . && node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "^7.0.2"
   }
 }

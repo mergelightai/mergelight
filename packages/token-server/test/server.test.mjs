@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { createTokenServer } from "../src/server.js";
+import { createTokenServer } from "../dist/server.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
@@ -60,7 +60,7 @@ test("passes a sign-in's origin and body through, and refuses a huge body", asyn
 });
 
 test("refuses to start without the private key", async () => {
-  const child = spawn(process.execPath, [join(here, "..", "src", "server.js")], {
+  const child = spawn(process.execPath, [join(here, "..", "dist", "server.js")], {
     env: { PATH: process.env.PATH, GITHUB_APP_CLIENT_ID: "x" },
     stdio: ["ignore", "ignore", "pipe"],
   });

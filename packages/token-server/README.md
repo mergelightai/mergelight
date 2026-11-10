@@ -18,10 +18,12 @@ The server stores nothing, and never sees code or model logins. If it's down or 
 ## Run it
 
 ```bash
+npm install
 npm test
+npm run build
 GITHUB_APP_CLIENT_ID=... GITHUB_APP_PRIVATE_KEY="$(cat key.pem)" npm start
 ```
 
-It has no dependencies. In production it runs on Render, set up by `render.yaml` at the repository root.
+It's TypeScript in `src/`, built to `dist/`. It has no runtime dependencies, only TypeScript to build it. In production it runs on Render, set up by `render.yaml` at the repository root.
 
 Keep the private key out of any account other people can reach. It can act on every repository the App is installed on.

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync, createSign, verify as nodeVerify } from "node:crypto";
 import { beforeEach, test } from "node:test";
-import { createAppJwt, handle, resetJwksCache, verifyOidcToken } from "../src/token.js";
+import { createAppJwt, handle, resetJwksCache, verifyOidcToken } from "../dist/token.js";
 
 const NOW = Date.parse("2026-11-06T12:00:00Z");
 const SECONDS = Math.floor(NOW / 1000);
@@ -246,6 +246,21 @@ test("after GitHub's keys can't be read, nobody asks again for a while", async (
   const { calls, fetchImpl } = fakeGitHub();
   assert.equal((await verifyOidcToken(makeToken(), fetchImpl, NOW + 11_000)).repository, "acme/widgets");
   assert.equal(calls.length, 1);
+});
+
+test("the pause after a failed fetch counts from when it failed, not from when it started", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: NOW });
+  let fetches = 0;
+  const silent = async () => {
+    fetches++;
+    // GitHub doesn't answer, and the fetch runs into its 10 second deadline.
+    t.mock.timers.tick(10_000);
+    throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+  };
+  await assert.rejects(verifyOidcToken(makeToken(), silent, NOW), (err) => err.status === 502 && err.code === "jwks_unavailable");
+  // 5 seconds after the fetch gave up, nobody asks GitHub again.
+  await assert.rejects(verifyOidcToken(makeToken(), silent, NOW + 15_000), (err) => err.status === 502 && err.code === "jwks_unavailable");
+  assert.equal(fetches, 1);
 });
 
 test("a key the server already holds is used while GitHub can't be asked, for a day at most", async () => {

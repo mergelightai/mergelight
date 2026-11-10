@@ -11,7 +11,7 @@
 // The reviewing model never calls this. Mergelight's own program does, before the model starts
 // and after it has finished.
 
-import { HttpError, verifyOidcToken } from "../../token-server/src/token.js";
+import { HttpError, verifyOidcToken } from "../../token-server/dist/token.js";
 import { isId, withOrg, type Pool } from "./db.js";
 
 /**

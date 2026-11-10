@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { createSign, generateKeyPairSync, randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
-import { resetJwksCache } from "../../token-server/src/token.js";
+import { resetJwksCache } from "../../token-server/dist/token.js";
 import { createApi } from "../dist/api.js";
 import { connectOrg, createPool, migrate, withOrg } from "../dist/db.js";
 import { createDataServer } from "../dist/server.js";

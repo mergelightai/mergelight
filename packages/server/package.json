@@ -5,8 +5,10 @@
   "description": "Stores what the Mergelight dashboard shows: numbers per review, and later memories, rules and settings.",
   "engines": { "node": ">=22" },
   "scripts": {
+    "prebuild": "npm --prefix ../token-server ci --include=dev --no-audit --no-fund && npm --prefix ../token-server run build",
     "build": "tsc -p .",
     "start": "node dist/server.js",
+    "pretest": "npm run prebuild",
     "test": "tsc -p . && node --test test/*.test.mjs"
   },
   "dependencies": {
