@@ -3,19 +3,19 @@
 // Required environment:
 //   GITHUB_APP_CLIENT_ID     The Mergelight AI app's client id. Public.
 //   GITHUB_APP_PRIVATE_KEY   The app's private key, in PEM. Keep it in the host's secret settings.
-//   GITHUB_APP_CLIENT_SECRET The app's client secret, for "Sign in with GitHub" on the setup page.
-//                            Optional: without it, only sign-in is off.
+//   GITHUB_SETUP_APP_CLIENT_SECRET The Mergelight Setup app's client secret, for "Sign in with GitHub"
+//                            on the setup page. Optional: without it, only sign-in is off.
 //   PORT                     Port to listen on. Render sets it.
 
-import { createServer } from "node:http";
+import { createServer, type IncomingMessage, type Server } from "node:http";
 import { fileURLToPath } from "node:url";
-import { handle } from "./token.js";
+import { handle, type Env } from "./token.js";
 
 /** A sign-in code fits easily in this, and anything larger isn't one. */
 const MAX_BODY = 4096;
 
-async function readBody(req) {
-  const chunks = [];
+async function readBody(req: IncomingMessage): Promise<Buffer> {
+  const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
@@ -26,21 +26,21 @@ async function readBody(req) {
 }
 
 /** Only the method, path, body and these headers matter, so nothing else from the request is passed on. */
-export function createTokenServer(env, fetchImpl = fetch) {
+export function createTokenServer(env: Env, fetchImpl: typeof fetch = fetch): Server {
   const server = createServer(async (req, res) => {
     try {
-      const headers = {};
+      const headers: Record<string, string> = {};
       for (const name of ["authorization", "origin", "content-type"]) {
-        if (req.headers[name]) headers[name] = req.headers[name];
+        if (req.headers[name]) headers[name] = req.headers[name] as string;
       }
       const hasBody = req.method === "POST";
       const body = hasBody ? await readBody(req) : undefined;
-      const request = new Request(new URL(req.url ?? "/", "http://token-server"), { method: req.method, headers, body: body?.length ? body : undefined });
+      const request = new Request(new URL(req.url ?? "/", "http://token-server"), { method: req.method, headers, body: body?.length ? (body as Uint8Array<ArrayBuffer>) : undefined });
       const response = await handle(request, env, fetchImpl);
       res.writeHead(response.status, Object.fromEntries(response.headers));
       res.end(await response.text());
     } catch (err) {
-      console.error("token server error", err?.name);
+      console.error("token server error", (err as Error | undefined)?.name);
       res.writeHead(400, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "bad_request" }));
     }

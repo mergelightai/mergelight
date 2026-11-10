@@ -4,7 +4,7 @@ import { createSign, generateKeyPairSync, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { after, before, beforeEach, test } from "node:test";
 import pg from "pg";
-import { handle as tokenServer, resetJwksCache } from "../../token-server/src/token.js";
+import { handle as tokenServer, resetJwksCache } from "../../token-server/dist/token.js";
 import { audienceOf, createApi, MAX_BODY, parseReview, RATE_MAX } from "../dist/api.js";
 import { assertRowRulesHold, connectOrg, createPool, deleteOrg, migrate, parseConnectOrgs, withOrg } from "../dist/db.js";
 import { createDataServer } from "../dist/server.js";

@@ -35,7 +35,7 @@ jobs:
         run: npm ci --no-audit --no-fund && npm test
       - name: Token server tests
         working-directory: packages/token-server
-        run: npm test
+        run: npm ci --no-audit --no-fund && npm test
       # After the package tests: one of these runs the built CLI against the server.
       - name: Server tests
         working-directory: packages/server
