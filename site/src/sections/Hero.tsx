@@ -45,7 +45,7 @@ export default function Hero() {
             className="inline-flex items-center gap-2.5 rounded-full border border-line bg-white/[0.03] px-3.5 py-1.5 text-sm backdrop-blur transition-colors hover:border-white/20"
           >
             <span className="size-1.5 rounded-full bg-mint shadow-[0_0_10px_2px_rgb(63_232_184/0.55)]" />
-            <ShinyText text="Open source. Launching soon." color="#a3a0b8" shineColor="#ffffff" speed={3} />
+            <ShinyText text="Source available. Launching soon." color="#a3a0b8" shineColor="#ffffff" speed={3} />
           </a>
 
           <BlurText
