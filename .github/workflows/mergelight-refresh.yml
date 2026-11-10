@@ -1,0 +1,24 @@
+# Refreshes the Codex login every third day and saves it at once, so reviews rarely need to.
+# Scheduled jobs only run from the default branch. Only does anything with a ChatGPT login.
+name: Mergelight login refresh
+
+on:
+  schedule:
+    - cron: "17 4 */3 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # Lets the app save the refreshed login.
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: mergelight-refresh-login
+    steps:
+      # Pinned to a release, so new code only runs here once you merge an update.
+      # Mergelight says on your pull requests when a new version is out.
+      - uses: mergelightai/mergelight@a98eb112c9a115057db66cfc6f798536f886bd41 # v0.1.12
+        with:
+          codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}
