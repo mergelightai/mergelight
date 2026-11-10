@@ -4,11 +4,11 @@ import { siCoderabbit, siGithubcopilot } from 'simple-icons';
 import {
   ACTIONS_ESTIMATE,
   CODERABBIT_BILL,
-  CODERABBIT_REVIEWS,
+  CODERABBIT_PRS,
   CODERABBIT_SEATS,
   COPILOT_BILL,
   COPILOT_LIST,
-  COPILOT_REVIEWS,
+  COPILOT_PRS,
   DEVELOPERS,
   MERGELIGHT_BILL,
   MERGELIGHT_PER_DEV,
@@ -120,7 +120,7 @@ export default function Bills() {
             lines={[
               ['2 seats', usd(CODERABBIT_SEATS, true)],
               ['Usage on top', usd(CODERABBIT_BILL - CODERABBIT_SEATS, true)],
-              ['Reviews', String(CODERABBIT_REVIEWS)],
+              ['PRs reviewed', String(CODERABBIT_PRS)],
             ]}
             totalLabel="Billed"
             total={CODERABBIT_BILL}
@@ -134,7 +134,7 @@ export default function Bills() {
             lines={[
               ['Listed price', usd(COPILOT_LIST, true)],
               ['Usage in AI credits', 'metered'],
-              ['Reviews', String(COPILOT_REVIEWS)],
+              ['PRs reviewed', String(COPILOT_PRS)],
             ]}
             totalLabel="Billed"
             total={COPILOT_BILL}
