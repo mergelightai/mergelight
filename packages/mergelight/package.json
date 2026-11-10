@@ -1,6 +1,6 @@
 {
-  "name": "mergelight",
-  "version": "0.1.12",
+  "name": "@mergelight/cli",
+  "version": "0.1.13",
   "description": "AI code review that runs on the Claude or ChatGPT plan you already pay for.",
   "type": "module",
   "bin": {
@@ -28,6 +28,9 @@
     "directory": "packages/mergelight"
   },
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "devDependencies": {
     "@types/node": "^22.20.5",
     "typescript": "^7.0.2"

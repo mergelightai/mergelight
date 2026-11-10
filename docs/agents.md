@@ -14,23 +14,23 @@ You need Node 20 or newer and the [GitHub CLI](https://cli.github.com), logged i
 **1. Run this once:**
 
 ```bash
-npx mergelight init
+npx @mergelight/cli init
 ```
 
 It adds the MCP server and the skill to each agent it finds: Claude Code, Codex and Cursor. It only writes where each agent keeps its own settings, and running it again replaces what it added.
 
-**2. By hand, if you'd rather.** The server is `npx -y mergelight mcp`, and the skill is the folder `skills/mergelight` in the package.
+**2. By hand, if you'd rather.** The server is `npx -y @mergelight/cli mcp`, and the skill is the folder `skills/mergelight` in the package.
 
 Claude Code:
 
 ```bash
-claude mcp add --scope user mergelight -- npx -y mergelight mcp
+claude mcp add --scope user mergelight -- npx -y @mergelight/cli mcp
 ```
 
 Codex:
 
 ```bash
-codex mcp add mergelight -- npx -y mergelight mcp
+codex mcp add mergelight -- npx -y @mergelight/cli mcp
 ```
 
 Cursor: add this to `~/.cursor/mcp.json`:
@@ -41,7 +41,7 @@ Cursor: add this to `~/.cursor/mcp.json`:
     "mergelight": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "mergelight", "mcp"]
+      "args": ["-y", "@mergelight/cli", "mcp"]
     }
   }
 }
