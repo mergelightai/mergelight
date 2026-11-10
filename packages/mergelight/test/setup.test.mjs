@@ -139,13 +139,12 @@ test("--yes doesn't stop to ask", async () => {
   assert.ok(!f.logs.includes("confirm"));
 });
 
-test("a ChatGPT login is refused on a public repository, before any login", async () => {
+test("a public repository connects ChatGPT the same way", async () => {
   let logins = 0;
   const f = fake({ isPrivate: false });
   f.deps.codexLogin = async () => (logins++, GOOD_AUTH);
-  assert.equal(await setup({ repo: "acme/widgets", yes: true }, f.deps), 1);
-  assert.equal(logins, 0);
-  assert.ok(f.logs.some((l) => l.includes("openai-api-key")));
+  assert.equal(await setup({ repo: "acme/widgets", yes: true }, f.deps), 0);
+  assert.equal(logins, 1);
 });
 
 test("the workflows go to the chosen branch", async () => {
@@ -182,10 +181,10 @@ test("reuses a pull request from an earlier setup", async () => {
   assert.ok(!f.calls.some((c) => c.args.includes("POST") && c.args.includes("repos/acme/widgets/pulls")));
 });
 
-test("a public repository doesn't get the refresh job", async () => {
+test("a public repository gets the refresh job too", async () => {
   const f = fake({ isPrivate: false, secrets: ["CODEX_AUTH_JSON"] });
   assert.equal(await setup({ repo: "acme/widgets", yes: true }, f.deps), 0);
   const added = puts(f.calls).join();
   assert.match(added, /mergelight\.yml/);
-  assert.doesNotMatch(added, /mergelight-refresh\.yml/);
+  assert.match(added, /mergelight-refresh\.yml/);
 });

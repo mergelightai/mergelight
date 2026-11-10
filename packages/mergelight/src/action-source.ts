@@ -7,6 +7,23 @@ export interface ActionSource {
   files: { path: string; text: string }[];
 }
 
+/** What a review couldn't see of an action, so its comment can say so. */
+export interface NotRead {
+  uses: string;
+  /** "program": only the definition was read, not the Node program or Docker image it runs. "unreadable": nothing was. */
+  why: "program" | "unreadable";
+}
+
+/** A Node or Docker action's definition only names what it runs. */
+const RUNS_A_PROGRAM = /^[ \t]*using:[ \t]*["']?(?:node\d*|docker)\b/m;
+
+export function notRead(sources: ActionSource[]): NotRead[] {
+  return sources.flatMap((s): NotRead[] => {
+    if (!s.files.length) return [{ uses: s.uses, why: "unreadable" }];
+    return RUNS_A_PROGRAM.test(s.files[0]!.text) ? [{ uses: s.uses, why: "program" }] : [];
+  });
+}
+
 /** The only places GitHub runs these from. */
 const WORKFLOW_FILE = /^\.github\/workflows\/[^/]+\.ya?ml$|^\.github\/actions\/(.+\/)?action\.ya?ml$/;
 const USES = /^[ \t]*(?:-[ \t]+)?uses:[ \t]*["']?([^"'\s#]+)/gm;

@@ -9,10 +9,10 @@ inputs:
   codex-auth-json:
     description: >
       A ChatGPT login, saved as a secret. Leave the secret unset and the first pull request shows a
-      link and code to connect ChatGPT, then saves it. OpenAI allows this for private repositories only.
+      link and code to connect ChatGPT, then saves it.
     required: false
   openai-api-key:
-    description: An OpenAI API key, billed per use. Works on public repositories too.
+    description: An OpenAI API key, billed per use.
     required: false
   claude-code-oauth-token:
     description: A Claude plan's login, from "claude setup-token" on your computer, saved as a secret.
@@ -160,12 +160,9 @@ runs:
       env:
         AUTH_JSON: ${{ inputs.codex-auth-json }}
         API_KEY: ${{ inputs.openai-api-key }}
-        REPO_PRIVATE: ${{ github.event.repository.private }}
-        GH_TOKEN: ${{ github.token }}
+        HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
       run: |
         set -euo pipefail
-        # Not every event says whether the repository is private, so ask if this one didn't.
-        [ -n "$REPO_PRIVATE" ] || REPO_PRIVATE="$(gh api "repos/$GITHUB_REPOSITORY" --jq .private)"
         export CODEX_HOME="$RUNNER_TEMP/codex-home"
         mkdir -p -m 700 "$CODEX_HOME"
         echo "CODEX_HOME=$CODEX_HOME" >> "$GITHUB_ENV"
@@ -176,7 +173,7 @@ runs:
           echo "MERGELIGHT_NO_LOGIN=0"
           echo "MERGELIGHT_LOGIN_LOST=0"
         } >> "$GITHUB_ENV"
-        if [ -n "$AUTH_JSON" ] && [ "$REPO_PRIVATE" = "true" ]; then
+        if [ -n "$AUTH_JSON" ]; then
           printf 'cli_auth_credentials_store = "file"\n' > "$CODEX_HOME/config.toml"
           printf '%s' "$AUTH_JSON" > "$CODEX_HOME/auth.json"
           chmod 600 "$CODEX_HOME/auth.json"
@@ -184,27 +181,21 @@ runs:
           echo "MERGELIGHT_CHATGPT=1" >> "$GITHUB_ENV"
         elif [ -n "$API_KEY" ]; then
           printf '%s' "$API_KEY" | codex login --with-api-key
-        elif [ -n "$AUTH_JSON" ]; then
-          echo "::error::A ChatGPT login is for private repositories only, by OpenAI's rules for Codex in CI. Use openai-api-key on public repositories."
-          exit 1
         elif [ "$GITHUB_ACTOR" = "dependabot[bot]" ]; then
           # GitHub keeps repository secrets from Dependabot's runs, so a login can't be read or saved here.
           echo "::notice::Skipping the review: GitHub gives Dependabot's runs no secrets."
           echo "MERGELIGHT_NO_LOGIN=1" >> "$GITHUB_ENV"
-        elif [ "$REPO_PRIVATE" = "true" ] && { [ "$GITHUB_EVENT_NAME" = "pull_request" ] || [ "$GITHUB_EVENT_NAME" = "pull_request_target" ]; }; then
+        elif [ -n "${HEAD_REPO:-}" ] && [ "$HEAD_REPO" != "$GITHUB_REPOSITORY" ]; then
+          # A fork's runs get no secrets either, and a stranger's pull request must never start a sign-in.
+          echo "::notice::Skipping the review: GitHub gives pull requests from forks no secrets."
+          echo "MERGELIGHT_NO_LOGIN=1" >> "$GITHUB_ENV"
+        elif [ "$GITHUB_EVENT_NAME" = "pull_request" ] || [ "$GITHUB_EVENT_NAME" = "pull_request_target" ]; then
           # No login yet: the next step connects ChatGPT from the pull request.
           printf 'cli_auth_credentials_store = "file"\n' > "$CODEX_HOME/config.toml"
           echo "MERGELIGHT_CONNECT=1" >> "$GITHUB_ENV"
-        elif [ "$REPO_PRIVATE" = "true" ]; then
+        else
           echo "No Codex login yet, so there's nothing to keep fresh."
           echo "MERGELIGHT_NO_LOGIN=1" >> "$GITHUB_ENV"
-        elif [ "$GITHUB_EVENT_NAME" = "schedule" ] || [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
-          # An API key needs no refreshing, and this job isn't given one anyway.
-          echo "A public repository has no ChatGPT login to keep fresh, so there's nothing to do."
-          echo "MERGELIGHT_NO_LOGIN=1" >> "$GITHUB_ENV"
-        else
-          echo "::error::Public repositories need openai-api-key. OpenAI allows a ChatGPT login in CI for private repositories only."
-          exit 1
         fi
 
     - name: Hide the Codex login in the logs

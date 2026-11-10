@@ -96,6 +96,8 @@ export interface Review {
   light: Light;
   summary: string;
   findings: Finding[];
+  /** Actions a changed workflow uses whose code the reviewers couldn't see. */
+  not_read?: { uses: string; why: "program" | "unreadable" }[];
   stats: {
     duration_ms: number;
     diff_chars: number;

@@ -183,6 +183,22 @@ function updateBanner({ tag, current, news }: UpdateNotice): string[] {
   ];
 }
 
+/** Says what the review couldn't see, so a quiet result isn't taken to cover it. The names are checked against a strict pattern before they get here. */
+export function notReadLine(list: Review["not_read"]): string | null {
+  if (!list?.length) return null;
+  const names = (items: NonNullable<Review["not_read"]>) => {
+    const shown = items.slice(0, 4).map((i) => `\`${i.uses.replace(/[^\w./@-]/g, "")}\``);
+    return items.length > 4 ? `${shown.join(", ")} and ${items.length - 4} more` : shown.join(", ");
+  };
+  const programs = list.filter((i) => i.why === "program");
+  const missing = list.filter((i) => i.why === "unreadable");
+  const parts = [
+    programs.length ? `the code that ${names(programs)} ${programs.length === 1 ? "runs" : "run"} (a Node or Docker action, so only ${programs.length === 1 ? "its definition was" : "their definitions were"} read)` : "",
+    missing.length ? `${names(missing)} (couldn't be read)` : "",
+  ].filter(Boolean);
+  return `<sub>Not read: ${parts.join(", and ")}.</sub>`;
+}
+
 export function summaryBody({ review: r, state, urls, marks = new Map(), handled = new Map(), update }: SummaryInput, withState = true): string {
   const light = LIGHT[r.light];
   const top = r.findings.filter((f) => f.tier === "post").sort((a, b) => (a.rank ?? 9) - (b.rank ?? 9) || rank(a) - rank(b));
@@ -242,6 +258,9 @@ export function summaryBody({ review: r, state, urls, marks = new Map(), handled
     for (const f of gone) out.push(`- ${clean(f.title)} \`${f.file}:${f.line}\``);
     out.push("", "</details>");
   }
+
+  const unread = notReadLine(r.not_read);
+  if (unread) out.push("", unread);
 
   const who = (p: { name: string; model: string | null }) => `${p.name === "codex" ? "Codex" : "Claude"}${p.model ? ` ${p.model.replace(/^claude-/, "")}` : ""}`;
   const checkedBy = r.verifier && r.verifier.name !== r.provider.name ? `, checked by ${who(r.verifier)},` : "";

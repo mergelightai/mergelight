@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { actionsUsedBy, fetchActionSources } from "../dist/action-source.js";
+import { actionsUsedBy, fetchActionSources, notRead } from "../dist/action-source.js";
 import { buildHunterPrompt, buildSweepPrompt, buildVerifierPrompt, focusesFor } from "../dist/prompt.js";
 
 const input = {
@@ -208,4 +208,27 @@ test("action source reaches the supply reviewer and the verifier, framed as data
 test("the pinning exception doesn't excuse what the action does", () => {
   assert.match(buildVerifierPrompt(input, []), /only about pinning: what the action does once it runs still counts/);
   assert.match(buildHunterPrompt(input, "supply"), /once runs overlap/);
+});
+
+test("every pull request is checked for two runs that collide, not only workflow changes", () => {
+  const prompt = buildHunterPrompt(input, "data");
+  assert.match(prompt, /two runs of the same code at once/);
+  assert.match(prompt, /a webhook delivered twice/);
+  assert.ok(focusesFor(["src/a.ts"]).includes("data"));
+});
+
+test("knows which actions the reviewers couldn't see into", () => {
+  const def = (using) => ({ path: "action.yml", text: `name: x\nruns:\n  using: ${using}\n  main: dist/index.js\n` });
+  const sources = [
+    { uses: "acme/node@v1", files: [def("node20")] },
+    { uses: "acme/docker@v1", files: [def('"docker"')] },
+    { uses: "acme/composite@v1", files: [def("composite")] },
+    { uses: "acme/private@v1", files: [] },
+  ];
+  assert.deepEqual(notRead(sources), [
+    { uses: "acme/node@v1", why: "program" },
+    { uses: "acme/docker@v1", why: "program" },
+    { uses: "acme/private@v1", why: "unreadable" },
+  ]);
+  assert.deepEqual(notRead([]), []);
 });
