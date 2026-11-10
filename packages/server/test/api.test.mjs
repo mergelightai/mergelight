@@ -191,6 +191,7 @@ test("a model name with a context suffix is kept", async () => {
   await connectOrg(pool, ACME.id, ACME.login);
   assert.equal((await post(makeToken(), { ...REVIEW, model: "claude-opus-5-5[1m]" })).status, 201);
   assert.equal((await rowsOf(ACME.id, "select model from reviews"))[0].model, "claude-opus-5-5[1m]");
+  assert.equal((await post(makeToken(), { ...REVIEW, report_id: randomUUID(), model: "claude-opus-5-5@20260101" })).status, 201);
 });
 
 test("a token works once", async () => {

@@ -8,7 +8,7 @@ export default defineConfig({
   server: { fs: { allow: ['..'] } },
   build: {
     rollupOptions: {
-      input: { main: 'index.html', setup: 'setup/index.html' },
+      input: { main: 'index.html', setup: 'setup/index.html', dashboard: 'dashboard/index.html' },
     },
   },
 });

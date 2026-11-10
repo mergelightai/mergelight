@@ -14,6 +14,15 @@ Never stored, because it is never sent: code, diffs, finding text, file paths, p
 
 `node dist/admin.js delete <github-account-id>` removes everything stored for an org.
 
+## The dashboard's side
+
+The dashboard page at `mergelight.dev/dashboard` signs a person in with GitHub and shows the server that GitHub token once (`POST /v1/session`). The server asks GitHub who the person is and which repositories they can see, keeps that answer for an hour under a session token of its own, and drops the GitHub token. It is never stored and never logged.
+
+- A person only sees reviews of repositories GitHub shows them. An org they can't reach looks like one that doesn't exist.
+- Sessions live in memory. Nothing about a sign-in is written to the database, and a restart signs everyone out.
+- A run's token and a person's session never work on each other's routes.
+- Only the sites in `DASHBOARD_ORIGINS` (default `https://mergelight.dev`) can read the answers from a browser.
+
 ## How a review talks to it
 
 1. Before the review, Mergelight's program asks `GET /v1/context`. The answer says if the org uses the dashboard. If not, nothing more is sent.
@@ -47,7 +56,7 @@ DATABASE_URL=postgres://... PUBLIC_URL=https://your-server.example npm start
 
 `npm start` runs the built files, so run `npm run build` first (`npm test` builds too). The database role must not be a superuser. Tables are created on start. `PUBLIC_URL` is the address workflows reach the server at, and it must match the Action's `server` input.
 
-Until sign-in exists, the operator turns the dashboard on for an org. Either set `CONNECT_ORGS` on the server, as `<github-account-id>:<login>` with commas between orgs, and it is done at each start. Or run the admin command on the server's host:
+Until sign-in exists, the operator turns the dashboard on for an org. Either set `CONNECT_ORGS` on the server, as `<github-account-id>:<login>` with commas between orgs, and it is done at each start. Taking an org out of the list doesn't turn it off again: `node dist/admin.js delete` does, and it removes what was stored. Or run the admin command on the server's host:
 
 ```bash
 gh api users/<login> --jq .id

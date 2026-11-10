@@ -6,7 +6,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "test:browser": "node test/browser/full-flow.mjs && node test/browser/return-trip.mjs && node test/browser/connect-code.mjs"
+    "test:browser": "node test/browser/full-flow.mjs && node test/browser/return-trip.mjs && node test/browser/connect-code.mjs && node test/browser/dashboard.mjs"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",

@@ -60,6 +60,7 @@ test("the numbers hold no text from the review: no title, summary, finding or fi
 test("a model name with a context suffix is sent as it is", () => {
   assert.equal(reviewNumbers({ ...review, provider: { ...review.provider, model: "claude-opus-5-5[1m]" } }).model, "claude-opus-5-5[1m]");
   assert.equal(reviewNumbers({ ...review, provider: { ...review.provider, model: "sonnet[1m]" } }).model, "sonnet[1m]");
+  assert.equal(reviewNumbers({ ...review, provider: { ...review.provider, model: "claude-opus-5-5@20260101" } }).model, "claude-opus-5-5@20260101");
 });
 
 test("a server mounted under a path is asked under that path", async () => {
@@ -159,6 +160,13 @@ test("a server error is tried once more, with a token of its own", async () => {
   // Both tries are the same report, so the server keeps it once.
   const ids = toServer.map((c) => JSON.parse(c.init.body).report_id);
   assert.equal(ids[0], ids[1]);
+});
+
+test("an answer that can't be read isn't sent again", async () => {
+  const s = setup(() => new Response("<html>not json</html>", { status: 200 }));
+  assert.equal(await reportReview(review, s.deps), false);
+  assert.equal(s.calls.filter((c) => c.url.startsWith("https://server.test")).length, 1);
+  assert.match(s.lines[0], /The review itself is posted/);
 });
 
 test("a server that is down or refuses never throws: the review goes on", async () => {

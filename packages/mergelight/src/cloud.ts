@@ -47,7 +47,7 @@ export interface ReviewNumbers {
 }
 
 /** The server checks a model's name against the same alphabet. */
-const MODEL_NAME = /^[\w.:/[\]-]{1,100}$/;
+const MODEL_NAME = /^[\w.:/@[\]-]{1,100}$/;
 
 export function reviewNumbers(review: Review): ReviewNumbers {
   const n = (keep: (f: Review["findings"][number]) => boolean) => review.findings.filter(keep).length;
@@ -163,23 +163,33 @@ async function call(d: Deps, server: URL, path: string, init: { method: string; 
   const signal = AbortSignal.timeout(d.deadlineMs);
   const late = () => new Error(`no answer within ${Math.round(d.deadlineMs / 1000)} seconds`);
   for (let attempt = 1; ; attempt++) {
+    let res: Response;
     try {
-      const res = await d.fetchImpl(endpoint(server, path), {
+      res = await d.fetchImpl(endpoint(server, path), {
         method: init.method,
         headers: { authorization: `Bearer ${await oidcToken(d, server, signal)}`, ...(init.body ? { "content-type": "application/json" } : {}) },
         body: init.body,
         redirect: "error",
         signal,
       });
-      if (res.status >= 500 && attempt === 1) {
-        await drop(res);
-        continue;
-      }
-      if (!res.ok) await drop(res);
-      return { status: res.status, ok: res.ok, answer: res.ok ? await readAnswer(res) : null };
     } catch (err) {
       if (signal.aborted) throw late();
       if (attempt === 2) throw err;
+      continue;
+    }
+    if (res.status >= 500 && attempt === 1) {
+      await drop(res);
+      continue;
+    }
+    if (!res.ok) {
+      await drop(res);
+      return { status: res.status, ok: false, answer: null };
+    }
+    // The server took the request. An answer that can't be read isn't a reason to send it again.
+    try {
+      return { status: res.status, ok: true, answer: await readAnswer(res) };
+    } catch (err) {
+      throw signal.aborted ? late() : err;
     }
   }
 }
