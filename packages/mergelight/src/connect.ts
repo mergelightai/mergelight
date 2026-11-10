@@ -2,9 +2,10 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { GitHub } from "./publish/api.js";
-import { PENDING_MARKER, pendingSummaryBody, SUMMARY_MARKER } from "./publish/markdown.js";
+import { FAILED_MARKER, PENDING_MARKER, pendingSummaryBody, SUMMARY_MARKER } from "./publish/markdown.js";
 import { CHECK_FAILED_TITLE, readPrReviewState, writeCheck } from "./publish/publish.js";
 import { stateBlock } from "./publish/state.js";
+import { claudeCodeRef, readCodeRef, shareClaudeToken, startClaudeSignIn, waitForPastedCode } from "./connect-claude.js";
 
 /**
  * Connects a repository to ChatGPT from its own pull request, with no terminal.
@@ -56,21 +57,41 @@ export function connectedBody(account: string | null, secretName: string): strin
   return `🔌 Reviews on this repository now use ${who}. If that isn't yours, remove the \`${secretName}\` secret and push a commit to connect again.`;
 }
 
-/** The setup page shows the code too. It reads it from the two numbered lines, so they have to keep this shape. */
-export function connectBody(login: DeviceLogin, runUrl?: string): string {
+/** The setup page reads the link and code from this hidden line, so a change to how the comment looks can't break it. */
+export function connectData(login: DeviceLogin | null, claudeUrl?: string): string {
+  return `<!-- mergelight:connect:v1 ${JSON.stringify({ url: login?.url ?? "", code: login?.code ?? "", claudeUrl: claudeUrl ?? null }).replace(/--/g, "\\u002d\\u002d")} -->`;
+}
+
+const SETUP_URL = "https://mergelight.dev/setup/";
+
+/** Opens the setup page on the step this pull request is waiting for. */
+export function claudeSetupLink(repo: string | undefined, number: number): string {
+  return repo ? `${SETUP_URL}?repo=${repo}&pr=${number}&connect=claude` : SETUP_URL;
+}
+
+export function connectBody(login: DeviceLogin | null, runUrl?: string, claudeUrl?: string, setupLink = SETUP_URL): string {
+  const options = [
+    ...(login ? [{ name: "ChatGPT", steps: `[Open ChatGPT](${login.url}) and enter \`${login.code}\`` }] : []),
+    ...(claudeUrl ? [{ name: "Claude", steps: `[Connect on mergelight.dev](${setupLink})` }] : []),
+  ];
+  const only = options.length === 1 ? options[0] : null;
+  const run = runUrl ? `[your own GitHub Actions run](${runUrl})` : "your own GitHub Actions run";
   return [
     SUMMARY_MARKER,
     PENDING_MARKER,
-    "### 🔌 Connect ChatGPT to start reviewing",
+    connectData(login, claudeUrl),
+    `### 🔌 Connect ${only?.name ?? "your AI"} to start reviews`,
     "",
-    `1. Open ${login.url}`,
-    `2. Enter this code: \`${login.code}\``,
+    ...(only ? [`${only.steps}. The review then starts by itself.`] : ["Pick one, and the review starts by itself.", "", ...options.map((o) => `- **${o.name}:** ${o.steps}`)]),
     "",
-    "The review starts by itself once you're connected. The code lasts 15 minutes. If it runs out, push a new commit to get another.",
+    "<details><summary>Something not working?</summary>",
     "",
-    `**If OpenAI refuses the code:** turn on "Enable device code sign-in" in your [ChatGPT security settings](${CHATGPT_SECURITY_URL}), or ask your workspace admin to.`,
+    "- **The link or code ran out:** they last 15 minutes. Push a new commit to get new ones.",
+    ...(login ? [`- **OpenAI refuses the code:** turn on "Enable device code sign-in" in your [ChatGPT security settings](${CHATGPT_SECURITY_URL}), or ask your workspace admin to.`] : []),
     "",
-    `<sub>Reviews use the plan of whoever enters this code, so only enter it if you're setting up this repository. It comes from ${runUrl ? `[your own GitHub Actions run](${runUrl})` : "your own GitHub Actions run"}. The login is saved as this repository's secret and is never sent to Mergelight.</sub>`,
+    "</details>",
+    "",
+    `<sub>Reviews use the plan of whoever connects it, so only do this if you're setting up this repository. This comes from ${run}. The login is saved as this repository's secret and never reaches Mergelight.</sub>`,
   ].join("\n");
 }
 
@@ -84,24 +105,34 @@ export function installAppBody(): string {
   ].join("\n");
 }
 
-export function connectFailedBody(reason: string): string {
+export function connectFailedBody(reason: string, claudeOffered = false): string {
   return [
     SUMMARY_MARKER,
-    "### ⚠️ Mergelight couldn't connect to ChatGPT",
+    FAILED_MARKER,
+    claudeOffered ? "### ⚠️ Mergelight couldn't connect your AI" : "### ⚠️ Mergelight couldn't connect to ChatGPT",
     "",
     reason,
     "",
-    "Push a new commit to try again. You can also use an OpenAI API key instead: https://mergelight.dev/setup",
+    claudeOffered ? "Push a new commit to get a new link and code. You can also use an API key instead: https://mergelight.dev/setup" : "Push a new commit to try again. You can also use an OpenAI API key instead: https://mergelight.dev/setup",
   ].join("\n");
 }
 
+/** A second way to connect, running beside the ChatGPT one. Whichever finishes first wins. */
+export interface ClaudeConnect {
+  url: string;
+  wait: () => Promise<boolean>;
+  stop: () => void;
+}
+
 export interface ConnectDeps {
+  /** Starts the Claude sign-in, when this repository can use it. Null if it can't. */
+  startClaude?: () => Promise<ClaudeConnect | null>;
   /** Runs the login and resolves with its exit code. */
   startLogin: (onOutput: (text: string) => void) => Promise<number>;
   /** Ends a running login. */
   stopLogin: () => void;
-  showCode: (login: DeviceLogin) => Promise<void>;
-  connected: () => Promise<void>;
+  showCode: (login: DeviceLogin | null, claudeUrl?: string) => Promise<void>;
+  connected: (via?: "chatgpt" | "claude") => Promise<void>;
   failed: (reason: string) => Promise<void>;
 }
 
@@ -110,30 +141,55 @@ export async function connect(deps: ConnectDeps): Promise<number> {
   let shown = false;
   let notPosted = false;
   let showing: Promise<void> = Promise.resolve();
-  const code = await deps.startLogin((text) => {
+  // First, so its link is in the comment that shows the ChatGPT code.
+  const claude = deps.startClaude ? await deps.startClaude().catch(() => null) : null;
+  const show = (login: DeviceLogin | null) => {
+    shown = true;
+    // Nobody can finish a login whose code never reached the pull request, so don't wait for it.
+    showing = deps.showCode(login, claude?.url).catch(() => {
+      notPosted = true;
+      deps.stopLogin();
+      claude?.stop();
+    });
+  };
+  const codexLogin = deps.startLogin((text) => {
     output += text;
     if (shown) return;
     const login = parseDeviceLogin(output);
-    if (login) {
-      shown = true;
-      // Nobody can finish a login whose code never reached the pull request, so don't wait for it.
-      showing = deps.showCode(login).catch(() => {
-        notPosted = true;
-        deps.stopLogin();
-      });
-    }
+    if (login) show(login);
+  });
+  const claudeWait = claude ? claude.wait().catch(() => false) : Promise.resolve(false);
+  const winner = await new Promise<"chatgpt" | "claude" | number>((resolve, reject) => {
+    let code: number | null = null;
+    let claudeOver = !claude;
+    codexLogin.then((exit) => {
+      code = exit;
+      if (exit === 0) resolve("chatgpt");
+      else if (claudeOver || notPosted) resolve(exit);
+      // ChatGPT's device sign-in can be switched off. Claude's link still has to reach the pull request.
+      else if (!shown) show(null);
+    }, reject);
+    claudeWait.then((ok) => {
+      claudeOver = true;
+      if (ok) resolve("claude");
+      else if (code !== null) resolve(code);
+    });
   });
   await showing;
+  if (winner === "claude") deps.stopLogin();
+  else claude?.stop();
   if (notPosted) {
     await deps.failed("Mergelight couldn't post the login code on this pull request, because GitHub refused or didn't answer.");
     return 1;
   }
-  if (code === 0) {
-    await deps.connected();
+  if (winner === "chatgpt" || winner === "claude") {
+    await deps.connected(winner);
     return 0;
   }
   await deps.failed(
-    shown
+    claude
+      ? "The ChatGPT code and the Claude link both ran out before anyone finished signing in."
+      : shown
       ? `The code ran out, or OpenAI refused it. Check that "Enable device code sign-in" is on in your [ChatGPT security settings](${CHATGPT_SECURITY_URL}).`
       : `Codex couldn't start a device login. "Enable device code sign-in" may be off in your [ChatGPT security settings](${CHATGPT_SECURITY_URL}), or for your workspace.`,
   );
@@ -164,10 +220,20 @@ export function withState(body: string, previous: string | undefined): string {
 }
 
 /** The real thing: Codex on this runner, and the pull request as the place to show the code. */
+/** A repository set up before Claude support doesn't pass the login on, so connecting it would only ask again next time. */
+async function workflowHasClaude(api: GitHub, env: NodeJS.ProcessEnv): Promise<boolean> {
+  const [, path, ref] = (env.GITHUB_WORKFLOW_REF ?? "").match(/^[^/]+\/[^/]+\/(.+?)@(.+)$/) ?? [];
+  if (!path || !ref) return false;
+  return api
+    .get<{ content: string }>(`contents/${path}?ref=${encodeURIComponent(env.GITHUB_SHA ?? ref)}`)
+    .then((f) => Buffer.from(f.content, "base64").toString("utf8").includes("claude-code-oauth-token"), () => false);
+}
+
 export function githubConnect(api: GitHub, number: number, headSha: string, log: (line: string) => void, env = process.env): ConnectDeps {
   const runUrl = env.GITHUB_RUN_ID ? `${env.GITHUB_SERVER_URL}/${env.GITHUB_REPOSITORY}/actions/runs/${env.GITHUB_RUN_ID}` : undefined;
   let checkId: number | null = null;
   let running: ChildProcess | null = null;
+  let claudeOffered = false;
   /**
    * The app's token dies if the app is removed during the login, which can wait 15 minutes. The comment
    * still has to change, or it keeps offering a dead code, and the workflow's own token can do that.
@@ -187,6 +253,40 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
     writeCheck(api, checkId, headSha, { status: "completed", conclusion: "neutral", completed_at: new Date().toISOString(), output: { title, summary } }, log);
   return {
     stopLogin: () => running?.kill("SIGTERM"),
+    startClaude: async () => {
+      if (!(await workflowHasClaude(api, env))) return null;
+      const signIn = await startClaudeSignIn();
+      if (!signIn) {
+        log("Claude's sign-in didn't start, so only ChatGPT is offered.");
+        return null;
+      }
+      const ref = claudeCodeRef(signIn.url);
+      if (!ref) {
+        log("Claude's sign-in link wasn't the expected shape, so only ChatGPT is offered.");
+        signIn.stop();
+        return null;
+      }
+      claudeOffered = true;
+      let over = false;
+      return {
+        url: signIn.url,
+        stop: () => {
+          over = true;
+          signIn.stop();
+        },
+        wait: async () => {
+          const code = await waitForPastedCode({ read: () => readCodeRef((path) => api.get(path), ref), stopped: () => over });
+          if (!code) return false;
+          const token = await signIn.finish(code);
+          if (!token) {
+            log("Claude didn't accept that code.");
+            return false;
+          }
+          shareClaudeToken(token, env);
+          return true;
+        },
+      };
+    },
     startLogin: (onOutput) =>
       new Promise((resolve, reject) => {
         const child = spawn("codex", ["login", "--device-auth"], { stdio: ["ignore", "pipe", "pipe"] });
@@ -203,23 +303,29 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
           resolve(code ?? 1);
         });
       }),
-    showCode: async (login) => {
-      await upsertSummary(api, number, connectBody(login, runUrl));
+    showCode: async (login, claudeUrl) => {
+      await upsertSummary(api, number, connectBody(login, runUrl, claudeUrl, claudeSetupLink(env.GITHUB_REPOSITORY, number)));
       log("Posted the link and code on the pull request. Waiting for the login.");
       // The comment is what people need. A check that can't be written shouldn't end a login that can still work.
       try {
         const run = await writeCheck(api, null, headSha, {
           status: "in_progress",
           started_at: new Date().toISOString(),
-          output: { title: "Waiting for you to connect ChatGPT", summary: "Follow the link and code in the pull request's Mergelight comment." },
+          output: { title: claudeUrl ? "Waiting for you to connect your AI" : "Waiting for you to connect ChatGPT", summary: "Follow the steps in the pull request's Mergelight comment." },
         }, log);
         checkId = run?.id ?? null;
       } catch (err) {
         log(`Couldn't show the waiting check: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
-    connected: async () => {
+    connected: async (via = "chatgpt") => {
       await updateSummary(pendingSummaryBody());
+      if (via === "claude") {
+        await api.write("POST", `issues/${number}/comments`, { body: "🔌 Reviews on this repository now use the Claude plan that confirmed the sign-in. If that isn't yours, remove the `CLAUDE_CODE_OAUTH_TOKEN` secret and push a commit to connect again." });
+        await finish("Connected to Claude", "Starting the review.");
+        log("Connected to Claude.");
+        return;
+      }
       let auth = "";
       try {
         auth = readFileSync(join(env.CODEX_HOME ?? "", "auth.json"), "utf8");
@@ -232,7 +338,7 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
     },
     failed: async (reason) => {
       // One failed write mustn't stop the other. Only the app that made a check can finish it.
-      await updateSummary(connectFailedBody(reason)).catch((err) => log(`Couldn't update the comment: ${err instanceof Error ? err.message : String(err)}`));
+      await updateSummary(connectFailedBody(reason, claudeOffered)).catch((err) => log(`Couldn't update the comment: ${err instanceof Error ? err.message : String(err)}`));
       await finish(CHECK_FAILED_TITLE, reason).catch((err) => log(`Couldn't finish the check: ${err instanceof Error ? err.message : String(err)}`));
       log(reason);
     },

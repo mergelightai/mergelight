@@ -57,7 +57,7 @@ export class GitHub {
     return (JSON.parse(out) as T[][]).flat();
   }
 
-  async write<T>(method: "POST" | "PATCH" | "PUT", path: string, body: unknown): Promise<T | null> {
+  async write<T>(method: "POST" | "PATCH" | "PUT" | "DELETE", path: string, body: unknown): Promise<T | null> {
     if (this.opts.dryRun) {
       this.opts.log?.(`[dry run] ${method} ${this.repoPath(path)}\n${JSON.stringify(body, null, 2)}`);
       return null;

@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { EventEmitter } from "node:events";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { connect, connectBody, connectedAccount, connectedBody, connectFailedBody, githubConnect, installAppBody, parseDeviceLogin, withState } from "../dist/connect.js";
-import { isPendingSummary, SUMMARY_MARKER } from "../dist/publish/markdown.js";
+import { claudeSetupLink, connect, connectBody, connectedAccount, connectedBody, connectFailedBody, githubConnect, installAppBody, parseDeviceLogin, withState } from "../dist/connect.js";
+import { claudeCodeRef, parseClaudeLink, parseClaudeToken, readCodeRef, readPastedCode, shareClaudeToken, startClaudeSignIn, waitForPastedCode } from "../dist/connect-claude.js";
+import { isPendingSummary, PENDING_MARKER, SUMMARY_MARKER } from "../dist/publish/markdown.js";
 import { ownSummary } from "../dist/publish/publish.js";
 import { decodeState, encodeState } from "../dist/publish/state.js";
 
@@ -153,10 +155,10 @@ test("the comment gives the link, the code and where it came from", () => {
   assert.doesNotMatch(body, /[–—]/, "no dashes in copy");
 });
 
-test("the setup page can read the code, which needs these two lines exactly", () => {
-  const lines = connectBody({ url: "https://auth.openai.com/codex/device", code: "2ZYY-TEST1" }).split("\n");
-  assert.ok(lines.includes("1. Open https://auth.openai.com/codex/device"));
-  assert.ok(lines.includes("2. Enter this code: `2ZYY-TEST1`"));
+test("the setup page can read the code from the hidden line", () => {
+  const body = connectBody({ url: "https://auth.openai.com/codex/device", code: "2ZYY-TEST1" });
+  assert.ok(body.includes(PENDING_MARKER));
+  assert.deepEqual(JSON.parse(body.match(/^<!-- mergelight:connect:v1 (\{.*\}) -->$/m)[1]), { url: "https://auth.openai.com/codex/device", code: "2ZYY-TEST1", claudeUrl: null });
 });
 
 test("every comment is the summary, so the review replaces it", () => {
@@ -228,3 +230,191 @@ test("other errors don't switch tokens", async () => {
   assert.equal(env.GH_TOKEN, "app");
 });
 
+const LINK = "https://claude.com/cai/oauth/authorize?code=true&code_challenge=abc&state=s";
+const SCREEN = `\x1b[2JBrowser didn't open? Use the url below to sign in\n\x1b[36m${LINK}\x1b[0m\r\nPaste code here if prompted >`;
+const TOKEN = "sk-ant-oat01-abcdefghijklmnopqrstuvwxyz0123456789";
+
+test("only a whole link on Claude's own site counts", () => {
+  assert.equal(parseClaudeLink(SCREEN), LINK);
+  assert.equal(parseClaudeLink(LINK), null, "it could still be arriving");
+  assert.equal(parseClaudeLink("https://claude.com.evil.example/cai/oauth/authorize?code_challenge=a \n"), null);
+  assert.equal(parseClaudeLink("https://claude.com/other?x=1 \n"), null);
+});
+
+test("finds the token in the terminal's output", () => {
+  assert.equal(parseClaudeToken(`\x1b[32m${TOKEN}\x1b[0m\r\n`), TOKEN);
+  assert.equal(parseClaudeToken("no token here\n"), null);
+});
+
+const CODE = `abcdef123456#${"s".repeat(43)}`;
+
+test("only a whole code counts", () => {
+  assert.equal(readPastedCode(CODE), CODE);
+  assert.equal(readPastedCode(`  ${CODE}\n`), CODE);
+  assert.equal(readPastedCode(`here it is ${CODE}`), null);
+  assert.equal(readPastedCode("abcdef123456"), null, "Claude refuses a code with no state");
+  assert.equal(readPastedCode("fixes issue#12"), null);
+  assert.equal(readPastedCode("see-the-branch#short"), null);
+});
+
+function codeWait(values) {
+  let t = 1000;
+  let i = 0;
+  return waitForPastedCode({
+    read: async () => {
+      const v = values[Math.min(i++, values.length - 1)];
+      if (v instanceof Error) throw v;
+      return v;
+    },
+    sleep: async () => { t += 10_000; },
+    now: () => t,
+  }, 30_000, 5_000);
+}
+
+test("waits until the setup page has left a whole code, past any failed read", async () => {
+  assert.equal(await codeWait([null, new Error("GitHub hiccup"), CODE]), CODE);
+});
+
+test("anything that isn't a whole code never counts, and the wait ends", async () => {
+  assert.equal(await codeWait(["not a code"]), null);
+  assert.equal(await codeWait([null]), null);
+});
+
+test("the hidden reference comes from this sign-in's own state", () => {
+  const state = "a".repeat(43);
+  assert.equal(claudeCodeRef(`https://claude.com/x?code=true&state=${state}`), `mergelight/claude-code/s${state}`);
+  assert.equal(claudeCodeRef("https://claude.com/x?code=true"), null);
+  assert.equal(claudeCodeRef("https://claude.com/x?state=short"), null);
+  assert.equal(claudeCodeRef("https://claude.com/x?state=../../heads/main/aaaaaaaaaaaaaaa"), null, "can't point anywhere else");
+  assert.equal(claudeCodeRef("not a link"), null);
+});
+
+const gitRefs = (found, blobs = {}) => async (path) => {
+  if (path.startsWith("git/matching-refs/")) return found;
+  return { content: Buffer.from(blobs[path.replace("git/blobs/", "")] ?? "").toString("base64") };
+};
+
+test("reads the code only from a blob at exactly that reference", async () => {
+  const ref = "mergelight/claude-code/sabc";
+  assert.equal(await readCodeRef(gitRefs([{ ref: `refs/${ref}`, object: { sha: "b1", type: "blob" } }], { b1: CODE }), ref), CODE);
+  assert.equal(await readCodeRef(gitRefs([]), ref), null, "not there yet");
+  assert.equal(await readCodeRef(gitRefs([{ ref: `refs/${ref}-longer`, object: { sha: "b1", type: "blob" } }], { b1: CODE }), ref), null, "matching is by prefix, so the name is checked");
+  assert.equal(await readCodeRef(gitRefs([{ ref: `refs/${ref}`, object: { sha: "c1", type: "commit" } }]), ref), null);
+});
+
+test("the token is hidden first, then shared with the later steps", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-share-"));
+  const file = join(dir, "env");
+  writeFileSync(file, "");
+  const printed = [];
+  shareClaudeToken(TOKEN, { GITHUB_ENV: file }, (l) => printed.push(l));
+  assert.deepEqual(printed, [`::add-mask::${TOKEN}`]);
+  assert.match(readFileSync(file, "utf8"), new RegExp(`MERGELIGHT_CLAUDE_TOKEN=${TOKEN}\\nMERGELIGHT_PROVIDER=claude\\nMERGELIGHT_CONNECT=0\\n`));
+  assert.throws(() => shareClaudeToken("x\nEVIL=1", { GITHUB_ENV: file }, () => {}));
+});
+
+function fakeTerminal(onWrite) {
+  const out = new EventEmitter();
+  out.setEncoding = () => {};
+  const child = new EventEmitter();
+  child.stdout = out;
+  child.stderr = null;
+  child.killed = false;
+  child.kill = () => { child.killed = true; };
+  child.stdin = { write: (text) => onWrite?.(text, out), on: () => {} };
+  return child;
+}
+
+test("the sign-in gives its link, sends the code, and ends with the token", async () => {
+  const written = [];
+  let spawned;
+  const child = fakeTerminal((text, out) => {
+    written.push(text);
+    if (text === "\r") out.emit("data", `Your token:\r\n${TOKEN}\r\n`);
+  });
+  const signIn = startClaudeSignIn((cmd, args) => { spawned = [cmd, ...args]; setImmediate(() => child.stdout.emit("data", SCREEN)); return child; }, { link: 1000, token: 2000 });
+  const s = await signIn;
+  assert.equal(s.url, LINK);
+  assert.equal(spawned[0], "script");
+  assert.match(spawned[2], /claude setup-token/);
+  assert.equal(await s.finish("abcdef123456"), TOKEN);
+  assert.deepEqual(written, ["abcdef123456", "\r"]);
+  assert.ok(child.killed, "nothing is left running");
+});
+
+test("no link in time means Claude just isn't offered", async () => {
+  const child = fakeTerminal();
+  assert.equal(await startClaudeSignIn(() => child, { link: 10, token: 10 }), null);
+  assert.ok(child.killed);
+});
+
+function raced({ codexExit, claudeOk, codexOutput = [CODEX] }) {
+  const d = deps(codexOutput, codexExit);
+  d.showCode = async (login, claudeUrl) => d.events.push(`show ${login?.code ?? "none"} ${claudeUrl ?? "-"}`);
+  d.connected = async (via) => d.events.push(`connected ${via}`);
+  d.startClaude = async () => ({ url: "CL", wait: async () => claudeOk, stop: () => d.events.push("claude stopped") });
+  return d;
+}
+
+test("Claude connecting first ends the ChatGPT login", async () => {
+  const d = raced({ codexExit: 1, claudeOk: true });
+  d.startLogin = async (onOutput) => { onOutput(CODEX); return new Promise((r) => setTimeout(() => r(1), 50)); };
+  assert.equal(await connect(d), 0);
+  assert.deepEqual(d.events, ["show 2ZYY-TEST1 CL", "stopped", "connected claude"]);
+});
+
+test("ChatGPT connecting first ends the Claude sign-in", async () => {
+  const d = raced({ codexExit: 0, claudeOk: false });
+  d.startClaude = async () => ({ url: "CL", wait: () => new Promise(() => {}), stop: () => d.events.push("claude stopped") });
+  assert.equal(await connect(d), 0);
+  assert.deepEqual(d.events, ["show 2ZYY-TEST1 CL", "claude stopped", "connected chatgpt"]);
+});
+
+test("with ChatGPT's device sign-in off, Claude's link still reaches the pull request", async () => {
+  const d = raced({ codexExit: 1, claudeOk: true, codexOutput: [] });
+  d.startClaude = async () => ({ url: "CL", wait: () => new Promise((r) => setTimeout(() => r(true), 30)), stop: () => {} });
+  assert.equal(await connect(d), 0);
+  assert.deepEqual(d.events, ["show none CL", "stopped", "connected claude"]);
+});
+
+test("when both fail, it says so", async () => {
+  const d = raced({ codexExit: 1, claudeOk: false });
+  assert.equal(await connect(d), 1);
+  assert.match(d.events.at(-1), /^failed .*ChatGPT code and the Claude link both ran out/);
+});
+
+test("the failure comment names ChatGPT only when ChatGPT was the only offer", () => {
+  assert.match(connectFailedBody("r"), /couldn't connect to ChatGPT/);
+  const both = connectFailedBody("r", true);
+  assert.match(both, /couldn't connect your AI/);
+  assert.doesNotMatch(both, /to ChatGPT/);
+  assert.match(both, /new link and code/);
+});
+
+test("the comment sends Claude to the setup page, and shows no code to paste", () => {
+  const device = { url: "https://auth.openai.com/d", code: "AAAA-BBBB" };
+  const setup = claudeSetupLink("acme/api", 7);
+  assert.equal(setup, "https://mergelight.dev/setup/?repo=acme/api&pr=7&connect=claude");
+  const both = connectBody(device, "https://github.com/run", LINK, setup);
+  assert.match(both, /Connect your AI to start reviews/);
+  assert.match(both, /^- \*\*ChatGPT:\*\* \[Open ChatGPT\]\(https:\/\/auth\.openai\.com\/d\) and enter `AAAA-BBBB`$/m);
+  assert.ok(both.includes(`- **Claude:** [Connect on mergelight.dev](${setup})`));
+  assert.doesNotMatch(both, /<img|<table|^\|/m);
+  assert.doesNotMatch(both, /\/claude-code|as a comment|paste/i);
+  const visible = both.replace(/\]\([^)]*\)/g, "]").replace(/<!--.*?-->/g, "");
+  assert.ok(!visible.includes("oauth/authorize"), "no long link on show");
+  const data = JSON.parse(both.match(/^<!-- mergelight:connect:v1 (\{.*\}) -->$/m)[1]);
+  assert.deepEqual(data, { url: device.url, code: device.code, claudeUrl: LINK });
+  const chatgptOnly = connectBody(device);
+  assert.match(chatgptOnly, /Connect ChatGPT to start reviews/);
+  assert.match(chatgptOnly, /^\[Open ChatGPT\]/m);
+  assert.doesNotMatch(chatgptOnly.replace(/<!--.*?-->/g, ""), /Claude/);
+  const claudeOnly = connectBody(null, undefined, LINK, setup);
+  assert.match(claudeOnly, /Connect Claude to start reviews/);
+  assert.doesNotMatch(claudeOnly.replace(/<!--.*?-->/g, ""), /ChatGPT|OpenAI/);
+});
+
+test("a value can't end the hidden line early", () => {
+  const line = connectBody(null, undefined, "https://claude.com/a-->b").split("\n").find((l) => l.startsWith("<!-- mergelight:connect:v1"));
+  assert.equal(line.match(/-->/g).length, 1, "only the end of the line closes it");
+});

@@ -35,6 +35,8 @@ jobs:
       # https://github.com/mergelightai/mergelight/releases
       - uses: mergelightai/mergelight@v0
         with:
-          # Neither set yet? The first pull request shows a link to connect ChatGPT.
+          # None set yet? The first pull request shows a link to connect ChatGPT. For Claude, see the setup page.
           codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}

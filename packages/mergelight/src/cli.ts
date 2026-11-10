@@ -4,8 +4,9 @@ import { parseArgs } from "node:util";
 import { currentRepo, fetchPullRequest, parsePrRef } from "./github.js";
 import { serve } from "./mcp/server.js";
 import { GitHub } from "./publish/api.js";
-import { approveCheck, CHECK_LOGIN_TITLE, failCheck, failSummary, previousFindings, publishReview, startCheck, startSummary } from "./publish/publish.js";
-import { LoginError, loginFailureMessage } from "./providers/codex.js";
+import { approveCheck, checkLimitTitle, checkLoginTitle, failCheck, failSummary, previousFindings, publishReview, startCheck, startSummary } from "./publish/publish.js";
+import { LimitError, LoginError, loginFailureMessage } from "./providers/codex.js";
+import { limitNotice, loginNotice } from "./publish/markdown.js";
 import { renderTerminal } from "./render.js";
 import { reviewPullRequest } from "./review.js";
 import { askForApp, connect, githubConnect } from "./connect.js";
@@ -33,7 +34,8 @@ Options
   --yellow-blocks       With --post or post: a "needs a human" check waits for an approval
   --json                Print the review as JSON
   --out <file>          Also write the JSON review to a file
-  --model <name>        Codex model (default: your Codex config)
+  --provider <name>     Who hunts for problems: codex or claude (default: codex)
+  --model <name>        Model for the hunters (default: your Codex config, or opus on Claude)
   --effort <level>      Reasoning effort: low, medium, high (default: high)
   --verify-with <name>  Who checks the findings: claude or codex
                         (default: claude when Claude Code is installed)
@@ -95,6 +97,7 @@ async function main(): Promise<number> {
       model: { type: "string" },
       effort: { type: "string" },
       "verify-with": { type: "string" },
+      provider: { type: "string" },
       "verify-model": { type: "string" },
       keep: { type: "boolean" },
       by: { type: "string" },
@@ -147,6 +150,11 @@ async function main(): Promise<number> {
   }
   const dryRun = Boolean(values["dry-run"]);
 
+  const provider = values.provider;
+  if (provider !== undefined && provider !== "codex" && provider !== "claude") {
+    log(`mergelight: --provider must be codex or claude, not "${provider}"`);
+    return 1;
+  }
   const verifyWith = values["verify-with"];
   if (verifyWith !== undefined && verifyWith !== "codex" && verifyWith !== "claude") {
     log(`mergelight: --verify-with must be codex or claude, not "${verifyWith}"`);
@@ -204,6 +212,7 @@ async function main(): Promise<number> {
     const review = await reviewPullRequest(ref, {
       previous: values.post ? await previousFindings(api, ref.number) : undefined,
       at: values.at,
+      provider,
       model: values.model,
       effort: values.effort,
       verifyWith,
@@ -229,9 +238,12 @@ async function main(): Promise<number> {
     const message = err instanceof Error ? err.message : String(err);
     log(`mergelight: ${message}`);
     if (values.post && headSha) {
-      const login = err instanceof LoginError;
-      await failCheck(api, checkRunId, headSha, message, log, login ? CHECK_LOGIN_TITLE : undefined).catch((e) => log(`Couldn't update the check: ${(e as Error).message}`));
-      await failSummary(api, ref.number, login ? message : undefined).catch((e) => log(`Couldn't update the summary: ${(e as Error).message}`));
+      const login = err instanceof LoginError ? err : null;
+      const limit = err instanceof LimitError ? err : null;
+      const title = limit ? checkLimitTitle(limit.plan) : login ? checkLoginTitle(login.plan) : undefined;
+      const notice = limit ? limitNotice(limit.plan, limit.resets) : login ? loginNotice(login.plan, message) : undefined;
+      await failCheck(api, checkRunId, headSha, message, log, title).catch((e) => log(`Couldn't update the check: ${(e as Error).message}`));
+      await failSummary(api, ref.number, notice).catch((e) => log(`Couldn't update the summary: ${(e as Error).message}`));
     }
     return 1;
   }

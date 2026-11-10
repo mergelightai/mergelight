@@ -2,7 +2,7 @@ import { currentRepo, fetchPullRequest, parsePrRef, type PrRef } from "../github
 import { GitHub } from "../publish/api.js";
 import { encodeMark, findingState, markedSince, MAX_NOTE, type FindingState, type HandledAs, type Mark } from "../publish/handled.js";
 import { clean } from "../publish/markdown.js";
-import { CHECK_FAILED_TITLE, CHECK_LOGIN_TITLE, latestCheck, readPrReviewState, resolveThread, reviewThreads, type CheckRun, type ReviewThread } from "../publish/publish.js";
+import { isFailedCheckTitle, latestCheck, readPrReviewState, resolveThread, reviewThreads, type CheckRun, type ReviewThread } from "../publish/publish.js";
 import type { StateFinding } from "../publish/state.js";
 import { runOk } from "../run.js";
 import type { Tier } from "../types.js";
@@ -72,7 +72,7 @@ export type ReviewStatus = "none" | "reviewing" | "failed" | "outdated" | "done"
 
 export function reviewStatus(check: CheckRun | undefined, hasState: boolean, upToDate: boolean): ReviewStatus {
   if (check && check.status !== "completed") return "reviewing";
-  if (check?.output.title === CHECK_FAILED_TITLE || check?.output.title === CHECK_LOGIN_TITLE) return "failed";
+  if (isFailedCheckTitle(check?.output.title)) return "failed";
   if (!hasState) return "none";
   return upToDate ? "done" : "outdated";
 }

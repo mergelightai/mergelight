@@ -2,16 +2,21 @@ import * as Dialog from '@radix-ui/react-dialog';
 import * as Select from '@radix-ui/react-select';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type Ref } from 'react';
+import { siClaude } from 'simple-icons';
 import workflowFile from '../../../examples/mergelight.yml?raw';
 import refreshFile from '../../../examples/mergelight-refresh.yml?raw';
+import { OPENAI_PATH } from '../brandIcons';
 import Ambient from '../sections/Ambient';
 import { Check, GitHubIcon, SURFACE, WELL } from '../ui';
-import { cleanUrl, finishSignIn, GitHubError, INSTALL_URL, rememberRepo, reviewAppUrl, takeRememberedRepo, isPinned, mockClient, pinned, realClient, REFRESH_FILE, signInUrl, wakeTokenServer, type CheckStatus, type ConnectCode, type GitHubClient, type Release, type Repo, type RepoDetails, type SetupPr, type WorkflowFile } from './github';
+import type { ConnectLink } from './github';
+import { cleanUrl, finishSignIn, GitHubError, INSTALL_URL, readConnectLink, rememberConnect, rememberRepo, reviewAppUrl, takeRememberedConnect, takeRememberedRepo, isPinned, mockClient, pinned, realClient, REFRESH_FILE, signInUrl, wakeTokenServer, type CheckStatus, type ConnectCode, type GitHubClient, type Release, type Repo, type RepoDetails, type SetupPr, type WorkflowFile } from './github';
 
 const CHATGPT_SECURITY = 'https://chatgpt.com/settings/security';
 const TYPES_MARKER = 'types: [opened, synchronize, reopened, ready_for_review, edited]';
 const SKIP_MARKER = 'github.event.pull_request.head.repo.full_name == github.repository';
 const SPRING = { type: 'spring', bounce: 0, duration: 0.45 } as const;
+const OPENAI_MARK = { path: OPENAI_PATH, color: '#10A37F' };
+const CLAUDE_MARK = { path: siClaude.path, color: '#D97757' };
 
 /** What gets reviewed. New work is PRs into one branch, without merges from the other long-lived ones. */
 type Scope = 'new' | 'all';
@@ -54,8 +59,9 @@ export default function Setup() {
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
   const requested = params.get('setup_action') === 'request';
   const backFromInstall = params.has('installation_id') && !params.has('state') && !requested;
+  const connectLink = useMemo(() => readConnectLink(params), [params]);
   // One skeleton from here until the right step is known, so steps that get skipped never show.
-  const [view, setView] = useState<View>(params.has('code') || backFromInstall ? 'settling' : 'welcome');
+  const [view, setView] = useState<View>(params.has('code') || backFromInstall || connectLink ? 'settling' : 'welcome');
   const [client, setClient] = useState<GitHubClient | null>(null);
   const [signInFailed, setSignInFailed] = useState(false);
   const [repos, setRepos] = useState<Repo[] | null>(null);
@@ -72,6 +78,8 @@ export default function Setup() {
   const [hasLogin, setHasLogin] = useState(false);
   const [merged, setMerged] = useState(false);
   const [detailsFailed, setDetailsFailed] = useState(false);
+  const [startOnClaude, setStartOnClaude] = useState(false);
+  const [missing, setMissing] = useState<ConnectLink | null>(null);
   const wide = useWide();
 
   const previous = useRef(view);
@@ -103,6 +111,13 @@ export default function Setup() {
     if (backFromInstall) window.location.replace(signInUrl());
   }, [backFromInstall]);
 
+  // From a pull request waiting for Claude. They were just on GitHub, so signing in needs nothing from them.
+  useEffect(() => {
+    if (!connectLink || backFromInstall || params.has('code')) return;
+    rememberConnect(connectLink);
+    window.location.replace(signInUrl());
+  }, [connectLink, backFromInstall, params]);
+
   // Coming back from GitHub with a sign-in code.
   useEffect(() => {
     if (!params.has('code') || backFromInstall) return;
@@ -132,8 +147,10 @@ export default function Setup() {
     return () => window.removeEventListener('focus', loadRepos);
   }, [loadRepos]);
 
-  const choose = (r: Repo) => {
+  /** `waitingPr` is the pull request whose comment sent them here, which skips straight to connecting it. */
+  const choose = (r: Repo, waitingPr?: number) => {
     setRepo(r);
+    setStartOnClaude(false);
     setDetailsFailed(false);
     setDetails(null);
     setPr(null);
@@ -149,7 +166,16 @@ export default function Setup() {
       setBranch(d.base);
       setScope(d.skip.length > 1 ? 'new' : 'all');
       setHasLogin(d.hasLogin);
-      setView(d.reviewApp === false ? 'review-app' : 'add');
+      const next = d.reviewApp === false ? 'review-app' : 'add';
+      if (!waitingPr) {
+        setView(next);
+        return;
+      }
+      client.prState(r, waitingPr).then(({ headSha }) => {
+        setPr({ number: waitingPr, url: `https://github.com/${r.fullName}/pull/${waitingPr}`, headSha });
+        setStartOnClaude(true);
+        setView('connect');
+      }, () => setView(next));
     }, () => {
       setDetailsFailed(true);
       setView('add');
@@ -161,6 +187,18 @@ export default function Setup() {
   useEffect(() => {
     if (!repos || autoPicked.current) return;
     autoPicked.current = true;
+    const waiting = takeRememberedConnect();
+    if (waiting) {
+      // A pull request's link opens that repo and no other, even if some other repo is the only one on the list.
+      const asked = repos.find((r) => r.fullName === waiting.repo);
+      if (asked) {
+        choose(asked, waiting.pr);
+      } else {
+        setMissing(waiting);
+        setView('repo');
+      }
+      return;
+    }
     const remembered = takeRememberedRepo();
     const target = repos.find((r) => r.fullName === remembered) ?? (repos.length === 1 ? repos[0] : null);
     if (target) choose(target);
@@ -250,10 +288,15 @@ export default function Setup() {
       setConnectCode(code);
       setHasLogin(login);
       setMerged(done);
-      if (view === 'connect' && (login || (isReviewing(check) && !couldntFinish(check)))) setView('live');
+      // A run that's still asking comes first, even if the repo has some other login saved. Someone sent here by a
+      // pull request is connecting that run, so only that run going ahead ends this step, not a login from before.
+      if (view === 'connect' && ((login && !code && !startOnClaude) || (isReviewing(check) && !couldntFinish(check)))) setView('live');
       return view === 'live' && (done || !pr);
     });
-  }, [view, client, repo, pr]);
+  }, [view, client, repo, pr, startOnClaude]);
+
+  // A pull request's link can be any pull request. Only one on a repo without the workflow is the one that sets it up.
+  const shownPr = startOnClaude && details?.installed ? null : pr;
 
   const anotherRepo = () => {
     setRepo(null);
@@ -281,7 +324,7 @@ export default function Setup() {
           Mergelight
         </a>
         {/* The orb at the end only lights up once reviews are really on. */}
-        <Rail at={view === 'live' && pr && !merged ? 3 : RAIL[view]} />
+        <Rail at={view === 'live' && shownPr && !merged ? 3 : RAIL[view]} />
       </header>
 
       <main className="flex flex-1 justify-center px-4 pb-16 pt-[6vh] sm:pt-[9vh]">
@@ -290,14 +333,14 @@ export default function Setup() {
             <Stage viewKey={view} direction={direction}>
               {view === 'welcome' && <Welcome failed={signInFailed} requested={requested} />}
               {view === 'settling' && <SettlingStep />}
-              {view === 'repo' && <RepoStep repos={repos} onChoose={choose} failed={signInFailed} />}
+              {view === 'repo' && <RepoStep repos={repos} onChoose={choose} failed={signInFailed} missing={missing} />}
               {view === 'review-app' && repo && <ReviewAppStep repo={repo} onCheck={() => choose(repo)} onBack={back['review-app']!} />}
               {view === 'add' && repo && (
                 <AddStep repo={repo} details={details} fileCount={files.length} branch={branch} setBranch={setBranch} scope={scope} setScope={setScope} fileOpen={fileOpen} onToggleFile={() => setFileOpen((v) => !v)} adding={adding} failed={addFailed} detailsFailed={detailsFailed} onRetry={() => choose(repo)} update={update} onAdd={() => void addToRepo()} fileUrl={fileUrl} onBack={adding ? () => undefined : back.add!} onByHand={() => { setFileOpen(false); setView('finish'); }} onContinue={afterAdding} />
               )}
               {view === 'finish' && repo && <FinishStep repo={repo} branch={branch} fileUrl={fileUrl} pr={pr} onBack={back.finish!} />}
-              {view === 'connect' && repo && <ConnectStep repo={repo} pr={pr} status={status} code={connectCode} onBack={back.connect!} onSkip={() => setView('live')} />}
-              {view === 'live' && repo && <LiveStep repo={repo} pr={pr} status={status} hasLogin={hasLogin} merged={merged} updatedTo={update?.tag ?? null} onAnother={anotherRepo} />}
+              {view === 'connect' && repo && <ConnectStep repo={repo} pr={pr} status={status} code={connectCode} onBack={back.connect!} onSkip={() => setView('live')} startOnClaude={startOnClaude} onClaudeCode={(url, c) => client!.sendClaudeCode(repo, url, c)} />}
+              {view === 'live' && repo && <LiveStep repo={repo} pr={shownPr} backTo={startOnClaude ? pr : null} status={status} hasLogin={hasLogin} merged={merged} updatedTo={startOnClaude ? null : (update?.tag ?? null)} onAnother={anotherRepo} />}
             </Stage>
             <p className="mt-6 flex items-center justify-center gap-1.5 text-center text-[13px] text-faint">
               <LockIcon className="size-3.5 shrink-0" />
@@ -524,7 +567,7 @@ function SettlingStep() {
   );
 }
 
-function RepoStep({ repos, onChoose, failed }: { repos: Repo[] | null; onChoose: (r: Repo) => void; failed: boolean }) {
+function RepoStep({ repos, onChoose, failed, missing }: { repos: Repo[] | null; onChoose: (r: Repo) => void; failed: boolean; missing: ConnectLink | null }) {
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
   const list = useMemo(() => (repos ?? []).filter((r) => r.fullName.toLowerCase().includes(query.trim().toLowerCase())), [repos, query]);
@@ -536,6 +579,17 @@ function RepoStep({ repos, onChoose, failed }: { repos: Repo[] | null; onChoose:
         <Heading title="Couldn't reach GitHub" sub="Your sign-in may have run out. Sign in again to pick up where you were." />
         <a href={signInUrl()} className={`${PRIMARY} mt-6`}>
           <GitHubIcon className="size-[18px]" /> Continue with GitHub
+        </a>
+      </div>
+    );
+  }
+
+  if (missing) {
+    return (
+      <div>
+        <Heading title={`Give Mergelight access to ${missing.repo.split('/')[1]}`} sub={`Your pull request is on ${missing.repo}, and Mergelight can't see that repo yet. Choose it on GitHub, and you'll come straight back here.`} />
+        <a href={INSTALL_URL} onClick={() => rememberConnect(missing)} className={`${PRIMARY} mt-6`}>
+          <GitHubIcon className="size-[18px]" /> Choose on GitHub
         </a>
       </div>
     );
@@ -636,19 +690,44 @@ function Fact({ icon, center = false, tall = false, children }: { icon: ReactNod
 }
 
 /** Two choices side by side. Real radio buttons, so arrow keys and screen readers just work. */
-function Choices<T extends string>({ label, options, value, onChange }: { label: string; options: { id: T; title: string; note: string; disabled?: boolean }[]; value: T; onChange: (v: T) => void }) {
+function Choices<T extends string>({ label, options, value, onChange, top = 'mt-5' }: { label: string; options: { id: T; title: string; note?: string; disabled?: boolean; icon?: { path: string; color: string } }[]; value: T; onChange: (v: T) => void; top?: string }) {
   return (
-    <div role="radiogroup" aria-label={label} className="mt-5 grid grid-cols-2 gap-2">
+    <div role="radiogroup" aria-label={label} className={`${top} grid grid-cols-2 gap-2`}>
       {options.map((o) => {
         const on = value === o.id;
         return (
           <label
             key={o.id}
-            className={`rounded-2xl p-3.5 transition-[background-color,box-shadow,transform] duration-150 has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-lilac ${o.disabled ? 'cursor-not-allowed opacity-40' : 'cursor-pointer active:scale-[0.98]'} ${on ? 'bg-white/[0.07] shadow-[inset_0_0_0_1.5px_rgb(184_156_255/0.75)]' : 'bg-white/[0.025] shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)] hover:bg-white/[0.05]'}`}
+            className={`flex flex-col justify-center rounded-2xl p-3.5 transition-[background-color,box-shadow,transform] duration-150 has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-lilac ${o.disabled ? 'cursor-not-allowed opacity-40' : 'cursor-pointer active:scale-[0.98]'} ${on ? 'bg-white/[0.07] shadow-[inset_0_0_0_1.5px_rgb(184_156_255/0.75)]' : 'bg-white/[0.025] shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)] hover:bg-white/[0.05]'}`}
           >
             <input type="radio" name={label} className="sr-only" checked={on} disabled={o.disabled} onChange={() => onChange(o.id)} />
-            <span className="block text-[14.5px] font-medium text-fg">{o.title}</span>
-            <span className="mt-1 block text-[12.5px] leading-snug text-muted [text-wrap:pretty]">{o.note}</span>
+            <span className="flex items-center gap-2.5">
+              {o.icon && (
+                <svg viewBox="0 0 24 24" aria-hidden="true" className="size-5 shrink-0" fill={o.icon.color} fillRule="evenodd">
+                  <path d={o.icon.path} />
+                </svg>
+              )}
+              <span className="block text-[14.5px] font-medium text-fg">{o.title}</span>
+            </span>
+            {o.note && <span className="mt-1 block text-[12.5px] leading-snug text-muted [text-wrap:pretty]">{o.note}</span>}
+          </label>
+        );
+      })}
+    </div>
+  );
+}
+
+/** One thing or the other, with a pill that slides between them. Real radio buttons, for the same reason as above. */
+function Segment<T extends string>({ label, options, value, onChange }: { label: string; options: { id: T; title: string }[]; value: T; onChange: (v: T) => void }) {
+  return (
+    <div role="radiogroup" aria-label={label} className="mt-5 flex rounded-xl bg-black/25 p-1 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.06)]">
+      {options.map((o) => {
+        const on = value === o.id;
+        return (
+          <label key={o.id} className={`relative flex h-9 flex-1 cursor-pointer items-center justify-center rounded-lg text-[14px] font-medium transition-colors duration-150 has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-1 has-[:focus-visible]:outline-lilac ${on ? 'text-fg' : 'text-muted hover:text-fg'}`}>
+            <input type="radio" name={label} className="sr-only" checked={on} onChange={() => onChange(o.id)} />
+            {on && <motion.span layoutId={`${label} pill`} transition={{ type: 'spring', bounce: 0, duration: 0.28 }} className="absolute inset-0 rounded-lg bg-white/[0.1] shadow-[0_0_0_1px_rgb(255_255_255/0.06)]" />}
+            <span className="relative">{o.title}</span>
           </label>
         );
       })}
@@ -1076,8 +1155,14 @@ function FinishStep({ repo, branch, fileUrl, pr, onBack }: { repo: Repo; branch:
   );
 }
 
-function ConnectStep({ repo, pr, status, code, onBack, onSkip }: { repo: Repo; pr: SetupPr | null; status: CheckStatus | null; code: ConnectCode | null; onBack: () => void; onSkip: () => void }) {
-  const [mode, setMode] = useState<'chatgpt' | 'apikey'>(repo.isPrivate ? 'chatgpt' : 'apikey');
+function ConnectStep({ repo, pr, status, code: found, onBack, onSkip, startOnClaude, onClaudeCode }: { repo: Repo; pr: SetupPr | null; status: CheckStatus | null; code: ConnectCode | null; onBack: () => void; onSkip: () => void; startOnClaude: boolean; onClaudeCode: (url: string, code: string) => Promise<void> }) {
+  const code = found?.code ? found : null;
+  const claudeUrl = found?.claudeUrl ?? null;
+  const [pasted, setPasted] = useState('');
+  const [sending, setSending] = useState<'idle' | 'sending' | 'sent' | 'failed' | 'incomplete'>('idle');
+  const [billing, setBilling] = useState<'plan' | 'key'>(startOnClaude || repo.isPrivate ? 'plan' : 'key');
+  const [provider, setProvider] = useState<'openai' | 'anthropic'>(startOnClaude ? 'anthropic' : 'openai');
+  const mode = billing === 'plan' ? (provider === 'openai' ? 'chatgpt' : 'claude') : provider === 'openai' ? 'apikey' : 'anthropic';
   const [copied, setCopied] = useState<string | null>(null);
   const prUrl = pr?.url ?? `https://github.com/${repo.fullName}/pulls`;
   const prLink = (
@@ -1089,9 +1174,26 @@ function ConnectStep({ repo, pr, status, code, onBack, onSkip }: { repo: Repo; p
   const waiting = !failed && status?.title?.toLowerCase().includes('connect');
   // With a pull request open, the run that makes the code is on its way or already going.
   const coming = Boolean(pr) && !failed && !waiting;
-  const note = mode === 'apikey' ? "We'll move on when you're connected" : code ? 'Waiting for you to enter the code' : failed ? "Couldn't connect. Check that step 1 is on." : waiting ? 'Your code is ready on the pull request' : "We'll move on when you're connected";
+  const noteEnded = 'This link has ended';
+  const note = mode !== 'chatgpt' ? "We'll move on when you're connected" : code ? 'Waiting for you to enter the code' : failed ? "Couldn't connect. Check that step 1 is on." : waiting ? 'Your code is ready on the pull request' : "We'll move on when you're connected";
   // The run takes a little while to make the code, so this has to look busy, not stuck.
   const gettingCode = mode === 'chatgpt' && coming && !code;
+  // A private repo's run offers Claude too, unless it was set up before that existed.
+  const gettingClaude = mode === 'claude' && repo.isPrivate && Boolean(pr) && !failed && !claudeUrl;
+  // A pull request's link means its run offered Claude, so no link now means that run has ended.
+  const claudeEnded = startOnClaude && mode === 'claude' && failed && !claudeUrl;
+  const sendCode = () => {
+    const value = pasted.trim();
+    if (!value || sending === 'sending' || sending === 'sent') return;
+    // The run only reads a whole code, so a partial copy would wait until the link runs out.
+    if (!/^[\w.~-]{10,500}#[\w.~-]{20,500}$/.test(value)) {
+      setSending('incomplete');
+      return;
+    }
+    if (!claudeUrl) return;
+    setSending('sending');
+    onClaudeCode(claudeUrl, value).then(() => setSending('sent'), () => setSending('failed'));
+  };
 
   const copy = (text: string) => {
     void navigator.clipboard?.writeText(text).then(() => {
@@ -1100,17 +1202,25 @@ function ConnectStep({ repo, pr, status, code, onBack, onSkip }: { repo: Repo; p
     });
   };
 
-  const options = [
-    { id: 'chatgpt' as const, title: 'ChatGPT plan', note: repo.isPrivate ? 'Uses the subscription you already have' : 'Private repos only, by OpenAI', disabled: !repo.isPrivate },
-    { id: 'apikey' as const, title: 'OpenAI API key', note: 'Pay OpenAI per use', disabled: false },
+  const secretName = mode === 'claude' ? 'CLAUDE_CODE_OAUTH_TOKEN' : mode === 'anthropic' ? 'ANTHROPIC_API_KEY' : 'OPENAI_API_KEY';
+  // OpenAI allows a ChatGPT login in CI on private repos only.
+  const chatgptClosed = billing === 'plan' && !repo.isPrivate;
+  const chooseBilling = (next: 'plan' | 'key') => {
+    setBilling(next);
+    if (next === 'plan' && !repo.isPrivate) setProvider('anthropic');
+  };
+  const providers = [
+    { id: 'openai' as const, title: billing === 'plan' ? 'ChatGPT' : 'OpenAI', icon: OPENAI_MARK, note: chatgptClosed ? 'Private repos only' : undefined, disabled: chatgptClosed },
+    { id: 'anthropic' as const, title: billing === 'plan' ? 'Claude' : 'Anthropic', icon: CLAUDE_MARK },
   ];
 
   return (
     <div>
       <BackButton onClick={onBack} />
-      <Heading title="Connect your AI" sub="Reviews run on your own account." />
+      <Heading title="Connect your AI" sub={billing === 'plan' ? 'Reviews use the subscription you already have.' : 'You pay your AI provider for each review.'} />
 
-      <Choices label="How to connect" options={options} value={mode} onChange={setMode} />
+      <Segment label="How to pay" options={[{ id: 'plan' as const, title: 'Your plan' }, { id: 'key' as const, title: 'API key' }]} value={billing} onChange={chooseBilling} />
+      <Choices label="Which AI" options={providers} value={provider} onChange={setProvider} top="mt-3" />
 
       {mode === 'chatgpt' ? (
         <ol className="mt-6 space-y-4">
@@ -1153,30 +1263,76 @@ function ConnectStep({ repo, pr, status, code, onBack, onSkip }: { repo: Repo; p
             )}
           </Numbered>
         </ol>
-      ) : (
+      ) : claudeEnded ? (
         <ol className="mt-6 space-y-4">
           <Numbered n={1}>
-            Add a secret named{' '}
-            <button type="button" onClick={() => copy('OPENAI_API_KEY')} title="Copy" className="rounded-md bg-white/[0.08] px-1.5 py-0.5 font-mono text-[12.5px] text-fg transition-colors hover:bg-white/[0.13]">
-              {copied === 'OPENAI_API_KEY' ? 'Copied' : 'OPENAI_API_KEY'}
+            Push a new commit to your pull request to get a new link
+            {prLink}
+          </Numbered>
+        </ol>
+      ) : mode === 'claude' && (claudeUrl || gettingClaude) ? (
+        <ol className="mt-6 space-y-4">
+          <Numbered n={1}>
+            Confirm on Claude's page
+            {claudeUrl ? (
+              <a href={claudeUrl} target="_blank" rel="noreferrer" className="mt-1 flex w-fit items-center gap-1 text-[13.5px] text-lilac transition-colors hover:text-fg">
+                Open Claude <External />
+              </a>
+            ) : (
+              <span className="mt-1 block text-[13.5px] text-muted">The link shows up here in a moment.</span>
+            )}
+          </Numbered>
+          <Numbered n={2}>
+            Paste the code Claude shows you
+            <span className={`${WELL} mt-2 flex items-center gap-2 py-1.5 pl-4 pr-1.5`}>
+              <input aria-label="Code from Claude" value={pasted} disabled={!claudeUrl || sending === 'sent'} onChange={(e) => setPasted(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && sendCode()} placeholder="Paste here" autoComplete="off" spellCheck={false} className="min-w-0 flex-1 bg-transparent font-mono text-[14px] text-fg outline-none placeholder:text-faint" />
+              <button type="button" onClick={sendCode} disabled={!pasted.trim() || sending === 'sending' || sending === 'sent'} className="shrink-0 rounded-lg bg-white/[0.08] px-3 py-1.5 text-[13px] text-fg transition-colors hover:bg-white/[0.13] disabled:opacity-40">
+                Connect
+              </button>
+            </span>
+            {sending === 'failed' && <span className="mt-1 block text-[13px] text-risk">GitHub didn't take that. Please try again.</span>}
+            {sending === 'incomplete' && <span className="mt-1 block text-[13px] text-risk">That isn't the whole code. Copy it again from Claude's page.</span>}
+            {sending !== 'failed' && sending !== 'incomplete' && <span className="mt-1 block text-[13px] text-muted">It works once, and goes straight to your repository.</span>}
+          </Numbered>
+        </ol>
+      ) : (
+        <ol className="mt-6 space-y-4">
+          {mode === 'claude' && (
+            <Numbered n={1}>
+              On your computer, run{' '}
+              <button type="button" onClick={() => copy('claude setup-token')} title="Copy" className="rounded-md bg-white/[0.08] px-1.5 py-0.5 font-mono text-[12.5px] text-fg transition-colors hover:bg-white/[0.13]">
+                {copied === 'claude setup-token' ? 'Copied' : 'claude setup-token'}
+              </button>
+              <span className="mt-1 block text-[13.5px] text-muted">It signs in to your Claude plan and shows a token that lasts a year.</span>
+            </Numbered>
+          )}
+          <Numbered n={mode === 'claude' ? 2 : 1}>
+            Add {mode === 'claude' ? 'that token as' : ''} a secret named{' '}
+            <button type="button" onClick={() => copy(secretName)} title="Copy" className="rounded-md bg-white/[0.08] px-1.5 py-0.5 font-mono text-[12.5px] text-fg transition-colors hover:bg-white/[0.13]">
+              {copied === secretName ? 'Copied' : secretName}
             </button>
             <a href={`https://github.com/${repo.fullName}/settings/secrets/actions/new`} target="_blank" rel="noreferrer" className="mt-1 flex w-fit items-center gap-1 text-[13.5px] text-lilac transition-colors hover:text-fg">
               Open GitHub secrets <External />
             </a>
           </Numbered>
-          <Numbered n={2}>Push any commit to your pull request to start the review</Numbered>
+          <Numbered n={mode === 'claude' ? 3 : 2}>Push any commit to your pull request to start the review</Numbered>
         </ol>
       )}
 
       <div className={`${WELL} mt-6 px-4 py-3.5`}>
         <div role="status">
-          {gettingCode ? (
+          {gettingClaude || (mode === 'claude' && sending === 'sent' && !failed) ? (
+            <span className="flex items-center gap-2.5">
+              <Spinner className="size-4 shrink-0 text-lilac" />
+              <span className="min-w-0 text-[14px] text-muted">{sending === 'sent' ? 'Connecting to Claude. Almost ready, hang tight.' : 'Getting your Claude link. Almost ready, hang tight.'}</span>
+            </span>
+          ) : gettingCode ? (
             <span className="flex items-center gap-2.5">
               <Spinner className="size-4 shrink-0 text-lilac" />
               <span className="min-w-0 text-[14px] text-muted">Getting your code. Almost ready, hang tight.</span>
             </span>
           ) : (
-            <Pulse tone={mode === 'chatgpt' && (code || failed || waiting) ? 'risk' : 'lilac'}>{note}</Pulse>
+            <Pulse tone={claudeEnded || (mode === 'chatgpt' && (code || failed || waiting)) ? 'risk' : 'lilac'}>{claudeEnded ? noteEnded : note}</Pulse>
           )}
         </div>
       </div>
@@ -1214,7 +1370,7 @@ function Milestone({ state, title, last = false, children }: { state: 'done' | '
   );
 }
 
-function LiveStep({ repo, pr, status, hasLogin, merged, updatedTo, onAnother }: { repo: Repo; pr: SetupPr | null; status: CheckStatus | null; hasLogin: boolean; merged: boolean; updatedTo: string | null; onAnother: () => void }) {
+function LiveStep({ repo, pr, backTo, status, hasLogin, merged, updatedTo, onAnother }: { repo: Repo; pr: SetupPr | null; backTo: SetupPr | null; status: CheckStatus | null; hasLogin: boolean; merged: boolean; updatedTo: string | null; onAnother: () => void }) {
   const name = repo.fullName.split('/')[1]!;
   const another = (
     <button type="button" onClick={onAnother} className={`${BUTTON} mt-3 text-fg shadow-[inset_0_0_0_1px_rgb(255_255_255/0.12)] hover:bg-white/[0.05]`}>
@@ -1231,9 +1387,17 @@ function LiveStep({ repo, pr, status, hasLogin, merged, updatedTo, onAnother }: 
         </motion.div>
         <h1 className="mt-4 text-[28px] font-semibold leading-[1.1] tracking-[-0.028em]">{updatedTo ? `You're on ${updatedTo}` : 'Mergelight is on'}</h1>
         <p className="mx-auto mt-2 max-w-[340px] text-[15px] leading-relaxed text-muted [text-wrap:pretty]">
-          {updatedTo ? `Reviews on ${name} now use the new version.` : `New PRs on ${name} get reviewed by themselves, and the results show up on the PR.`} You can close this page.
+          {updatedTo ? `Reviews on ${name} now use the new version.` : `New PRs on ${name} get reviewed by themselves, and the results show up on the PR.`}{backTo ? '' : ' You can close this page.'}
         </p>
-        <div className="mt-6">{another}</div>
+        <div className="mt-6">
+          {/* GitHub opens a comment's links in the same tab, so this is the way back. */}
+          {backTo && (
+            <a href={backTo.url} className={PRIMARY}>
+              Back to PR #{backTo.number}
+            </a>
+          )}
+          {another}
+        </div>
       </div>
     );
   }
