@@ -129,10 +129,10 @@ function Plans() {
 function Agent() {
   return (
     <div className="overflow-hidden rounded-xl border border-line bg-[#0a0912] px-3 py-2.5 font-mono text-[12px] leading-5 [&>p]:truncate">
-      <p><span className="text-mint">get_findings</span> <span className="text-faint">returned 1 bug, 2 hardening</span></p>
+      <p><span className="text-mint">list_findings</span> <span className="text-faint">returned 1 bug, 2 hardening</span></p>
       <p><span className="text-lilac">fix</span> <span className="text-muted">cart.ts:54, tests pass</span></p>
-      <p><span className="text-lilac">reply</span> <span className="text-muted">decline 2 hardening, reason given</span></p>
-      <p><span className="text-mint">resolve</span> <span className="text-faint">all threads closed</span></p>
+      <p><span className="text-lilac">leave</span> <span className="text-muted">2 hardening, not worth the change</span></p>
+      <p><span className="text-mint">mark_finding_handled</span> <span className="text-faint">1 fixed</span></p>
     </div>
   );
 }

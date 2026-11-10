@@ -1,6 +1,6 @@
 {
   "name": "mergelight",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "description": "AI code review that runs on the Claude or ChatGPT plan you already pay for.",
   "type": "module",
   "bin": {
@@ -14,6 +14,7 @@
   ],
   "scripts": {
     "build": "tsc -p .",
+    "prepack": "npm run build",
     "dev": "tsc -p . --watch",
     "test": "tsc -p . && node --test test/*.test.mjs"
   },

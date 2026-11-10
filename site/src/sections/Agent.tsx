@@ -6,16 +6,16 @@ import { Check, Container, SectionHead } from '../ui';
 const COMMAND = 'npx mergelight init';
 
 const output = [
-  'Skill added for Claude Code',
-  'Review rules added to AGENTS.md for Codex',
-  'MCP server set up for Cursor and T3 Code',
+  'MCP server and skill added for Claude Code',
+  'MCP server and skill added for Codex',
+  'MCP server and skill added for Cursor',
 ];
 
 const tools = [
-  ['wait_for_review', 'Waits until the Mergelight check finishes, so your agent knows when to come back.'],
-  ['get_findings', 'Returns the open findings as data, already sorted into bug, risk and hardening.'],
-  ['reply', 'Accepts or declines a finding with a reason. Every reply teaches Mergelight.'],
-  ['resolve', 'Closes the thread once the fix is pushed.'],
+  ['list_findings', 'Returns the open findings as data, already sorted into what to fix, what is your call and what to leave.'],
+  ['list_findings · review', 'Says if the review matches your latest commit, so your agent knows when to come back.'],
+  ['mark_finding_handled · fixed', 'Records that the fix is pushed. The next review checks it and closes the thread.'],
+  ['mark_finding_handled · wont_fix', 'Records a finding you chose to leave, with the reason. The next review reads it.'],
 ];
 
 export default function Agent() {
@@ -72,7 +72,7 @@ export default function Agent() {
                     <Check className="size-4 text-mint" /> {line}
                   </p>
                 ))}
-                <p className="pt-3 text-faint">Your agent now waits for Mergelight after every push.</p>
+                <p className="pt-3 text-faint">Now ask your agent: "Handle the Mergelight findings on this PR."</p>
               </div>
             </div>
           </div>
@@ -88,7 +88,7 @@ export default function Agent() {
         </div>
 
         <p className="mt-10 max-w-3xl text-lg leading-relaxed text-muted">
-          The skill teaches your agent the routine: <span className="text-fg">fix the bugs, ask you about risks, decline hardening with a reason,</span> and never grow the PR beyond what it set out to do.
+          The skill teaches your agent the routine: <span className="text-fg">fix what is worth fixing, ask you about what is your call, leave hardening alone,</span> and never grow the PR beyond what it set out to do.
         </p>
       </Container>
     </section>
