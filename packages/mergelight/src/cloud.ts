@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Review } from "./types.js";
 
 /**
@@ -85,11 +86,12 @@ export function serverUrl(env: Record<string, string | undefined>): URL | null {
 }
 
 /**
- * Who the OIDC token is made for: the server's own address. Another Mergelight server refuses it,
- * and so does the token server, so a token can't be passed on to get anything anywhere else.
+ * Who the OIDC token is made for: the server's own address, with its path if it's mounted under one.
+ * Another Mergelight server refuses it, and so does the token server, so a token can't be passed on
+ * to get anything anywhere else.
  */
 export function audienceFor(server: URL): string {
-  return server.origin;
+  return server.origin + server.pathname.replace(/\/+$/, "");
 }
 
 function defaults(deps: CloudDeps) {
@@ -206,7 +208,9 @@ export async function reportReview(review: Review, deps: CloudDeps = {}): Promis
   const server = serverUrl(d.env);
   if (!server) return false;
   try {
-    const res = await call(d, server, "/v1/reviews", { method: "POST", body: JSON.stringify(reviewNumbers(review)) });
+    // One id for this report, the same on both tries, so the server keeps it once.
+    const body = JSON.stringify({ ...reviewNumbers(review), report_id: randomUUID() });
+    const res = await call(d, server, "/v1/reviews", { method: "POST", body });
     if (!res.ok) d.log(`The Mergelight server answered ${res.status} to the review's numbers. The review itself is posted.`);
     return res.ok;
   } catch (err) {

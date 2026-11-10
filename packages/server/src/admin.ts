@@ -7,7 +7,7 @@
 //
 // The id is GitHub's number for the account: gh api users/<login> --jq .id
 
-import { connectOrg, createPool, deleteOrg, isId, migrate } from "./db.js";
+import { assertRowRulesHold, connectOrg, createPool, deleteOrg, isId, migrate } from "./db.js";
 
 function usage(): never {
   console.error("Usage: node dist/admin.js connect <github-account-id> <login> | delete <github-account-id>");
@@ -27,6 +27,8 @@ if (command === "connect" && !/^[\w.-]{1,100}$/.test(login ?? "")) usage();
 
 const pool = createPool(url);
 try {
+  // The same check as the server: a superuser would create the tables as their owner and skip the row rules.
+  await assertRowRulesHold(pool);
   await migrate(pool);
   if (command === "connect") {
     await connectOrg(pool, id, login!);
@@ -34,6 +36,9 @@ try {
   } else {
     console.log((await deleteOrg(pool, id)) ? `Removed everything stored for ${id}.` : `Nothing was stored for ${id}.`);
   }
+} catch (err) {
+  console.error((err as Error).message);
+  process.exitCode = 1;
 } finally {
   await pool.end();
 }

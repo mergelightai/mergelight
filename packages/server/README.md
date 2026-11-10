@@ -4,6 +4,8 @@ Stores what the Mergelight dashboard shows. Today that is numbers about each rev
 
 It is off unless a workflow sets the Action's `server` input, and it stores nothing for an org that hasn't turned the dashboard on.
 
+A run that has the input set does tell the server who it is, even before the server says whether the org is on. It sends GitHub's signed token, which names the repository, the branch, the workflow, the run and who started it. The server reads the ids it needs from it and keeps none of it for an org that isn't on. So only point the input at a server you trust with those names.
+
 ## What it stores, and what it never does
 
 Stored, per review: the repository's name and GitHub id, the pull request number, the commit, the light (green, yellow, red), how many findings of each kind, which AI ran it (`codex` or `claude`, and the model's name), how long it took, and the size of the change.
@@ -26,9 +28,9 @@ A server that is down, slow or hostile can't stop or change a review. Each of th
 
 - **No key to store.** A run proves which repository it is with GitHub's OIDC token, like the token server. The server checks GitHub's signature, the issuer, the audience, the expiry and the event.
 - **The org comes from the signature.** The org and repository are GitHub's own id numbers from the signed token. Nothing in a request's body or address can choose them. Ids, not names, because a name can be given up and taken by someone else.
-- **A token is made for one server.** Its audience is this server's own address (`PUBLIC_URL`). A token made for another Mergelight server is refused, so a server someone else runs can't pass a token on to this one. The token server refuses these tokens too, so nothing that reaches this server can be turned into an app token. This server holds no GitHub key at all.
+- **A token is made for one server.** Its audience is this server's own address (`PUBLIC_URL`), with its path if it is mounted under one. A token made for another Mergelight server is refused, so a server someone else runs can't pass a token on to this one. The token server refuses these tokens too, so nothing that reaches this server can be turned into an app token. This server holds no GitHub key at all.
 - **A token works once.** A copied token is worth nothing. The server keeps the used ones in memory, so this holds for one server between restarts. GitHub's tokens expire within minutes, which bounds the rest.
-- **Runs aren't trusted.** Someone who can push a branch can change the workflow in their pull request and send anything from it. So a run can read its own org's data and add numbers about its own repository, and nothing else. Every field is checked, and no free text is kept.
+- **Runs aren't trusted.** Someone who can push a branch can change the workflow in their pull request and send anything from it. So a run can read its own org's data and add numbers about its own repository, and nothing else. Every field is checked, and no free text is kept. What is left: such a person can add made-up numbers for their own repository. On a `pull_request` run the pull request number must be the one GitHub signed; a `pull_request_target` run is signed for the base branch, so there it can't be checked.
 - **The database keeps orgs apart by itself.** Every table has row-level security, forced for the table's owner too. The server names the org once per request, inside a transaction, and a query that names none sees no rows. The server refuses to start as a database role that can bypass this.
 - **Limits.** 8 KB per request, 600 requests a minute per org, 30 seconds per request.
 - **Logs** hold error names only. Never a token, a body or a row.

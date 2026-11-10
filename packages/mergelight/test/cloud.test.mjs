@@ -68,8 +68,8 @@ test("a server mounted under a path is asked under that path", async () => {
   const s = setup(json(200, { connected: true }));
   assert.equal(await cloudConnected({ ...s.deps, env: { ...env, MERGELIGHT_SERVER: "https://server.test/mergelight" } }), true);
   assert.equal(s.calls[1].url, "https://server.test/mergelight/v1/context");
-  // The token is still made for the server's address alone.
-  assert.equal(new URL(s.calls[0].url).searchParams.get("audience"), "https://server.test");
+  // The token is made for that mounted server, not for a neighbour on the same host.
+  assert.equal(new URL(s.calls[0].url).searchParams.get("audience"), "https://server.test/mergelight");
 });
 
 test("a server setting that can't be used says so, instead of looking like it is on", async () => {
@@ -122,8 +122,9 @@ test("asks GitHub for a token made for the server, hides it, and asks the server
   assert.deepEqual(s.masked, ["oidc-1"]);
 });
 
-test("the token's audience is the server's address alone, whatever path or case the setting has", () => {
-  assert.equal(audienceFor(serverUrl({ MERGELIGHT_SERVER: "https://Data.Example.com:443/some/path?x=1" })), "https://data.example.com");
+test("the token's audience is the server's address, with its path and without a query or a trailing slash", () => {
+  assert.equal(audienceFor(serverUrl({ MERGELIGHT_SERVER: "https://Data.Example.com:443/?x=1" })), "https://data.example.com");
+  assert.equal(audienceFor(serverUrl({ MERGELIGHT_SERVER: "https://data.example.com/mergelight/" })), "https://data.example.com/mergelight");
   assert.equal(audienceFor(serverUrl({ MERGELIGHT_SERVER: "http://127.0.0.1:10001/" })), "http://127.0.0.1:10001");
   assert.notEqual(audienceFor(serverUrl({ MERGELIGHT_SERVER: "https://mergelight" })), "mergelight");
 });
@@ -144,7 +145,9 @@ test("sends the numbers with a new token, and nothing but the numbers", async ()
   assert.equal(sent.url, "https://server.test/v1/reviews");
   assert.equal(sent.init.method, "POST");
   assert.equal(sent.init.headers["content-type"], "application/json");
-  assert.deepEqual(JSON.parse(sent.init.body), reviewNumbers(review));
+  const { report_id, ...numbers } = JSON.parse(sent.init.body);
+  assert.deepEqual(numbers, reviewNumbers(review));
+  assert.match(report_id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
   assert.equal(s.lines.length, 0);
 });
 
@@ -153,6 +156,9 @@ test("a server error is tried once more, with a token of its own", async () => {
   assert.equal(await reportReview(review, s.deps), true);
   const toServer = s.calls.filter((c) => c.url.startsWith("https://server.test"));
   assert.deepEqual(toServer.map((c) => c.init.headers.authorization), ["Bearer oidc-1", "Bearer oidc-2"]);
+  // Both tries are the same report, so the server keeps it once.
+  const ids = toServer.map((c) => JSON.parse(c.init.body).report_id);
+  assert.equal(ids[0], ids[1]);
 });
 
 test("a server that is down or refuses never throws: the review goes on", async () => {

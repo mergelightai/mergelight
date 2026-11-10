@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createSign, generateKeyPairSync, randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { after, before, beforeEach, test } from "node:test";
 import pg from "pg";
 import { handle as tokenServer, resetJwksCache } from "../../token-server/src/token.js";
@@ -54,6 +56,7 @@ const fetchImpl = async (url) => {
 };
 
 const REVIEW = {
+  report_id: "11111111-1111-4111-8111-111111111111",
   pr: 42,
   sha: "a".repeat(40),
   light: "yellow",
@@ -163,12 +166,12 @@ test("the same run can't count twice, and a new attempt counts once more", async
   assert.equal((await rowsOf(ACME.id, "select 1 from reviews")).length, 2);
 });
 
-test("two review jobs in one run each get their row: another pull request, or another AI", async () => {
+test("two review jobs in one run each get their row, and a second try of one report doesn't", async () => {
   await connectOrg(pool, ACME.id, ACME.login);
   assert.equal((await post(makeToken())).status, 201);
-  assert.equal((await post(makeToken(), { ...REVIEW, pr: 43 })).status, 201);
-  assert.equal((await post(makeToken(), { ...REVIEW, provider: "codex" })).status, 201);
-  assert.equal((await post(makeToken(), { ...REVIEW, provider: "codex" })).status, 200);
+  // Same run, same pull request, same AI: still its own row, because the report has its own id.
+  assert.equal((await post(makeToken(), { ...REVIEW, report_id: randomUUID() })).status, 201);
+  assert.equal((await post(makeToken(), { ...REVIEW, report_id: randomUUID(), pr: 43, provider: "codex" })).status, 201);
   assert.equal((await rowsOf(ACME.id, "select 1 from reviews")).length, 3);
 });
 
@@ -238,8 +241,9 @@ test("a token made for this server gets nothing from the token server", async ()
   assert.match((await res.json()).message, /wrong audience/);
 });
 
-test("the server's address must be https, and is its origin alone", () => {
-  assert.equal(audienceOf("https://Data.Example.com/some/path"), "https://data.example.com");
+test("the server's address must be https, and a token must be made for exactly it", () => {
+  assert.equal(audienceOf("https://Data.Example.com"), "https://data.example.com");
+  assert.equal(audienceOf("https://data.example.com/mergelight/"), "https://data.example.com/mergelight");
   assert.equal(audienceOf("http://127.0.0.1:10001"), "http://127.0.0.1:10001");
   assert.throws(() => audienceOf("http://data.example.com"), /https/);
   assert.throws(() => audienceOf("mergelight"));
@@ -321,6 +325,9 @@ test("a review that isn't plain numbers is refused, and nothing is stored", asyn
   const bad = [
     "not json",
     "[]",
+    { ...REVIEW, report_id: undefined },
+    { ...REVIEW, report_id: "not-an-id" },
+    { ...REVIEW, report_id: 7 },
     { ...REVIEW, pr: 0 },
     { ...REVIEW, pr: "42" },
     { ...REVIEW, sha: "HEAD" },
@@ -349,7 +356,7 @@ test("a review that isn't plain numbers is refused, and nothing is stored", asyn
 
 test("parseReview keeps only the fields it knows, and a missing model is fine", () => {
   const parsed = parseReview({ ...REVIEW, model: null, verifier: undefined, note: "ignore me", title: "secret code" });
-  assert.deepEqual(Object.keys(parsed).sort(), ["additions", "bugs", "deletions", "duration_ms", "files_changed", "hardening", "light", "major", "model", "pr", "provider", "risks", "sha", "tier_decision", "tier_list", "tier_post", "verifier"]);
+  assert.deepEqual(Object.keys(parsed).sort(), ["additions", "bugs", "deletions", "duration_ms", "files_changed", "hardening", "light", "major", "model", "pr", "provider", "report_id", "risks", "sha", "tier_decision", "tier_list", "tier_post", "verifier"]);
   assert.equal(parsed.model, null);
   assert.equal(parsed.verifier, null);
 });
@@ -365,6 +372,30 @@ test("an org that sends too many requests in a minute is slowed down, and other 
   clock += 61_000;
   assert.equal((await get(refused)).status, 200);
   assert.equal((await get(refused)).status, 401);
+});
+
+test("a server mounted under a path answers there, and only takes tokens made for that path", async () => {
+  await connectOrg(pool, ACME.id, ACME.login);
+  const mounted = createApi({ pool, publicUrl: "https://server.test/mergelight/", fetchImpl, now: () => clock });
+  const ask = (path, aud) => mounted(new Request(`https://server.test${path}`, { headers: { authorization: `Bearer ${makeToken({ aud })}` } }));
+  // A proxy may pass the path on or strip it.
+  assert.equal((await ask("/mergelight/v1/context", "https://server.test/mergelight")).status, 200);
+  assert.equal((await ask("/v1/context", "https://server.test/mergelight")).status, 200);
+  assert.equal((await mounted(new Request("https://server.test/mergelight"))).status, 200);
+  // A token for the host alone, or for a neighbour on the same host, is refused.
+  assert.equal((await ask("/mergelight/v1/context", "https://server.test")).status, 401);
+  assert.equal((await ask("/mergelight/v1/context", "https://server.test/other")).status, 401);
+  assert.equal((await ask("/mergelightx/v1/context", "https://server.test/mergelight")).status, 404);
+});
+
+test("the admin command refuses a database role that can skip the row rules", () => {
+  const admin = fileURLToPath(new URL("../dist/admin.js", import.meta.url));
+  const run = spawnSync(process.execPath, [admin, "connect", "1001", "acme"], { env: { ...process.env, DATABASE_URL: postgres.adminUrl }, encoding: "utf8" });
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /bypass row-level security/);
+  const ok = spawnSync(process.execPath, [admin, "connect", "1001", "acme"], { env: { ...process.env, DATABASE_URL: postgres.url }, encoding: "utf8" });
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.match(ok.stdout, /The dashboard is on for acme/);
 });
 
 test("unknown paths and wrong methods get no further", async () => {

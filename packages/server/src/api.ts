@@ -15,7 +15,8 @@ import { HttpError, verifyOidcToken } from "../../token-server/src/token.js";
 import { isId, withOrg, type Pool } from "./db.js";
 
 /**
- * Who a token must be made for: this server's own public address, like "https://data.example.com".
+ * Who a token must be made for: this server's own public address, like "https://data.example.com",
+ * with its path if it's mounted under one.
  * A token made for another Mergelight server is refused here, so a server someone else runs can't
  * pass a token it received on to this one. And no address equals the token server's audience, so
  * nothing that reaches this server can be turned into an app token.
@@ -24,7 +25,7 @@ export function audienceOf(publicUrl: string): string {
   const url = new URL(publicUrl);
   const local = url.hostname === "localhost" || url.hostname === "127.0.0.1";
   if (url.protocol !== "https:" && !(url.protocol === "http:" && local)) throw new Error("The server's public address must start with https://");
-  return url.origin;
+  return url.origin + url.pathname.replace(/\/+$/, "");
 }
 
 /** Only runs that review a pull request talk to this server. */
@@ -48,6 +49,8 @@ const MAX_INT = 2_147_483_647;
 
 /** One review's numbers, as they go into the database. */
 export interface ReviewRow {
+  /** The client's own id for this report. A second try of the same report carries the same one. */
+  report_id: string;
   pr: number;
   sha: string;
   light: Light;
@@ -104,7 +107,8 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "obj
 export function parseReview(body: unknown): ReviewRow {
   const bad = (what: string) => new HttpError(400, "bad_request", `The review's ${what} isn't valid.`);
   if (!isRecord(body)) throw bad("body");
-  const { pr, sha, light, counts, tiers, major, provider, model, verifier, duration_ms, files_changed, additions, deletions } = body;
+  const { report_id, pr, sha, light, counts, tiers, major, provider, model, verifier, duration_ms, files_changed, additions, deletions } = body;
+  if (typeof report_id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(report_id)) throw bad("report id");
   if (typeof pr !== "number" || !Number.isInteger(pr) || pr < 1 || pr > MAX_INT) throw bad("pull request number");
   if (typeof sha !== "string" || !/^[0-9a-f]{40}$/.test(sha)) throw bad("commit");
   if (!oneOf(LIGHTS, light)) throw bad("light");
@@ -120,7 +124,7 @@ export function parseReview(body: unknown): ReviewRow {
   if (!count(additions, MAX_INT)) throw bad("additions");
   if (!count(deletions, MAX_INT)) throw bad("deletions");
   return {
-    pr, sha, light,
+    report_id, pr, sha, light,
     bugs: counts.bug, risks: counts.risk, hardening: counts.hardening,
     major, tier_post: tiers.post, tier_list: tiers.list, tier_decision: tiers.decision,
     provider, model: model ?? null, verifier: verifier ?? null,
@@ -130,6 +134,8 @@ export function parseReview(body: unknown): ReviewRow {
 
 export function createApi({ pool, publicUrl, fetchImpl = fetch, now = () => Date.now() }: ApiOptions): (request: Request) => Promise<Response> {
   const audience = audienceOf(publicUrl);
+  /** The path the server is mounted under, if any. A proxy may strip it or pass it on, so both forms are routed. */
+  const mount = new URL(audience).pathname.replace(/\/+$/, "");
   /** Token ids already used, with when each expires. A token works once, so a copied one is worth nothing. */
   const seen = new Map<string, number>();
   /** Requests per org in the current minute. */
@@ -216,11 +222,11 @@ export function createApi({ pool, publicUrl, fetchImpl = fetch, now = () => Date
         [who.orgId, who.repoId, who.repo],
       );
       const inserted = await db.query(
-        `insert into reviews (org_id, repo_id, run_id, run_attempt, pr, sha, light, bugs, risks, hardening, major, tier_post, tier_list, tier_decision,
+        `insert into reviews (org_id, repo_id, run_id, run_attempt, report_id, pr, sha, light, bugs, risks, hardening, major, tier_post, tier_list, tier_decision,
                               provider, model, verifier, duration_ms, files_changed, additions, deletions)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
-         on conflict (org_id, repo_id, run_id, run_attempt, pr, provider) do nothing`,
-        [who.orgId, who.repoId, who.runId, who.runAttempt, r.pr, r.sha, r.light, r.bugs, r.risks, r.hardening, r.major, r.tier_post, r.tier_list, r.tier_decision,
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+         on conflict (org_id, repo_id, run_id, run_attempt, report_id) do nothing`,
+        [who.orgId, who.repoId, who.runId, who.runAttempt, r.report_id, r.pr, r.sha, r.light, r.bugs, r.risks, r.hardening, r.major, r.tier_post, r.tier_list, r.tier_decision,
          r.provider, r.model, r.verifier, r.duration_ms, r.files_changed, r.additions, r.deletions],
       );
       return (inserted.rowCount ?? 0) > 0;
@@ -235,7 +241,8 @@ export function createApi({ pool, publicUrl, fetchImpl = fetch, now = () => Date
   };
 
   return async function handle(request: Request): Promise<Response> {
-    const { pathname } = new URL(request.url);
+    const full = new URL(request.url).pathname;
+    const pathname = mount && (full === mount || full.startsWith(`${mount}/`)) ? full.slice(mount.length) || "/" : full;
     if (request.method === "GET" && pathname === "/") return respond(200, { service: "mergelight-server" });
     const route = Object.hasOwn(routes, pathname) ? routes[pathname] : undefined;
     if (!route) return respond(404, { error: "not_found" });
