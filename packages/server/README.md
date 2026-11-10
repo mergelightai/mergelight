@@ -10,7 +10,7 @@ Stored, per review: the repository's name and GitHub id, the pull request number
 
 Never stored, because it is never sent: code, diffs, finding text, file paths, pull request titles, AI logins.
 
-`node src/admin.js delete <github-account-id>` removes everything stored for an org.
+`node dist/admin.js delete <github-account-id>` removes everything stored for an org.
 
 ## How a review talks to it
 
@@ -43,13 +43,13 @@ npm test                      # starts a throwaway Postgres in Docker, or uses T
 DATABASE_URL=postgres://... PUBLIC_URL=https://your-server.example npm start
 ```
 
-The database role must not be a superuser. Tables are created on start. `PUBLIC_URL` is the address workflows reach the server at, and it must match the Action's `server` input.
+`npm start` runs the built files, so run `npm run build` first (`npm test` builds too). The database role must not be a superuser. Tables are created on start. `PUBLIC_URL` is the address workflows reach the server at, and it must match the Action's `server` input.
 
 Until sign-in exists, turn the dashboard on for an org from the server's host:
 
 ```bash
 gh api users/<login> --jq .id
-DATABASE_URL=postgres://... node src/admin.js connect <github-account-id> <login>
+DATABASE_URL=postgres://... node dist/admin.js connect <github-account-id> <login>
 ```
 
 Then set the Action's input in the workflow:

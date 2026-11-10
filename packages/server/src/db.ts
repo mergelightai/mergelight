@@ -6,17 +6,21 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 
+export type Pool = pg.Pool;
+/** A connection inside one org's transaction. */
+export type Db = pg.PoolClient;
+
 const MIGRATIONS = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 /** Any fixed number: two servers starting at once take turns applying migrations. */
 const MIGRATE_LOCK = 7_234_001;
 
 /** GitHub's ids are positive whole numbers. Anything else never reaches a query. */
-export function isId(value) {
-  return Number.isSafeInteger(value) && value > 0;
+export function isId(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
 /** Encryption on the way to the database is chosen in the address itself, with sslmode. */
-export function createPool(connectionString) {
+export function createPool(connectionString: string): Pool {
   const pool = new pg.Pool({
     connectionString,
     max: 10,
@@ -25,7 +29,7 @@ export function createPool(connectionString) {
     statement_timeout: 10_000,
   });
   // An idle connection the database dropped must not take the server down.
-  pool.on("error", (err) => console.error("database connection error", err?.code ?? err?.name));
+  pool.on("error", (err) => console.error("database connection error", (err as { code?: string }).code ?? err.name));
   return pool;
 }
 
@@ -33,20 +37,21 @@ export function createPool(connectionString) {
  * The row rules only hold for a role that can't switch them off. A superuser or a role with
  * BYPASSRLS reads every org's rows whatever the policies say, so the server refuses to run as one.
  */
-export async function assertRowRulesHold(pool) {
-  const { rows } = await pool.query("select rolsuper, rolbypassrls from pg_roles where rolname = current_user");
-  if (!rows[0] || rows[0].rolsuper || rows[0].rolbypassrls) {
+export async function assertRowRulesHold(pool: Pool): Promise<void> {
+  const { rows } = await pool.query<{ rolsuper: boolean; rolbypassrls: boolean }>("select rolsuper, rolbypassrls from pg_roles where rolname = current_user");
+  const role = rows[0];
+  if (!role || role.rolsuper || role.rolbypassrls) {
     throw new Error("The database user can bypass row-level security. Use a role without SUPERUSER and BYPASSRLS.");
   }
 }
 
 /** Applies each file in migrations/ once, in name order, each in its own transaction. */
-export async function migrate(pool) {
+export async function migrate(pool: Pool): Promise<void> {
   const client = await pool.connect();
   try {
     await client.query("select pg_advisory_lock($1)", [MIGRATE_LOCK]);
     await client.query("create table if not exists schema_migrations (name text primary key, applied_at timestamptz not null default now())");
-    const done = new Set((await client.query("select name from schema_migrations")).rows.map((r) => r.name));
+    const done = new Set((await client.query<{ name: string }>("select name from schema_migrations")).rows.map((r) => r.name));
     for (const name of readdirSync(MIGRATIONS).filter((f) => f.endsWith(".sql")).sort()) {
       if (done.has(name)) continue;
       await client.query("begin");
@@ -69,7 +74,7 @@ export async function migrate(pool) {
  * Runs fn in a transaction that can only see and write one org's rows.
  * orgId must come from something checked: GitHub's signed token, or a checked sign-in. Never from a request's text.
  */
-export async function withOrg(pool, orgId, fn) {
+export async function withOrg<T>(pool: Pool, orgId: number, fn: (db: Db) => Promise<T>): Promise<T> {
   if (!isId(orgId)) throw new Error("withOrg needs a GitHub account id");
   const client = await pool.connect();
   try {
@@ -88,13 +93,11 @@ export async function withOrg(pool, orgId, fn) {
 }
 
 /** Turns the dashboard on for an org. Until then the server stores nothing about it. */
-export async function connectOrg(pool, orgId, login) {
-  return withOrg(pool, orgId, (db) =>
-    db.query("insert into orgs (id, login) values ($1, $2) on conflict (id) do update set login = excluded.login", [orgId, login]),
-  );
+export async function connectOrg(pool: Pool, orgId: number, login: string): Promise<void> {
+  await withOrg(pool, orgId, (db) => db.query("insert into orgs (id, login) values ($1, $2) on conflict (id) do update set login = excluded.login", [orgId, login]));
 }
 
-/** Removes everything stored for an org: its repositories and reviews go with it. */
-export async function deleteOrg(pool, orgId) {
-  return withOrg(pool, orgId, async (db) => (await db.query("delete from orgs where id = $1", [orgId])).rowCount > 0);
+/** Removes everything stored for an org: its repositories and reviews go with it. Returns whether anything was there. */
+export async function deleteOrg(pool: Pool, orgId: number): Promise<boolean> {
+  return withOrg(pool, orgId, async (db) => ((await db.query("delete from orgs where id = $1", [orgId])).rowCount ?? 0) > 0);
 }

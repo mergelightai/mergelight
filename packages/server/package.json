@@ -5,10 +5,16 @@
   "description": "Stores what the Mergelight dashboard shows: numbers per review, and later memories, rules and settings.",
   "engines": { "node": ">=22" },
   "scripts": {
-    "start": "node src/server.js",
-    "test": "node --test test/*.test.mjs"
+    "build": "tsc -p .",
+    "start": "node dist/server.js",
+    "test": "tsc -p . && node --test test/*.test.mjs"
   },
   "dependencies": {
     "pg": "^8.16.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "@types/pg": "^8.15.0",
+    "typescript": "^7.0.2"
   }
 }

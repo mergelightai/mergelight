@@ -7,9 +7,9 @@ import assert from "node:assert/strict";
 import { createSign, generateKeyPairSync, randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
 import { resetJwksCache } from "../../token-server/src/token.js";
-import { createApi } from "../src/api.js";
-import { connectOrg, createPool, migrate, withOrg } from "../src/db.js";
-import { createDataServer } from "../src/server.js";
+import { createApi } from "../dist/api.js";
+import { connectOrg, createPool, migrate, withOrg } from "../dist/db.js";
+import { createDataServer } from "../dist/server.js";
 import { startPostgres } from "./postgres.mjs";
 
 const { cloudConnected, reportReview } = await import("../../mergelight/dist/cloud.js").catch(() => {

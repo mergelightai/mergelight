@@ -3,9 +3,9 @@ import { createSign, generateKeyPairSync, randomUUID } from "node:crypto";
 import { after, before, beforeEach, test } from "node:test";
 import pg from "pg";
 import { handle as tokenServer, resetJwksCache } from "../../token-server/src/token.js";
-import { audienceOf, createApi, MAX_BODY, parseReview } from "../src/api.js";
-import { assertRowRulesHold, connectOrg, createPool, deleteOrg, migrate, withOrg } from "../src/db.js";
-import { createDataServer } from "../src/server.js";
+import { audienceOf, createApi, MAX_BODY, parseReview } from "../dist/api.js";
+import { assertRowRulesHold, connectOrg, createPool, deleteOrg, migrate, withOrg } from "../dist/db.js";
+import { createDataServer } from "../dist/server.js";
 import { startPostgres } from "./postgres.mjs";
 
 const NOW = Date.parse("2026-11-10T12:00:00Z");
