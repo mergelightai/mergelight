@@ -184,8 +184,8 @@ export interface GitHubClient {
   connectCode(repo: Repo, number: number): Promise<ConnectCode | null>;
   /** Leaves the code from Claude's page where the waiting run looks for it, out of sight of the pull request. */
   sendClaudeCode(repo: Repo, claudeUrl: string, code: string): Promise<void>;
-  /** Removes the sign-in codes left in the repository, once the run has connected. */
-  clearClaudeCodes(repo: Repo): Promise<void>;
+  /** Removes the sign-in code this page left in the repository, once the run has connected. */
+  clearClaudeCode(repo: Repo): Promise<void>;
   /** Whether it's merged, and the commit it's on now. */
   prState(repo: Repo, number: number): Promise<{ merged: boolean; headSha: string }>;
 }
@@ -348,11 +348,14 @@ export function realClient(token: string): GitHubClient {
     return (res.status === 204 ? undefined : await res.json()) as T;
   };
   const get = <T,>(path: string) => call<T>('GET', path);
-  /** Removes every sign-in code this page left in the repository. A code is spent once the run has read it. */
-  const clearClaudeCodes = async (repo: Repo): Promise<void> => {
-    const git = `/repos/${repo.fullName}/git`;
-    const left = await get<{ ref: string }[]>(`${git}/matching-refs/mergelight/claude-code/`).catch(() => []);
-    await Promise.all(left.map((r) => call('DELETE', `${git}/${r.ref}`).catch(() => undefined)));
+  /** The sign-in code this page left in the repository, until it's removed. */
+  let ownCode: string | null = null;
+  /** Removes that code, and only that one: someone else may be connecting the same repository right now. */
+  const clearClaudeCode = async (repo: Repo): Promise<void> => {
+    const name = ownCode;
+    if (!name) return;
+    ownCode = null;
+    await call('DELETE', `/repos/${repo.fullName}/git/refs/${name}`).catch(() => undefined);
   };
   /** The workflow file on a branch, if it's there. Only a missing file counts as missing: any other failure stops whoever asked. */
   const workflowOn = async (repo: Repo, branch: string, name = 'mergelight.yml'): Promise<{ sha: string; content: string } | null> => {
@@ -493,12 +496,14 @@ export function realClient(token: string): GitHubClient {
       if (!name) throw new GitHubError(422);
       const git = `/repos/${repo.fullName}/git`;
       // Anything left from an earlier sign-in is spent, so a tab closed early never leaves more than one behind.
-      await clearClaudeCodes(repo);
+      const left = await get<{ ref: string }[]>(`${git}/matching-refs/mergelight/claude-code/`).catch(() => []);
+      await Promise.all(left.map((r) => call('DELETE', `${git}/${r.ref}`).catch(() => undefined)));
       const { sha } = await call<{ sha: string }>('POST', `${git}/blobs`, { content: code, encoding: 'utf-8' });
       await call('POST', `${git}/refs`, { ref: `refs/${name}`, sha });
-      setTimeout(() => void clearClaudeCodes(repo), CODE_REF_LIFETIME_MS);
+      ownCode = name;
+      setTimeout(() => void clearClaudeCode(repo), CODE_REF_LIFETIME_MS);
     },
-    clearClaudeCodes,
+    clearClaudeCode,
     connectCode: async (repo, number) => readConnectCode(await get<{ user: { login: string } | null; body?: string | null }[]>(`/repos/${repo.fullName}/issues/${number}/comments?per_page=100`)),
     prState: async (repo, number) => {
       const pull = await get<{ merged: boolean; head: { sha: string } }>(`/repos/${repo.fullName}/pulls/${number}`);
@@ -557,7 +562,7 @@ export function mockClient(): GitHubClient {
       return later({ status: 'completed', conclusion: 'failure', title: '🔴 Blocked: 2 bugs, 1 risk to fix' });
     },
     sendClaudeCode: () => later(undefined),
-    clearClaudeCodes: () => later(undefined),
+    clearClaudeCode: () => later(undefined),
     connectCode: () => later(checks < 4 ? { url: 'https://auth.openai.com/codex/device', code: '2ZYY-TEST1', claudeUrl: 'https://claude.com/cai/oauth/authorize?code_challenge=x' } : null),
     prState: () => later({ merged: checks >= 11, headSha: 'abc' }),
   };

@@ -312,6 +312,12 @@ await scenario('claude-button-and-paste', { comments: [CLAUDE_COMMENT()], checks
   expect(left?.ref === `refs/${claudeCodeRef(CLAUDE)}` && left?.sha === 'blobsha', 'leaves the code at the exact place the run looks');
   expect(world.blob?.content === WHOLE, 'leaves only the code');
   expect(!world.posted?.length, 'nothing shows on the pull request');
+  expect(!world.removed?.length, 'keeps the code in place while the run still has to read it');
+  world.comments = [comment(BOT, withState(pendingSummaryBody(), undefined))];
+  world.checks.headsha = { status: 'completed', conclusion: 'neutral', output: { title: 'Connected to Claude' } };
+  const end = Date.now() + 14000;
+  while (Date.now() < end && !world.removed?.length) await new Promise((r) => setTimeout(r, 200));
+  expect(world.removed?.[0] === `refs/${claudeCodeRef(CLAUDE)}` && world.removed.length === 1, 'removes its own code as soon as the run has connected, before anyone can leave the page');
 });
 
 await scenario('link-from-the-pull-request', { comments: [CLAUDE_COMMENT()], checks: { headsha: WAITING }, login: true }, async ({ page, world, until, click, shot }) => {
@@ -357,7 +363,7 @@ await scenario('link-connects-on-a-repo-already-set-up', { comments: [CLAUDE_COM
   const t = await until((x) => /Mergelight is on/.test(x), 'the done screen');
   expect(!/moves the workflow|Merge it to/.test(t), 'never calls this pull request an update or a setup');
   expect(await page.evaluate(() => [...document.querySelectorAll('a')].find((a) => a.textContent.includes('Back to PR #7'))?.href) === 'https://github.com/acme/api/pull/7', 'has a button back to the pull request');
-  expect(world.removed?.includes('refs/mergelight/claude-code/sleftover') && !(world.refs ?? []).length, 'removes the sign-in code as soon as the run has connected, before anyone can leave the page');
+  expect(!world.removed?.length, "leaves a code alone that this page didn't send, because someone else may be connecting");
 });
 
 await scenario('link-to-a-repo-they-cannot-see', { comments: [CLAUDE_COMMENT()], checks: { headsha: WAITING }, onlyOther: true }, async ({ page, world, until, click }) => {
