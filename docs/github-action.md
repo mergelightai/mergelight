@@ -114,6 +114,7 @@ They're separate files so a PR's merge box only shows the review, not skipped jo
 | `yellow-blocks` | `false` | Make a 🟡 check wait for an approval. For teams: GitHub doesn't let you approve your own PR |
 | `codex-version` | `0.166.0` | Codex CLI version |
 | `token-server` | Mergelight's | Where to get an app token. Empty means always post as `github-actions[bot]` |
+| `server` | | Address of a [Mergelight server](../packages/server/README.md), for the dashboard. Empty means off. With it, the run sends each review's numbers, never code or finding text |
 | `github-token` | `github.token` | Posts comments and checks |
 
 ## Good to know

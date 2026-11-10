@@ -125,7 +125,11 @@ async function signingKey(kid, fetchImpl, now) {
 }
 
 /** Checks a GitHub Actions OIDC token and returns its claims. Throws a 401 otherwise. */
-export async function verifyOidcToken(token, fetchImpl = fetch, now = Date.now()) {
+/**
+ * audience: who the token was made for. A token for another Mergelight service is refused here, so
+ * a service that takes these tokens can never use one to get an app token from this server.
+ */
+export async function verifyOidcToken(token, fetchImpl = fetch, now = Date.now(), audience = OIDC_AUDIENCE) {
   const invalid = (why) => new HttpError(401, "invalid_token", `GitHub's OIDC token was rejected: ${why}.`);
   const parts = typeof token === "string" ? token.split(".") : [];
   if (parts.length !== 3) throw invalid("it isn't a JWT");
@@ -161,7 +165,7 @@ export async function verifyOidcToken(token, fetchImpl = fetch, now = Date.now()
   const seconds = Math.floor(now / 1000);
   if (claims.iss !== OIDC_ISSUER) throw invalid("wrong issuer");
   const audiences = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
-  if (!audiences.includes(OIDC_AUDIENCE)) throw invalid("wrong audience");
+  if (!audiences.includes(audience)) throw invalid("wrong audience");
   if (typeof claims.exp !== "number" || claims.exp + CLOCK_SKEW_S < seconds) throw invalid("it expired");
   if (typeof claims.nbf === "number" && claims.nbf - CLOCK_SKEW_S > seconds) throw invalid("it isn't valid yet");
   return claims;

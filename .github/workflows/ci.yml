@@ -12,6 +12,19 @@ jobs:
   tests:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # The server's tests need a real Postgres: its row rules are what keeps one org out of another's data.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -23,6 +36,12 @@ jobs:
       - name: Token server tests
         working-directory: packages/token-server
         run: npm test
+      # After the package tests: one of these runs the built CLI against the server.
+      - name: Server tests
+        working-directory: packages/server
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+        run: npm ci --no-audit --no-fund && npm test
       - name: Build the site
         working-directory: site
         run: npm ci --no-audit --no-fund && npm run build

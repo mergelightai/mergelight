@@ -1,0 +1,14 @@
+{
+  "name": "mergelight-server",
+  "private": true,
+  "type": "module",
+  "description": "Stores what the Mergelight dashboard shows: numbers per review, and later memories, rules and settings.",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "pg": "^8.16.0"
+  }
+}
