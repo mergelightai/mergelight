@@ -1,0 +1,34 @@
+{
+  "name": "mergelight",
+  "version": "0.1.9",
+  "description": "AI code review that runs on the Claude or ChatGPT plan you already pay for.",
+  "type": "module",
+  "bin": {
+    "mergelight": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "scripts",
+    "skills",
+    "templates"
+  ],
+  "scripts": {
+    "build": "tsc -p .",
+    "dev": "tsc -p . --watch",
+    "test": "tsc -p . && node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "homepage": "https://mergelight.dev",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mergelightai/mergelight.git",
+    "directory": "packages/mergelight"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "^7.0.2"
+  }
+}

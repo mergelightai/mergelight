@@ -1,0 +1,25 @@
+# The Mergelight token server. Create it once from this file in Render's dashboard (New > Blueprint).
+services:
+  - type: web
+    name: mergelight-token
+    runtime: node
+    region: virginia
+    plan: free # Sleeps when idle. Move to a paid plan before customers depend on it.
+    rootDir: packages/token-server
+    buildCommand: npm install
+    startCommand: node src/server.js
+    healthCheckPath: /
+    autoDeployTrigger: commit
+    domains:
+      - api.mergelight.dev
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: GITHUB_APP_CLIENT_ID
+        value: Iv23liM8BL5MwWeDmXHV
+      # The GitHub App's private key. Render asks for it when the Blueprint is created.
+      - key: GITHUB_APP_PRIVATE_KEY
+        sync: false
+      # For "Sign in with GitHub" on the setup page. It belongs to the Mergelight Setup app, which has no private key.
+      - key: GITHUB_SETUP_APP_CLIENT_SECRET
+        sync: false

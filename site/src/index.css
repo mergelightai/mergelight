@@ -49,3 +49,33 @@ section[id] { scroll-margin-top: 88px; }
   -webkit-mask: conic-gradient(from -45deg at bottom, #0000, #000 1deg 89deg, #0000 90deg) 50% / var(--tooth) 100%;
   mask: conic-gradient(from -45deg at bottom, #0000, #000 1deg 89deg, #0000 90deg) 50% / var(--tooth) 100%;
 }
+
+/* The setup page's dropdown grows out of its trigger. */
+.setup-pop {
+  transform-origin: var(--radix-select-content-transform-origin);
+  animation: setup-pop 150ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+@keyframes setup-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+/* A line of the workflow file that a choice on the card just changed. */
+.setup-fresh {
+  animation: setup-fresh 1100ms ease-out;
+}
+
+@keyframes setup-fresh {
+  from {
+    background-color: rgb(184 156 255 / 0.22);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .setup-pop {
+    animation: none;
+  }
+}

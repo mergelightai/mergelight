@@ -1,0 +1,263 @@
+name: Mergelight
+description: AI code review on the ChatGPT plan you already pay for. Tells you which problems are worth fixing.
+author: Mergelight
+branding:
+  icon: git-merge
+  color: green
+
+inputs:
+  codex-auth-json:
+    description: >
+      A ChatGPT login, saved as a secret. Leave the secret unset and the first pull request shows a
+      link and code to connect ChatGPT, then saves it. OpenAI allows this for private repositories only.
+    required: false
+  openai-api-key:
+    description: An OpenAI API key, billed per use. Works on public repositories too.
+    required: false
+  secrets-token:
+    description: >
+      Only needed without the Mergelight AI app. A token that can update this repository's secrets
+      (fine-grained, "Secrets: read and write"). A ChatGPT login's token lasts 10 days, and each
+      refreshed login has to be saved back to the secret. The app does this on its own.
+    required: false
+  auth-secret-name:
+    description: Name of the secret that holds the ChatGPT login.
+    default: CODEX_AUTH_JSON
+  model:
+    description: Codex model to review with. Defaults to Codex's own default.
+    required: false
+  effort:
+    description: "Reasoning effort: low, medium or high."
+    required: false
+  verify-with:
+    description: "Who checks the findings: codex, or claude on a runner with Claude Code logged in."
+    default: codex
+  yellow-blocks:
+    description: 'Set to "true" for a team: a "needs a human" check then waits for an approval. Leave it off if you work alone, since GitHub bars approving your own PR.'
+    default: "false"
+  codex-version:
+    description: Version of the Codex CLI to install.
+    default: "0.166.0"
+  github-token:
+    description: Token for posting comments and checks. Needs pull-requests and checks write.
+    default: ${{ github.token }}
+  token-server:
+    description: >
+      Where to get a Mergelight AI app token, so comments and checks carry the app's name and logo.
+      Needs the app installed and "id-token: write". Without them, or with this empty, the run posts
+      as github-actions[bot].
+    default: https://api.mergelight.dev/token
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+      with:
+        node-version: 22
+
+    - name: Build Mergelight
+      shell: bash
+      working-directory: ${{ github.action_path }}/packages/mergelight
+      run: npm ci --no-audit --no-fund --loglevel=error && npm run build --silent
+
+    # GitHub's OIDC token proves which repository this run belongs to, and the token server swaps
+    # it for an app token limited to that repository. Skipped when you pass your own github-token.
+    - name: Get the Mergelight AI app token
+      id: app
+      if: >
+        inputs.github-token == github.token &&
+        (github.event_name == 'pull_request' || github.event_name == 'pull_request_target' ||
+        (github.event_name == 'pull_request_review' && github.event.review.state == 'approved'))
+      shell: bash
+      env:
+        TOKEN_SERVER: ${{ inputs.token-server }}
+      run: node "$GITHUB_ACTION_PATH/packages/mergelight/scripts/app-token.mjs"
+
+    # A human approved the PR: turn a "needs a human" check green. No Codex needed.
+    - name: Approve the check
+      if: github.event_name == 'pull_request_review' && github.event.review.state == 'approved'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.app.outputs.token || inputs.github-token }}
+        PR: ${{ github.event.pull_request.number }}
+        BY: ${{ github.event.review.user.login }}
+      run: node "$GITHUB_ACTION_PATH/packages/mergelight/dist/cli.js" approve "$GITHUB_REPOSITORY#$PR" --by "$BY"
+
+    - name: Install Codex
+      if: github.event_name != 'pull_request_review'
+      shell: bash
+      run: npm install -g "@openai/codex@${{ inputs.codex-version }}" --no-audit --no-fund --loglevel=error
+
+    # Codex's Linux sandbox (bubblewrap) needs unprivileged user namespaces, which Ubuntu 24.04
+    # runners block through AppArmor. Without them Codex can't read the code. Same fix as
+    # OpenAI's codex-action (PR #77). Self-hosted runners need this configured ahead of time.
+    - name: Let the Codex sandbox start
+      if: github.event_name != 'pull_request_review' && runner.os == 'Linux'
+      shell: bash
+      run: |
+        userns="$(sysctl -n kernel.unprivileged_userns_clone 2>/dev/null || true)"
+        if [ -n "$userns" ] && [ "$userns" != "1" ]; then
+          sudo -n sysctl -w kernel.unprivileged_userns_clone=1 || echo "::warning::Couldn't enable unprivileged user namespaces; Codex may not be able to read the code."
+        fi
+        apparmor="$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || true)"
+        if [ -n "$apparmor" ] && [ "$apparmor" != "0" ]; then
+          sudo -n sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || echo "::warning::Couldn't lift the AppArmor user namespace limit; Codex may not be able to read the code."
+        fi
+
+    - name: Log in to Codex
+      if: github.event_name != 'pull_request_review'
+      shell: bash
+      env:
+        AUTH_JSON: ${{ inputs.codex-auth-json }}
+        API_KEY: ${{ inputs.openai-api-key }}
+        REPO_PRIVATE: ${{ github.event.repository.private }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        # Not every event says whether the repository is private, so ask if this one didn't.
+        [ -n "$REPO_PRIVATE" ] || REPO_PRIVATE="$(gh api "repos/$GITHUB_REPOSITORY" --jq .private)"
+        export CODEX_HOME="$RUNNER_TEMP/codex-home"
+        mkdir -p -m 700 "$CODEX_HOME"
+        echo "CODEX_HOME=$CODEX_HOME" >> "$GITHUB_ENV"
+        # A job can run this Action more than once, so nothing carries over from an earlier run.
+        {
+          echo "MERGELIGHT_CHATGPT=0"
+          echo "MERGELIGHT_CONNECT=0"
+          echo "MERGELIGHT_NO_LOGIN=0"
+          echo "MERGELIGHT_LOGIN_LOST=0"
+        } >> "$GITHUB_ENV"
+        if [ -n "$AUTH_JSON" ] && [ "$REPO_PRIVATE" = "true" ]; then
+          printf 'cli_auth_credentials_store = "file"\n' > "$CODEX_HOME/config.toml"
+          printf '%s' "$AUTH_JSON" > "$CODEX_HOME/auth.json"
+          chmod 600 "$CODEX_HOME/auth.json"
+          sha256sum "$CODEX_HOME/auth.json" | cut -d' ' -f1 > "$RUNNER_TEMP/codex-auth.sha256"
+          echo "MERGELIGHT_CHATGPT=1" >> "$GITHUB_ENV"
+        elif [ -n "$API_KEY" ]; then
+          printf '%s' "$API_KEY" | codex login --with-api-key
+        elif [ -n "$AUTH_JSON" ]; then
+          echo "::error::A ChatGPT login is for private repositories only, by OpenAI's rules for Codex in CI. Use openai-api-key on public repositories."
+          exit 1
+        elif [ "$GITHUB_ACTOR" = "dependabot[bot]" ]; then
+          # GitHub keeps repository secrets from Dependabot's runs, so a login can't be read or saved here.
+          echo "::notice::Skipping the review: GitHub gives Dependabot's runs no secrets."
+          echo "MERGELIGHT_NO_LOGIN=1" >> "$GITHUB_ENV"
+        elif [ "$REPO_PRIVATE" = "true" ] && { [ "$GITHUB_EVENT_NAME" = "pull_request" ] || [ "$GITHUB_EVENT_NAME" = "pull_request_target" ]; }; then
+          # No login yet: the next step connects ChatGPT from the pull request.
+          printf 'cli_auth_credentials_store = "file"\n' > "$CODEX_HOME/config.toml"
+          echo "MERGELIGHT_CONNECT=1" >> "$GITHUB_ENV"
+        elif [ "$REPO_PRIVATE" = "true" ]; then
+          echo "No Codex login yet, so there's nothing to keep fresh."
+          echo "MERGELIGHT_NO_LOGIN=1" >> "$GITHUB_ENV"
+        elif [ "$GITHUB_EVENT_NAME" = "schedule" ] || [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+          # An API key needs no refreshing, and this job isn't given one anyway.
+          echo "A public repository has no ChatGPT login to keep fresh, so there's nothing to do."
+          echo "MERGELIGHT_NO_LOGIN=1" >> "$GITHUB_ENV"
+        else
+          echo "::error::Public repositories need openai-api-key. OpenAI allows a ChatGPT login in CI for private repositories only."
+          exit 1
+        fi
+
+    - name: Hide the Codex login in the logs
+      if: env.MERGELIGHT_CHATGPT == '1'
+      shell: bash
+      run: node "$GITHUB_ACTION_PATH/packages/mergelight/scripts/mask-login.mjs"
+
+    # Refresh before anything uses the login, and save at once, so a review never does it halfway
+    # through while another starts from the old login. The job always refreshes. A review only does
+    # when its token could run out during it.
+    - name: Refresh the Codex login if it's due
+      if: >
+        env.MERGELIGHT_CHATGPT == '1' &&
+        (github.event_name == 'pull_request' || github.event_name == 'pull_request_target' ||
+        github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+      shell: bash
+      env:
+        SECRETS_TOKEN: ${{ inputs.secrets-token }}
+        SECRET_NAME: ${{ inputs.auth-secret-name }}
+        TOKEN_SERVER: ${{ inputs.token-server }}
+      run: node "$GITHUB_ACTION_PATH/packages/mergelight/scripts/refresh-login.mjs"
+
+    # A login needs somewhere to be saved: the app with Secrets write approved, or a token that can
+    # update secrets. Find out before asking anyone to enter a code. Being able to post isn't enough.
+    - name: Check the login can be saved
+      id: saving
+      if: env.MERGELIGHT_CONNECT == '1'
+      shell: bash
+      env:
+        SECRETS_TOKEN: ${{ inputs.secrets-token }}
+        TOKEN_SERVER: ${{ inputs.token-server }}
+      run: |
+        if [ -z "$SECRETS_TOKEN" ]; then
+          out="$RUNNER_TEMP/mergelight-login-check"
+          : > "$out"
+          TOKEN_SCOPE=login GITHUB_OUTPUT="$out" node "$GITHUB_ACTION_PATH/packages/mergelight/scripts/app-token.mjs"
+          saved="$(grep -c '^token=' "$out" || true)"
+          rm -f "$out"
+          [ "$saved" != "0" ] || exit 0
+        fi
+        echo "can_save=true" >> "$GITHUB_OUTPUT"
+
+    - name: Connect ChatGPT
+      if: env.MERGELIGHT_CONNECT == '1'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.app.outputs.token || inputs.github-token }}
+        PR: ${{ github.event.pull_request.number }}
+        GITHUB_WORKFLOW_TOKEN: ${{ inputs.github-token }}
+        CAN_SAVE: ${{ steps.saving.outputs.can_save }}
+        SECRET_NAME: ${{ inputs.auth-secret-name }}
+      run: |
+        args=(connect "$GITHUB_REPOSITORY#$PR")
+        [ "$CAN_SAVE" = "true" ] || args+=(--no-save)
+        node "$GITHUB_ACTION_PATH/packages/mergelight/dist/cli.js" "${args[@]}"
+
+    - name: Hide the new Codex login in the logs
+      if: env.MERGELIGHT_CONNECT == '1'
+      shell: bash
+      run: node "$GITHUB_ACTION_PATH/packages/mergelight/scripts/mask-login.mjs"
+
+    # Saved right away, so a pull request opened during this review doesn't ask for another code.
+    - name: Save the new Codex login
+      if: env.MERGELIGHT_CONNECT == '1'
+      shell: bash
+      env:
+        SECRETS_TOKEN: ${{ inputs.secrets-token }}
+        SECRET_NAME: ${{ inputs.auth-secret-name }}
+        TOKEN_SERVER: ${{ inputs.token-server }}
+      run: bash "$GITHUB_ACTION_PATH/packages/mergelight/scripts/save-login.sh"
+
+    - name: Review
+      if: (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && env.MERGELIGHT_NO_LOGIN != '1'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.app.outputs.token || inputs.github-token }}
+        PR: ${{ github.event.pull_request.number }}
+        MODEL: ${{ inputs.model }}
+        EFFORT: ${{ inputs.effort }}
+        VERIFY_WITH: ${{ inputs.verify-with }}
+        YELLOW_BLOCKS: ${{ inputs.yellow-blocks }}
+        MERGELIGHT_ACTION_REF: ${{ github.action_ref }}
+        SECRET_NAME: ${{ inputs.auth-secret-name }}
+      run: |
+        set -euo pipefail
+        args=(review "$GITHUB_REPOSITORY#$PR" --post --verify-with "$VERIFY_WITH" --out "$RUNNER_TEMP/mergelight-review.json")
+        [ -n "$MODEL" ] && args+=(--model "$MODEL")
+        [ -n "$EFFORT" ] && args+=(--effort "$EFFORT")
+        [ "$YELLOW_BLOCKS" = "true" ] && args+=(--yellow-blocks)
+        node "$GITHUB_ACTION_PATH/packages/mergelight/dist/cli.js" "${args[@]}"
+
+    # Codex may have refreshed the login during the run. Save the new one, or the next run
+    # starts from tokens that no longer work. An API key's login is never saved over a ChatGPT one.
+    - name: Save the refreshed Codex login
+      if: always() && github.event_name != 'pull_request_review' && (env.MERGELIGHT_CHATGPT == '1' || env.MERGELIGHT_CONNECT == '1')
+      shell: bash
+      env:
+        SECRETS_TOKEN: ${{ inputs.secrets-token }}
+        SECRET_NAME: ${{ inputs.auth-secret-name }}
+        TOKEN_SERVER: ${{ inputs.token-server }}
+      run: bash "$GITHUB_ACTION_PATH/packages/mergelight/scripts/save-login.sh"
+
+    - name: Clean up the Codex login
+      if: always() && github.event_name != 'pull_request_review'
+      shell: bash
+      run: rm -rf "$RUNNER_TEMP/codex-home" "$RUNNER_TEMP/codex-auth.sha256"

@@ -1,0 +1,40 @@
+# Mergelight review. It runs in your GitHub Actions, on your AI plan.
+# Setup: https://mergelight.dev/setup
+name: Mergelight
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+  id-token: write # Lets it post as the Mergelight AI app, if installed.
+
+jobs:
+  review:
+    # Forks and Dependabot get no secrets, and drafts aren't ready for review. An edit only counts when the
+    # target branch changed, so a new title doesn't start a review.
+    if: >
+      (github.event.action != 'edited' || github.event.changes.base) &&
+      !github.event.pull_request.draft &&
+      github.actor != 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    # Room for the first login, which can wait up to 16 minutes, and then a long review.
+    timeout-minutes: 45
+    # A new push cancels the older review of the same PR.
+    concurrency:
+      group: mergelight-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      # Not pinned, on purpose. @v0 moves to each new release, so fixes reach you without
+      # merging anything. The catch: this step can read your AI login, so you're trusting each
+      # release as it comes. To check every update yourself, pin it with the line from a release:
+      # https://github.com/mergelightai/mergelight/releases
+      - uses: mergelightai/mergelight@v0
+        with:
+          # Neither set yet? The first pull request shows a link to connect ChatGPT.
+          codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
