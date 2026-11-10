@@ -102,3 +102,13 @@ node eval/replay.mjs owner/repo --from v2 --tag opus --with claude   # same cand
 ```
 
 `compare.mjs` is a cruder, faster version of the judge. It only checks whether the commented lines changed, which misses fixes that land a few lines away.
+
+## License
+
+Mergelight is under the [Functional Source License](https://github.com/mergelightai/mergelight/blob/main/LICENSE.md) (FSL-1.1-MIT). In plain words:
+
+- You can use it, alone or in your company, and you can change it, fork it and share it.
+- You can't offer it, or something built from it, as a commercial product or service that takes its place.
+- Each version becomes MIT two years after it's released.
+
+Changes are welcome as pull requests. See [CONTRIBUTING.md](https://github.com/mergelightai/mergelight/blob/main/CONTRIBUTING.md).

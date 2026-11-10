@@ -51,7 +51,7 @@ export default function Pricing() {
             className="flex h-full w-full flex-col p-8"
           >
             <p className="text-lg font-semibold">Self-host</p>
-            <p className="mt-1 text-sm text-muted">The open source engine</p>
+            <p className="mt-1 text-sm text-muted">The source-available engine</p>
             <p className="mt-7 flex items-baseline gap-2">
               <span className="text-5xl font-semibold tracking-tight">$0</span>
               <span className="text-muted">forever</span>
