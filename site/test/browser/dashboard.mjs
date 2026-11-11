@@ -238,7 +238,7 @@ async function open(name, { signedOutAfter = Infinity, serverDown = false, forge
     }
     return req.continue();
   });
-  const text = () => page.evaluate(() => document.querySelector('main').innerText.replace(/\s+/g, ' '));
+  const text = () => page.evaluate(() => `${document.querySelector('main')?.innerText ?? ''} ${document.querySelector('[data-sonner-toaster]')?.innerText ?? ''}`.replace(/\s+/g, ' ').trim());
   const click = async (selector, label) => {
     const at = await page.evaluate((s, t) => {
       // Only what is on screen: a phone and a wide screen each hide one copy of the menu.
@@ -588,6 +588,8 @@ const done = async (t) => {
   await t.menu('Your account', 'Sign out');
   const keptAfter = await t.page.evaluate(() => Object.keys(sessionStorage).filter((k) => k.includes('draft') || k.includes('written-skill') || k.endsWith('.org') || k.endsWith('.view') || k.endsWith('.resume')));
   expect(keptAfter.length === 0, `signing out forgets the drafts, the org and the view, so the next person starts clean (${keptAfter})`);
+  const picksAfter = await t.page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('mergelight.dashboard.repo')));
+  expect(picksAfter.length === 0, `and the remembered repository picks (${picksAfter})`);
   expect(/Continue with GitHub/.test(await t.text()), 'signing out goes back to the sign-in screen');
   expect(t.calls.at(-1).m === 'DELETE' && t.calls.at(-1).path === '/v1/session', 'and ends the session on the server');
   await t.page.reload({ waitUntil: 'networkidle2' });

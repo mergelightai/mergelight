@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { addCheck, addRule, addSkill, finishSignIn, forgetDecision, loadChecks, loadDecisions, loadOverview, loadRules, loadSkills, mayRenew, NotConnected, rememberedSession, removeCheck, removeRule, removeSkill, SignedOut, signInUrl, signOut, tidyAddress, type Checks, type Decision, type Overview, type Rules, type Session, type Skills } from './api';
 import { AppShell, VIEWS, type ViewId } from './AppShell';
-import { forgetTab, keepOrg, keptOrg, keepView, keptView, takeResume } from './kit';
+import { claimTab, forgetTab, keepOrg, keptOrg, keepView, keptView, takeResume } from './kit';
 import { ChecksView } from './views/ChecksView';
 import { DecisionsView } from './views/DecisionsView';
 import { ReviewsView } from './views/ReviewsView';
@@ -41,7 +41,6 @@ export default function Dashboard() {
   const [view, setView] = useState<View>({ kind: 'loading' });
   const [tab, setTab] = useState<ViewId>(() => fromHash());
   const pickTab = (id: ViewId) => {
-    keepView(id);
     setTab(id);
     window.history.replaceState(null, '', id === 'reviews' ? window.location.pathname : `#${id}`);
   };
@@ -64,6 +63,11 @@ export default function Dashboard() {
       gone = true;
     };
   }, [params]);
+
+  // A different GitHub user signing in on this tab doesn't inherit the last one's drafts, org or view.
+  useEffect(() => {
+    if (session) claimTab(session.user.id);
+  }, [session]);
 
   const org = useMemo(() => {
     const orgs = session?.orgs ?? [];
@@ -114,6 +118,7 @@ export default function Dashboard() {
     reload();
     return () => cancelLoad.current();
   }, [reload]);
+  useEffect(() => keepView(tab), [tab]);
   // Someone who types another #view in the address goes there.
   useEffect(() => {
     const onHash = () => setTab(fromHash());

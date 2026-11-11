@@ -140,7 +140,7 @@ export function FormDialog({
       <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
         <DialogContent className="glass-frame rounded-[2rem]! bg-transparent! p-2! ring-0! shadow-none! sm:max-w-lg" style={wide ? { maxWidth: '42rem' } : undefined} showCloseButton={false}>
           <form
-            className="glass-inner grid gap-5 rounded-[1.6rem] bg-popover p-6"
+            className="glass-inner grid max-h-[calc(100svh-3rem)] gap-5 overflow-y-auto rounded-[1.6rem] bg-popover p-6"
             onSubmit={(e: FormEvent) => {
               e.preventDefault();
               if (ready && !busy) onSubmit();
@@ -238,7 +238,6 @@ export function useDraft<T extends Record<string, string>>(key: string, empty: T
   return [draft, (patch) => setDraft((d) => ({ ...d, ...patch })), () => setDraft(empty)];
 }
 
-const LAST_REPO = 'mergelight.dashboard.repo';
 
 /** The repository someone picked last in this org, so the next form starts there and not on the first one in the list. */
 export function lastRepo(orgId: number, allowed: string[]): string | null {
@@ -260,6 +259,7 @@ export function rememberRepo(orgId: number, value: string): void {
   }
 }
 
+const LAST_REPO = 'mergelight.dashboard.repo';
 const ORG = 'mergelight.dashboard.org';
 const RESUME = 'mergelight.dashboard.resume';
 
@@ -296,7 +296,21 @@ export function forgetTab(): void {
   } catch {
     /* No storage: nothing was kept. */
   }
-  for (const key of [ORG, VIEW, RESUME]) write(key, null);
+  for (const key of [ORG, VIEW, RESUME, OWNER]) write(key, null);
+  try {
+    for (const key of Object.keys(localStorage)) if (key.startsWith(`${LAST_REPO}.`)) localStorage.removeItem(key);
+  } catch {
+    /* No storage: no remembered picks. */
+  }
+}
+
+const OWNER = 'mergelight.dashboard.owner';
+
+/** What this tab kept belongs to one GitHub user. When someone else signs in here, it is forgotten first. */
+export function claimTab(userId: number): void {
+  const owner = read(OWNER);
+  if (owner && owner !== String(userId)) forgetTab();
+  write(OWNER, String(userId));
 }
 
 

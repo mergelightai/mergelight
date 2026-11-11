@@ -244,9 +244,9 @@ export function AppShell({ user, orgs, org, onPickOrg, view, onView, onSignOut, 
           </div>
         </header>
         <div className="flex w-full flex-1 flex-col px-4 pb-6 pt-2">{children}</div>
-        {/* In the page's main region, so a screen reader reads what just happened. */}
-        <Toaster position="bottom-right" />
       </SidebarInset>
+      {/* Outside the page region, so a message shows above an open form window. Sonner announces it to screen readers. */}
+      <Toaster position="bottom-right" />
     </SidebarProvider>
     </TooltipProvider>
   );

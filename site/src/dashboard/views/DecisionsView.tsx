@@ -35,7 +35,7 @@ export function DecisionsView({ decisions, total, onForget }: { decisions: Decis
                   <DataRow key={d.id}>
                     <DataCell className="whitespace-normal">
                       <p className="font-medium text-foreground">{d.title}</p>
-                      <p className="mt-1 truncate font-mono text-xs text-muted-foreground">
+                      <p className="mt-1 font-mono text-xs text-muted-foreground [overflow-wrap:anywhere]">
                         {d.repo} · {d.file}:{d.line}
                       </p>
                       <p className="mt-3 rounded-2xl bg-white/[0.04] px-4 py-3 text-sm leading-relaxed text-muted-foreground">
