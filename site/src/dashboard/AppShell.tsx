@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { RotateCwIcon, ExternalLinkIcon, EllipsisIcon, BookOpenTextIcon, BrainIcon, LifeBuoyIcon, SendIcon, ChevronDownIcon, ChevronsUpDownIcon, CheckIcon, GitPullRequestIcon, ListChecksIcon, ScaleIcon, LogOutIcon } from 'lucide-react';
+import { RotateCwIcon, ExternalLinkIcon, EllipsisIcon, PuzzleIcon, BrainIcon, LifeBuoyIcon, SendIcon, ChevronDownIcon, ChevronsUpDownIcon, CheckIcon, GitPullRequestIcon, ListChecksIcon, ScrollTextIcon, LogOutIcon } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
@@ -17,8 +17,8 @@ export const VIEWS: { group: string; items: { id: ViewId; label: string; icon: t
   {
     group: 'What the reviewer knows',
     items: [
-      { id: 'rules', label: 'Rules', icon: ScaleIcon },
-      { id: 'skills', label: 'Skills', icon: BookOpenTextIcon },
+      { id: 'rules', label: 'Rules', icon: ScrollTextIcon },
+      { id: 'skills', label: 'Skills', icon: PuzzleIcon },
       { id: 'checks', label: 'Checks', icon: ListChecksIcon },
       { id: 'decisions', label: 'Decisions', icon: BrainIcon },
     ],
