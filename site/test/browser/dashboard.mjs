@@ -87,7 +87,7 @@ const OVERVIEWS = {
 let failures = 0;
 const expect = (ok, what) => { console.log(`  ${ok ? 'ok ' : 'FAIL'} ${what}`); if (!ok) failures++; };
 
-async function open(name, { signedOutAfter = Infinity, serverDown = false, forgetFails = false, signedOutOnAdd = false, signedOutOnWrite = false, noOrgs = false } = {}) {
+async function open(name, { signedOutAfter = Infinity, serverDown = false, forgetFails = false, signedOutOnAdd = false, signedOutOnWrite = false, noOrgs = false, skillsFail = false } = {}) {
   /** Whether the one Add that finds the session ran out has happened. */
   let addSignedOut = false;
   /** Decisions the page asked the server to forget. */
@@ -157,6 +157,7 @@ async function open(name, { signedOutAfter = Infinity, serverDown = false, forge
       }
       const skills = /^\/v1\/orgs\/(\d+)\/skills(?:\/(\d+))?$/.exec(u.pathname);
       if (skills && !SKILLS[skills[1]]) return json(req, { error: 'not_connected' }, 404);
+      if (skills && skillsFail && m === 'GET') return json(req, { error: 'server_error' }, 500);
       if (skills && m === 'POST') {
         const body = JSON.parse(req.postData());
         if (body.path.includes('..')) return json(req, { error: 'bad_request', message: "Name the skill's folder in the repository, like .claude/skills/migrations." }, 400);
@@ -561,6 +562,9 @@ const done = async (t) => {
   await t.page.evaluate(() => { window.location.hash = 'checks'; });
   await wait(400);
   expect(/Only an admin of a repository can set its checks\./.test(await t.text()), 'typing another #view in the address goes to that view');
+  await t.page.goBack();
+  await wait(400);
+  expect(/Latest 3 reviews|No reviews to show yet/.test(await t.text()) && !/Only an admin of a repository can set its checks/.test(await t.text()), 'Back after a typed #view returns to Reviews');
   await t.view('Reviews');
   const tripsBefore = t.renewals.length;
   await t.page.reload({ waitUntil: 'networkidle2' });
@@ -568,6 +572,14 @@ const done = async (t) => {
   expect(/No reviews to show yet/.test(await t.text()) && /fresh/.test(await t.page.evaluate(() => document.querySelector('[aria-label="Switch org"]').textContent)) && t.renewals.length === tripsBefore, 'a reload keeps the session and the org, with no trip to GitHub');
   await t.menu('Switch org', 'acme');
   expect(/acme\/widgets #42/.test(await t.text()), 'and switching back shows that org again');
+
+  await t.page.click('[data-sidebar=trigger]');
+  await wait(400);
+  await t.page.reload({ waitUntil: 'networkidle2' });
+  await wait(500);
+  expect(await t.page.evaluate(() => document.querySelector('[data-slot=sidebar][data-state]')?.getAttribute('data-state')) === 'collapsed', 'a menu shrunk to icons stays shrunk after a reload');
+  await t.page.click('[data-sidebar=trigger]');
+  await wait(400);
 
   // On a phone the menu is a sheet over the page. Picking a view closes it.
   await t.page.setViewport({ width: 390, height: 844, deviceScaleFactor: 2 });
@@ -588,7 +600,7 @@ const done = async (t) => {
   await t.menu('Your account', 'Sign out');
   const keptAfter = await t.page.evaluate(() => Object.keys(sessionStorage).filter((k) => k.includes('draft') || k.includes('written-skill') || k.endsWith('.org') || k.endsWith('.view') || k.endsWith('.resume')));
   expect(keptAfter.length === 0, `signing out forgets the drafts, the org and the view, so the next person starts clean (${keptAfter})`);
-  const picksAfter = await t.page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('mergelight.dashboard.repo')));
+  const picksAfter = await t.page.evaluate(() => [...Object.keys(localStorage), ...Object.keys(sessionStorage)].filter((k) => k.startsWith('mergelight.dashboard.repo')));
   expect(picksAfter.length === 0, `and the remembered repository picks (${picksAfter})`);
   expect(/Continue with GitHub/.test(await t.text()), 'signing out goes back to the sign-in screen');
   expect(t.calls.at(-1).m === 'DELETE' && t.calls.at(-1).path === '/v1/session', 'and ends the session on the server');
@@ -700,6 +712,19 @@ const done = async (t) => {
   await t.click('[role=dialog] button', 'Save skill');
   await wait(800);
   expect(t.written.length === 1 && t.written[0].name === 'Migrations', 'one more click saves it');
+  await done(t);
+}
+
+{
+  const t = await open('skill-folders-fail', { skillsFail: true });
+  await t.signIn();
+  await t.view('Skills');
+  await wait(500);
+  const page = await t.text();
+  expect(/Your skill folders couldn't load/.test(page) && !/The dashboard couldn't load/.test(page), 'when only the skill folders fail to load, that list says so, not the whole dashboard');
+  expect(/Payments Use when a pull request changes src\/billing\./.test(page), 'and the skills written here still show');
+  await t.view('Rules');
+  expect(/Ignore style and naming\. set by/.test(await t.text()), 'and the other views work');
   await done(t);
 }
 

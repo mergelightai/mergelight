@@ -239,24 +239,15 @@ export function useDraft<T extends Record<string, string>>(key: string, empty: T
 }
 
 
-/** The repository someone picked last in this org, so the next form starts there and not on the first one in the list. */
+/** The repository someone picked last in this org, so the next form starts there and not on the first one in the list. Kept for this tab only. */
 export function lastRepo(orgId: number, allowed: string[]): string | null {
-  let last: string | null = null;
-  try {
-    last = localStorage.getItem(`${LAST_REPO}.${orgId}`);
-  } catch {
-    /* No storage: no remembered pick. */
-  }
+  const last = read(`${LAST_REPO}.${orgId}`);
   if (last && allowed.includes(last)) return last;
   return allowed.length === 1 ? allowed[0] : null;
 }
 
 export function rememberRepo(orgId: number, value: string): void {
-  try {
-    localStorage.setItem(`${LAST_REPO}.${orgId}`, value);
-  } catch {
-    /* No storage: the next form starts empty. */
-  }
+  write(`${LAST_REPO}.${orgId}`, value);
 }
 
 const LAST_REPO = 'mergelight.dashboard.repo';
@@ -298,7 +289,7 @@ export function forgetTab(): void {
   }
   for (const key of [ORG, VIEW, RESUME, OWNER]) write(key, null);
   try {
-    for (const key of Object.keys(localStorage)) if (key.startsWith(`${LAST_REPO}.`)) localStorage.removeItem(key);
+    for (const key of Object.keys(sessionStorage)) if (key.startsWith(`${LAST_REPO}.`)) sessionStorage.removeItem(key);
   } catch {
     /* No storage: no remembered picks. */
   }
@@ -307,10 +298,12 @@ export function forgetTab(): void {
 const OWNER = 'mergelight.dashboard.owner';
 
 /** What this tab kept belongs to one GitHub user. When someone else signs in here, it is forgotten first. */
-export function claimTab(userId: number): void {
+export function claimTab(userId: number): boolean {
   const owner = read(OWNER);
-  if (owner && owner !== String(userId)) forgetTab();
+  const other = !!owner && owner !== String(userId);
+  if (other) forgetTab();
   write(OWNER, String(userId));
+  return other;
 }
 
 

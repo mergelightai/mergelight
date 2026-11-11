@@ -185,7 +185,7 @@ export function AppShell({ user, orgs, org, onPickOrg, view, onView, onSignOut, 
   const here = { label: group.items.find((i) => i.id === view)?.label ?? '' };
   return (
     <TooltipProvider>
-    <SidebarProvider>
+    <SidebarProvider defaultOpen={!document.cookie.split('; ').includes('sidebar_state=false')}>
       <Sidebar collapsible="icon">
         <SidebarHeader>
           <SidebarMenu>

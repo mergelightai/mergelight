@@ -68,8 +68,8 @@ function NewSkillForm({ orgId, skills, onAdd, startOpen }: { orgId: number; skil
   );
 }
 
-export function SkillsView({ session, signedIn, orgId, skills, onAdd, onRemove, resume }: { session: Session; signedIn: (change: () => Promise<void>) => Promise<void>; orgId: number; skills: Skills; onAdd: (skill: { repo_id: number; path: string }) => Promise<void>; onRemove: (skill: Skill) => Promise<void>; resume: string | null }) {
-  const mayAdd = skills.repos.some((r) => r.can_pick_skills);
+export function SkillsView({ session, signedIn, orgId, skills, onRetry, onAdd, onRemove, resume }: { session: Session; signedIn: (change: () => Promise<void>) => Promise<void>; orgId: number; skills: Skills | null; onRetry: () => void; onAdd: (skill: { repo_id: number; path: string }) => Promise<void>; onRemove: (skill: Skill) => Promise<void>; resume: string | null }) {
+  const mayAdd = !!skills && skills.repos.some((r) => r.can_pick_skills);
   return (
     <>
       <ViewHeader
@@ -84,9 +84,16 @@ export function SkillsView({ session, signedIn, orgId, skills, onAdd, onRemove, 
             <h2 className="font-heading text-base font-semibold">Skill folders</h2>
             <p className="mt-1 text-sm text-muted-foreground">Read from your repository.</p>
           </div>
-          {mayAdd ? <NewSkillForm orgId={orgId} skills={skills} onAdd={onAdd} startOpen={resume === 'skills'} /> : <ReadOnly>Only an admin of a repository can pick its skills.</ReadOnly>}
+          {skills && mayAdd ? <NewSkillForm orgId={orgId} skills={skills} onAdd={onAdd} startOpen={resume === 'skills'} /> : skills ? <ReadOnly>Only an admin of a repository can pick its skills.</ReadOnly> : null}
         </div>
-        {skills.skills.length === 0 ? (
+        {!skills ? (
+          <EmptyList title="Your skill folders couldn't load">
+            The Mergelight server answered with an error for this list.{' '}
+            <button type="button" onClick={onRetry} className="text-foreground underline underline-offset-4">
+              Try again
+            </button>
+          </EmptyList>
+        ) : skills.skills.length === 0 ? (
           <EmptyList title="No skill folders yet">Add a skill folder, and every review of its repository reads it.</EmptyList>
         ) : (
           <DataTable>

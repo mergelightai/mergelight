@@ -66,7 +66,10 @@ export default function Dashboard() {
 
   // A different GitHub user signing in on this tab doesn't inherit the last one's drafts, org or view.
   useEffect(() => {
-    if (session) claimTab(session.user.id);
+    if (session && claimTab(session.user.id)) {
+      setOrgId(null);
+      setTab('reviews');
+    }
   }, [session]);
 
   const org = useMemo(() => {
@@ -121,7 +124,10 @@ export default function Dashboard() {
   useEffect(() => keepView(tab), [tab]);
   // Someone who types another #view in the address goes there.
   useEffect(() => {
-    const onHash = () => setTab(fromHash());
+    const onHash = () => {
+      const id = window.location.hash.slice(1) as ViewId;
+      setTab(ALL_VIEWS.includes(id) ? id : 'reviews');
+    };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
@@ -229,14 +235,15 @@ export default function Dashboard() {
             setView((v) => (v.kind === 'ready' && v.rules ? { ...v, rules: { ...v.rules, rules: v.rules.rules.filter((x) => x.id !== rule.id) } } : v));
           }}
         />
-      ) : <LoadError onRetry={reload} />)}
-      {ready && tab === 'skills' && (ready.skills ? (
+      ) : <LoadError onRetry={reload} what="rules" />)}
+      {ready && tab === 'skills' && (
         <SkillsView
           key={org.id}
           session={session}
           signedIn={signedIn}
           orgId={org.id}
           skills={ready.skills}
+          onRetry={reload}
           resume={resume}
           onAdd={async (skill) => {
             await signedIn(() => addSkill(session, org.id, skill));
@@ -249,7 +256,7 @@ export default function Dashboard() {
             setView((v) => (v.kind === 'ready' && v.skills ? { ...v, skills: { ...v.skills, skills: v.skills.skills.filter((x) => x.id !== skill.id) } } : v));
           }}
         />
-      ) : <LoadError onRetry={reload} />)}
+      )}
       {ready && tab === 'checks' && (ready.checks ? (
         <ChecksView
           key={org.id}
@@ -267,7 +274,7 @@ export default function Dashboard() {
             setView((v) => (v.kind === 'ready' && v.checks ? { ...v, checks: { ...v.checks, checks: v.checks.checks.filter((x) => x.id !== check.id) } } : v));
           }}
         />
-      ) : <LoadError onRetry={reload} />)}
+      ) : <LoadError onRetry={reload} what="checks" />)}
       {ready && tab === 'decisions' && (
         <DecisionsView
           decisions={ready.decisions}

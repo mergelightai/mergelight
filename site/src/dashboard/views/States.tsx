@@ -93,11 +93,11 @@ export function NotOn({ org }: { org: Org }) {
   );
 }
 
-export function LoadError({ onRetry }: { onRetry: () => void }) {
+export function LoadError({ onRetry, what }: { onRetry: () => void; what?: string }) {
   return (
     <GlassCard className="max-w-2xl">
-      <h2 className="font-heading text-lg font-semibold">The dashboard couldn't load</h2>
-      <p className="mt-2 text-[15px] text-muted-foreground">The Mergelight server didn't answer. Your reviews are not affected.</p>
+      <h2 className="font-heading text-lg font-semibold">{what ? `Your ${what} couldn't load` : "The dashboard couldn't load"}</h2>
+      <p className="mt-2 text-[15px] text-muted-foreground">{what ? 'The Mergelight server answered with an error for this list. The other views work, and your reviews are not affected.' : "The Mergelight server didn't answer. Your reviews are not affected."}</p>
       <Button className="mt-5" onClick={onRetry}>
         Try again
       </Button>
