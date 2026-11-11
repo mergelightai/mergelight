@@ -751,3 +751,22 @@ test("a remembered reason gets one answer in its thread", async () => {
   assert.match(writes()[0].body, /only its start is kept/);
   assert.equal(await withFakeGh(env, () => answerRemembered(new GitHub("o", "r"), 7, [], new Set())), 0);
 });
+
+test("a reason the server hasn't confirmed is sent again in later reviews, until Mergelight has answered in its thread", async () => {
+  const base = stateOf([finding({ id: "aaaaaaaaaa", file: "src/a.ts", line: 12, end_line: 12 })]);
+  const pending = { ...base, remember: [{ id: "aaaaaaaaaa", at: "2001-01-01T00:00:00Z" }] };
+  const thread = (extra = []) => findingThread("aaaaaaaaaa", 501, [reply("teammate", "Known, leave it.", "2001-01-01T00:00:00Z"), ...extra]);
+  const read = async (state, threads) => {
+    const { env } = useScenario({ issueComments: [summaryComment(state)], threads, compare: { status: "diverged", files: [] } });
+    return (await withFakeGh(env, () => previousFindings(new GitHub("o", "r"), 7, PUSHED)))[0].handled;
+  };
+  // Old, and the code can't be compared: only the pending list keeps it.
+  assert.equal((await read(pending, [thread()])).remember, true);
+  assert.equal((await read(base, [thread()])).remember, undefined, "nothing pending: an old reply isn't kept");
+  const answered = [thread([{ databaseId: 10, body: "<!-- mergelight:remembered -->\nRemembered.", createdAt: "2001-01-02T00:00:00Z", author: { __typename: "Bot", login: "mergelight-ai" } }])];
+  assert.equal((await read(pending, answered)).remember, undefined, "answered in the thread: the server has it");
+  const forged = [thread([{ databaseId: 10, body: "<!-- mergelight:remembered -->", createdAt: "2001-01-02T00:00:00Z", author: { __typename: "User", login: "teammate" } }])];
+  assert.equal((await read(pending, forged)).remember, true, "only Mergelight's own answer counts");
+  const changed = { ...base, remember: [{ id: "aaaaaaaaaa", at: "2000-01-01T00:00:00Z" }] };
+  assert.equal((await read(changed, [thread()])).remember, undefined, "the pending reason is an older one");
+});

@@ -108,6 +108,7 @@ export async function previousFindings(api: GitHub, number: number, headSha?: st
   const resolved = await resolvedByPeople(threads, writeAccess(api));
   const replies = resolverReplies(threads, resolved);
   const latest = state?.rounds.at(-1);
+  const waiting = new Map((state?.remember ?? []).map((r) => [r.id, r.at]));
   const unchanged = unchangedSince(api, latest?.sha, headSha);
   // A decision not to fix must reach the verifier however long the list gets, or the problem comes back as new.
   const order = (f: StateFinding) => (marks.get(f.id)?.as === "wont_fix" || resolved.has(f.id) ? 0 : f.status === "gone" ? 2 : 1);
@@ -128,7 +129,10 @@ export async function previousFindings(api: GitHub, number: number, headSha?: st
       // if the code there didn't change since the review it answers: then the reply may say how it was
       // fixed. A reply from before the latest review may answer an older round, such as a fix it checked.
       const fresh = all.filter((r) => latest && Date.parse(r.at) > Date.parse(latest.at));
-      const remember = isReason && fresh.length > 0 && !fresh.some((r) => FIX_CLAIM.test(r.text)) && f.status === "open" && (await unchanged(f));
+      // A reason an earlier review judged worth keeping, and the server hasn't confirmed yet (no answer in
+      // the thread): sent again, so one failed report doesn't lose it. A newer reply is a new reason.
+      const pending = isReason && !reply!.answered && waiting.get(id) === reasons.at(-1)?.at;
+      const remember = pending || (isReason && fresh.length > 0 && !fresh.some((r) => FIX_CLAIM.test(r.text)) && f.status === "open" && (await unchanged(f)));
       const handled = mark
         ? { as: mark.as, note: mark.note, by: mark.by, sha: mark.sha, from: "mark" as const, at: mark.at }
         : by && isReason
@@ -265,6 +269,10 @@ export async function publishReview(
     yellowBlocks?: boolean;
     /** True when the team's server couldn't be asked, so its rules and checks weren't used in this review. */
     teamUnread?: boolean;
+    /** When this review read the pull request's threads. A reply written after it is newer than this round. */
+    startedAt?: Date;
+    /** Reasons given in threads that this review sends to keep, until the server confirms them. */
+    remember?: { id: string; at: string }[];
   } = {},
 ): Promise<PublishResult> {
   const log = opts.log ?? (() => {});
@@ -332,8 +340,8 @@ export async function publishReview(
 
   const { handled, resolved } = await settleThreads(api, review, log);
 
-  const started = new Date(Date.parse(review.created_at) - (review.stats?.duration_ms ?? 0));
-  const state = nextState(prev, review.findings, review.pr.head_sha, review.light, urls, Number.isFinite(started.getTime()) ? started : new Date());
+  const started = opts.startedAt ?? new Date(Date.parse(review.created_at) - (review.stats?.duration_ms ?? 0));
+  const state = nextState(prev, review.findings, review.pr.head_sha, review.light, urls, Number.isFinite(started.getTime()) ? started : new Date(), opts.remember);
   const summaryInput = { review, state, urls, marks, handled, update: await newerVersion(api) };
   const commentBody = summaryBody(summaryInput);
   let summaryUrl: string | null = summary?.html_url ?? null;

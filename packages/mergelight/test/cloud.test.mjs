@@ -467,3 +467,8 @@ test("a report the server refuses for its decisions is sent again without them, 
   assert.equal("declines" in bodies[1], false);
   assert.notEqual(bodies[0].report_id, bodies[1].report_id);
 });
+
+test("reasons given in threads go first, so marks can't crowd them out of a report", () => {
+  const sent = declinesOf([prior(mark(), { id: "aaaaaa0001" }), prior(mark({ from: "reply", remember: true }), { id: "bbbbbb0002" })]);
+  assert.deepEqual(sent.map((d) => d.finding_id), ["bbbbbb0002", "aaaaaa0001"]);
+});

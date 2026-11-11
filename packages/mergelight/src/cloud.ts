@@ -362,7 +362,9 @@ export function declinesOf(previous: PriorFinding[] | undefined): Decline[] {
   // Line breaks and control characters become spaces: a reason is one line of plain text by the time it is sent.
   const clean = (text: string, max: number) => text.replace(/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u2028-\u202e\u2066-\u2069]+/g, " ").replace(/ {2,}/g, " ").trim().slice(0, max).trim();
   const declines: Decline[] = [];
-  for (const p of previous ?? []) {
+  // Reasons given in threads first: unlike marks, they aren't read again from the pull request each time.
+  const order = (p: PriorFinding) => (p.handled?.from === "reply" ? 0 : 1);
+  for (const p of [...(previous ?? [])].sort((a, b) => order(a) - order(b))) {
     const h = p.handled;
     // A mark, or a reason someone just gave when they resolved the thread. A plain resolve has no reason to keep.
     if (!h || h.as !== "wont_fix" || (h.from !== "mark" && !(h.from === "reply" && h.remember)) || !h.note?.trim()) continue;

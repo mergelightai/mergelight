@@ -580,3 +580,9 @@ test("a round is dated by when its review started, so a reply written while it r
   const state = nextState(null, [], "a".repeat(40), "green", new Map(), new Date("2030-01-01T10:00:00Z"));
   assert.equal(state.rounds[0].at, "2030-01-01T10:00:00.000Z");
 });
+
+test("the state keeps the reasons waiting for the server, and only when there are some", () => {
+  const sha = "a".repeat(40);
+  assert.deepEqual(nextState(null, [], sha, "green", new Map(), new Date(), [{ id: "abcdef1234", at: "2030-01-01T00:00:00Z" }]).remember, [{ id: "abcdef1234", at: "2030-01-01T00:00:00Z" }]);
+  assert.equal("remember" in nextState(null, [], sha, "green", new Map()), false);
+});
