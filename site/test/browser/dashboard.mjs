@@ -77,7 +77,9 @@ const OVERVIEWS = {
 let failures = 0;
 const expect = (ok, what) => { console.log(`  ${ok ? 'ok ' : 'FAIL'} ${what}`); if (!ok) failures++; };
 
-async function open(name, { signedOutAfter = Infinity, serverDown = false, forgetFails = false } = {}) {
+async function open(name, { signedOutAfter = Infinity, serverDown = false, forgetFails = false, signedOutOnAdd = false } = {}) {
+  /** Whether the one Add that finds the session ran out has happened. */
+  let addSignedOut = false;
   /** Decisions the page asked the server to forget. */
   const forgotten = [];
   /** Rules the page asked the server to add and to remove. */
@@ -121,6 +123,10 @@ async function open(name, { signedOutAfter = Infinity, serverDown = false, forge
       const rules = /^\/v1\/orgs\/(\d+)\/rules(?:\/(\d+))?$/.exec(u.pathname);
       if (rules && !RULES[rules[1]]) return json(req, { error: 'not_connected' }, 404);
       if (rules && m === 'POST') {
+        if (signedOutOnAdd && !addSignedOut) {
+          addSignedOut = true;
+          return json(req, { error: 'signed_out' }, 401);
+        }
         const body = JSON.parse(req.postData());
         if (body.text.includes('refuse me')) return json(req, { error: 'read_only', message: 'Only an owner of the org can set rules for the whole org.' }, 403);
         added.push(body);
@@ -190,6 +196,7 @@ async function open(name, { signedOutAfter = Infinity, serverDown = false, forge
       renewals.push(u.searchParams.get('state'));
       return req.respond({ status: 302, headers: { location: `${base}/setup/?code=again&state=${encodeURIComponent(u.searchParams.get('state'))}` } });
     }
+    if (u.hostname === 'github.com' || u.hostname === 'avatars.githubusercontent.com') return req.respond({ status: 404, headers: cors, body: '' });
     if (u.origin === base) {
       const file = join(dist, u.pathname.endsWith('/') ? `${u.pathname}index.html` : u.pathname);
       if (existsSync(file)) return req.respond({ status: 200, contentType: types[extname(file)] ?? 'application/octet-stream', body: readFileSync(file) });
@@ -209,6 +216,42 @@ async function open(name, { signedOutAfter = Infinity, serverDown = false, forge
     if (!at) throw new Error(`no ${selector} "${label}": ${await text()}`);
     await page.mouse.click(at.x, at.y);
   };
+  /** Clicks the item of a menu whose text ends with the label: an org's picture letter may come first. */
+  const menu = async (trigger, item) => {
+    await page.click(`[aria-label="${trigger}"]`);
+    await wait(350);
+    const at = await page.evaluate((t) => {
+      const el = [...document.querySelectorAll('[role=menuitem]')].find((e) => e.textContent.trim().endsWith(t));
+      if (!el) return null;
+      const b = el.getBoundingClientRect();
+      return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+    }, item);
+    if (!at) throw new Error(`no menu item "${item}" under "${trigger}"`);
+    await page.mouse.click(at.x, at.y);
+    await wait(500);
+  };
+  /** Opens a view from the menu on the left. */
+  const view = async (label) => {
+    await click('[data-sidebar=menu-button]', label);
+    await wait(400);
+  };
+  /** The choices a list offers, and picking one. */
+  const options = async (label) => {
+    await page.click(`[aria-label="${label}"]`);
+    await wait(350);
+    const found = await page.evaluate(() => [...document.querySelectorAll('[data-slot=select-content][data-open] [role=option]')].map((o) => ({ text: o.textContent.trim(), disabled: o.getAttribute('aria-disabled') === 'true' || o.hasAttribute('data-disabled') })));
+    await page.keyboard.press('Escape');
+    await wait(250);
+    return found;
+  };
+  const choose = async (label, option) => {
+    await page.click(`[aria-label="${label}"]`);
+    await wait(350);
+    await click('[data-slot=select-content][data-open] [role=option]', option);
+    await wait(300);
+  };
+  /** The text of the open form window, which sits outside the page's main region. */
+  const dialog = () => page.evaluate(() => document.querySelector('[role=dialog]')?.innerText.replace(/\s+/g, ' ') ?? '');
   /** What GitHub does after "Continue with GitHub": it sends the person to the setup page with a code and the state. */
   const comeBackFromGitHub = async (state) => {
     await page.goto(`${base}/setup/?code=c&state=${encodeURIComponent(state)}`, { waitUntil: 'networkidle2' });
@@ -222,7 +265,7 @@ async function open(name, { signedOutAfter = Infinity, serverDown = false, forge
     return { href, state };
   };
   console.log(`\n== ${name}`);
-  return { page, calls, exchanges, renewals, forgotten, added, removed, skillsAdded, skillsRemoved, checksAdded, checksRemoved, errors, text, click, signIn, comeBackFromGitHub, shot: (file) => page.screenshot({ path: `${out}${file}.png`, fullPage: true }).catch(() => {}) };
+  return { page, calls, exchanges, renewals, forgotten, added, removed, skillsAdded, skillsRemoved, checksAdded, checksRemoved, errors, text, click, menu, view, options, choose, dialog, signIn, comeBackFromGitHub, shot: (file) => page.screenshot({ path: `${out}${file}.png`, fullPage: true }).catch(() => {}) };
 }
 const done = async (t) => {
   if (t.errors.length) { console.log('  page errors', t.errors.slice(0, 3)); failures++; }
@@ -244,14 +287,19 @@ const done = async (t) => {
   expect(/acme/.test(after) && /acme\/widgets #42/.test(after), 'the org and its latest reviews show');
   expect(/2 bugs, 1 risk, 3 hardening/.test(after) && /Nothing worth fixing/.test(after), 'each review says what was found');
   expect(/opus, 6m 52s/.test(after) && /codex, 1m 35s/.test(after), 'and which AI ran it and how long it took');
-  expect(/Latest 3 reviews 3 Safe to merge 1 Needs a human 1 Blocked 1/.test(after), `the counts add up (${after.slice(0, 160)})`);
-  expect(/acme\/api 1 review/.test(after) && /acme\/widgets 2 reviews/.test(after), 'the repositories are listed');
-  const add = await t.page.evaluate(() => [...document.querySelectorAll('a')].find((a) => a.textContent.includes('Add it on GitHub'))?.href);
-  expect(add === 'https://github.com/apps/mergelight-setup/installations/new', 'the way to add a missing org or repository is on the page');
-  const newTab = await t.page.evaluate(() => [...document.querySelectorAll('a')].find((a) => a.textContent.includes('Add it on GitHub'))?.target);
-  expect(newTab === '_blank', 'and it opens in a new tab, so the dashboard stays where it is');
+  expect(/Latest 3 reviews 3 Since 1 day ago Safe to merge 1 33% of them Needs a human 1 33% of them Blocked 1 33% of them/.test(after), `the counts add up, and say over which time (${after.slice(0, 200)})`);
+  expect(/acme\/widgets Last review 1 hour ago 2/.test(after) && /acme\/api Last review 1 day ago 1/.test(after), 'the repositories are listed, with their number of reviews');
+  await t.page.click('[aria-label=More]');
+  await wait(350);
+  const addLink = await t.page.evaluate(() => { const a = [...document.querySelectorAll('a')].find((x) => x.textContent.includes('Add it on GitHub')); return a && { href: a.href, target: a.target }; });
+  expect(addLink?.href === 'https://github.com/apps/mergelight-setup/installations/new', 'the way to add a missing org or repository is in the page menu');
+  expect(addLink?.target === '_blank', 'and it opens in a new tab, so the dashboard stays where it is');
+  await t.page.keyboard.press('Escape');
+  await wait(300);
   const link = await t.page.evaluate(() => [...document.querySelectorAll('a')].find((a) => a.textContent.includes('#42'))?.href);
   expect(link === 'https://github.com/acme/widgets/pull/42', 'a review links to its pull request on GitHub');
+  const cursors = await t.page.evaluate(() => [...document.querySelectorAll('button:not(:disabled), a[href], tbody tr')].filter((e) => getComputedStyle(e).cursor !== 'pointer').map((e) => e.outerHTML.slice(0, 80)));
+  expect(cursors.length === 0, `everything that can be clicked shows the hand (${cursors.join(' | ')})`);
   await t.shot('2-reviews');
 
   expect(t.calls[0].m === 'POST' && t.calls[0].path === '/v1/session' && t.calls[0].auth === `Bearer ${GITHUB_TOKEN}`, 'the GitHub token goes to the server once, to sign in');
@@ -260,121 +308,168 @@ const done = async (t) => {
   expect(!stored.includes(GITHUB_TOKEN), 'the page keeps no GitHub token, in no kind of storage');
   expect(t.exchanges.length === 1, 'the sign-in code is used once');
 
-  expect(/What your team decided/.test(after) && /Cart total is rounded before tax/.test(after) && /ada: The payment provider needs whole cents\./.test(after), 'what the team decided shows, with who said why');
-  expect(/acme\/widgets · src\/cart\.ts:40/.test(after) && /Left out of 3 reviews since/.test(after) && /Not needed since/.test(after), 'and where it is and how often it was used');
+  // Decisions.
+  await t.view('Decisions');
+  const decided = await t.text();
+  expect(/Cart total is rounded before tax/.test(decided) && /ada: The payment provider needs whole cents\./.test(decided), 'what the team decided shows, with who said why');
+  expect(/acme\/widgets · src\/cart\.ts:40/.test(decided) && /Left out of 3 reviews since/.test(decided) && /Not needed since/.test(decided), 'and where it is and how often it was used');
+  expect(/A decision nobody needed for 90 days is dropped/.test(decided), 'it says when a decision is dropped');
   const forgetButtons = await t.page.evaluate(() => [...document.querySelectorAll('button')].filter((b) => b.textContent.trim() === 'Forget').length);
   expect(forgetButtons === 1, 'only a decision in a repository the person can push to has a Forget button');
   await t.click('button', 'Forget');
-  await wait(500);
+  await wait(400);
+  expect(t.forgotten.length === 0, 'Forget asks first, and does nothing yet');
+  const asked = await t.page.evaluate(() => document.querySelector('[data-slot=popover-content]')?.innerText ?? '');
+  expect(/can't be undone/.test(asked) && /may raise this finding again/.test(asked), 'and says it cannot be undone');
+  await t.click('button', 'Yes, forget');
+  await wait(600);
   expect(t.forgotten.join() === '12' && !/Cart total is rounded/.test(await t.text()) && /Retry has no upper bound/.test(await t.text()), 'Forget removes that one decision, on the server and on the page');
+  expect(/Decision forgotten/.test(await t.text()), 'and says it is done');
 
   // Rules.
+  await t.view('Rules');
   const withRules = await t.text();
-  expect(/Ignore style and naming\. Every repository set by ada/.test(withRules), `a rule of the whole org shows, with who set it (${withRules.match(/Rules.{0,40}/)?.[0]})`);
-  expect(/Billing changes need a second pair of eyes\. acme\/api Always needs a human src\/billing\/\*\*, \*\.sql set by bo/.test(withRules), 'files that always need a human show with their repository and patterns');
+  expect(/Ignore style and naming\. set by ada, 8 days ago Every repository All files/.test(withRules), `a rule of the whole org shows, with who set it (${withRules.match(/Rule Where.{0,80}/)?.[0]})`);
+  expect(/Billing changes need a second pair of eyes\. Always needs a human set by bo, 1 day ago acme\/api src\/billing\/\*\*, \*\.sql/.test(withRules), 'files that always need a human show with their repository and patterns');
+  expect(/stops a merge only where the Mergelight check is required and the workflow sets yellow-blocks: true\. Without that it is a warning/.test(withRules), 'the view says when "needs a human" stops a merge');
   const removeButtons = await t.page.evaluate(() => [...document.querySelectorAll('button')].filter((b) => b.textContent.trim() === 'Remove').length);
   expect(removeButtons === 1, 'only a rule this person may remove has a Remove button');
-  const places = await t.page.evaluate(() => [...document.querySelector('select[aria-label="Where it applies"]').options].map((o) => o.textContent));
-  expect(places.join() === 'Every repository,acme/widgets', `a new rule can go where this person may set rules, and nowhere else (${places})`);
+  await t.click('button', 'New rule');
+  await wait(500);
+  const places = await t.options('Where it applies');
+  expect(places.map((o) => o.text).join() === 'Every repository,acme/widgets' && places.every((o) => !o.disabled), `a new rule can go where this person may set rules, and nowhere else (${JSON.stringify(places)})`);
+  const placeShown = await t.page.evaluate(() => document.querySelector('[aria-label="Where it applies"]').textContent);
+  expect(/Pick a repository/.test(placeShown), 'with more than one place to pick, the form does not pick one for the person');
 
   const fill = async (label, value) => {
     await t.page.evaluate((l) => document.querySelector(`[aria-label="${l}"]`).scrollIntoView({ block: 'center', behavior: 'instant' }), label);
     await t.page.click(`[aria-label="${label}"]`, { clickCount: 3 });
     await t.page.keyboard.type(value);
   };
-  await t.page.select('select[aria-label="What it is"]', 'needs_human');
+  const submitOff = (label) => t.page.evaluate((l) => [...document.querySelectorAll('[role=dialog] button')].find((b) => b.textContent.trim() === l).disabled, label);
+  await t.choose('What it is', 'Files that always need a human');
   await fill('The rule', 'Migrations are reviewed by the data team.');
-  const disabled = await t.page.evaluate(() => [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Add').disabled);
-  expect(disabled, 'files that always need a human can\'t be added without naming files');
+  await t.choose('Where it applies', 'acme/widgets');
+  expect(await submitOff('Add'), 'files that always need a human can\'t be added without naming files');
   await fill('Files', 'db/migrations/**, *.sql');
-  await t.page.select('select[aria-label="Where it applies"]', '501');
-  await t.click('button', 'Add');
-  await wait(700);
+  await t.click('[role=dialog] button', 'Add');
+  await wait(800);
   expect(JSON.stringify(t.added) === JSON.stringify([{ kind: 'needs_human', text: 'Migrations are reviewed by the data team.', paths: ['db/migrations/**', '*.sql'], repo_id: 501 }]), `the new rule is sent as typed (${JSON.stringify(t.added)})`);
-  expect(/Migrations are reviewed by the data team\. acme\/widgets Always needs a human db\/migrations\/\*\*, \*\.sql/.test(await t.text()), 'and shows in the list');
+  expect(/Migrations are reviewed by the data team\. Always needs a human set by ada, just now acme\/widgets db\/migrations\/\*\*, \*\.sql/.test(await t.text()), 'and shows in the list');
+  expect(!(await t.page.$('[role=dialog]')) && /Files added/.test(await t.text()), 'the form closes and says it is done');
+  await t.click('button', 'New rule');
+  await wait(500);
   const cleared = await t.page.evaluate(() => document.querySelector('[aria-label="The rule"]').value + document.querySelector('[aria-label="Files"]').value);
   expect(cleared === '', 'the form is empty again');
+  const remembered = await t.page.evaluate(() => document.querySelector('[aria-label="Where it applies"]').textContent);
+  expect(/acme\/widgets/.test(remembered), 'and starts on the repository picked last time');
 
   await fill('The rule', 'refuse me');
   await fill('Files', 'src/**');
-  await t.click('button', 'Add');
-  await wait(600);
-  expect(/Only an owner of the org can set rules for the whole org\./.test(await t.text()), 'when the server says no, the page shows why');
+  await t.click('[role=dialog] button', 'Add');
+  await wait(700);
+  expect(/Only an owner of the org can set rules for the whole org\./.test(await t.dialog()), 'when the server says no, the form shows why');
+  await t.page.keyboard.press('Escape');
+  await wait(400);
 
+  expect(!(await t.page.$('[role=dialog]')), `Escape closes the form (${await t.dialog()})`);
   await t.click('button', 'Remove');
+  await wait(400);
+  expect(t.removed.length === 0, 'Remove asks first');
+  await t.shot('4-remove-asks');
+  await t.click('button', 'Yes, remove');
   await wait(600);
-  expect(t.removed.join() === '3' && !/Ignore style and naming/.test(await t.text()), 'Remove takes the rule off the server and the page');
+  expect(t.removed.join() === '3' && !/Ignore style and naming\. set by/.test(await t.text()), `Remove takes the rule off the server and the page (${t.removed} | ${(await t.text()).slice(0, 300)})`);
 
   // Skills.
+  await t.view('Skills');
   const withSkills = await t.text();
-  expect(/\.claude\/skills\/migrations acme\/widgets picked by ada/.test(withSkills) && /\.agents\/skills\/payments acme\/api picked by bo/.test(withSkills), `the picked skill folders show, with their repository and who picked them (${withSkills.match(/Skills.{0,60}/)?.[0]})`);
-  expect(/a pull request can't change the skill that reviews it/.test(withSkills) && /The skill's text stays in your repository/.test(withSkills), 'the card says where a skill is read from, and that its text is not stored');
+  expect(/\.claude\/skills\/migrations picked by ada, 3 days ago acme\/widgets/.test(withSkills) && /\.agents\/skills\/payments picked by bo, 20 hours ago acme\/api/.test(withSkills), `the picked skill folders show, with their repository and who picked them (${withSkills.match(/Skill folder.{0,80}/)?.[0]})`);
+  expect(/a pull request can't change the skill that reviews it/.test(withSkills) && /The skill's text stays in your repository/.test(withSkills) && /Only the folder's path is stored here/.test(withSkills) && /Name the real folder, not a link to it/.test(withSkills), 'the view says where a skill is read from, and that its text is not stored');
   const skillRemoves = await t.page.evaluate(() => [...document.querySelectorAll('button')].filter((b) => b.textContent.trim() === 'Remove skill').length);
   expect(skillRemoves === 1, 'only a skill in a repository this person is an admin of has a Remove button');
-  const skillPlaces = await t.page.evaluate(() => [...document.querySelector('select[aria-label="Skill repository"]').options].map((o) => o.textContent));
-  expect(skillPlaces.join() === 'acme/widgets', `a skill can be picked for repositories this person is an admin of, and no other (${skillPlaces})`);
-  const addSkillOff = await t.page.evaluate(() => [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Add skill').disabled);
-  expect(addSkillOff, 'a skill can\'t be added without a folder');
+  await t.click('button', 'New skill');
+  await wait(500);
+  const skillPlaces = await t.options('Skill repository');
+  expect(skillPlaces.map((o) => o.text).join() === 'acme/widgets', `a skill can be picked for repositories this person is an admin of, and no other (${JSON.stringify(skillPlaces)})`);
+  expect(/acme\/widgets/.test(await t.page.evaluate(() => document.querySelector('[aria-label="Skill repository"]').textContent)), 'with one repository to pick, the form starts on it');
+  expect(await submitOff('Add skill'), 'a skill can\'t be added without a folder');
   await fill('Skill folder', '  .agents/skills/billing ');
-  await t.click('button', 'Add skill');
-  await wait(700);
+  await t.click('[role=dialog] button', 'Add skill');
+  await wait(800);
   expect(JSON.stringify(t.skillsAdded) === JSON.stringify([{ repo_id: 501, path: '.agents/skills/billing' }]), `the new skill is sent with its repository and its folder (${JSON.stringify(t.skillsAdded)})`);
-  expect(/\.agents\/skills\/billing acme\/widgets picked by ada/.test(await t.text()) && (await t.page.evaluate(() => document.querySelector('[aria-label="Skill folder"]').value)) === '', 'and shows in the list, with the form empty again');
+  expect(/\.agents\/skills\/billing picked by ada, just now acme\/widgets/.test(await t.text()) && /Skill added/.test(await t.text()), 'and shows in the list, and the page says it is done');
+  await t.click('button', 'New skill');
+  await wait(500);
+  expect((await t.page.evaluate(() => document.querySelector('[aria-label="Skill folder"]').value)) === '', 'the form is empty again');
   await fill('Skill folder', '../other/skills');
-  await t.click('button', 'Add skill');
-  await wait(600);
-  expect(/Name the skill's folder in the repository/.test(await t.text()), 'when the server refuses a folder, the page shows why');
+  await t.click('[role=dialog] button', 'Add skill');
+  await wait(700);
+  expect(/Name the skill's folder in the repository/.test(await t.dialog()), 'when the server refuses a folder, the form shows why');
+  await t.page.keyboard.press('Escape');
+  await wait(400);
   await t.click('button', 'Remove skill');
+  await wait(400);
+  await t.click('button', 'Yes, remove');
   await wait(600);
-  expect(t.skillsRemoved.join() === '7' && !/\.claude\/skills\/migrations acme\/widgets/.test(await t.text()), 'Remove takes the skill off the server and the page');
+  expect(t.skillsRemoved.join() === '7' && !/\.claude\/skills\/migrations picked by/.test(await t.text()), 'Remove takes the skill off the server and the page');
 
   // Checks.
+  await t.view('Checks');
   const withChecks = await t.text();
-  expect(/Translations · Every new text in en\.json has a translation in da\.json\. acme\/widgets src\/i18n\/\*\* set by ada/.test(withChecks), `a check shows with its name, its text, its repository and its files (${withChecks.match(/Checks.{0,60}/)?.[0]})`);
-  expect(/Refunds · A refund is never larger than its invoice\. acme\/api src\/billing\/\*\*, \*\.sql set by bo/.test(withChecks), 'and so does one in a repository this person only reads');
-  expect(/one more AI run on your own plan/.test(withChecks) && /never changes code/.test(withChecks) && /require that check in your branch rules/.test(withChecks), 'the card says what a check costs, that it only reports, and how to make it stop a merge');
+  expect(/Translations Every new text in en\.json has a translation in da\.json\. set by ada, 2 days ago acme\/widgets src\/i18n\/\*\*/.test(withChecks), `a check shows with its name, its text, its repository and its files (${withChecks.match(/Check Repository.{0,80}/)?.[0]})`);
+  expect(/Refunds A refund is never larger than its invoice\. set by bo, 10 hours ago acme\/api src\/billing\/\*\*, \*\.sql/.test(withChecks), 'and so does one in a repository this person only reads');
+  expect(/runs only when a pull request changes its files/.test(withChecks) && /one more AI run on your own plan/.test(withChecks) && /never changes code/.test(withChecks) && /require that check in your branch rules/.test(withChecks) && /couldn't tell or couldn't run holds the merge too/.test(withChecks), 'the view says when a check runs, what it costs, that it only reports, and how to make it stop a merge');
   const checkRemoves = await t.page.evaluate(() => [...document.querySelectorAll('button')].filter((b) => b.textContent.trim() === 'Remove check').length);
   expect(checkRemoves === 1, 'only a check in a repository this person is an admin of has a Remove button');
-  const checkPlaces = await t.page.evaluate(() => [...document.querySelector('select[aria-label="Check repository"]').options].map((o) => o.textContent));
-  expect(checkPlaces.join() === 'acme/widgets', `a check can be set for repositories this person is an admin of, and no other (${checkPlaces})`);
-  const addCheckIsOff = () => t.page.evaluate(() => [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Add check').disabled);
+  await t.click('button', 'New check');
+  await wait(500);
+  const checkPlaces = await t.options('Check repository');
+  expect(checkPlaces.map((o) => o.text).join() === 'acme/widgets', `a check can be set for repositories this person is an admin of, and no other (${JSON.stringify(checkPlaces)})`);
   await fill('Check name', 'Migrations');
   await fill('The check', 'Every migration has a down step.');
-  expect(await addCheckIsOff(), 'a check can\'t be added without the files it is about');
+  expect(await submitOff('Add check'), 'a check can\'t be added without the files it is about');
+  expect(/Mergelight: Migrations/.test(await t.dialog()), 'the form shows the name the check will have on the pull request');
   await fill('Check files', 'db/migrations/**, *.sql');
-  await t.click('button', 'Add check');
-  await wait(700);
+  await t.click('[role=dialog] button', 'Add check');
+  await wait(800);
   expect(JSON.stringify(t.checksAdded) === JSON.stringify([{ repo_id: 501, name: 'Migrations', text: 'Every migration has a down step.', paths: ['db/migrations/**', '*.sql'] }]), `the new check is sent as typed (${JSON.stringify(t.checksAdded)})`);
-  expect(/Migrations · Every migration has a down step\. acme\/widgets db\/migrations\/\*\*, \*\.sql set by ada/.test(await t.text()), 'and shows in the list');
+  expect(/Migrations Every migration has a down step\. set by ada, just now acme\/widgets db\/migrations\/\*\*, \*\.sql/.test(await t.text()) && /Check added/.test(await t.text()), 'and shows in the list, and the page says it is done');
+  await t.click('button', 'New check');
+  await wait(500);
   const checkFormCleared = await t.page.evaluate(() => ['Check name', 'The check', 'Check files'].map((l) => document.querySelector(`[aria-label="${l}"]`).value).join(''));
   expect(checkFormCleared === '', 'the form is empty again');
   await fill('Check name', 'Translations');
   await fill('The check', 'Another one.');
   await fill('Check files', 'src/**');
-  await t.click('button', 'Add check');
-  await wait(600);
-  expect(/This repository already has a check of that name\./.test(await t.text()), 'when the server refuses a check, the page shows why');
+  await t.click('[role=dialog] button', 'Add check');
+  await wait(700);
+  expect(/This repository already has a check of that name\./.test(await t.dialog()), 'when the server refuses a check, the form shows why');
+  await t.page.keyboard.press('Escape');
+  await wait(400);
   await t.click('button', 'Remove check');
+  await wait(400);
+  await t.click('button', 'Yes, remove');
   await wait(600);
-  expect(t.checksRemoved.join() === '21' && !/Translations · Every new text/.test(await t.text()), 'Remove takes the check off the server and the page');
+  expect(t.checksRemoved.join() === '21' && !/Translations Every new text/.test(await t.text()), 'Remove takes the check off the server and the page');
 
-  await t.click('[role=tab]', 'quiet');
-  await wait(500);
+  await t.menu('Switch org', 'quiet');
   expect(/The dashboard isn't on for quiet/.test(await t.text()), 'an org that hasn\'t turned it on says so');
-  await t.click('[role=tab]', 'fresh');
-  await wait(500);
-  expect(/Only an owner of the org or an admin of a repository can change the rules\./.test(await t.text()) && !(await t.page.$('[aria-label="The rule"]')), 'someone who may not set rules sees no form, and is told who can');
-  expect(/Only an admin of a repository can pick its skills\./.test(await t.text()) && !(await t.page.$('[aria-label="Skill folder"]')), 'someone who is no admin sees no skill form, and is told who can');
-  expect(/Only an admin of a repository can set its checks\./.test(await t.text()) && !(await t.page.$('[aria-label="The check"]')), 'and no check form either');
-  expect(/No reviews to show yet/.test(await t.text()) && /repositories this sign-in can't see/.test(await t.text()) && (await t.text()).includes(`server: ${SERVER}`), 'an org with no reviews yet shows the one line to add');
+  await t.menu('Switch org', 'fresh');
+  expect(/Only an admin of a repository can set its checks\./.test(await t.text()) && !(await t.page.$('[aria-label="The check"]')) && !/New check/.test(await t.text()), 'someone who is no admin sees no check form, and is told who can');
+  await t.view('Rules');
+  expect(/Only an owner of the org or an admin of a repository can change the rules\./.test(await t.text()) && !/New rule/.test(await t.text()), 'someone who may not set rules sees no form, and is told who can');
+  await t.view('Skills');
+  expect(/Only an admin of a repository can pick its skills\./.test(await t.text()) && !/New skill/.test(await t.text()), 'someone who is no admin sees no skill form, and is told who can');
+  await t.view('Reviews');
+  expect(/No reviews to show yet/.test(await t.text()) && /repositories this sign-in can't see/.test(await t.text()) && (await t.text()).includes(`server: ${SERVER}`) && /It never sends code/.test(await t.text()), 'an org with no reviews yet shows the one line to add, and what a review sends');
   await t.shot('3-nothing-yet');
 
   await t.page.reload({ waitUntil: 'networkidle2' });
   await wait(500);
   expect(/acme\/widgets #42/.test(await t.text()), 'a reload keeps the session, with no trip to GitHub');
 
-  await t.page.evaluate(() => [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Sign out').click());
-  await wait(500);
+  await t.menu('Your account', 'Sign out');
   expect(/Continue with GitHub/.test(await t.text()), 'signing out goes back to the sign-in screen');
   expect(t.calls.at(-1).m === 'DELETE' && t.calls.at(-1).path === '/v1/session', 'and ends the session on the server');
   await t.page.reload({ waitUntil: 'networkidle2' });
@@ -385,8 +480,11 @@ const done = async (t) => {
 {
   const t = await open('forget-fails', { forgetFails: true });
   await t.signIn();
+  await t.view('Decisions');
   await t.click('button', 'Forget');
-  await wait(500);
+  await wait(400);
+  await t.click('button', 'Yes, forget');
+  await wait(600);
   expect(/Cart total is rounded before tax/.test(await t.text()) && /That didn't work/.test(await t.text()), 'a Forget that fails leaves the decision on the page, and says so');
   await done(t);
 }
@@ -428,12 +526,37 @@ const done = async (t) => {
   const t = await open('session-ran-out', { signedOutAfter: 1 });
   await t.signIn();
   expect(/acme\/widgets #42/.test(await t.text()), 'signed in');
-  await t.click('[role=tab]', 'fresh');
-  await wait(1800);
+  await t.menu('Switch org', 'fresh');
+  await wait(1300);
   expect(t.renewals.length === 1 && t.renewals[0].startsWith('dash.'), 'when the session runs out, the page goes to GitHub by itself to sign in again');
   expect(t.exchanges.length === 2 && t.calls.filter((c) => c.path === '/v1/session' && c.m === 'POST').length === 2, 'and comes back with a new session');
   expect(/Continue with GitHub/.test(await t.text()), 'a session that fails again straight after is not renewed in a loop: the page asks for a sign-in');
   expect(t.renewals.length === 1, 'so GitHub is visited once');
+  await done(t);
+}
+
+{
+  const t = await open('add-after-session-ran-out', { signedOutOnAdd: true });
+  await t.signIn();
+  await t.view('Rules');
+  await t.click('button', 'New rule');
+  await wait(500);
+  await t.page.click('[aria-label="The rule"]');
+  await t.page.keyboard.type('Keep this text.');
+  await t.page.click('[aria-label="Where it applies"]');
+  await wait(350);
+  await t.click('[data-slot=select-content][data-open] [role=option]', 'acme/widgets');
+  await wait(300);
+  await t.click('[role=dialog] button', 'Add');
+  await wait(2500);
+  expect(t.renewals.length === 1 && t.exchanges.length === 2, 'when the session ran out during an Add, the page signs in again by itself');
+  expect(t.added.length === 0, 'the rule that hit the old session was not added');
+  const kept = await t.page.evaluate(() => document.querySelector('[aria-label="The rule"]')?.value);
+  expect(kept === 'Keep this text.', `after the new sign-in the form is open again, with the text (${kept})`);
+  expect(/You were signed in again/.test(await t.text()), 'and the page says what happened');
+  await t.click('[role=dialog] button', 'Add');
+  await wait(800);
+  expect(t.added.length === 1 && t.added[0].text === 'Keep this text.', 'one more click adds it');
   await done(t);
 }
 

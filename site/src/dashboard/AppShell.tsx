@@ -3,6 +3,7 @@ import { RotateCwIcon, ExternalLinkIcon, EllipsisIcon, PuzzleIcon, BrainIcon, Li
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
+import { Toaster } from '@/components/ui/sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarHeader, SidebarInset, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
@@ -227,6 +228,8 @@ export function AppShell({ user, orgs, org, onPickOrg, view, onView, onSignOut, 
           </div>
         </header>
         <div className="w-full px-4 pb-16 pt-2">{children}</div>
+        {/* In the page's main region, so a screen reader reads what just happened. */}
+        <Toaster position="bottom-right" />
       </SidebarInset>
     </SidebarProvider>
     </TooltipProvider>
