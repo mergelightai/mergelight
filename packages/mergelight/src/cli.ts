@@ -238,6 +238,7 @@ async function main(): Promise<number> {
       rulesUnread: cloud.failed === true,
       skills: cloud.skills,
       checks: cloud.checks,
+      onTeamChecks: (results) => (answered = results),
       at: values.at,
       provider,
       model: values.model,
@@ -248,7 +249,6 @@ async function main(): Promise<number> {
       onProgress: progress.onProgress,
     });
     progress.stop();
-    answered = review.team_checks;
 
     const json = JSON.stringify(review, null, 2);
     if (values.out) writeFileSync(values.out, `${json}\n`);

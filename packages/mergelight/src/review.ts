@@ -21,9 +21,9 @@ import {
 import { LimitError, LoginError } from "./providers/codex.js";
 import { claudeAvailable, runModel, TOOLING, type ProviderName } from "./providers/index.js";
 import { candidateSchema, checkSchema, reviewSchema, reviewSchemaWithDecisions } from "./schema.js";
-import { CHECK_TIMEOUT_MS, startTeamChecks } from "./checks.js";
+import { CHECK_TIMEOUT_MS, startTeamChecks, type ChecksRun } from "./checks.js";
 import { run } from "./run.js";
-import type { Finding, Light, ModelFinding, ModelReview, Review, Tier } from "./types.js";
+import type { Finding, Light, ModelFinding, ModelReview, Review, TeamCheckResult, Tier } from "./types.js";
 import { cacheDir, prepareWorkspace } from "./workspace.js";
 
 export interface ReviewOptions {
@@ -50,6 +50,11 @@ export interface ReviewOptions {
   skills?: string[];
   /** The team's own checks. Each one that is about a changed file is asked in an AI run of its own. */
   checks?: TeamCheck[];
+  /**
+   * Called with the checks' answers when the review ends, also when it ends in an error. The answers
+   * a failed review already has are then still worth posting.
+   */
+  onTeamChecks?: (results: TeamCheckResult[]) => void;
   /** Keep the temporary checkout for inspection. */
   keep?: boolean;
   /** Progress messages. transient ones (the command the agent is running) are only worth showing live. */
@@ -275,7 +280,7 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
   if (ws.skills.length) progress(`Using your team's skill${ws.skills.length === 1 ? "" : "s"}: ${ws.skills.map((s) => s.name).join(", ")}`);
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const log = (step: string) => join(cacheDir(), "logs", `${pr.owner}-${pr.repo}-${pr.number}-${stamp}-${step}.log`);
-  let stopChecks = () => {};
+  let checksRun: ChecksRun | null = null;
 
   try {
     const input: PromptInput = {
@@ -382,7 +387,7 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
           progress,
         )
       : null;
-    stopChecks = () => teamChecks?.stop();
+    checksRun = teamChecks;
 
     // Step 2: the verifier tries to disprove each candidate and sorts the rest.
     // Opus checks better than Codex: in the eval it posted a third less and kept the same finds.
@@ -438,7 +443,11 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
     };
   } finally {
     // The checkout is about to go. A check that is still waiting for its turn must not start in it.
-    stopChecks();
+    // What the checks answered so far goes to the caller, whether the review worked or not.
+    if (checksRun) {
+      (checksRun as ChecksRun).stop();
+      opts.onTeamChecks?.(await (checksRun as ChecksRun).done);
+    }
     if (opts.keep) progress(`Kept the checkout at ${ws.dir}`);
     else await ws.cleanup();
   }

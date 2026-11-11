@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { filesOf, readAnswer, startTeamChecks } from "../dist/checks.js";
 import { buildCheckPrompt, buildHunterPrompt } from "../dist/prompt.js";
 import { plain, publishTeamChecks, teamCheckBody, teamCheckName } from "../dist/publish/team-checks.js";
+import { withoutProjectDocs } from "../dist/providers/codex.js";
 
 const input = { pr: { owner: "acme", repo: "widgets", number: 1, title: "t", author: "a", baseRef: "main", body: "" }, mergeBase: "base", headSha: "head", diffStat: "", diff: "+ the reviewers' diff", diffTruncated: false, tooling: "shell" };
 const check = { id: "K3", name: "Translations", text: "Every new key in en.json has a Danish text in da.json.", paths: ["src/i18n/**"] };
@@ -197,6 +198,12 @@ test("each outcome becomes a check of its own on GitHub, and no answer never cou
   assert.equal(error.conclusion, "action_required");
   assert.match(error.output.summary, /This is not a pass/);
   for (const outcome of ["pass", "fail", "unsure", "skipped", "error"]) assert.notEqual(teamCheckBody({ ...base, outcome, summary: "x", problems: [] }).conclusion, "neutral");
+});
+
+test("for a check, Codex is started without the instruction files and the skills of the checkout", async () => {
+  // Codex stops at a switch it doesn't know, so the one for skills is only used where this Codex has it.
+  assert.deepEqual(await withoutProjectDocs(Promise.resolve(new Set(["apps", "omit_skill_descriptions"]))), ["-c", "project_doc_max_bytes=0", "--enable", "omit_skill_descriptions"]);
+  assert.deepEqual(await withoutProjectDocs(Promise.resolve(new Set(["apps"]))), ["-c", "project_doc_max_bytes=0"]);
 });
 
 test("the checks are posted one by one, and one that can't be posted doesn't stop the others", async () => {

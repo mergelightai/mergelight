@@ -518,7 +518,7 @@ function ChecksCard({ checks, onAdd, onRemove }: { checks: Checks; onAdd: (check
         Write a check in plain words. Each review asks it as a question of its own and posts the answer on the pull request as a check named <span className="font-mono">Mergelight: your name</span>, passed or failed with the places to fix.
       </p>
       <p className="mt-2 max-w-2xl text-[13px] leading-relaxed text-faint">
-        A check runs only when a pull request changes its files, and each run is one more AI run on your own plan. It reports, and never changes code. To make it stop a merge, require that check in your branch rules on GitHub. Only a real pass gets through then: a check that couldn't tell or couldn't run holds the merge too.
+        A check runs only when a pull request changes its files, and each run is one more AI run on your own plan. It reports, and never changes code. To make it stop a merge, require that check in your branch rules on GitHub. Pick the app that posts it as the check's source there, so nothing else can post a check of that name. Only a real pass gets through then: a check that couldn't tell or couldn't run holds the merge too.
       </p>
       {checks.checks.length > 0 && (
         <ul className="mt-3">
