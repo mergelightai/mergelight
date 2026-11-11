@@ -40,6 +40,8 @@ const MAX_DECLINES = 40;
 const MAX_MEMORIES_PER_REPO = 500;
 /** How many a review is sent at most, most recently used first. */
 const MEMORIES_PER_REVIEW = 100;
+/** The longest reason a decision can carry. A reply in a pull request thread can be a few sentences. */
+const MAX_REASON = 1000;
 /** A team's rules are few and short, so all of them are sent. */
 const RULES_PER_REVIEW = 100;
 /** And how large that list may be. The client stops reading an answer past 64 KB, so the list stays well under it. */
@@ -176,7 +178,7 @@ export function parseDeclines(value: unknown): Decline[] {
     if (!isRecord(raw)) throw bad("decision");
     const { finding_id, title, file, line: at, end_line, reason, by, decided_at } = raw;
     if (typeof finding_id !== "string" || !/^[a-f0-9]{6,40}$/.test(finding_id)) throw bad("decision's finding");
-    if (!text(title, 200) || !text(file, 400) || !text(reason, 500)) throw bad("decision's text");
+    if (!text(title, 200) || !text(file, 400) || !text(reason, MAX_REASON)) throw bad("decision's text");
     if (!line(at) || (end_line != null && !line(end_line))) throw bad("decision's lines");
     if (typeof by !== "string" || !/^[\w.-]{1,100}(\[bot\])?$/.test(by)) throw bad("decision's author");
     // A time GitHub could have given: a real date, and not in the future.
@@ -331,7 +333,11 @@ export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"
       const fresh = (inserted.rowCount ?? 0) > 0;
 
       // A second try of a report that is already in changes nothing more.
-      if (!fresh) return false;
+      if (!fresh) return { stored: false, remembered: [] as string[] };
+
+      // The decisions this report put in, or replaced with a later one. The review program answers
+      // "remembered" on the pull request only for these, so it never says so for one that was skipped.
+      const remembered: string[] = [];
 
       // What the team decided on this pull request. Only a decision written later than the one on file
       // replaces it, and it then starts its 90 days from now. So a pull request that is reviewed again doesn't keep an unused decision alive, and
@@ -339,16 +345,19 @@ export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"
       for (const d of declines) {
         // One written over 90 days ago would have run out by now. An old pull request that is reviewed again doesn't bring it back.
         if (Date.parse(d.decided_at) <= now() - MEMORY_DAYS * 24 * 60 * 60_000) continue;
-        await db.query(
+        const put = await db.query(
           `insert into memories (org_id, repo_id, finding_id, title, file, line, end_line, reason, by_login, pr, decided_at)
            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
            on conflict (org_id, repo_id, finding_id) do update
              set title = excluded.title, file = excluded.file, line = excluded.line, end_line = excluded.end_line,
                  reason = excluded.reason, by_login = excluded.by_login, pr = excluded.pr, decided_at = excluded.decided_at,
                  updated_at = now(), forgotten_at = null, last_used_at = null, uses = 0
-             where excluded.decided_at > memories.decided_at`,
+             where excluded.decided_at > memories.decided_at
+           returning finding_id`,
           [who.orgId, who.repoId, d.finding_id, d.title, d.file, d.line, d.end_line, d.reason, d.by, r.pr, d.decided_at],
         );
+        // A row comes back only when this decision was put in or replaced an older one.
+        if (put.rowCount && !remembered.includes(d.finding_id)) remembered.push(d.finding_id);
       }
       // The earlier decisions this review used get their 90 days again.
       if (used.length) {
@@ -363,10 +372,12 @@ export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"
           [who.repoId],
         );
       }
-      return true;
+      // One of them may be gone again already: a repository keeps 500, and the oldest go first.
+      const kept = remembered.length ? (await db.query("select finding_id from memories where repo_id = $1 and finding_id = any($2::text[])", [who.repoId, remembered])).rows.map((m) => m.finding_id as string) : [];
+      return { stored: true, remembered: remembered.filter((id) => kept.includes(id)) };
     });
     if (stored === null) return respond(404, { error: "not_connected", message: "This org hasn't turned the Mergelight dashboard on." });
-    return respond(stored ? 201 : 200, { stored });
+    return respond(stored.stored ? 201 : 200, stored);
   }
 
   const routes: Record<string, { method: string; run: (who: Caller, request: Request) => Promise<Response> }> = {
