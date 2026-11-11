@@ -15,14 +15,15 @@ export type { ReviewThread } from "./closed.js";
 export const CHECK_NAME = "Mergelight";
 
 /**
- * How each merge light shows up as a GitHub check. Yellow is neutral, which
- * GitHub counts as passing: a solo developer can't approve their own PR, so
- * yellow must not wait for an approval unless a team asks for that. Then it's
- * action_required, which doesn't pass until someone approves (see approveCheck).
+ * How each merge light shows up as a GitHub check. Red and yellow are neutral, which GitHub counts as
+ * passing and shows without a red cross: a review is a judgment, not a failed build, and the title
+ * still says what it found. A team that wants the check to hold merges sets yellowBlocks: then yellow
+ * is action_required, which doesn't pass until someone approves (see approveCheck), and red fails
+ * until the code changes.
  */
 export function checkConclusion(light: Light, yellowBlocks = false): "success" | "neutral" | "action_required" | "failure" {
   if (light === "green") return "success";
-  if (light === "red") return "failure";
+  if (light === "red") return yellowBlocks ? "failure" : "neutral";
   return yellowBlocks ? "action_required" : "neutral";
 }
 

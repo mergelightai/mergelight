@@ -36,7 +36,7 @@ Options
   --post                Post the review to the PR: summary comment, inline findings, check
                         (the check needs a GitHub App, a personal gh login skips it)
   --dry-run             With --post, post or approve: print what would be posted, change nothing
-  --yellow-blocks       With --post or post: a "needs a human" check waits for an approval
+  --yellow-blocks       With --post or post: a "needs a human" check waits for an approval and a "blocked" one fails
   --json                Print the review as JSON
   --out <file>          Also write the JSON review to a file
   --provider <name>     Who hunts for problems: codex or claude (default: codex)

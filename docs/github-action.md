@@ -7,7 +7,7 @@ Reviews every pull request with your own Claude or Codex login and posts:
 - **A live check** called **Mergelight**. It shows "Reviewing" while it works, then:
   - 🟢 **Safe to merge:** success.
   - 🟡 **Needs a human:** neutral, so it doesn't block the merge. Read it and decide. It turns green if someone approves the PR.
-  - 🔴 **Blocked:** a bug that must be fixed. Approving doesn't change it; fixing does.
+  - 🔴 **Blocked:** neutral too, so it doesn't block the merge or show a red cross. The title and the summary say what to fix first.
 
 If the review itself can't run, for example because the login expired, the check ends neutral so it doesn't block merging, and the workflow job fails so you notice.
 
@@ -68,7 +68,7 @@ updates:
       - dependency-name: mergelightai/mergelight
 ```
 
-**Optional: make it required.** In branch protection or a ruleset, require the **Mergelight** check. 🔴 then blocks the merge. 🟡 doesn't, unless your team sets `yellow-blocks: true` to make it wait for an approval.
+**Optional: let it hold merges.** Set `yellow-blocks: true` and require the **Mergelight** check in branch protection or a ruleset. 🔴 then fails until the code changes, and 🟡 waits for an approval. Without `yellow-blocks`, both end neutral, which GitHub counts as passing.
 
 ## Set it up by hand
 
@@ -111,7 +111,7 @@ They're separate files so a PR's merge box only shows the review, not skipped jo
 | `model` | Codex default | Model to review with |
 | `effort` | `high` | Reasoning effort: `low`, `medium` or `high` |
 | `verify-with` | `codex` | Who checks the findings: `codex`, or `claude` on a runner with Claude Code logged in |
-| `yellow-blocks` | `false` | Make a 🟡 check wait for an approval. For teams: GitHub doesn't let you approve your own PR |
+| `yellow-blocks` | `false` | Let the check hold merges: 🟡 waits for an approval and 🔴 fails until the code changes. For teams: GitHub doesn't let you approve your own PR |
 | `codex-version` | `0.166.0` | Codex CLI version |
 | `token-server` | Mergelight's | Where to get an app token. Empty means always post as `github-actions[bot]` |
 | `server` | | Address of a [Mergelight server](../packages/server/README.md), for the dashboard. Empty means off. With it, each run shows the server GitHub's signed token (repository, branch, workflow, who started it) and, if your org turned the dashboard on, sends the review's numbers and the findings your team declined: title, file and lines, the reason, and who declined it and when. Never code |

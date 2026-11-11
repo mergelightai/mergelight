@@ -560,7 +560,7 @@ export function mockClient(): GitHubClient {
       if (checks < 2) return later(null);
       if (checks < 4) return later({ status: 'in_progress', conclusion: null, title: 'Waiting for you to connect ChatGPT' });
       if (checks < 7) return later({ status: 'in_progress', conclusion: null, title: 'Reviewing' });
-      return later({ status: 'completed', conclusion: 'failure', title: '🔴 Blocked: 2 bugs, 1 risk to fix' });
+      return later({ status: 'completed', conclusion: 'neutral', title: '🔴 Blocked: 2 bugs, 1 risk to fix' });
     },
     sendClaudeCode: () => later(undefined),
     clearClaudeCode: () => later(undefined),
