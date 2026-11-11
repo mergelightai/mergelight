@@ -19,8 +19,8 @@
   --color-safe: #3fe8b8;
   --color-human: #f5c451;
   --color-blocked: #ff6b7a;
-  /* The inner panel of a glass card: lighter than the glass, so it sits on top of it. */
-  --color-panel: #21202e;
+  /* The inner panel of a glass card: darker than the frame around it, set into it. */
+  --color-panel: #171623;
   --color-mint: #3fe8b8;
   --color-lilac: #b89cff;
 }
@@ -105,19 +105,19 @@
 
 /* The landing page's colours (src/index.css), so the dashboard is the same product. */
 .dark {
-  --background: #13121d;
+  --background: #1b1a27;
   --foreground: #eceaf4;
-  --card: #1a1927;
+  --card: #252433;
   --card-foreground: #eceaf4;
-  --popover: #23222f;
+  --popover: #2c2b3a;
   --popover-foreground: #eceaf4;
   --primary: #eceaf4;
-  --primary-foreground: #13121d;
-  --secondary: #23222f;
+  --primary-foreground: #1b1a27;
+  --secondary: #2c2b3a;
   --secondary-foreground: #eceaf4;
-  --muted: #23222f;
-  --muted-foreground: #a7a4bb;
-  --accent: #23222f;
+  --muted: #2c2b3a;
+  --muted-foreground: #b0adc3;
+  --accent: #2c2b3a;
   --accent-foreground: #eceaf4;
   --destructive: #ff6b7a;
   --border: rgb(255 255 255 / 0.08);
@@ -128,10 +128,10 @@
   --chart-3: #f59ee6;
   --chart-4: #f9a28c;
   --chart-5: #f5c451;
-  --sidebar: #13121d;
+  --sidebar: #1b1a27;
   --sidebar-foreground: #eceaf4;
   --sidebar-primary: #3fe8b8;
-  --sidebar-primary-foreground: #13121d;
+  --sidebar-primary-foreground: #1b1a27;
   --sidebar-accent: rgb(255 255 255 / 0.045);
   --sidebar-accent-foreground: #eceaf4;
   --sidebar-border: rgb(255 255 255 / 0.07);
@@ -158,7 +158,7 @@
    The pane blurs the page behind it, and its rim catches light at the top like a real glass edge. */
 @layer components {
   .glass-frame {
-    background: rgb(26 25 39 / 0.75);
+    background: rgb(37 36 51 / 0.78);
     -webkit-backdrop-filter: blur(22px) saturate(180%) brightness(1.08);
     backdrop-filter: blur(22px) saturate(180%) brightness(1.08);
     box-shadow:
