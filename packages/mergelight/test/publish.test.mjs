@@ -8,7 +8,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { parsePatch, place } from "../dist/publish/diff-lines.js";
 import { mergeLight, tierOf } from "../dist/review.js";
-import { closedBody, readClosed, reopenedBody, resolvedByPeople, threadAction } from "../dist/publish/closed.js";
+import { closedBody, patchTouches, readClosed, reopenedBody, resolvedByPeople, threadAction } from "../dist/publish/closed.js";
 import { clean, failedSummaryBody, isFailedSummary, limitNotice, notReadLine, loginNotice, FINDING_MARKER_RE, inlineBody, isPendingSummary, pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "../dist/publish/markdown.js";
 import { APPROVAL_MARKER, approvalHold, approvalLight, UNREVIEWED, checkConclusion, isYellowCheck, syncApproval, trustedComment, CHECK_FAILED_TITLE, checkLimitTitle, checkLoginTitle, isFailedCheckTitle } from "../dist/publish/publish.js";
 import { decodeState, encodeState, nextState } from "../dist/publish/state.js";
@@ -565,4 +565,13 @@ test("the comment says which actions' code wasn't read", () => {
   const many = notReadLine(Array.from({ length: 6 }, (_, i) => ({ uses: `a/t${i}@v1`, why: "unreadable" })));
   assert.match(many, /`a\/t3@v1` and 2 more/);
   assert.doesNotMatch(notReadLine([{ uses: "a/b@v1`<img>", why: "unreadable" }]), /<img>/);
+});
+
+test("a patch touches a finding when a hunk's old lines reach it, context included", () => {
+  const patch = "@@ -10,3 +10,4 @@ fn\n a\n+b\n@@ -40 +41 @@\n-c\n+d\n@@ -60,0 +62,2 @@\n+e";
+  assert.equal(patchTouches(patch, 12, 12), true);
+  assert.equal(patchTouches(patch, 13, 20), false);
+  assert.equal(patchTouches(patch, 40, 40), true);
+  assert.equal(patchTouches(patch, 60, 60), true, "an insertion after line 60 counts for line 60");
+  assert.equal(patchTouches(patch, 1, 9), false);
 });

@@ -10,7 +10,7 @@ import { nextStep, reviewStatus } from "../dist/mcp/findings.js";
 import { GitHub } from "../dist/publish/api.js";
 import { decodeMark, encodeMark, findingState, readMarks } from "../dist/publish/handled.js";
 import { SUMMARY_MARKER, summaryBody } from "../dist/publish/markdown.js";
-import { previousFindings, publishReview } from "../dist/publish/publish.js";
+import { answerRemembered, previousFindings, publishReview } from "../dist/publish/publish.js";
 import { decodeState, encodeState, nextState } from "../dist/publish/state.js";
 import { buildVerifierPrompt } from "../dist/prompt.js";
 
@@ -98,6 +98,7 @@ const path = args[1].replace("repos/o/r/", "");
 if (path === "repos/o/r") out({ permissions: { push: s.push !== false } });
 else if (path === "pulls/7") out({ number: 7, title: "PR title", body: "", html_url: "https://github.com/o/r/pull/7", user: { login: "a" }, base: { ref: "main", sha: "b" }, head: { sha: s.head || "${REVIEWED}" }, additions: 1, deletions: 0, changed_files: 1 });
 else if (path.startsWith("commits/")) out({ check_runs: s.checkRuns || [] });
+else if (path.startsWith("compare/")) { if (!s.compare) fail("HTTP 404"); out(s.compare); }
 else if (path.startsWith("collaborators/")) { const p = ({ teammate: "write", ...s.permissions })[path.split("/")[1]]; if (!p) fail("HTTP 404"); out({ permission: p }); }
 else fail("unexpected get " + path);
 `,
@@ -664,4 +665,61 @@ test("nothing Mergelight writes to people uses long dashes", () => {
   for (const file of ["../skills/mergelight/SKILL.md", "../../../docs/agents.md"]) {
     assert.doesNotMatch(readFileSync(join(here, file), "utf8"), /[–—]/, file);
   }
+});
+
+/** A thread on one of Mergelight's findings, resolved by teammate, with these replies. */
+const findingThread = (id, commentId, replies, over = {}) => ({
+  id: `T${commentId}`,
+  isResolved: true,
+  isOutdated: false,
+  resolvedBy: { login: "teammate" },
+  comments: { nodes: [{ databaseId: commentId, body: `<!-- mergelight:finding id=${id} -->\nFinding`, author: { __typename: "Bot", login: "mergelight-ai" } }, ...replies] },
+  ...over,
+});
+const reply = (login, body, at = "2030-01-02T00:00:00Z") => ({ databaseId: 9, body, createdAt: at, author: { __typename: "User", login } });
+
+test("a reason given when resolving a thread is a decision, unless the code there changed or someone else wrote it", async () => {
+  const state = stateOf([
+    finding({ id: "aaaaaaaaaa", file: "src/a.ts", line: 12, end_line: 12 }),
+    finding({ id: "bbbbbbbbbb", file: "src/b.ts", line: 30, end_line: 30 }),
+    finding({ id: "cccccccccc", file: "src/c.ts", line: 5, end_line: 5 }),
+    finding({ id: "dddddddddd", file: "src/d.ts", line: 5, end_line: 5 }),
+  ]);
+  const { env } = useScenario({
+    issueComments: [summaryComment(state)],
+    threads: [
+      findingThread("aaaaaaaaaa", 501, [reply("teammate", "Valid, and known.\n\nThe repair ships\u200b next release."), reply("mergelight-ai", "<!-- mergelight:remembered -->\nRemembered.")]),
+      findingThread("bbbbbbbbbb", 502, [reply("teammate", "Fixed in abc.")]),
+      findingThread("cccccccccc", 503, [reply("stranger", "Not a problem.")]),
+      findingThread("dddddddddd", 504, []),
+    ],
+    compare: { files: [{ filename: "src/b.ts", patch: "@@ -28,5 +28,6 @@\n ctx" }, { filename: "src/a.ts", patch: "@@ -100,2 +100,3 @@\n ctx" }] },
+  });
+  const previous = await withFakeGh(env, () => previousFindings(new GitHub("o", "r"), 7, PUSHED));
+  const byId = Object.fromEntries(previous.map((p) => [p.id, p.handled]));
+  assert.deepEqual(byId.aaaaaaaaaa, { as: "wont_fix", note: "Valid, and known. The repair ships next release.", by: "teammate", sha: null, from: "reply", at: "2030-01-02T00:00:00Z" }, "the file changed, but far from the finding");
+  assert.equal(byId.bbbbbbbbbb.from, "thread", "the lines changed: the reply may say how it was fixed");
+  assert.equal(byId.bbbbbbbbbb.note, "Fixed in abc.");
+  assert.equal(byId.cccccccccc.note, "Resolved the comment on the pull request.", "only the person who resolved it gives the reason");
+  assert.equal(byId.dddddddddd.from, "thread");
+  // GitHub can't say what changed: nothing becomes a decision.
+  const unknown = useScenario({ issueComments: [summaryComment(state)], threads: [findingThread("aaaaaaaaaa", 501, [reply("teammate", "Known.")])] });
+  const again = await withFakeGh(unknown.env, () => previousFindings(new GitHub("o", "r"), 7, PUSHED));
+  assert.equal(again.find((p) => p.id === "aaaaaaaaaa").handled.from, "thread");
+});
+
+test("a remembered reason gets one answer in its thread", async () => {
+  const { env, writes } = useScenario({
+    threads: [
+      findingThread("aaaaaaaaaa", 501, [reply("teammate", "Known.")]),
+      findingThread("bbbbbbbbbb", 502, [reply("teammate", "Known."), reply("mergelight-ai", "<!-- mergelight:remembered -->\nRemembered.")]),
+      findingThread("cccccccccc", 503, [reply("teammate", "Known.")]),
+    ],
+  });
+  const answered = await withFakeGh(env, () => answerRemembered(new GitHub("o", "r"), 7, ["aaaaaaaaaa", "bbbbbbbbbb"], new Set(["aaaaaaaaaa"])));
+  assert.equal(answered, 1);
+  assert.deepEqual(writes().map((w) => [w.method, w.path]), [["POST", "pulls/7/comments/501/replies"]]);
+  assert.match(writes()[0].body, /^<!-- mergelight:remembered -->\n🧠 \*\*Remembered\.\*\*/);
+  assert.match(writes()[0].body, /only its start is kept/);
+  assert.equal(await withFakeGh(env, () => answerRemembered(new GitHub("o", "r"), 7, [], new Set())), 0);
 });

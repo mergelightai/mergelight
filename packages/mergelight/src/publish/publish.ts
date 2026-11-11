@@ -2,10 +2,11 @@ import type { Finding, Light, Review } from "../types.js";
 import type { PriorFinding } from "../prompt.js";
 import { GitHub, type ApiOptions } from "./api.js";
 import { commentableLines, place } from "./diff-lines.js";
-import { closedBody, readClosed, reopenedBody, resolvedByPeople, threadAction, threadFinding, type Handled, type ReviewThread } from "./closed.js";
+import { closedBody, patchTouches, readClosed, REMEMBERED_MARKER, reopenedBody, resolvedByPeople, resolverReplies, threadAction, threadFinding, type Handled, type ReviewThread } from "./closed.js";
 import type { FailureNotice } from "./markdown.js";
 import { failedSummaryBody, FINDING_MARKER_RE, headline, inlineBody, isFailedSummary, isPendingSummary, LIGHT, pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "./markdown.js";
-import { askWriteAccess, readMarks, trustedComment, writeAccess, type Mark, type PrComment } from "./handled.js";
+import { askWriteAccess, MAX_NOTE, readMarks, trustedComment, writeAccess, type Mark, type PrComment } from "./handled.js";
+import { withoutHidden } from "../skills.js";
 import { decodeState, nextState, type ReviewState, type StateFinding } from "./state.js";
 import { newerVersion } from "../update.js";
 
@@ -64,25 +65,95 @@ export async function readPrReviewState(api: GitHub, number: number): Promise<Pr
 
 const MAX_PREVIOUS = 40;
 
-/** What earlier rounds found on this PR, latest first, for the verifier to check again. */
-export async function previousFindings(api: GitHub, number: number): Promise<PriorFinding[]> {
+/**
+ * Whether the code at a finding is as the latest review saw it. Asked of GitHub once, for the whole
+ * change since then. Anything it can't tell counts as changed.
+ */
+function unchangedSince(api: GitHub, since: string | undefined, headSha: string | undefined): (f: Pick<StateFinding, "file" | "line" | "end_line">) => Promise<boolean> {
+  if (!since || !headSha) return async () => false;
+  if (since === headSha) return async () => true;
+  type Compare = { files?: { filename: string; previous_filename?: string; patch?: string }[] };
+  let files: Promise<Map<string, string | null> | null> | undefined;
+  return async (f) => {
+    files ??= api
+      .get<Compare>(`compare/${since}...${headSha}`)
+      .then((r) => {
+        // GitHub lists at most 300 files. Past that, a file that isn't listed may still have changed.
+        if (!r.files || r.files.length >= 300) return null;
+        const out = new Map<string, string | null>();
+        for (const file of r.files) {
+          out.set(file.filename, file.patch ?? null);
+          if (file.previous_filename) out.set(file.previous_filename, null);
+        }
+        return out;
+      })
+      .catch(() => null);
+    const changed = await files;
+    if (!changed) return false;
+    if (!changed.has(f.file)) return true;
+    const patch = changed.get(f.file);
+    return patch ? !patchTouches(patch, f.line, f.end_line ?? f.line) : false;
+  };
+}
+
+/**
+ * What earlier rounds found on this PR, latest first, for the verifier to check again.
+ * headSha: the commit this review is about, to tell a reason from a fix.
+ */
+export async function previousFindings(api: GitHub, number: number, headSha?: string): Promise<PriorFinding[]> {
   const { state, marks } = await readPrReviewState(api, number);
-  const resolved = await resolvedByPeople(await reviewThreads(api, number).catch(() => []), writeAccess(api));
+  const threads = await reviewThreads(api, number).catch(() => []);
+  const resolved = await resolvedByPeople(threads, writeAccess(api));
+  const replies = resolverReplies(threads, resolved);
+  const unchanged = unchangedSince(api, state?.rounds.at(-1)?.sha, headSha);
   // A decision not to fix must reach the verifier however long the list gets, or the problem comes back as new.
   const order = (f: StateFinding) => (marks.get(f.id)?.as === "wont_fix" || resolved.has(f.id) ? 0 : f.status === "gone" ? 2 : 1);
-  return (state?.findings ?? [])
-    .sort((a, b) => order(a) - order(b))
-    .slice(0, MAX_PREVIOUS)
-    .map(({ id, title, file, line, end_line, how }) => {
+  const kept = (state?.findings ?? []).sort((a, b) => order(a) - order(b)).slice(0, MAX_PREVIOUS);
+  return Promise.all(
+    kept.map(async (f) => {
+      const { id, title, file, line, end_line, how } = f;
       const mark = marks.get(id);
       const by = resolved.get(id);
+      const reply = replies.get(id);
+      // A resolve with a reason is a decision, unless the code there changed since: then the reply may
+      // well say how it was fixed. Only a decision is remembered for later pull requests.
+      const decided = Boolean(reply) && f.status === "open" && (await unchanged(f));
       const handled = mark
         ? { as: mark.as, note: mark.note, by: mark.by, sha: mark.sha, from: "mark" as const, at: mark.at }
-        : by
-          ? { as: "wont_fix" as const, note: "Resolved the comment on the pull request.", by, sha: null, from: "thread" as const }
-          : undefined;
+        : by && reply
+          ? { as: "wont_fix" as const, note: oneLine(reply.text), by, sha: null, from: decided ? ("reply" as const) : ("thread" as const), at: reply.at }
+          : by
+            ? { as: "wont_fix" as const, note: "Resolved the comment on the pull request.", by, sha: null, from: "thread" as const }
+            : undefined;
       return { id, title, file, line, end_line, how, ...(handled ? { handled } : {}) };
-    });
+    }),
+  );
+}
+
+/** A person's reply as the verifier reads it: one line, nothing hidden, not too long. */
+function oneLine(text: string): string {
+  return withoutHidden(text).replace(/\s+/g, " ").trim().slice(0, MAX_NOTE);
+}
+
+/**
+ * Answers once in each thread whose reason the server just remembered, so the person sees it was
+ * taken. ids: the findings the server stored a decision for.
+ */
+export async function answerRemembered(api: GitHub, number: number, ids: string[], cut: Set<string>, log: (line: string) => void = () => {}): Promise<number> {
+  if (!ids.length) return 0;
+  const wanted = new Set(ids);
+  let answered = 0;
+  for (const t of await reviewThreads(api, number).catch(() => [])) {
+    const found = threadFinding(t);
+    if (!found || !wanted.has(found.id) || t.comments.nodes.some((c) => c.body.includes(REMEMBERED_MARKER))) continue;
+    const body = [
+      REMEMBERED_MARKER,
+      `🧠 **Remembered.** Later reviews of this repository read this reason before they report this problem again.${cut.has(found.id) ? " The reason was long, so only its start is kept." : ""} If it stops being true, forget it on your Mergelight dashboard.`,
+    ].join("\n");
+    const posted = await api.write("POST", `pulls/${number}/comments/${found.commentId}/replies`, { body }).catch((err) => (log(`Couldn't answer a thread: ${(err as Error).message}`), null));
+    if (posted !== null) answered++;
+  }
+  return answered;
 }
 
 export const CHECK_FAILED_TITLE = "Couldn't review this pull request";
@@ -352,7 +423,7 @@ export async function reviewThreads(api: GitHub, number: number): Promise<Review
       repository(owner: $owner, name: $repo) {
         pullRequest(number: $number) {
           reviewThreads(first: 100) {
-            nodes { id isResolved isOutdated resolvedBy { login } comments(first: 50) { nodes { databaseId body authorAssociation author { __typename } } } }
+            nodes { id isResolved isOutdated resolvedBy { login } comments(first: 50) { nodes { databaseId body authorAssociation createdAt author { __typename login } } } }
           }
         }
       }

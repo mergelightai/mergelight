@@ -338,6 +338,8 @@ export async function cloudConnected(deps: CloudDeps = {}): Promise<boolean> {
 
 /** The server reads 64 KB per report. The decisions get most of it, and the numbers always fit beside them. */
 const MAX_DECLINE_BYTES = 48_000;
+/** The server refuses a longer reason, and with it the whole report. */
+export const MAX_REASON = 500;
 
 /** A finding someone on the team chose not to fix, with their reason, as it is sent to the server to remember. */
 export interface Decline {
@@ -362,11 +364,13 @@ export function declinesOf(previous: PriorFinding[] | undefined): Decline[] {
   const declines: Decline[] = [];
   for (const p of previous ?? []) {
     const h = p.handled;
-    if (!h || h.as !== "wont_fix" || h.from !== "mark" || !h.note?.trim()) continue;
+    // A mark, or a reason someone gave when they resolved the thread. A plain resolve has no reason to keep.
+    if (!h || h.as !== "wont_fix" || (h.from !== "mark" && h.from !== "reply") || !h.note?.trim()) continue;
     if (!/^[a-f0-9]{6,40}$/.test(p.id) || !/^[\w.-]{1,100}(\[bot\])?$/.test(h.by) || !isLine(p.line)) continue;
     const title = clean(p.title, 200);
     const file = clean(p.file, 400);
-    const reason = clean(h.note, 500);
+    // A person's own text, typed or pasted: characters nobody can see are taken out before anything reads it.
+    const reason = clean(withoutHidden(h.note), MAX_REASON);
     const at = Date.parse(h.at ?? "");
     if (!title || !file || !reason || !Number.isFinite(at)) continue;
     declines.push({ finding_id: p.id, title, file, line: p.line, ...(isLine(p.end_line) ? { end_line: p.end_line } : {}), reason, by: h.by, decided_at: new Date(at).toISOString() });
@@ -382,23 +386,38 @@ export function declinesOf(previous: PriorFinding[] | undefined): Decline[] {
   return fit;
 }
 
+export interface ReportResult {
+  /** Whether the server took the report. */
+  stored: boolean;
+  /**
+   * The findings whose decision this report newly stored or replaced. Null when the server doesn't
+   * say, as an older one doesn't: then nobody is told a decision was remembered.
+   */
+  remembered: string[] | null;
+}
+
 /**
  * Sends the review's numbers for the dashboard, with the team's new decisions to remember and the
- * earlier ones this review used. Returns whether the server took them.
+ * earlier ones this review used.
  */
-export async function reportReview(review: Review, deps: CloudDeps = {}, declines: Decline[] = []): Promise<boolean> {
+export async function reportReview(review: Review, deps: CloudDeps = {}, declines: Decline[] = []): Promise<ReportResult> {
   const d = defaults(deps);
   const server = serverUrl(d.env);
-  if (!server) return false;
+  if (!server) return { stored: false, remembered: null };
   try {
     // One id for this report, the same on both tries, so the server keeps it once.
     const used = (review.used_memories ?? []).filter((id) => /^M\d{1,12}$/.test(id)).slice(0, 200);
     const body = JSON.stringify({ ...reviewNumbers(review), report_id: randomUUID(), ...(declines.length ? { declines } : {}), ...(used.length ? { used_memories: used } : {}) });
     const res = await call(d, server, "/v1/reviews", { method: "POST", body });
     d.log(res.ok ? "Sent this review's numbers to the Mergelight server." : `The Mergelight server answered ${res.status} to the review's numbers. The review itself is posted.`);
-    return res.ok;
+    if (!res.ok) return { stored: false, remembered: null };
+    const said = (res.answer as { remembered?: unknown } | null)?.remembered;
+    const sent = new Set(declines.map((x) => x.finding_id));
+    // Only ids this report sent: the answer can't make Mergelight speak about any other finding.
+    const remembered = Array.isArray(said) ? said.filter((id): id is string => typeof id === "string" && sent.has(id)) : null;
+    return { stored: true, remembered };
   } catch (err) {
     d.log(`Couldn't send the review's numbers to the Mergelight server (${(err as Error).message}). The review itself is posted.`);
-    return false;
+    return { stored: false, remembered: null };
   }
 }

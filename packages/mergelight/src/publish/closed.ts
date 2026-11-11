@@ -19,7 +19,7 @@ export interface ReviewThread {
   isResolved: boolean;
   isOutdated: boolean;
   resolvedBy?: { login?: string } | null;
-  comments: { nodes: { databaseId: number; body: string; authorAssociation?: string; author?: { __typename?: string } | null }[] };
+  comments: { nodes: { databaseId: number; body: string; authorAssociation?: string; author?: { __typename?: string; login?: string } | null; createdAt?: string }[] };
 }
 
 /** fixed: the code changed and the finding is gone. resolved: someone resolved the thread. */
@@ -116,6 +116,44 @@ export function threadAction(t: ReviewThread, open: Set<string>): ThreadAction |
  * verifier hears about these as a team decision, so a pull request's own author
  * can't talk it out of a finding: GitHub lets them resolve threads too.
  */
+/** Mergelight's reply in a thread, once a person's reason there is remembered. */
+export const REMEMBERED_MARKER = "<!-- mergelight:remembered -->";
+
+/**
+ * The reason a person gave when they resolved a thread: their own latest reply in it. Only a reply by
+ * the person who resolved it counts, so a reason can't come from someone who couldn't have decided.
+ * resolved: who resolved each finding's thread, from resolvedByPeople.
+ */
+export function resolverReplies(threads: ReviewThread[], resolved: Map<string, string>): Map<string, { text: string; at: string; commentId: number }> {
+  const out = new Map<string, { text: string; at: string; commentId: number }>();
+  for (const t of threads) {
+    const found = threadFinding(t);
+    if (!found) continue;
+    const by = resolved.get(found.id);
+    if (!by || t.resolvedBy?.login !== by) continue;
+    const reply = t.comments.nodes
+      .slice(1)
+      .filter((c) => c.author?.__typename === "User" && c.author.login === by && c.createdAt && c.body.trim() && !c.body.includes("<!-- mergelight:"))
+      .at(-1);
+    if (reply) out.set(found.id, { text: reply.body.trim(), at: reply.createdAt!, commentId: found.commentId });
+  }
+  return out;
+}
+
+/**
+ * Whether a diff of one file touches lines start to end of the old side. From a patch's hunk headers,
+ * so context lines count too: a near miss counts as touched, never the other way round.
+ */
+export function patchTouches(patch: string, start: number, end: number): boolean {
+  for (const m of patch.matchAll(/^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@/gm)) {
+    const from = Number(m[1]);
+    const count = m[2] === undefined ? 1 : Number(m[2]);
+    const to = from + Math.max(count, 1) - 1;
+    if (from <= end && to >= start) return true;
+  }
+  return false;
+}
+
 export async function resolvedByPeople(threads: ReviewThread[], canWrite: (login: string) => Promise<boolean>): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   for (const t of threads) {

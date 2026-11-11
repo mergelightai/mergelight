@@ -3,11 +3,11 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { currentRepo, fetchPullRequest, parsePrRef } from "./github.js";
 import { serve } from "./mcp/server.js";
-import { declinesOf, fetchContext, reportReview } from "./cloud.js";
+import { declinesOf, fetchContext, MAX_REASON, reportReview } from "./cloud.js";
 import { GitHub } from "./publish/api.js";
 import { writeAccess } from "./publish/handled.js";
 import { publishTeamChecks } from "./publish/team-checks.js";
-import { approveCheck, checkLimitTitle, checkLoginTitle, failCheck, failSummary, previousFindings, publishReview, startCheck, startSummary, syncApproval, UNREVIEWED } from "./publish/publish.js";
+import { answerRemembered, approveCheck, checkLimitTitle, checkLoginTitle, failCheck, failSummary, previousFindings, publishReview, startCheck, startSummary, syncApproval, UNREVIEWED } from "./publish/publish.js";
 import { LimitError, LoginError, loginFailureMessage } from "./providers/codex.js";
 import { limitNotice, loginNotice } from "./publish/markdown.js";
 import { renderRejected, renderTerminal } from "./render.js";
@@ -230,7 +230,7 @@ async function main(): Promise<number> {
   try {
     // The login step already found this login can't be refreshed, so don't send every reviewer to find out.
     if (process.env.MERGELIGHT_LOGIN_LOST === "1") throw new LoginError(loginFailureMessage(process.env.SECRET_NAME || undefined));
-    const previous = values.post ? await previousFindings(api, ref.number) : undefined;
+    const previous = values.post ? await previousFindings(api, ref.number, headSha ?? undefined) : undefined;
     const review = await reviewPullRequest(ref, {
       previous,
       memories: cloud.memories,
@@ -271,7 +271,14 @@ async function main(): Promise<number> {
         const canWrite = writeAccess(api);
         const declines = [];
         for (const d of declinesOf(previous)) if (await canWrite(d.by)) declines.push(d);
-        await reportReview(review, { log }, declines);
+        const { remembered } = await reportReview(review, { log }, declines);
+        // A reason given in a thread gets an answer there, once the server says it kept it. A mark was
+        // written through the agent tools, which say so themselves.
+        const fromThreads = (previous ?? []).filter((p) => p.handled?.from === "reply");
+        const cut = new Set(fromThreads.filter((p) => (p.handled?.note?.length ?? 0) > MAX_REASON).map((p) => p.id));
+        const answer = (remembered ?? []).filter((id) => fromThreads.some((p) => p.id === id));
+        const answered = await answerRemembered(api, ref.number, answer, cut, log);
+        if (answered) log(`Remembered ${answered} reason${answered === 1 ? "" : "s"} given in a thread, and said so there.`);
       }
       // The check carries the verdict; the job itself only fails on errors.
       return 0;
