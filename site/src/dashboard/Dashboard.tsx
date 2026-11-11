@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { GitHubIcon, SURFACE, WELL } from '../ui';
 import { addCheck, addRule, addSkill, ADD_REPOS_URL, finishSignIn, forgetDecision, loadChecks, loadDecisions, loadOverview, loadRules, loadSkills, mayRenew, removeCheck, removeRule, removeSkill, NotConnected, rememberedSession, SERVER, SignedOut, signInUrl, signOut, tidyAddress, type Check, type Checks, type Decision, type Light, type NewCheck, type NewRule, type Org, type Overview, type Rule, type Rules, type Review, type Session, type Skill, type Skills } from './api';
+import { WrittenSkillsCard } from './WrittenSkills';
 
 const LIGHTS: Record<Light, { label: string; dot: string; text: string }> = {
   green: { label: 'Safe to merge', dot: 'bg-mint', text: 'text-mint' },
@@ -809,6 +810,7 @@ export default function Dashboard() {
                   }}
                 />
               )}
+              <WrittenSkillsCard session={session} orgId={org.id} signedIn={signedIn} />
               {view.checks && (
                 <ChecksCard
                   checks={view.checks}

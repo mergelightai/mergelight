@@ -2,7 +2,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, statSync } from 
 import { homedir, tmpdir } from "node:os";
 import { join, posix } from "node:path";
 import { run, runOk } from "./run.js";
-import { importSkills, SKILL_GIT_TIMEOUT_MS, SKILL_IMPORT_TIMEOUT_MS, type TeamSkill } from "./skills.js";
+import { importSkills, SKILL_GIT_TIMEOUT_MS, SKILL_IMPORT_TIMEOUT_MS, writeSkills, type TeamSkill, type WrittenSkill } from "./skills.js";
 import type { Convention } from "./prompt.js";
 import type { PullRequest } from "./types.js";
 
@@ -252,6 +252,8 @@ export interface Workspace {
   touchedPaths: string[];
   /** The team's skills that were found on the base branch and copied into the checkout for the reviewer. */
   skills: TeamSkill[];
+  /** The skills the team wrote on its dashboard, written into the checkout for the reviewer. */
+  writtenSkills: TeamSkill[];
   /** AGENTS.md and the other instruction files, from the base branch. */
   conventions: Convention[];
   cleanup: () => Promise<void>;
@@ -261,7 +263,7 @@ export interface Workspace {
  * Keeps a blobless bare mirror of the repository in the cache, fetches the PR,
  * and checks out the commit under review in a temporary worktree.
  */
-export async function prepareWorkspace(pr: PullRequest, at?: string, skillFolders: string[] = []): Promise<Workspace> {
+export async function prepareWorkspace(pr: PullRequest, at?: string, skillFolders: string[] = [], writtenSkills: WrittenSkill[] = []): Promise<Workspace> {
   const mirror = join(cacheDir(), "repos", pr.owner, `${pr.repo}.git`);
   mkdirSync(join(cacheDir(), "repos", pr.owner), { recursive: true });
 
@@ -330,6 +332,13 @@ export async function prepareWorkspace(pr: PullRequest, at?: string, skillFolder
     // The same goes for the instruction files.
     const teamBase = haveBaseBranch ? `refs/mergelight/base/${pr.baseRef}` : baseCandidate;
     const skills = await skillsFor(mirror, teamBase, dir, skillFolders);
+    // The skills the team wrote on its dashboard go next to them. A skill that can't be written is one fewer, never a failed review.
+    let written: TeamSkill[] = [];
+    try {
+      written = writeSkills(dir, writtenSkills);
+    } catch {
+      written = [];
+    }
     const conventions = await withDeadline(conventionsFor(mirror, teamBase, touchedPaths), SKILL_IMPORT_TIMEOUT_MS + 2 * SKILL_GIT_TIMEOUT_MS, []);
 
     return {
@@ -342,6 +351,7 @@ export async function prepareWorkspace(pr: PullRequest, at?: string, skillFolder
       changedFiles,
       touchedPaths,
       skills,
+      writtenSkills: written,
       conventions,
       cleanup: async () => {
         await run("git", ["-C", mirror, "worktree", "remove", "--force", dir]);
