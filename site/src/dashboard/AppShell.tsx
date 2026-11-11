@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { ArrowClockwiseIcon, ArrowSquareOutIcon, SignInIcon, DotsThreeIcon, PlusIcon, BookOpenTextIcon, BrainIcon, LifebuoyIcon, PaperPlaneTiltIcon, CaretUpDownIcon, CheckIcon, GitPullRequestIcon, ListChecksIcon, ScalesIcon, SignOutIcon } from '@phosphor-icons/react';
+import { ArrowClockwiseIcon, ArrowSquareOutIcon, SignInIcon, DotsThreeIcon, PlusIcon, BookOpenTextIcon, BrainIcon, LifebuoyIcon, PaperPlaneTiltIcon, CaretDownIcon, CaretUpDownIcon, CheckIcon, GitPullRequestIcon, ListChecksIcon, ScalesIcon, SignOutIcon } from '@phosphor-icons/react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
@@ -25,34 +25,38 @@ export const VIEWS: { group: string; items: { id: ViewId; label: string; icon: t
   },
 ];
 
-function OrgPicker({ orgs, org, onPick }: { orgs: Org[]; org: Org; onPick: (id: number) => void }) {
-  const badge = (o: Org) => (
-    <span className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-primary/15 text-sm font-semibold uppercase text-primary">{o.login.slice(0, 1)}</span>
+/** The org's picture from GitHub, or its first letter while that loads or if it fails. */
+function OrgIcon({ org }: { org: Org }) {
+  return (
+    <Avatar className="size-6 rounded-[7px]! after:rounded-[7px]!">
+      <AvatarImage src={`https://github.com/${encodeURIComponent(org.login)}.png?size=48`} alt="" className="rounded-[7px]!" />
+      <AvatarFallback className="rounded-[7px]! bg-primary text-xs font-semibold uppercase text-primary-foreground">{org.login.slice(0, 1)}</AvatarFallback>
+    </Avatar>
   );
+}
+
+function OrgPicker({ orgs, org, onPick }: { orgs: Org[]; org: Org; onPick: (id: number) => void }) {
   if (orgs.length < 2) {
     return (
-      <div className="flex items-center gap-2.5 px-2 py-1.5">
-        {badge(org)}
-        <span className="truncate font-heading text-sm font-medium">{org.login}</span>
+      <div className="flex h-8 items-center gap-2 px-1.5">
+        <OrgIcon org={org} />
+        <span className="truncate font-medium">{org.login}</span>
       </div>
     );
   }
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger render={<SidebarMenuButton size="lg" aria-label="Switch org" />}>
-        {badge(org)}
-        <span className="grid flex-1 text-left leading-tight">
-          <span className="truncate font-heading text-sm font-medium">{org.login}</span>
-          <span className="truncate text-xs text-muted-foreground">{orgs.length} orgs</span>
-        </span>
-        <CaretUpDownIcon className="ml-auto size-4 text-muted-foreground" />
+      <DropdownMenuTrigger render={<SidebarMenuButton className="w-fit px-1.5" aria-label="Switch org" />}>
+        <OrgIcon org={org} />
+        <span className="truncate font-medium">{org.login}</span>
+        <CaretDownIcon className="size-3.5 opacity-50" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="min-w-56">
         <DropdownMenuGroup>
           <DropdownMenuLabel>Orgs</DropdownMenuLabel>
           {orgs.map((o) => (
             <DropdownMenuItem key={o.id} onClick={() => onPick(o.id)}>
-              {badge(o)}
+              <OrgIcon org={o} />
               <span className="flex-1 truncate">{o.login}</span>
               {o.id === org.id && <CheckIcon className="size-4" />}
             </DropdownMenuItem>
@@ -67,9 +71,9 @@ function OrgPicker({ orgs, org, onPick }: { orgs: Org[]; org: Org; onPick: (id: 
 function Who({ user }: { user: Session['user'] }) {
   return (
     <>
-      <Avatar className="size-8 rounded-xl after:rounded-xl">
-        <AvatarImage src={`https://avatars.githubusercontent.com/u/${user.id}?s=80`} alt="" className="rounded-xl" />
-        <AvatarFallback className="rounded-xl uppercase">{user.login.slice(0, 1)}</AvatarFallback>
+      <Avatar className="size-8 rounded-[10px]! after:rounded-[10px]!">
+        <AvatarImage src={`https://avatars.githubusercontent.com/u/${user.id}?s=80`} alt="" className="rounded-[10px]!" />
+        <AvatarFallback className="rounded-[10px]! uppercase">{user.login.slice(0, 1)}</AvatarFallback>
       </Avatar>
       <span className="grid flex-1 text-left leading-tight">
         <span className="truncate font-medium">{user.login}</span>
@@ -149,9 +153,6 @@ export function AppShell({ user, orgs, org, onPickOrg, view, onView, onSignOut, 
     <SidebarProvider>
       <Sidebar variant="floating">
         <SidebarHeader>
-          <a href="/" className="flex items-center gap-2 px-2 pb-2 pt-1 font-heading text-[15px] font-semibold tracking-tight">
-            <img src="/logo.png" alt="" className="size-6 rounded-md" /> Mergelight
-          </a>
           <SidebarMenu>
             <SidebarMenuItem>
               <OrgPicker orgs={orgs} org={org} onPick={onPickOrg} />
@@ -161,7 +162,7 @@ export function AppShell({ user, orgs, org, onPickOrg, view, onView, onSignOut, 
         <SidebarContent>
           {VIEWS.map((g) => (
             <SidebarGroup key={g.group}>
-              <SidebarGroupLabel>{g.group}</SidebarGroupLabel>
+              {g.group !== 'Overview' && <SidebarGroupLabel>{g.group}</SidebarGroupLabel>}
               <SidebarGroupContent>
                 <SidebarMenu>
                   {g.items.map((item) => (
