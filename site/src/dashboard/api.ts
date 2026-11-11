@@ -104,6 +104,23 @@ export interface NewRule {
   repo_id: number | null;
 }
 
+/** A skill folder in a repository that the team picked for its reviews. The skill's text stays in the repository. */
+export interface Skill {
+  id: number;
+  repo_id: number;
+  repo: string;
+  path: string;
+  by: string;
+  created_at: string;
+  can_remove: boolean;
+}
+
+export interface Skills {
+  skills: Skill[];
+  /** Picking a skill takes an admin of that repository. */
+  repos: { id: number; name: string; can_pick_skills: boolean }[];
+}
+
 /** Thrown when the session ran out or the server restarted. The page then asks for a new sign-in. */
 export class SignedOut extends Error {}
 /** Thrown when the org hasn't turned the dashboard on. */
@@ -270,6 +287,25 @@ export async function addRule(session: Session, orgId: number, rule: NewRule): P
 
 export async function removeRule(session: Session, orgId: number, id: number): Promise<void> {
   const res = await call(session, `/v1/orgs/${orgId}/rules/${id}`, { method: 'DELETE' });
+  // Already gone counts as done.
+  if (!res.ok && res.status !== 404) throw new Error(`The Mergelight server answered ${res.status}.`);
+}
+
+export async function loadSkills(session: Session, orgId: number): Promise<Skills> {
+  const res = await call(session, `/v1/orgs/${orgId}/skills`);
+  if (res.status === 404 && ((await res.json()) as { error?: string }).error === 'not_connected') throw new NotConnected();
+  if (!res.ok) throw new Error(`The Mergelight server answered ${res.status}.`);
+  return (await res.json()) as Skills;
+}
+
+/** Picks a skill folder for a repository's reviews. Throws with the server's own words when it says no. */
+export async function addSkill(session: Session, orgId: number, skill: { repo_id: number; path: string }): Promise<void> {
+  const res = await call(session, `/v1/orgs/${orgId}/skills`, { method: 'POST', body: JSON.stringify(skill) });
+  if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { message?: string }).message ?? `The Mergelight server answered ${res.status}.`);
+}
+
+export async function removeSkill(session: Session, orgId: number, id: number): Promise<void> {
+  const res = await call(session, `/v1/orgs/${orgId}/skills/${id}`, { method: 'DELETE' });
   // Already gone counts as done.
   if (!res.ok && res.status !== 404) throw new Error(`The Mergelight server answered ${res.status}.`);
 }

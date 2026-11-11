@@ -275,7 +275,8 @@ export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"
       );
       // The team's rules: those for the whole org and those for this repository.
       const rules = await db.query(`select id, repo_id, kind, text, paths from rules where repo_id is null or repo_id = $1 order by id limit ${RULES_PER_REVIEW}`, [who.repoId]);
-      return { memories: rows, rules: rules.rows };
+      const skills = await db.query("select path from skills where repo_id = $1 order by id limit 10", [who.repoId]);
+      return { memories: rows, rules: rules.rows, skills: skills.rows.map((s) => s.path as string) };
     });
     if (!found) return respond(200, { connected: false });
     const rules = found.rules.map((r) => ({ id: `R${r.id}`, kind: r.kind, text: r.text, ...(r.paths.length ? { paths: r.paths } : {}), scope: r.repo_id === null ? "org" : "repo" }));
@@ -288,7 +289,7 @@ export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"
       if (bytes > MEMORY_BYTES_PER_REVIEW) break;
       memories.push(memory);
     }
-    return respond(200, { connected: true, memories, rules });
+    return respond(200, { connected: true, memories, rules, skills: found.skills });
   }
 
   async function saveReview(who: Caller, request: Request): Promise<Response> {

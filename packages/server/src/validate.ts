@@ -12,3 +12,8 @@ export function isLineOfText(v: unknown, max: number): v is string {
 export function isPathPattern(v: unknown): v is string {
   return typeof v === "string" && /^[\w.@+\-/*?]{1,100}$/.test(v);
 }
+
+/** A folder in a repository, written plainly: no wildcards, no "..", no slash at either end. */
+export function isSkillPath(v: unknown): v is string {
+  return typeof v === "string" && v.length <= 200 && /^[\w.@+\-]+(\/[\w.@+\-]+)*$/.test(v) && !v.split("/").some((part) => part === ".." || part === ".");
+}

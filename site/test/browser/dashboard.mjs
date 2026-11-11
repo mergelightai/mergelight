@@ -45,6 +45,16 @@ const RULES = {
   },
   4004: { can_set_org_rules: false, repos: [{ id: 801, name: 'fresh/app', can_set_rules: false }], rules: [] },
 };
+const SKILLS = {
+  1001: {
+    repos: [{ id: 501, name: 'acme/widgets', can_pick_skills: true }, { id: 502, name: 'acme/api', can_pick_skills: false }],
+    skills: [
+      { id: 7, repo_id: 501, repo: 'acme/widgets', path: '.claude/skills/migrations', by: 'ada', created_at: hoursAgo(90), can_remove: true },
+      { id: 8, repo_id: 502, repo: 'acme/api', path: '.agents/skills/payments', by: 'bo', created_at: hoursAgo(20), can_remove: false },
+    ],
+  },
+  4004: { repos: [{ id: 801, name: 'fresh/app', can_pick_skills: false }], skills: [] },
+};
 const OVERVIEWS = {
   1001: {
     org: { id: 1001, login: 'acme' },
@@ -63,6 +73,9 @@ async function open(name, { signedOutAfter = Infinity, serverDown = false, forge
   /** Rules the page asked the server to add and to remove. */
   const added = [];
   const removed = [];
+  /** Skill folders the page asked the server to add and to remove. */
+  const skillsAdded = [];
+  const skillsRemoved = [];
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 900, deviceScaleFactor: 2 });
   const errors = [];
@@ -108,6 +121,23 @@ async function open(name, { signedOutAfter = Infinity, serverDown = false, forge
         const own = RULES[rules[1]];
         const fresh = added.map((r, i) => ({ id: 101 + i, ...r, by: 'ada', created_at: new Date().toISOString(), repo: r.repo_id ? 'acme/widgets' : null, can_remove: true }));
         return json(req, { ...own, rules: [...own.rules, ...(rules[1] === '1001' ? fresh : [])].filter((r) => !removed.includes(r.id)) });
+      }
+      const skills = /^\/v1\/orgs\/(\d+)\/skills(?:\/(\d+))?$/.exec(u.pathname);
+      if (skills && !SKILLS[skills[1]]) return json(req, { error: 'not_connected' }, 404);
+      if (skills && m === 'POST') {
+        const body = JSON.parse(req.postData());
+        if (body.path.includes('..')) return json(req, { error: 'bad_request', message: "Name the skill's folder in the repository, like .claude/skills/migrations." }, 400);
+        skillsAdded.push(body);
+        return json(req, { id: 200 + skillsAdded.length }, 201);
+      }
+      if (skills && m === 'DELETE') {
+        skillsRemoved.push(Number(skills[2]));
+        return req.respond({ status: 204, headers: cors });
+      }
+      if (skills) {
+        const own = SKILLS[skills[1]];
+        const fresh = skillsAdded.map((s, i) => ({ id: 201 + i, ...s, repo: 'acme/widgets', by: 'ada', created_at: new Date().toISOString(), can_remove: true }));
+        return json(req, { ...own, skills: [...own.skills, ...(skills[1] === '1001' ? fresh : [])].filter((s) => !skillsRemoved.includes(s.id)) });
       }
       const memories = /^\/v1\/orgs\/(\d+)\/memories(?:\/(\d+))?$/.exec(u.pathname);
       if (memories && m === 'DELETE') {
@@ -162,7 +192,7 @@ async function open(name, { signedOutAfter = Infinity, serverDown = false, forge
     return { href, state };
   };
   console.log(`\n== ${name}`);
-  return { page, calls, exchanges, renewals, forgotten, added, removed, errors, text, click, signIn, comeBackFromGitHub, shot: (file) => page.screenshot({ path: `${out}${file}.png`, fullPage: true }).catch(() => {}) };
+  return { page, calls, exchanges, renewals, forgotten, added, removed, skillsAdded, skillsRemoved, errors, text, click, signIn, comeBackFromGitHub, shot: (file) => page.screenshot({ path: `${out}${file}.png`, fullPage: true }).catch(() => {}) };
 }
 const done = async (t) => {
   if (t.errors.length) { console.log('  page errors', t.errors.slice(0, 3)); failures++; }
@@ -245,12 +275,36 @@ const done = async (t) => {
   await wait(600);
   expect(t.removed.join() === '3' && !/Ignore style and naming/.test(await t.text()), 'Remove takes the rule off the server and the page');
 
+  // Skills.
+  const withSkills = await t.text();
+  expect(/\.claude\/skills\/migrations acme\/widgets picked by ada/.test(withSkills) && /\.agents\/skills\/payments acme\/api picked by bo/.test(withSkills), `the picked skill folders show, with their repository and who picked them (${withSkills.match(/Skills.{0,60}/)?.[0]})`);
+  expect(/a pull request can't change the skill that reviews it/.test(withSkills) && /The skill's text stays in your repository/.test(withSkills), 'the card says where a skill is read from, and that its text is not stored');
+  const skillRemoves = await t.page.evaluate(() => [...document.querySelectorAll('button')].filter((b) => b.textContent.trim() === 'Remove skill').length);
+  expect(skillRemoves === 1, 'only a skill in a repository this person is an admin of has a Remove button');
+  const skillPlaces = await t.page.evaluate(() => [...document.querySelector('select[aria-label="Skill repository"]').options].map((o) => o.textContent));
+  expect(skillPlaces.join() === 'acme/widgets', `a skill can be picked for repositories this person is an admin of, and no other (${skillPlaces})`);
+  const addSkillOff = await t.page.evaluate(() => [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Add skill').disabled);
+  expect(addSkillOff, 'a skill can\'t be added without a folder');
+  await fill('Skill folder', '  .agents/skills/billing ');
+  await t.click('button', 'Add skill');
+  await wait(700);
+  expect(JSON.stringify(t.skillsAdded) === JSON.stringify([{ repo_id: 501, path: '.agents/skills/billing' }]), `the new skill is sent with its repository and its folder (${JSON.stringify(t.skillsAdded)})`);
+  expect(/\.agents\/skills\/billing acme\/widgets picked by ada/.test(await t.text()) && (await t.page.evaluate(() => document.querySelector('[aria-label="Skill folder"]').value)) === '', 'and shows in the list, with the form empty again');
+  await fill('Skill folder', '../other/skills');
+  await t.click('button', 'Add skill');
+  await wait(600);
+  expect(/Name the skill's folder in the repository/.test(await t.text()), 'when the server refuses a folder, the page shows why');
+  await t.click('button', 'Remove skill');
+  await wait(600);
+  expect(t.skillsRemoved.join() === '7' && !/\.claude\/skills\/migrations acme\/widgets/.test(await t.text()), 'Remove takes the skill off the server and the page');
+
   await t.click('[role=tab]', 'quiet');
   await wait(500);
   expect(/The dashboard isn't on for quiet/.test(await t.text()), 'an org that hasn\'t turned it on says so');
   await t.click('[role=tab]', 'fresh');
   await wait(500);
   expect(/Only an owner of the org or an admin of a repository can change the rules\./.test(await t.text()) && !(await t.page.$('[aria-label="The rule"]')), 'someone who may not set rules sees no form, and is told who can');
+  expect(/Only an admin of a repository can pick its skills\./.test(await t.text()) && !(await t.page.$('[aria-label="Skill folder"]')), 'someone who is no admin sees no skill form, and is told who can');
   expect(/No reviews to show yet/.test(await t.text()) && /repositories this sign-in can't see/.test(await t.text()) && (await t.text()).includes(`server: ${SERVER}`), 'an org with no reviews yet shows the one line to add');
   await t.shot('3-nothing-yet');
 

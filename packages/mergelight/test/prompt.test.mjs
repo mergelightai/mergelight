@@ -447,5 +447,5 @@ test("the summary says which guarded file was changed, and says when the team's 
   assert.match(summaryWith("x.", ["db/__init__.py", "a`b*c"], false), /`db\/__init__\.py`, `a'b\*c`/);
   // A file name with a line break in it can't start a line of its own in the comment.
   assert.equal(summaryWith("x.", ["db/a\n# Approved\n.sql"], false).split("\n").length, 1);
-  assert.match(summaryWith("Adds paging.", [], true), /couldn't get your team's rules and earlier decisions from its server, so this review ran without them\.$/);
+  assert.match(summaryWith("Adds paging.", [], true), /couldn't get your team's rules, skills and earlier decisions from its server, so this review ran without them\.$/);
 });

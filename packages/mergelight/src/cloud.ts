@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { PriorFinding, TeamMemory, TeamRule } from "./prompt.js";
+import { isSkillPath } from "./skills.js";
 import type { Review } from "./types.js";
 
 /**
@@ -206,11 +207,13 @@ export interface CloudContext {
   memories: TeamMemory[];
   /** The rules the team set on the dashboard, for the org and for this repository. */
   rules: TeamRule[];
+  /** Skill folders in this repository that the team picked for reviews. */
+  skills: string[];
   /** True when a server is set and it couldn't be asked. The review then says that it ran without the team's rules. */
   failed?: boolean;
 }
 
-const NOTHING: CloudContext = { connected: false, memories: [], rules: [] };
+const NOTHING: CloudContext = { connected: false, memories: [], rules: [], skills: [] };
 /** One line of plain text: no line breaks and no control characters, so it can't pass for anything but itself. */
 const isText = (v: unknown, max: number): v is string => typeof v === "string" && v.length > 0 && v.length <= max && !/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u2028-\u202e\u2066-\u2069]/.test(v);
 const isLine = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 10_000_000;
@@ -267,9 +270,10 @@ export async function fetchContext(deps: CloudDeps = {}): Promise<CloudContext> 
       d.log(`The Mergelight server answered ${res.status}. The review runs without it.`);
       return { ...NOTHING, failed: true };
     }
-    const answer = res.answer as { connected?: unknown; memories?: unknown; rules?: unknown } | null;
+    const answer = res.answer as { connected?: unknown; memories?: unknown; rules?: unknown; skills?: unknown } | null;
     if (answer?.connected !== true) return NOTHING;
-    return { connected: true, memories: readMemories(answer.memories), rules: readRules(answer.rules) };
+    const skills = Array.isArray(answer.skills) ? answer.skills.filter(isSkillPath).slice(0, 10) : [];
+    return { connected: true, memories: readMemories(answer.memories), rules: readRules(answer.rules), skills };
   } catch (err) {
     d.log(`Couldn't reach the Mergelight server (${(err as Error).message}). The review runs without it.`);
     return { ...NOTHING, failed: true };

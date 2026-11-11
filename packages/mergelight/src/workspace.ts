@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { run, runOk } from "./run.js";
+import { importSkills, SKILL_GIT_TIMEOUT_MS, SKILL_IMPORT_TIMEOUT_MS, type TeamSkill } from "./skills.js";
 import type { PullRequest } from "./types.js";
 
 /** Lockfiles and generated files are left out of the diff the model sees. */
@@ -38,6 +39,31 @@ function git(args: string[], cwd?: string) {
     ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential", ...args],
     { cwd, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } },
   );
+}
+
+/**
+ * Copies the team's skills, and never lets that stop or hold up a review. The mirror has no file
+ * contents of its own, so reading a skill the pull request changed asks GitHub for it: with the
+ * same login as every other git call here, never with a prompt, and never for long.
+ */
+async function skillsFor(mirror: string, base: string, checkout: string, folders: string[]): Promise<TeamSkill[]> {
+  if (!folders.length) return [];
+  const gitInMirror = (args: string[]) =>
+    run("git", ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential", "-C", mirror, ...args], {
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+      timeoutMs: SKILL_GIT_TIMEOUT_MS,
+    });
+  let timer: NodeJS.Timeout | undefined;
+  // A last stop, for a git process that doesn't end even when told to.
+  const gaveUp = new Promise<TeamSkill[]>((resolve) => {
+    timer = setTimeout(() => resolve([]), SKILL_IMPORT_TIMEOUT_MS + 2 * SKILL_GIT_TIMEOUT_MS);
+    timer.unref();
+  });
+  try {
+    return await Promise.race([importSkills(mirror, base, checkout, folders, gitInMirror).catch(() => []), gaveUp]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function hasCommit(mirror: string, sha: string): Promise<boolean> {
@@ -86,6 +112,8 @@ export interface Workspace {
    * renamed file counts under both its old and its new name.
    */
   touchedPaths: string[];
+  /** The team's skills that were found on the base branch and copied into the checkout for the reviewer. */
+  skills: TeamSkill[];
   cleanup: () => Promise<void>;
 }
 
@@ -93,7 +121,7 @@ export interface Workspace {
  * Keeps a blobless bare mirror of the repository in the cache, fetches the PR,
  * and checks out the commit under review in a temporary worktree.
  */
-export async function prepareWorkspace(pr: PullRequest, at?: string): Promise<Workspace> {
+export async function prepareWorkspace(pr: PullRequest, at?: string, skillFolders: string[] = []): Promise<Workspace> {
   const mirror = join(cacheDir(), "repos", pr.owner, `${pr.repo}.git`);
   mkdirSync(join(cacheDir(), "repos", pr.owner), { recursive: true });
 
@@ -154,6 +182,10 @@ export async function prepareWorkspace(pr: PullRequest, at?: string): Promise<Wo
 
     const dir = mkdtempSync(join(tmpdir(), `mergelight-${pr.repo}-${pr.number}-`));
     await git(["worktree", "add", "--quiet", "--detach", dir, headSha], mirror);
+    // From the base branch as it is now: what the team merged. Not from the pull request, and not from
+    // the commit it branched from either. Its author picks that commit, and could pick one from
+    // before a skill was written or tightened.
+    const skills = await skillsFor(mirror, haveBaseBranch ? `refs/mergelight/base/${pr.baseRef}` : baseCandidate, dir, skillFolders);
 
     return {
       dir,
@@ -164,6 +196,7 @@ export async function prepareWorkspace(pr: PullRequest, at?: string): Promise<Wo
       diffTruncated: diff.length > MAX_INLINE_DIFF,
       changedFiles,
       touchedPaths,
+      skills,
       cleanup: async () => {
         await run("git", ["-C", mirror, "worktree", "remove", "--force", dir]);
         rmSync(dir, { recursive: true, force: true });

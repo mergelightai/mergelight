@@ -42,6 +42,8 @@ export interface ReviewOptions {
   rules?: TeamRule[];
   /** True when the team's server couldn't be asked for its rules and decisions. The summary then says so. */
   rulesUnread?: boolean;
+  /** Skill folders in the repository that the team picked for reviews. They are read from the base branch. */
+  skills?: string[];
   /** Keep the temporary checkout for inspection. */
   keep?: boolean;
   /** Progress messages. transient ones (the command the agent is running) are only worth showing live. */
@@ -202,7 +204,7 @@ export function summaryWith(summary: string, needsHuman: string[], rulesUnread: 
     ? ` It changes ${needsHuman.slice(0, 3).map(code).join(", ")}${needsHuman.length > 3 ? ` and ${needsHuman.length - 3} more` : ""}, which your team marked as always needing a human.`
     : "";
   // A team may have rules that would have changed this review. Running without them must never be silent.
-  const unread = rulesUnread ? " Mergelight couldn't get your team's rules and earlier decisions from its server, so this review ran without them." : "";
+  const unread = rulesUnread ? " Mergelight couldn't get your team's rules, skills and earlier decisions from its server, so this review ran without them." : "";
   return `${summary}${guarded}${unread}`;
 }
 
@@ -247,7 +249,10 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
   const pr = await fetchPullRequest(ref);
 
   progress("Checking out the code");
-  const ws = await prepareWorkspace(pr, opts.at);
+  const ws = await prepareWorkspace(pr, opts.at, opts.skills);
+  const skillsMissing = (opts.skills?.length ?? 0) - ws.skills.length;
+  if (skillsMissing > 0) progress(`${skillsMissing} of the skill folders your team picked ${skillsMissing === 1 ? "has" : "have"} no SKILL.md on the base branch, or couldn't be read: left out. Name the real folder, not a link to it`);
+  if (ws.skills.length) progress(`Using ${ws.skills.length} of your team's skill${ws.skills.length === 1 ? "" : "s"}: ${ws.skills.map((s) => s.name).join(", ")}`);
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const log = (step: string) => join(cacheDir(), "logs", `${pr.owner}-${pr.repo}-${pr.number}-${stamp}-${step}.log`);
 
@@ -262,6 +267,7 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
       previous: opts.previous,
       memories: memoriesFor(opts.memories, ws.changedFiles.map((f) => f.path), pr.number),
       // Matched against every path the pull request touches, exactly as git has it.
+      skills: ws.skills,
       rules: (opts.rules ?? []).filter((r) => r.kind === "rule" && ruleApplies(r, ws.touchedPaths)).slice(0, MAX_RULES),
     };
 

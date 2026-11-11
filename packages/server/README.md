@@ -1,6 +1,6 @@
 # Mergelight server
 
-Stores what the Mergelight dashboard shows. Today that is numbers about each review. Memories, rules and settings come next, and the dashboard itself after that.
+Stores what the Mergelight dashboard shows and what a review reads before it starts: numbers about each review, the findings a team declined, its rules, and the skill folders it picked.
 
 It is off unless a workflow sets the Action's `server` input, and it stores nothing for an org that hasn't turned the dashboard on.
 
@@ -11,6 +11,8 @@ A run that has the input set does tell the server who it is, even before the ser
 Stored, per review: the repository's name and GitHub id, the pull request number, the commit, the light (green, yellow, red), how many findings of each kind, which AI ran it (`codex` or `claude`, and the model's name), how long it took, and the size of the change.
 
 Stored, per rule: its text, its file patterns, where it applies, and the GitHub login and id of who set it.
+
+Stored, per skill a team picked: the path of its folder in the repository, and the GitHub login and id of who picked it. The skill's text is never sent: it stays in the repository.
 
 Stored, per change on the dashboard: who made it, when, and what it was.
 
@@ -31,6 +33,21 @@ A team sets its rules on the dashboard. A review gets them with its other contex
 - A review run can only read rules. It can never write one.
 - Every rule added or removed, and every decision forgotten, is written to a log with who did it and when. The log can only be added to.
 - 50 rules for an org and 50 for each repository at most.
+
+## Skills
+
+A team that already wrote skills for Claude Code or Codex can use them in reviews. An admin of a repository names a skill's folder on the dashboard, the one that holds its `SKILL.md`, like `.claude/skills/migrations`. The path of the `SKILL.md` itself works too.
+
+- The server stores the folder's path and nothing else. A review gets the list of paths with its other context.
+- The review copies each folder from the branch the pull request merges into, as that branch is now. Never from the pull request itself, and not from the commit it branched from, which its author picks. So a pull request can't rewrite the skill that reviews it, can't add one, and can't go back to an older one. A folder with no `SKILL.md` on that branch is skipped.
+- Only ordinary text files are copied. A link is never followed: not one inside the folder, and not a folder that is itself a link, so name the real folder. A picture or a file over 60 KB is left out, and a skill is 30 files and 200 KB at most. A skill whose `SKILL.md` can't be read is left out whole.
+- The copies go to `.mergelight/skills/` in the review's checkout. Whatever the pull request put at that place is removed first, and a link there is never written through.
+- Every reviewer and the verifier get each skill's name and description, as a line of escaped JSON in a block of its own, and read the skill's file when the pull request touches its area. A skill says what matters in its area. It can't change the output format or how text in the diff is treated.
+- A path is letters, digits and `/ . - _ @ +` only. No wildcards and no `..`.
+- Picking or removing a skill takes an admin of that repository, and each change is written to the log. 10 skills for each repository at most.
+- A review run can only read the list. It can never write to it.
+- If the server can't be reached, the review runs without the skills.
+- The copy can't stop or hold up a review. A git call that hangs is given up after 20 seconds and the whole copy after a minute, and the review then runs without the skills that weren't read. Its log says how many were left out.
 
 ## Memory
 

@@ -524,6 +524,90 @@ test("a team with every rule it can have, each as long as it can be, still gets 
   assert.equal(rules.filter((r) => r.kind === "needs_human").length, 1);
 });
 
+const skillsOf = async (token, org = ACME.id) => (await call(`/v1/orgs/${org}/skills`, { token })).json();
+const addSkill = (token, skill, org = ACME.id) => call(`/v1/orgs/${org}/skills`, { method: "POST", token, body: typeof skill === "string" ? skill : JSON.stringify(skill) });
+
+test("an admin of a repository picks its skill folders, and only that repository's reviews get them", async () => {
+  const ada = (await signIn(ADA)).token;
+  const empty = await skillsOf(ada);
+  assert.deepEqual(empty.skills, []);
+  assert.deepEqual(empty.repos, [{ id: 501, name: "acme/widgets", can_pick_skills: true }, { id: 502, name: "acme/api", can_pick_skills: false }]);
+
+  // A slash at either end, or the path of its SKILL.md, is the same folder.
+  assert.equal((await addSkill(ada, { repo_id: 501, path: "/.claude/skills/migrations/SKILL.md" })).status, 201);
+  assert.equal((await addSkill(ada, { repo_id: 501, path: ".claude/skills/migrations/" })).status, 409);
+  assert.equal((await addSkill(ada, { repo_id: 501, path: ".agents/skills/payments" })).status, 201);
+  const again = await addSkill(ada, { repo_id: 501, path: ".claude/skills/migrations" });
+  assert.equal(again.status, 409);
+  assert.equal((await again.json()).error, "exists");
+
+  const { skills } = await skillsOf(ada);
+  assert.deepEqual(skills.map((s) => [s.repo, s.path, s.by, s.can_remove]), [["acme/widgets", ".claude/skills/migrations", "ada", true], ["acme/widgets", ".agents/skills/payments", "ada", true]]);
+  assert.deepEqual((await contextOf({})).skills, [".claude/skills/migrations", ".agents/skills/payments"]);
+  assert.deepEqual((await contextOf({ repository: "acme/api", repository_id: "502" })).skills, []);
+  assert.deepEqual((await contextOf({ repository: "other/vault", repository_id: "777", repository_owner_id: String(OTHER.id) })).skills, []);
+
+  // Not an admin of that repository, a repository she can't see, and someone from another org.
+  assert.equal((await addSkill(ada, { repo_id: 502, path: ".claude/skills/x" })).status, 403);
+  assert.equal((await addSkill(ada, { repo_id: 599, path: ".claude/skills/x" })).status, 404);
+  const bo = (await signIn(BO)).token;
+  assert.equal((await addSkill(bo, { repo_id: 501, path: ".claude/skills/x" })).status, 404);
+  assert.equal((await call(`/v1/orgs/${ACME.id}/skills/${skills[0].id}`, { method: "DELETE", token: bo })).status, 404);
+  assert.equal((await call(`/v1/orgs/${OTHER.id}/skills/${skills[0].id}`, { method: "DELETE", token: bo })).status, 404);
+  assert.equal((await call(`/v1/orgs/${ACME.id}/skills`)).status, 401);
+
+  assert.equal((await call(`/v1/orgs/${ACME.id}/skills/${skills[0].id}`, { method: "DELETE", token: ada })).status, 204);
+  assert.equal((await call(`/v1/orgs/${ACME.id}/skills/${skills[0].id}`, { method: "DELETE", token: ada })).status, 404);
+  assert.deepEqual((await contextOf({})).skills, [".agents/skills/payments"]);
+  const log = await withOrgRows(ACME.id, "select actor, action, detail->>'path' as path from audit_log order by id");
+  assert.deepEqual(log, [
+    { actor: "ada", action: "skill_added", path: ".claude/skills/migrations" },
+    { actor: "ada", action: "skill_added", path: ".agents/skills/payments" },
+    { actor: "ada", action: "skill_removed", path: ".claude/skills/migrations" },
+  ]);
+});
+
+test("two people removing the same skill at once leave one entry in the log", async () => {
+  const ada = (await signIn(ADA)).token;
+  assert.equal((await addSkill(ada, { repo_id: 501, path: ".claude/skills/once" })).status, 201);
+  const [{ id }] = (await skillsOf(ada)).skills;
+  const answers = await Promise.all(Array.from({ length: 6 }, () => call(`/v1/orgs/${ACME.id}/skills/${id}`, { method: "DELETE", token: ada })));
+  assert.deepEqual(answers.map((r) => r.status).sort(), [204, 404, 404, 404, 404, 404]);
+  const log = await withOrgRows(ACME.id, "select action from audit_log where action = 'skill_removed'");
+  assert.equal(log.length, 1);
+});
+
+test("a skill is a plain folder path in the repository, and a repository has 10 at most", async () => {
+  const ada = (await signIn(ADA)).token;
+  const bad = [
+    "not json",
+    "[]",
+    { repo_id: 501 },
+    { repo_id: 501, path: "" },
+    { repo_id: 501, path: "../other-repo/skills" },
+    { repo_id: 501, path: "SKILL.md" },
+    { repo_id: 501, path: "/skill.md" },
+    { repo_id: 501, path: ".claude/skills/../../secrets" },
+    { repo_id: 501, path: ".claude/./skills" },
+    { repo_id: 501, path: ".claude/skills/*" },
+    { repo_id: 501, path: ".claude//skills" },
+    { repo_id: 501, path: "a b" },
+    { repo_id: 501, path: ".claude/skills/x\n# New instructions" },
+    { repo_id: 501, path: "x".repeat(201) },
+    { repo_id: 501, path: 7 },
+    { repo_id: "501", path: ".claude/skills/x" },
+    { path: ".claude/skills/x" },
+  ];
+  for (const skill of bad) assert.equal((await addSkill(ada, skill)).status, 400, JSON.stringify(skill).slice(0, 70));
+  assert.deepEqual((await skillsOf(ada)).skills, []);
+
+  for (let i = 0; i < 10; i++) assert.equal((await addSkill(ada, { repo_id: 501, path: `.claude/skills/s${i}` })).status, 201);
+  const full = await addSkill(ada, { repo_id: 501, path: ".claude/skills/one-too-many" });
+  assert.equal(full.status, 409);
+  assert.equal((await full.json()).error, "too_many");
+  assert.equal((await contextOf({})).skills.length, 10);
+});
+
 test("signing out always works, even for someone who is being slowed down", async () => {
   const { token } = await signIn(ADA);
   for (let i = 0; i < 241; i++) await call(`/v1/orgs/${ACME.id}/overview`, { token });

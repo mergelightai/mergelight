@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { GitHubIcon, SURFACE, WELL } from '../ui';
-import { addRule, ADD_REPOS_URL, finishSignIn, forgetDecision, loadDecisions, loadOverview, loadRules, mayRenew, removeRule, NotConnected, rememberedSession, SERVER, SignedOut, signInUrl, signOut, tidyAddress, type Decision, type Light, type NewRule, type Org, type Overview, type Rule, type Rules, type Review, type Session } from './api';
+import { addRule, addSkill, ADD_REPOS_URL, finishSignIn, forgetDecision, loadDecisions, loadOverview, loadRules, loadSkills, mayRenew, removeRule, removeSkill, NotConnected, rememberedSession, SERVER, SignedOut, signInUrl, signOut, tidyAddress, type Decision, type Light, type NewRule, type Org, type Overview, type Rule, type Rules, type Review, type Session, type Skill, type Skills } from './api';
 
 const LIGHTS: Record<Light, { label: string; dot: string; text: string }> = {
   green: { label: 'Safe to merge', dot: 'bg-mint', text: 'text-mint' },
@@ -337,6 +337,110 @@ function RulesCard({ rules, onAdd, onRemove }: { rules: Rules; onAdd: (rule: New
   );
 }
 
+/** The form for a new skill. Only repositories this person is an admin of are offered. */
+function NewSkillForm({ skills, onAdd }: { skills: Skills; onAdd: (skill: { repo_id: number; path: string }) => Promise<void> }) {
+  const places = skills.repos.filter((r) => r.can_pick_skills);
+  const [path, setPath] = useState('');
+  const [place, setPlace] = useState(places[0] ? String(places[0].id) : '');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  if (!places.length) {
+    return <p className="mt-5 text-[13px] leading-relaxed text-faint">Only an admin of a repository can pick its skills.</p>;
+  }
+  const ready = path.trim().length > 0 && !busy;
+  return (
+    <form
+      className={`${WELL} mt-5 space-y-3 p-4`}
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (!ready) return;
+        setBusy(true);
+        setError(null);
+        onAdd({ repo_id: Number(place), path: path.trim() })
+          .then(() => setPath(''))
+          .catch((err: unknown) => setError(err instanceof Error ? err.message : 'That did not work.'))
+          .finally(() => setBusy(false));
+      }}
+    >
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="block text-[13px] text-muted">
+          Repository
+          <select aria-label="Skill repository" value={place} onChange={(e) => setPlace(e.target.value)} className={`${FIELD} mt-1.5`}>
+            {places.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="block text-[13px] text-muted">
+          The skill's folder
+          <input aria-label="Skill folder" value={path} maxLength={200} onChange={(e) => setPath(e.target.value)} placeholder=".claude/skills/migrations" className={`${FIELD} mt-1.5 font-mono text-[13px]`} />
+        </label>
+      </div>
+      <div className="flex flex-wrap items-center gap-3 pt-1">
+        <button type="submit" disabled={!ready} className={`${PRIMARY} h-10 px-5 text-[14px] disabled:opacity-40`}>
+          {busy ? 'Adding' : 'Add skill'}
+        </button>
+        {error && <span className="text-[13px] text-risk">{error}</span>}
+      </div>
+    </form>
+  );
+}
+
+/** The skill folders the team picked: ones it already wrote for Claude Code or Codex, now read in reviews too. */
+function SkillsCard({ skills, onAdd, onRemove }: { skills: Skills; onAdd: (skill: { repo_id: number; path: string }) => Promise<void>; onRemove: (skill: Skill) => Promise<void> }) {
+  const [busy, setBusy] = useState<number | null>(null);
+  const [failed, setFailed] = useState<number | null>(null);
+  return (
+    <Card>
+      <h2 className="text-[17px] font-semibold tracking-[-0.01em]">Skills</h2>
+      <p className="mt-1.5 max-w-2xl text-[14px] leading-relaxed text-muted">
+        Use the skills your team already wrote for Claude Code or Codex. Name a skill's folder, the one that holds its <span className="font-mono">SKILL.md</span>, and every review of that repository can read it.
+      </p>
+      <p className="mt-2 max-w-2xl text-[13px] leading-relaxed text-faint">
+        A skill is read from the branch a pull request merges into, so a pull request can't change the skill that reviews it. Only the folder's path is stored here. The skill's text stays in your repository. Name the real folder, not a link to it.
+      </p>
+      {skills.skills.length > 0 && (
+        <ul className="mt-3">
+          {skills.skills.map((s) => (
+            <li key={s.id} className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2 border-t border-line py-3.5 first:border-t-0">
+              <div className="min-w-0 flex-1 basis-[320px]">
+                <p className="break-all font-mono text-[14px] text-fg">{s.path}</p>
+                <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-faint">
+                  <span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-muted">{s.repo}</span>
+                  <span>
+                    picked by {s.by}, {ago(s.created_at)}
+                  </span>
+                </p>
+                {failed === s.id && <p className="mt-2 text-[13px] text-risk">That didn't work. Please try again.</p>}
+              </div>
+              {s.can_remove && (
+                <button
+                  type="button"
+                  aria-label={`Remove skill ${s.path}`}
+                  disabled={busy === s.id}
+                  onClick={() => {
+                    setBusy(s.id);
+                    setFailed(null);
+                    onRemove(s)
+                      .catch(() => setFailed(s.id))
+                      .finally(() => setBusy(null));
+                  }}
+                  className="rounded-full px-3 py-1.5 text-[13px] text-muted transition-colors hover:bg-white/[0.06] hover:text-fg disabled:opacity-50"
+                >
+                  {busy === s.id ? 'Removing' : 'Remove skill'}
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      <NewSkillForm skills={skills} onAdd={onAdd} />
+    </Card>
+  );
+}
+
 /** How to send the first review's numbers. Shown when the dashboard is on and has nothing yet. */
 function NothingYet({ org }: { org: Org }) {
   return (
@@ -372,7 +476,7 @@ function NotOn({ org }: { org: Org }) {
   );
 }
 
-type View = { kind: 'loading' } | { kind: 'ready'; overview: Overview; decisions: Decision[]; total: number; rules: Rules | null } | { kind: 'off' } | { kind: 'error' };
+type View = { kind: 'loading' } | { kind: 'ready'; overview: Overview; decisions: Decision[]; total: number; rules: Rules | null; skills: Skills | null } | { kind: 'off' } | { kind: 'error' };
 
 export default function Dashboard() {
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
@@ -421,8 +525,12 @@ export default function Dashboard() {
       if (err instanceof SignedOut || err instanceof NotConnected) throw err;
       return null;
     });
-    Promise.all([loadOverview(session, org.id), decisions, rules])
-      .then(([overview, { decisions, total }, rules]) => !gone && setView({ kind: 'ready', overview, decisions, total, rules }))
+    const skills = loadSkills(session, org.id).catch((err) => {
+      if (err instanceof SignedOut || err instanceof NotConnected) throw err;
+      return null;
+    });
+    Promise.all([loadOverview(session, org.id), decisions, rules, skills])
+      .then(([overview, { decisions, total }, rules, skills]) => !gone && setView({ kind: 'ready', overview, decisions, total, rules, skills }))
       .catch((err) => {
         if (gone) return;
         if (err instanceof SignedOut) {
@@ -556,6 +664,21 @@ export default function Dashboard() {
                   onRemove={async (rule) => {
                     await signedIn(() => removeRule(session, org.id, rule.id));
                     setView((v) => (v.kind === 'ready' && v.rules ? { ...v, rules: { ...v.rules, rules: v.rules.rules.filter((x) => x.id !== rule.id) } } : v));
+                  }}
+                />
+              )}
+              {view.skills && (
+                <SkillsCard
+                  skills={view.skills}
+                  onAdd={async (skill) => {
+                    await signedIn(() => addSkill(session, org.id, skill));
+                    // The skill is in. If only the fresh list fails to load, that isn't a failed Add.
+                    const skills = await loadSkills(session, org.id).catch(() => null);
+                    if (skills) setView((v) => (v.kind === 'ready' ? { ...v, skills } : v));
+                  }}
+                  onRemove={async (skill) => {
+                    await signedIn(() => removeSkill(session, org.id, skill.id));
+                    setView((v) => (v.kind === 'ready' && v.skills ? { ...v, skills: { ...v.skills, skills: v.skills.skills.filter((x) => x.id !== skill.id) } } : v));
                   }}
                 />
               )}
