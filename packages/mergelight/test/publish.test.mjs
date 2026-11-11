@@ -10,7 +10,7 @@ import { parsePatch, place } from "../dist/publish/diff-lines.js";
 import { mergeLight, tierOf } from "../dist/review.js";
 import { closedBody, readClosed, reopenedBody, resolvedByPeople, threadAction } from "../dist/publish/closed.js";
 import { clean, failedSummaryBody, isFailedSummary, limitNotice, notReadLine, loginNotice, FINDING_MARKER_RE, inlineBody, isPendingSummary, pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "../dist/publish/markdown.js";
-import { APPROVAL_MARKER, approvalLight, checkConclusion, isYellowCheck, syncApproval, trustedComment, CHECK_FAILED_TITLE, checkLimitTitle, checkLoginTitle, isFailedCheckTitle } from "../dist/publish/publish.js";
+import { APPROVAL_MARKER, approvalHold, approvalLight, UNREVIEWED, checkConclusion, isYellowCheck, syncApproval, trustedComment, CHECK_FAILED_TITLE, checkLimitTitle, checkLoginTitle, isFailedCheckTitle } from "../dist/publish/publish.js";
 import { decodeState, encodeState, nextState } from "../dist/publish/state.js";
 import { buildVerifierPrompt } from "../dist/prompt.js";
 import { assignIds } from "../dist/review.js";
@@ -470,6 +470,31 @@ test("Mergelight doesn't approve a pull request while one of the team's own chec
   // The review's own light is never made better or worse than it is.
   assert.equal(approvalLight({ light: "yellow", team_checks: [check("pass")] }), "yellow");
   assert.equal(approvalLight({ light: "red", team_checks: [check("fail")] }), "red");
+  // The dismissal names the check that held the approval, not a finding the review never had.
+  assert.equal(approvalHold({ team_checks: [check("pass"), check("fail")] }), `Your team's check "Translations" hasn't passed.`);
+  assert.equal(approvalHold({ team_checks: [check("fail"), { ...check("error"), name: "Refunds" }] }), `Your team's checks "Translations", "Refunds" haven't passed.`);
+  assert.equal(approvalHold({ team_checks: [check("pass")] }), null);
+});
+
+test("Mergelight doesn't approve when the team's server couldn't be asked for its rules and checks", () => {
+  // No checks ran, so none failed. But nobody knows what the team's rules and checks would have said.
+  assert.equal(approvalLight({ light: "green" }, true), "yellow");
+  assert.match(approvalHold({}, true), /couldn't reach your team's server/);
+  assert.equal(approvalLight({ light: "green" }, false), "green");
+  assert.equal(approvalLight({ light: "red" }, true), "red");
+});
+
+test("a dismissal says why, and a review that couldn't run takes an earlier approval back", async () => {
+  const sent = [];
+  const api = {
+    list: async () => [{ id: 9, state: "APPROVED", commit_id: "older", body: `${APPROVAL_MARKER}\nfine`, user: { login: "mergelight-ai[bot]" } }],
+    write: async (method, path, body) => (sent.push([method, path, body]), {}),
+  };
+  assert.equal(await syncApproval(api, 3, "yellow", "head", () => {}, UNREVIEWED), "dismissed");
+  assert.deepEqual(sent, [["PUT", "pulls/3/reviews/9/dismissals", { message: UNREVIEWED, event: "DISMISS" }]]);
+  sent.length = 0;
+  assert.equal(await syncApproval(api, 3, "yellow", "head"), "dismissed");
+  assert.equal(sent[0][2].message, "A newer Mergelight review found something to look at.");
 });
 
 test("yellow and red take back Mergelight's approval, and never request changes", async () => {
