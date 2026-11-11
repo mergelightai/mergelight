@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { ArrowClockwiseIcon, ArrowSquareOutIcon, SignInIcon, DotsThreeIcon, PlusIcon, BookOpenTextIcon, BrainIcon, LifebuoyIcon, PaperPlaneTiltIcon, CaretDownIcon, CaretUpDownIcon, CheckIcon, GitPullRequestIcon, ListChecksIcon, ScalesIcon, SignOutIcon } from '@phosphor-icons/react';
+import { ArrowClockwiseIcon, ArrowSquareOutIcon, DotsThreeIcon, BookOpenTextIcon, BrainIcon, LifebuoyIcon, PaperPlaneTiltIcon, CaretDownIcon, CaretUpDownIcon, CheckIcon, GitPullRequestIcon, ListChecksIcon, ScalesIcon, SignOutIcon } from '@phosphor-icons/react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
@@ -118,29 +118,32 @@ function Updated({ at }: { at: number }) {
 
 /** The page's own actions, out of the way until someone needs them. */
 function PageMenu({ orgLogin, onRefresh }: { orgLogin: string; onRefresh: () => void }) {
+  const link = 'h-8 gap-1.5 rounded-full px-2.5 text-[13px] text-muted-foreground data-highlighted:text-foreground';
   return (
     <DropdownMenu>
       <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label="More" />}>
         <DotsThreeIcon weight="bold" />
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="min-w-64">
+      <DropdownMenuContent
+        align="end"
+        className="min-w-[23rem] whitespace-nowrap"
+        footer={
+          <>
+            <span className="mr-auto pl-1 text-[13px] text-muted-foreground">Missing an org?</span>
+            <DropdownMenuItem className={link} render={<a href={ADD_REPOS_URL} target="_blank" rel="noreferrer" />}>
+              Add it on GitHub
+              <ArrowSquareOutIcon className="size-3.5" />
+            </DropdownMenuItem>
+            <DropdownMenuItem className={link} render={<a href={signInUrl()} />}>
+              Sign in again
+            </DropdownMenuItem>
+          </>
+        }
+      >
         <DropdownMenuItem onClick={onRefresh}>
           <ArrowClockwiseIcon />
           Refresh {orgLogin}
         </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuGroup>
-          <DropdownMenuLabel>Don't see an org or a repository?</DropdownMenuLabel>
-          <DropdownMenuItem render={<a href={ADD_REPOS_URL} target="_blank" rel="noreferrer" />}>
-            <PlusIcon />
-            Add it on GitHub
-            <ArrowSquareOutIcon className="ml-auto text-muted-foreground" />
-          </DropdownMenuItem>
-          <DropdownMenuItem render={<a href={signInUrl()} />}>
-            <SignInIcon />
-            Then sign in again
-          </DropdownMenuItem>
-        </DropdownMenuGroup>
       </DropdownMenuContent>
     </DropdownMenu>
   );
