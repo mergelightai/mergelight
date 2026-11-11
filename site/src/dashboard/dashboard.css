@@ -93,20 +93,21 @@
   --sidebar-ring: oklch(0.708 0 0);
 }
 
+/* Tommy, Nov 11 2026: the dark purple-grey of the old dashboard cards, for the whole dashboard. */
 .dark {
-  --background: oklch(0.145 0 0);
+  --background: #121116;
   --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
+  --card: #1a1820;
   --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
+  --popover: #1d1b24;
   --popover-foreground: oklch(0.985 0 0);
   --primary: oklch(0.398 0.195 277.366);
   --primary-foreground: oklch(0.962 0.018 272.314);
-  --secondary: oklch(0.274 0.006 286.033);
+  --secondary: #24212c;
   --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
+  --muted: #24212c;
   --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
+  --accent: #24212c;
   --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.704 0.191 22.216);
   --border: oklch(1 0 0 / 10%);
@@ -117,11 +118,11 @@
   --chart-3: oklch(0.648 0.2 131.684);
   --chart-4: oklch(0.532 0.157 131.589);
   --chart-5: oklch(0.453 0.124 130.933);
-  --sidebar: oklch(0.205 0 0);
+  --sidebar: #0e0d12;
   --sidebar-foreground: oklch(0.985 0 0);
   --sidebar-primary: oklch(0.585 0.233 277.117);
   --sidebar-primary-foreground: oklch(0.962 0.018 272.314);
-  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent: #1f1d26;
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
