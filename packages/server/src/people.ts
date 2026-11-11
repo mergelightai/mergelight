@@ -10,8 +10,9 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import { HttpError } from "../../token-server/dist/token.js";
-import { isId, MEMORY_DAYS, withOrg, type Pool } from "./db.js";
+import { isId, MEMORY_DAYS, withOrg, type Db, type Pool } from "./db.js";
 import { DEFAULT_SIGN_IN_APP, lookUp, looksLikePersonToken, type Person, type Reach } from "./github.js";
+import { isLineOfText, isPathPattern } from "./validate.js";
 
 /**
  * How long what GitHub said at sign-in is trusted. Someone who loses access on GitHub stops seeing
@@ -34,6 +35,9 @@ const REQUESTS_PER_MINUTE = 240;
 const RECENT_REVIEWS = 50;
 /** How many decisions the dashboard lists at once, most recent first. */
 const DECISIONS_PER_PAGE = 500;
+/** Rules for a whole org, and for one repository. Enough for any team, and a bound on every prompt. */
+const MAX_RULES = 50;
+const MAX_RULE_BODY = 4096;
 
 interface Session {
   person: Person;
@@ -268,11 +272,119 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
       // without this its next review would bring the decision straight back.
       // The marker carries the moment of forgetting, so only a decision someone writes after it counts
       // again, whichever pull request an older one turns up from.
+      const { rows: was } = await db.query("select title from memories where id = $1", [memoryId]);
       await db.query("update memories set forgotten_at = now(), decided_at = now(), title = '', file = '', reason = '', by_login = '' where id = $1", [memoryId]);
+      // The log keeps which decision it was by its number and repository. Its text is gone with it.
+      await record(db, orgId, session.person, "decision_forgotten", { id: memoryId, repo_id: Number(rows[0]!.repo_id), had_text: Boolean(was[0]?.title) });
       return "gone";
     });
     if (outcome === "missing") throw new HttpError(404, "not_found", "No such decision.");
     if (outcome === "read_only") throw new HttpError(403, "read_only", "Only people who can push to this repository can remove a decision.");
+    return { status: 204, body: null };
+  }
+
+  /** Writes down who changed what. It runs in the same transaction as the change, so there is no change without its line. */
+  const record = (db: Db, orgId: number, person: Person, action: string, detail: Record<string, unknown>) =>
+    db.query("insert into audit_log (org_id, actor, actor_id, action, detail) values ($1, $2, $3, $4, $5)", [orgId, person.login, person.id, action, JSON.stringify(detail)]);
+
+  /** The team's rules this person can see: those of the whole org, and those of repositories GitHub shows them. */
+  async function rules(session: Session, orgId: number): Promise<{ status: number; body: unknown }> {
+    const reach = session.reach.get(orgId);
+    if (!reach) throw new HttpError(404, "not_found", "No such org.");
+    const rows = await withOrg(pool, orgId, async (db) => {
+      if ((await db.query("select 1 from orgs where id = $1", [orgId])).rowCount === 0) return null;
+      const found = await db.query(
+        "select id, repo_id, kind, text, paths, created_by, created_at from rules where repo_id is null or repo_id = any($1::bigint[]) order by repo_id nulls first, id",
+        [[...reach.repos.keys()]],
+      );
+      return found.rows;
+    });
+    if (!rows) throw new HttpError(404, "not_connected", "This org hasn't turned the Mergelight dashboard on.");
+    return {
+      status: 200,
+      body: {
+        // Who may change what: a rule tells every review what to report, so it takes the person who runs the org or the repository.
+        can_set_org_rules: reach.admin,
+        repos: [...reach.repos].map(([id, r]) => ({ id, name: r.name, can_set_rules: r.admin })),
+        rules: rows.map((r) => {
+          const repo = r.repo_id === null ? null : reach.repos.get(Number(r.repo_id));
+          return {
+            id: Number(r.id), kind: r.kind, text: r.text, paths: r.paths, by: r.created_by, created_at: r.created_at,
+            repo_id: r.repo_id === null ? null : Number(r.repo_id), repo: repo?.name ?? null,
+            can_remove: r.repo_id === null ? reach.admin : repo?.admin === true,
+          };
+        }),
+      },
+    };
+  }
+
+  /** Adds a rule. For the whole org it takes someone who runs the org, for one repository someone who administers it. */
+  async function addRule(session: Session, orgId: number, request: Request): Promise<{ status: number; body: unknown }> {
+    const reach = session.reach.get(orgId);
+    if (!reach) throw new HttpError(404, "not_found", "No such org.");
+    const raw = await request.text();
+    if (Buffer.byteLength(raw) > MAX_RULE_BODY) throw new HttpError(413, "too_large", "The rule is too large.");
+    let body: unknown;
+    try {
+      body = JSON.parse(raw);
+    } catch {
+      throw new HttpError(400, "bad_request", "The rule isn't JSON.");
+    }
+    const bad = (what: string) => new HttpError(400, "bad_request", `The rule's ${what} isn't valid.`);
+    if (typeof body !== "object" || body === null || Array.isArray(body)) throw bad("body");
+    const { kind, text, paths = [], repo_id = null } = body as Record<string, unknown>;
+    if (kind !== "rule" && kind !== "needs_human") throw bad("kind");
+    if (!isLineOfText(text, 300)) throw bad("text");
+    if (!Array.isArray(paths) || paths.length > 10 || !paths.every(isPathPattern)) throw bad("patterns");
+    // "Always needs a human" is about files, so it has to name some.
+    if (kind === "needs_human" && !paths.length) throw bad("patterns");
+    if (repo_id !== null && !isId(repo_id)) throw bad("repository");
+
+    const repo = repo_id === null ? null : reach.repos.get(repo_id);
+    // A repository this person can't see looks the same as one that doesn't exist.
+    if (repo_id !== null && !repo) throw new HttpError(404, "not_found", "No such repository.");
+    if (repo_id === null ? !reach.admin : !repo!.admin) {
+      throw new HttpError(403, "read_only", repo_id === null ? "Only an owner of the org can set rules for the whole org." : "Only an admin of this repository can set its rules.");
+    }
+
+    const created = await withOrg(pool, orgId, async (db) => {
+      // The org's row is held until the rule is in, so two people adding at once can't both slip past the limit.
+      if ((await db.query("select 1 from orgs where id = $1 for update", [orgId])).rowCount === 0) return null;
+      const scope = repo_id === null ? "repo_id is null" : "repo_id = $1";
+      const count = await db.query(`select count(*)::int as n from rules where ${scope}`, repo_id === null ? [] : [repo_id]);
+      if ((count.rows[0]?.n ?? 0) >= MAX_RULES) return "full";
+      // A rule can be set for a repository before its first review reaches the server.
+      if (repo_id !== null) await db.query("insert into repos (org_id, id, name) values ($1, $2, $3) on conflict (org_id, id) do nothing", [orgId, repo_id, repo!.name]);
+      const { rows } = await db.query(
+        "insert into rules (org_id, repo_id, kind, text, paths, created_by, created_by_id) values ($1, $2, $3, $4, $5, $6, $7) returning id",
+        [orgId, repo_id, kind, text, paths, session.person.login, session.person.id],
+      );
+      const id = Number(rows[0]!.id);
+      await record(db, orgId, session.person, "rule_added", { id, kind, text, paths, repo_id });
+      return id;
+    });
+    if (created === null) throw new HttpError(404, "not_connected", "This org hasn't turned the Mergelight dashboard on.");
+    if (created === "full") throw new HttpError(409, "too_many", `There can be ${MAX_RULES} rules here at most. Remove one first.`);
+    return { status: 201, body: { id: created } };
+  }
+
+  /** Removes a rule. The same people who can add one there can remove it. */
+  async function removeRule(session: Session, orgId: number, ruleId: number): Promise<{ status: number; body: unknown }> {
+    const reach = session.reach.get(orgId);
+    if (!reach) throw new HttpError(404, "not_found", "No such org.");
+    const outcome = await withOrg(pool, orgId, async (db) => {
+      const { rows } = await db.query("select repo_id, kind, text from rules where id = $1", [ruleId]);
+      const rule = rows[0];
+      if (!rule) return "missing";
+      const repo = rule.repo_id === null ? null : reach.repos.get(Number(rule.repo_id));
+      if (rule.repo_id !== null && !repo) return "missing";
+      if (rule.repo_id === null ? !reach.admin : !repo!.admin) return "read_only";
+      await db.query("delete from rules where id = $1", [ruleId]);
+      await record(db, orgId, session.person, "rule_removed", { id: ruleId, kind: rule.kind, text: rule.text, repo_id: rule.repo_id === null ? null : Number(rule.repo_id) });
+      return "gone";
+    });
+    if (outcome === "missing") throw new HttpError(404, "not_found", "No such rule.");
+    if (outcome === "read_only") throw new HttpError(403, "read_only", "Only the people who can set rules here can remove one.");
     return { status: 204, body: null };
   }
 
@@ -281,16 +393,16 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
    * pathname has the server's mount path already taken off.
    */
   return async function handle(request: Request, pathname: string): Promise<Response | null> {
-    const org = /^\/v1\/orgs\/(\d{1,18})\/(overview|memories)(?:\/(\d{1,18}))?$/.exec(pathname);
+    const org = /^\/v1\/orgs\/(\d{1,18})\/(overview|memories|rules)(?:\/(\d{1,18}))?$/.exec(pathname);
     if (pathname !== "/v1/session" && !org) return null;
-    // Only one decision at a time has an address of its own.
-    if (org && org[3] && org[2] !== "memories") return null;
+    // Only one decision or one rule at a time has an address of its own.
+    if (org && org[3] && org[2] === "overview") return null;
 
     // A browser only lets a page read the answer when its site is named here. Other callers send no Origin.
     const origin = request.headers.get("origin");
     if (origin && !origins.includes(origin)) return json(403, { error: "origin_not_allowed" }, {});
     const cors: Record<string, string> = origin ? { "access-control-allow-origin": origin, vary: "Origin" } : {};
-    const methods = !org ? "POST, DELETE" : org[3] ? "DELETE" : "GET";
+    const methods = !org ? "POST, DELETE" : org[3] ? "DELETE" : org[2] === "rules" ? "GET, POST" : "GET";
     if (request.method === "OPTIONS") {
       return json(204, null, { ...cors, "access-control-allow-methods": methods, "access-control-allow-headers": "authorization, content-type", "access-control-max-age": "600" });
     }
@@ -300,11 +412,15 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
       let result: { status: number; body: unknown };
       if (org) {
         const orgId = Number(org[1]);
-        const memoryId = org[3] ? Number(org[3]) : null;
-        if (request.method !== (memoryId === null ? "GET" : "DELETE")) return json(405, { error: "method_not_allowed" }, cors);
-        if (!isId(orgId) || (memoryId !== null && !isId(memoryId))) throw new HttpError(404, "not_found", "No such org.");
+        const what = org[2];
+        const itemId = org[3] ? Number(org[3]) : null;
+        const allowed = itemId !== null ? ["DELETE"] : what === "rules" ? ["GET", "POST"] : ["GET"];
+        if (!allowed.includes(request.method)) return json(405, { error: "method_not_allowed" }, cors);
+        if (!isId(orgId) || (itemId !== null && !isId(itemId))) throw new HttpError(404, "not_found", "No such org.");
         const { session } = sessionOf(request, at);
-        result = memoryId !== null ? await forget(session, orgId, memoryId) : org[2] === "memories" ? await memories(session, orgId) : await overview(session, orgId);
+        if (itemId !== null) result = what === "rules" ? await removeRule(session, orgId, itemId) : await forget(session, orgId, itemId);
+        else if (what === "rules") result = request.method === "POST" ? await addRule(session, orgId, request) : await rules(session, orgId);
+        else result = what === "memories" ? await memories(session, orgId) : await overview(session, orgId);
       } else if (request.method === "POST") {
         result = await signIn(request, at);
       } else if (request.method === "DELETE") {

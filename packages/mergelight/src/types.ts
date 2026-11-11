@@ -97,6 +97,8 @@ export interface Review {
   light: Light;
   summary: string;
   findings: Finding[];
+  /** Changed files the team marked as always needing a human. They keep the light from going green by itself. */
+  needs_human?: string[];
   /** The team's earlier decisions the verifier used to leave findings out, by id like "M12". */
   used_memories?: string[];
   /** Actions a changed workflow uses whose code the reviewers couldn't see. */

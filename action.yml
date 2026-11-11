@@ -63,7 +63,8 @@ inputs:
     default: https://api.mergelight.dev/token
   server:
     description: >
-      Address of a Mergelight server, for teams that use the dashboard. Empty means off, and then
+      Address of a Mergelight server, for teams that use the dashboard: reviews in one place, memory
+      of what your team declined, and rules for every review. Empty means off, and then
       nothing about a review leaves your runner. With it, each run first shows the server GitHub's
       signed token, which names the repository, branch, workflow and who started the run. If your
       org turned the dashboard on, the run then sends the review's numbers (how many findings, the

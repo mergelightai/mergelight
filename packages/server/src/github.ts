@@ -26,6 +26,8 @@ export interface Person {
 export interface Reach {
   id: number;
   login: string;
+  /** Whether the person runs this account: it is their own, or GitHub says they are an owner of the org. */
+  admin: boolean;
   repos: Map<number, RepoReach>;
 }
 
@@ -34,6 +36,8 @@ export interface RepoReach {
   name: string;
   /** Whether GitHub lets the person push to it. People who can are the ones who may change what the team decided there. */
   write: boolean;
+  /** Whether the person administers it. They are the ones who may set its rules. */
+  admin: boolean;
 }
 
 const isLogin = (v: unknown): v is string => typeof v === "string" && /^[\w.-]{1,100}$/.test(v);
@@ -59,6 +63,21 @@ async function ask(fetchImpl: typeof fetch, token: string, path: string, signal:
 }
 
 /**
+ * Whether the person runs an account: it is their own, or they are an owner of the org. GitHub only
+ * answers the second for an app that may read an org's members. When it doesn't, the answer is no.
+ */
+async function runsAccount(fetchImpl: typeof fetch, token: string, personId: number, account: { id?: unknown; login?: unknown; type?: unknown }, signal: AbortSignal): Promise<boolean> {
+  if (account.type === "User") return account.id === personId;
+  try {
+    const membership = (await ask(fetchImpl, token, `/user/memberships/orgs/${encodeURIComponent(String(account.login))}`, signal)) as { state?: unknown; role?: unknown };
+    return membership.state === "active" && membership.role === "admin";
+  } catch (err) {
+    if (err instanceof HttpError && err.code === "github_error") return false;
+    throw err;
+  }
+}
+
+/**
  * Who the token belongs to, and which accounts and repositories they reach through the app they
  * signed in with. Everything GitHub returns is checked before it is used.
  */
@@ -77,15 +96,15 @@ export async function lookUp(token: string, fetchImpl: typeof fetch = fetch, app
     if (all.length && !ours.length) throw new HttpError(401, "sign_in_failed", "That sign-in isn't Mergelight's.");
     const reach: Reach[] = [];
     for (const installation of ours.slice(0, MAX_ORGS)) {
-      const { id, account } = installation as { id?: unknown; account?: { id?: unknown; login?: unknown } | null };
+      const { id, account } = installation as { id?: unknown; account?: { id?: unknown; login?: unknown; type?: unknown } | null };
       if (!isId(id) || !account || !isId(account.id) || !isLogin(account.login)) continue;
       const repos = new Map<number, RepoReach>();
       try {
         for (let page = 1; page <= MAX_REPO_PAGES; page++) {
           const { repositories } = (await ask(fetchImpl, token, `/user/installations/${id}/repositories?per_page=100&page=${page}`, signal)) as { repositories?: unknown };
           const list = Array.isArray(repositories) ? repositories : [];
-          for (const repo of list as { id?: unknown; full_name?: unknown; permissions?: { push?: unknown } | null }[]) {
-            if (isId(repo.id) && isRepoName(repo.full_name)) repos.set(repo.id, { name: repo.full_name, write: repo.permissions?.push === true });
+          for (const repo of list as { id?: unknown; full_name?: unknown; permissions?: { push?: unknown; admin?: unknown } | null }[]) {
+            if (isId(repo.id) && isRepoName(repo.full_name)) repos.set(repo.id, { name: repo.full_name, write: repo.permissions?.push === true, admin: repo.permissions?.admin === true });
           }
           if (list.length < 100) break;
         }
@@ -94,7 +113,7 @@ export async function lookUp(token: string, fetchImpl: typeof fetch = fetch, app
         if (!(err instanceof HttpError && err.code === "github_error")) throw err;
         continue;
       }
-      reach.push({ id: account.id, login: account.login, repos });
+      reach.push({ id: account.id, login: account.login, admin: await runsAccount(fetchImpl, token, user.id, account, signal), repos });
     }
     return { person: { id: user.id, login: user.login }, reach };
   } catch (err) {

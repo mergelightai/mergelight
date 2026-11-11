@@ -11,7 +11,9 @@ import {
   type Candidate,
   type PriorFinding,
   type PromptInput,
+  ruleApplies,
   type TeamMemory,
+  type TeamRule,
   usedMemories,
 } from "./prompt.js";
 import { LimitError, LoginError } from "./providers/codex.js";
@@ -36,6 +38,10 @@ export interface ReviewOptions {
   previous?: PriorFinding[];
   /** Findings the team declined in earlier pull requests. Only those in files this one changes reach the verifier. */
   memories?: TeamMemory[];
+  /** The team's rules. Only those about files this pull request changes are used. */
+  rules?: TeamRule[];
+  /** True when the team's server couldn't be asked for its rules and decisions. The summary then says so. */
+  rulesUnread?: boolean;
   /** Keep the temporary checkout for inspection. */
   keep?: boolean;
   /** Progress messages. transient ones (the command the agent is running) are only worth showing live. */
@@ -185,6 +191,34 @@ export async function verifyCandidates(dir: string, input: PromptInput, found: C
   return { summary: review.summary, findings, rejected: review.rejected, model: result.model, cost_usd: result.cost_usd ?? null };
 }
 
+/** Every rule a team can have for one repository: 50 for the org and 50 of its own. None is dropped. */
+const MAX_RULES = 100;
+
+/** The summary, with what the reader must know about the team's rules: a guarded file was changed, or the rules couldn't be read. */
+export function summaryWith(summary: string, needsHuman: string[], rulesUnread: boolean): string {
+  const guarded = needsHuman.length
+    ? ` It changes ${needsHuman.slice(0, 3).join(", ")}${needsHuman.length > 3 ? ` and ${needsHuman.length - 3} more` : ""}, which your team marked as always needing a human.`
+    : "";
+  // A team may have rules that would have changed this review. Running without them must never be silent.
+  const unread = rulesUnread ? " Mergelight couldn't reach its server, so this review ran without your team's rules and earlier decisions." : "";
+  return `${summary}${guarded}${unread}`;
+}
+
+/**
+ * The light, with the team's "always needs a human" files taken into account. Such a file keeps a
+ * pull request from going green by itself. It never makes a light better: red stays red.
+ */
+export function lightWith(findings: Finding[], needsHuman: string[]): Light {
+  const light = mergeLight(findings);
+  return light === "green" && needsHuman.length ? "yellow" : light;
+}
+
+/** The changed files that match a "needs a human" rule of the team. */
+export function filesNeedingHuman(rules: TeamRule[] | undefined, changedFiles: string[]): string[] {
+  const guards = (rules ?? []).filter((r) => r.kind === "needs_human" && r.paths?.length);
+  return changedFiles.filter((file) => guards.some((r) => ruleApplies(r, [file])));
+}
+
 /** Most recent first, as the server sends them. Enough for the files of one pull request, and not a wall of old decisions. */
 const MAX_MEMORIES = 30;
 
@@ -225,6 +259,7 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
       diffTruncated: ws.diffTruncated,
       previous: opts.previous,
       memories: memoriesFor(opts.memories, ws.changedFiles.map((f) => f.path), pr.number),
+      rules: (opts.rules ?? []).filter((r) => r.kind === "rule" && ruleApplies(r, ws.changedFiles.map((f) => f.path))).slice(0, MAX_RULES),
     };
 
     // Step 1: hunters, one per area, in parallel. One failing doesn't sink the review.
@@ -307,6 +342,8 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
       logFile: log("verify"),
       onCommand: (cmd) => progress(`Checking ${found.length} candidates: ${cmd.replace(/\s+/g, " ").slice(0, 80)}`, true),
     });
+    // Every path the pull request touches counts here, the lockfiles and generated files the reviewers skip included.
+    const needsHuman = filesNeedingHuman(opts.rules, ws.touchedPaths);
     const firstHunt = hunts.find((h) => h.status === "fulfilled");
     const servedModel = firstHunt?.status === "fulfilled" ? firstHunt.value.model : null;
 
@@ -323,8 +360,9 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
       },
       provider: { name: provider, model: servedModel, effort },
       verifier: { name: verifyWith, model: verified.model, effort, cost_usd: verified.cost_usd },
-      light: mergeLight(verified.findings),
-      summary: verified.summary,
+      light: lightWith(verified.findings, needsHuman),
+      summary: summaryWith(verified.summary, needsHuman, opts.rulesUnread === true),
+      ...(needsHuman.length ? { needs_human: needsHuman } : {}),
       findings: verified.findings,
       ...(input.memories?.length ? { used_memories: usedMemories(input.memories, verified.rejected, found) } : {}),
       ...(unread.length ? { not_read: unread } : {}),

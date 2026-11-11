@@ -80,6 +80,12 @@ export interface Workspace {
   diffTruncated: boolean;
   /** Changed files (lockfiles and generated files left out), with lines added and removed. */
   changedFiles: { path: string; added: number; removed: number }[];
+  /**
+   * Every path the pull request touches, lockfiles and generated files included, exactly as git has
+   * it. For the team's "always needs a human" rules, which must see a file the reviewers skip. A
+   * renamed file counts under both its old and its new name.
+   */
+  touchedPaths: string[];
   cleanup: () => Promise<void>;
 }
 
@@ -143,6 +149,9 @@ export async function prepareWorkspace(pr: PullRequest, at?: string): Promise<Wo
         return { path: path ?? "", added: Number(added) || 0, removed: Number(removed) || 0 };
       });
 
+    // -z gives each path as it is, ended by a NUL. Without it git puts quotes around a name with odd characters in it.
+    const touchedPaths = (await git(["diff", "--name-only", "-z", "--no-renames", "--no-color", "--no-ext-diff", range], mirror)).stdout.split("\0").filter(Boolean);
+
     const dir = mkdtempSync(join(tmpdir(), `mergelight-${pr.repo}-${pr.number}-`));
     await git(["worktree", "add", "--quiet", "--detach", dir, headSha], mirror);
 
@@ -154,6 +163,7 @@ export async function prepareWorkspace(pr: PullRequest, at?: string): Promise<Wo
       diffStat,
       diffTruncated: diff.length > MAX_INLINE_DIFF,
       changedFiles,
+      touchedPaths,
       cleanup: async () => {
         await run("git", ["-C", mirror, "worktree", "remove", "--force", dir]);
         rmSync(dir, { recursive: true, force: true });
