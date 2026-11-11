@@ -1,6 +1,6 @@
 // The dashboard's states other than its views: signing in, signed out, loading, and the ones that explain why there is nothing to show.
 import type { ReactNode } from 'react';
-import { LoaderCircleIcon, LockIcon } from 'lucide-react';
+import { LoaderCircleIcon, LockIcon } from '@/lib/icons';
 import { Button } from '@/components/ui/button';
 import { ADD_REPOS_URL, SERVER, signInUrl, type Org } from '../api';
 import { ViewHeader } from '../AppShell';

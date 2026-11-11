@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { RotateCwIcon, ExternalLinkIcon, EllipsisIcon, PuzzleIcon, BrainIcon, LifeBuoyIcon, SendIcon, ChevronDownIcon, ChevronsUpDownIcon, CheckIcon, GitPullRequestIcon, ListChecksIcon, ScrollTextIcon, LogOutIcon } from 'lucide-react';
+import { RotateCwIcon, ExternalLinkIcon, EllipsisIcon, PuzzleIcon, BrainIcon, LifeBuoyIcon, SendIcon, ChevronDownIcon, ChevronsUpDownIcon, CheckIcon, GitPullRequestIcon, ListChecksIcon, ScrollTextIcon, LogOutIcon } from '@/lib/icons';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
@@ -167,7 +167,7 @@ export function AppShell({ user, orgs, org, onPickOrg, view, onView, onSignOut, 
   return (
     <TooltipProvider>
     <SidebarProvider>
-      <Sidebar variant="floating" collapsible="icon" className="[&_[data-sidebar=sidebar]]:bg-[linear-gradient(180deg,#1a1820_0%,#121116_100%)] [&_[data-sidebar=sidebar]]:shadow-[inset_0_1px_0_rgb(255_255_255/0.06),0_24px_48px_-28px_rgb(0_0_0/0.85)]">
+      <Sidebar collapsible="icon">
         <SidebarHeader>
           <SidebarMenu>
             <SidebarMenuItem>

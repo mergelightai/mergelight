@@ -1,7 +1,7 @@
 // The parts the dashboard's views share: the glass card, the facts card, the form window,
 // the "are you sure" popup, the repository picker and the form fields.
 import { useEffect, useState, type ComponentProps, type FormEvent, type ReactNode } from 'react';
-import { InfoIcon, LockIcon, PlusIcon } from 'lucide-react';
+import { InfoIcon, LockIcon, PlusIcon } from '@/lib/icons';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
