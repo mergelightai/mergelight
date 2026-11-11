@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react';
 import { BookOpenTextIcon, BrainIcon, CaretUpDownIcon, CheckIcon, GitPullRequestIcon, ListChecksIcon, ScalesIcon, SignOutIcon } from '@phosphor-icons/react';
+import { Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from '@/components/ui/breadcrumb';
+import { Separator } from '@/components/ui/separator';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarHeader, SidebarInset, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import type { Org } from './api';
@@ -59,9 +61,11 @@ function OrgPicker({ orgs, org, onPick }: { orgs: Org[]; org: Org; onPick: (id: 
 }
 
 export function AppShell({ login, orgs, org, onPickOrg, view, onView, onSignOut, children }: { login: string; orgs: Org[]; org: Org; onPickOrg: (id: number) => void; view: ViewId; onView: (v: ViewId) => void; onSignOut: () => void; children: ReactNode }) {
+  const group = VIEWS.find((g) => g.items.some((i) => i.id === view)) ?? VIEWS[0];
+  const here = { group: group.group, label: group.items.find((i) => i.id === view)?.label ?? '' };
   return (
     <SidebarProvider>
-      <Sidebar variant="inset">
+      <Sidebar variant="floating">
         <SidebarHeader>
           <a href="/" className="flex items-center gap-2 px-2 pb-2 pt-1 font-heading text-[15px] font-semibold tracking-tight">
             <img src="/logo.png" alt="" className="size-6 rounded-md" /> Mergelight
@@ -107,11 +111,20 @@ export function AppShell({ login, orgs, org, onPickOrg, view, onView, onSignOut,
         </SidebarFooter>
       </Sidebar>
       <SidebarInset>
-        <header className="flex h-14 items-center gap-2 px-4 md:hidden">
-          <SidebarTrigger />
-          <span className="font-heading text-sm font-medium">{org.login}</span>
+        <header className="flex h-16 shrink-0 items-center gap-2 px-4">
+          <SidebarTrigger className="-ml-1" />
+          <Separator orientation="vertical" className="mr-2 data-vertical:h-4 data-vertical:self-center" />
+          <Breadcrumb>
+            <BreadcrumbList>
+              <BreadcrumbItem className="hidden md:block">{here.group}</BreadcrumbItem>
+              <BreadcrumbSeparator className="hidden md:block" />
+              <BreadcrumbItem>
+                <BreadcrumbPage>{here.label}</BreadcrumbPage>
+              </BreadcrumbItem>
+            </BreadcrumbList>
+          </Breadcrumb>
         </header>
-        <div className="mx-auto w-full max-w-5xl px-4 pb-16 pt-2 md:px-8 md:pt-8">{children}</div>
+        <div className="w-full px-4 pb-16 pt-2">{children}</div>
       </SidebarInset>
     </SidebarProvider>
   );
