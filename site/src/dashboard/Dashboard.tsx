@@ -42,7 +42,6 @@ export default function Dashboard() {
   const [tab, setTab] = useState<ViewId>(() => fromHash());
   const pickTab = (id: ViewId) => {
     setTab(id);
-    window.history.replaceState(null, '', id === 'reviews' ? window.location.pathname : `#${id}`);
   };
 
   // Coming back from GitHub with a sign-in code.
@@ -121,7 +120,13 @@ export default function Dashboard() {
     reload();
     return () => cancelLoad.current();
   }, [reload]);
-  useEffect(() => keepView(tab), [tab]);
+  // The view on screen is kept for the tab and shown in the address, however it was reached.
+  useEffect(() => {
+    keepView(tab);
+    const hash = tab === 'reviews' ? '' : `#${tab}`;
+    if (window.location.hash !== hash) window.history.replaceState(null, '', window.location.pathname + window.location.search + hash);
+    // Again once a sign-in has finished: tidying the code out of the address also drops the #view.
+  }, [tab, signingIn]);
   // Someone who types another #view in the address goes there.
   useEffect(() => {
     const onHash = () => {

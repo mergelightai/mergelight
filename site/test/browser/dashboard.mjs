@@ -401,6 +401,12 @@ const done = async (t) => {
   const remembered = await t.page.evaluate(() => document.querySelector('[aria-label="Where it applies"]').textContent);
   expect(/acme\/widgets/.test(remembered), 'and starts on the repository picked last time');
 
+  await t.page.click('[aria-label="The rule"]');
+  await t.page.keyboard.down('Meta');
+  await t.page.keyboard.press('b');
+  await t.page.keyboard.up('Meta');
+  await wait(300);
+  expect(await t.page.evaluate(() => document.querySelector('[data-slot=sidebar][data-state]')?.getAttribute('data-state')) === 'expanded', 'Cmd+B while typing in a form does not fold the menu');
   await fill('The rule', 'refuse me');
   await fill('Files', 'src/**');
   await t.click('[role=dialog] button', 'Add');
@@ -686,6 +692,7 @@ const done = async (t) => {
   const kept = await t.page.evaluate(() => document.querySelector('[aria-label="The rule"]')?.value);
   expect(kept === 'Keep this text.', `after the new sign-in the form is open again, with the text (${kept})`);
   expect(/You were signed in again/.test(await t.text()), 'and the page says what happened');
+  expect(new URL(t.page.url()).hash === '#rules', `and the address shows the view on screen (${t.page.url()})`);
   await t.click('[role=dialog] button', 'Add');
   await wait(800);
   expect(t.added.length === 1 && t.added[0].text === 'Keep this text.', 'one more click adds it');

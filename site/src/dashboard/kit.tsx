@@ -235,7 +235,15 @@ export function useDraft<T extends Record<string, string>>(key: string, empty: T
     }
   });
   useEffect(() => write(key, JSON.stringify(draft)), [key, draft]);
-  return [draft, (patch) => setDraft((d) => ({ ...d, ...patch })), () => setDraft(empty)];
+  // Clearing also empties the storage at once: the form may be gone from the page by the time a save ends.
+  return [
+    draft,
+    (patch) => setDraft((d) => ({ ...d, ...patch })),
+    () => {
+      write(key, null);
+      setDraft(empty);
+    },
+  ];
 }
 
 
