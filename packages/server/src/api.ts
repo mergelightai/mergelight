@@ -277,7 +277,8 @@ export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"
       const rules = await db.query(`select id, repo_id, kind, text, paths from rules where repo_id is null or repo_id = $1 order by id limit ${RULES_PER_REVIEW}`, [who.repoId]);
       const skills = await db.query("select path from skills where repo_id = $1 order by id limit 10", [who.repoId]);
       const checks = await db.query("select id, name, text, paths from checks where repo_id = $1 order by id limit 5", [who.repoId]);
-      return { memories: rows, rules: rules.rows, skills: skills.rows.map((s) => s.path as string), checks: checks.rows };
+      const written = await db.query("select id, name, description, body from written_skills where repo_id = $1 order by id limit 10", [who.repoId]);
+      return { memories: rows, rules: rules.rows, skills: skills.rows.map((s) => s.path as string), checks: checks.rows, written: written.rows };
     });
     if (!found) return respond(200, { connected: false });
     const rules = found.rules.map((r) => ({ id: `R${r.id}`, kind: r.kind, text: r.text, ...(r.paths.length ? { paths: r.paths } : {}), scope: r.repo_id === null ? "org" : "repo" }));
@@ -291,7 +292,9 @@ export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"
       memories.push(memory);
     }
     const checks = found.checks.map((c) => ({ id: `K${c.id}`, name: c.name, text: c.text, paths: c.paths }));
-    return respond(200, { connected: true, memories, rules, skills: found.skills, checks });
+    // Skills the team wrote on the dashboard. "skills" stays the list of folders: an older review program reads only that.
+    const written_skills = found.written.map((s) => ({ id: `S${s.id}`, name: s.name, description: s.description, text: s.body }));
+    return respond(200, { connected: true, memories, rules, skills: found.skills, checks, written_skills });
   }
 
   async function saveReview(who: Caller, request: Request): Promise<Response> {

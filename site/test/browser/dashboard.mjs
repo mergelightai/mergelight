@@ -65,6 +65,16 @@ const CHECKS = {
   },
   4004: { repos: [{ id: 801, name: 'fresh/app', can_set_checks: false }], checks: [] },
 };
+const WRITTEN = {
+  1001: {
+    repos: [{ id: 501, name: 'acme/widgets', can_write_skills: true }, { id: 502, name: 'acme/api', can_write_skills: false }],
+    skills: [
+      { id: 31, repo_id: 501, repo: 'acme/widgets', name: 'Payments', description: 'Use when a pull request changes src/billing.', text: '# Payments\n\nAmounts are whole cents, never fractions.', by: 'ada', created_at: hoursAgo(60), can_remove: true },
+      { id: 32, repo_id: 502, repo: 'acme/api', name: 'Queues', description: 'Use for retry and queue code.', text: 'Each retry has an upper bound.', by: 'bo', created_at: hoursAgo(5), can_remove: false },
+    ],
+  },
+  4004: { repos: [{ id: 801, name: 'fresh/app', can_write_skills: false }], skills: [] },
+};
 const OVERVIEWS = {
   1001: {
     org: { id: 1001, login: 'acme' },
@@ -86,6 +96,9 @@ async function open(name, { signedOutAfter = Infinity, serverDown = false, forge
   /** Skill folders the page asked the server to add and to remove. */
   const skillsAdded = [];
   const skillsRemoved = [];
+  /** Skills the page asked the server to save and to delete. */
+  const written = [];
+  const writtenRemoved = [];
   /** Checks the page asked the server to add and to remove. */
   const checksAdded = [];
   const checksRemoved = [];
@@ -151,6 +164,23 @@ async function open(name, { signedOutAfter = Infinity, serverDown = false, forge
         const own = SKILLS[skills[1]];
         const fresh = skillsAdded.map((s, i) => ({ id: 201 + i, ...s, repo: 'acme/widgets', by: 'ada', created_at: new Date().toISOString(), can_remove: true }));
         return json(req, { ...own, skills: [...own.skills, ...(skills[1] === '1001' ? fresh : [])].filter((s) => !skillsRemoved.includes(s.id)) });
+      }
+      const ownSkills = /^\/v1\/orgs\/(\d+)\/written-skills(?:\/(\d+))?$/.exec(u.pathname);
+      if (ownSkills && !WRITTEN[ownSkills[1]]) return json(req, { error: 'not_connected' }, 404);
+      if (ownSkills && m === 'POST') {
+        const body = JSON.parse(req.postData());
+        if (body.name === 'Payments') return json(req, { error: 'exists', message: 'This repository already has a skill of that name.' }, 409);
+        written.push(body);
+        return json(req, { id: 400 + written.length }, 201);
+      }
+      if (ownSkills && m === 'DELETE') {
+        writtenRemoved.push(Number(ownSkills[2]));
+        return req.respond({ status: 204, headers: cors });
+      }
+      if (ownSkills) {
+        const own = WRITTEN[ownSkills[1]];
+        const fresh = written.map((s, i) => ({ id: 401 + i, ...s, repo: 'acme/widgets', by: 'ada', created_at: new Date().toISOString(), can_remove: true }));
+        return json(req, { ...own, skills: [...own.skills, ...(ownSkills[1] === '1001' ? fresh : [])].filter((s) => !writtenRemoved.includes(s.id)) });
       }
       const checks = /^\/v1\/orgs\/(\d+)\/checks(?:\/(\d+))?$/.exec(u.pathname);
       if (checks && !CHECKS[checks[1]]) return json(req, { error: 'not_connected' }, 404);
@@ -222,7 +252,7 @@ async function open(name, { signedOutAfter = Infinity, serverDown = false, forge
     return { href, state };
   };
   console.log(`\n== ${name}`);
-  return { page, calls, exchanges, renewals, forgotten, added, removed, skillsAdded, skillsRemoved, checksAdded, checksRemoved, errors, text, click, signIn, comeBackFromGitHub, shot: (file) => page.screenshot({ path: `${out}${file}.png`, fullPage: true }).catch(() => {}) };
+  return { page, calls, exchanges, renewals, forgotten, added, removed, skillsAdded, skillsRemoved, written, writtenRemoved, checksAdded, checksRemoved, errors, text, click, signIn, comeBackFromGitHub, shot: (file) => page.screenshot({ path: `${out}${file}.png`, fullPage: true }).catch(() => {}) };
 }
 const done = async (t) => {
   if (t.errors.length) { console.log('  page errors', t.errors.slice(0, 3)); failures++; }
@@ -328,6 +358,45 @@ const done = async (t) => {
   await wait(600);
   expect(t.skillsRemoved.join() === '7' && !/\.claude\/skills\/migrations acme\/widgets/.test(await t.text()), 'Remove takes the skill off the server and the page');
 
+  // Skills written on the dashboard.
+  const withWritten = await t.text();
+  expect(/Payments · Use when a pull request changes src\/billing\. acme\/widgets written by ada/.test(withWritten) && /Queues · Use for retry and queue code\. acme\/api written by bo/.test(withWritten), `a written skill shows with its name, when to use it, its repository and who wrote it (${withWritten.match(/Skills written here.{0,60}/)?.[0]})`);
+  expect(/The text of a skill written here is stored on the Mergelight server/.test(withWritten), 'the card says that the text of a written skill is stored on the server');
+  expect(!/Amounts are whole cents/.test(withWritten), 'the text of a skill is closed until someone opens it');
+  await t.click('button', 'Show text');
+  await wait(300);
+  expect(/Amounts are whole cents, never fractions\./.test(await t.text()), 'Show text opens the skill\'s text');
+  const writtenDeletes = await t.page.evaluate(() => [...document.querySelectorAll('button')].filter((b) => b.textContent.trim() === 'Delete skill').length);
+  expect(writtenDeletes === 1, 'only a skill in a repository this person is an admin of has a Delete button');
+  const writtenPlaces = await t.page.evaluate(() => [...document.querySelector('select[aria-label="Written skill repository"]').options].map((o) => o.textContent));
+  expect(writtenPlaces.join() === 'acme/widgets', `a skill can be written for repositories this person is an admin of, and no other (${writtenPlaces})`);
+  const saveIsOff = () => t.page.evaluate(() => [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Save skill').disabled);
+  await fill('Written skill name', 'Migrations');
+  await fill('Written skill description', 'Use when a pull request changes db/migrations.');
+  expect(await saveIsOff(), 'a skill can\'t be saved without its text');
+  await t.page.evaluate(() => document.querySelector('[aria-label="Written skill text"]').scrollIntoView({ block: 'center', behavior: 'instant' }));
+  await t.page.click('[aria-label="Written skill text"]');
+  await t.page.keyboard.type('Every migration has a down step.');
+  await t.page.keyboard.press('Enter');
+  await t.page.keyboard.type('Never drop a column in the same release.');
+  expect(/73 of 8000 characters/.test(await t.text()), 'the form counts the characters of the text');
+  await t.click('button', 'Save skill');
+  await wait(700);
+  expect(JSON.stringify(t.written) === JSON.stringify([{ repo_id: 501, name: 'Migrations', description: 'Use when a pull request changes db/migrations.', text: 'Every migration has a down step.\nNever drop a column in the same release.' }]), `the new skill is sent as typed, line break included (${JSON.stringify(t.written)})`);
+  expect(/Migrations · Use when a pull request changes db\/migrations\. acme\/widgets written by ada/.test(await t.text()), 'and shows in the list');
+  const writtenCleared = await t.page.evaluate(() => ['Written skill name', 'Written skill description', 'Written skill text'].map((l) => document.querySelector(`[aria-label="${l}"]`).value).join(''));
+  expect(writtenCleared === '', 'the form is empty again');
+  await fill('Written skill name', 'Payments');
+  await fill('Written skill description', 'Again.');
+  await t.page.click('[aria-label="Written skill text"]');
+  await t.page.keyboard.type('Text.');
+  await t.click('button', 'Save skill');
+  await wait(600);
+  expect(/This repository already has a skill of that name\./.test(await t.text()), 'when the server refuses a skill, the page shows why');
+  await t.click('button', 'Delete skill');
+  await wait(600);
+  expect(t.writtenRemoved.join() === '31' && !/Payments · Use when a pull request changes src\/billing/.test(await t.text()), 'Delete takes the skill off the server and the page');
+
   // Checks.
   const withChecks = await t.text();
   expect(/Translations · Every new text in en\.json has a translation in da\.json\. acme\/widgets src\/i18n\/\*\* set by ada/.test(withChecks), `a check shows with its name, its text, its repository and its files (${withChecks.match(/Checks.{0,60}/)?.[0]})`);
@@ -366,6 +435,7 @@ const done = async (t) => {
   expect(/Only an owner of the org or an admin of a repository can change the rules\./.test(await t.text()) && !(await t.page.$('[aria-label="The rule"]')), 'someone who may not set rules sees no form, and is told who can');
   expect(/Only an admin of a repository can pick its skills\./.test(await t.text()) && !(await t.page.$('[aria-label="Skill folder"]')), 'someone who is no admin sees no skill form, and is told who can');
   expect(/Only an admin of a repository can set its checks\./.test(await t.text()) && !(await t.page.$('[aria-label="The check"]')), 'and no check form either');
+  expect(/Only an admin of a repository can write its skills\./.test(await t.text()) && !(await t.page.$('[aria-label="Written skill text"]')), 'and no form to write a skill');
   expect(/No reviews to show yet/.test(await t.text()) && /repositories this sign-in can't see/.test(await t.text()) && (await t.text()).includes(`server: ${SERVER}`), 'an org with no reviews yet shows the one line to add');
   await t.shot('3-nothing-yet');
 

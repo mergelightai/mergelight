@@ -284,7 +284,7 @@ export async function forgetDecision(session: Session, orgId: number, id: number
   if (!res.ok && res.status !== 404) throw new Error(`The Mergelight server answered ${res.status}.`);
 }
 
-async function call(session: Session, path: string, init: { method?: string; body?: string } = {}): Promise<Response> {
+export async function call(session: Session, path: string, init: { method?: string; body?: string } = {}): Promise<Response> {
   const res = await fetch(`${SERVER}${path}`, {
     method: init.method ?? 'GET',
     headers: { authorization: `Bearer ${session.token}`, ...(init.body ? { 'content-type': 'application/json' } : {}) },

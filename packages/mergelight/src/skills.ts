@@ -61,6 +61,55 @@ export function describeSkill(markdown: string, folder: string): { name: string;
   };
 }
 
+/** A skill the team wrote on its dashboard: there is no file in the repository for it, so its text comes from the team's server. */
+export interface WrittenSkill {
+  /** Its id on the team's server, like "S3". */
+  id: string;
+  name: string;
+  /** One line: when a reviewer should use it. */
+  description: string;
+  text: string;
+}
+
+/** The most a written skill can hold, the same as the team's server allows. */
+export const SKILL_TEXT_MAX = 8000;
+
+/**
+ * Whether a text holds characters a person can't see: zero-width and joining characters, marks that
+ * reorder text, Unicode "tag" characters and the like. The team reads its rules and skills on a
+ * dashboard, so what the reviewing AI reads must be what the team saw there.
+ */
+export function hasHiddenCharacters(v: string): boolean {
+  return /\p{Default_Ignorable_Code_Point}/u.test(v);
+}
+
+/** Plain text over several lines. Line breaks and tabs are fine. Other control characters, and characters that hide or reorder text, are not. */
+export function isSkillText(v: unknown): v is string {
+  return typeof v === "string" && v.length <= SKILL_TEXT_MAX && v.trim().length > 0 && !/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u2029]/.test(v) && !hasHiddenCharacters(v);
+}
+
+/**
+ * Writes the skills a team wrote on its dashboard into the checkout, each as a file a reviewer can
+ * read, next to the copies of the picked skill folders. It goes after importSkills, which empties
+ * the folder first. Nothing is written through a link: the folder has to be the checkout's own.
+ */
+export function writeSkills(checkout: string, written: WrittenSkill[]): TeamSkill[] {
+  const skills: TeamSkill[] = [];
+  if (!written.length) return skills;
+  const dir = join(checkout, ".mergelight", "skills");
+  mkdirSync(dir, { recursive: true });
+  if (realpathSync(dir) !== join(realpathSync(checkout), ".mergelight", "skills")) return skills;
+  for (const [index, skill] of written.slice(0, MAX_SKILLS).entries()) {
+    // "w" keeps these apart from the numbered folders of the picked skills.
+    const folder = `w${index + 1}`;
+    rmSync(join(dir, folder), { recursive: true, force: true });
+    mkdirSync(join(dir, folder));
+    writeFileSync(join(dir, folder, "SKILL.md"), `# ${skill.name}\n\n${skill.text}\n`);
+    skills.push({ name: skill.name, description: skill.description, read: `.mergelight/skills/${folder}/SKILL.md` });
+  }
+  return skills;
+}
+
 /**
  * An empty folder in the checkout for the copies. The checkout holds the pull request's own files,
  * so it could carry a link or a file at this very place: to send the copies somewhere else on the

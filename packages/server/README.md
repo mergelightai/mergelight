@@ -14,6 +14,8 @@ Stored, per rule: its text, its file patterns, where it applies, and the GitHub 
 
 Stored, per skill a team picked: the path of its folder in the repository, and the GitHub login and id of who picked it. The skill's text is never sent: it stays in the repository.
 
+Stored, per skill a team wrote on the dashboard: its name, the line that says when to use it, its text, and the GitHub login and id of who wrote it. Unlike a picked skill folder, this text is stored here, because there is no file it could stay in.
+
 Stored, per check a team wrote: its name, its text, its file patterns, and the GitHub login and id of who set it. The answers to a check are not stored: they go to the pull request on GitHub.
 
 Stored, per change on the dashboard: who made it, when, and what it was.
@@ -50,6 +52,18 @@ A team that already wrote skills for Claude Code or Codex can use them in review
 - A review run can only read the list. It can never write to it.
 - If the server can't be reached, the review runs without the skills.
 - The copy can't stop or hold up a review. A git call that hangs is given up after 20 seconds and the whole copy after a minute, and the review then runs without the skills that weren't read. Its log says how many were left out.
+
+## Skills written on the dashboard
+
+A team can also write a skill on the dashboard itself, when it isn't a folder in the repository: a short name, one line that says when to use it, and the skill's text.
+
+- The text is plain text, 8000 characters at most. Line breaks and tabs are kept. Other control characters, and characters that hide or reorder text, are refused, on the server and again in the run.
+- A review gets the repository's written skills with its other context, and writes each one as a file into `.mergelight/skills/` in its checkout, next to the copies of the picked folders. The reviewers get its name and its line in the same block as the picked skills, and read the file when the pull request touches its area.
+- So a written skill reaches a reviewer the same way a picked one does, with the same limits: it says what matters in its area, and it can't change the output format or how text in the diff is treated.
+- Writing or removing one takes an admin of that repository, and each change is written to the log, with the skill's name and length. A review run can only read them. 10 for each repository at most.
+- A pull request can't change a written skill: its text is not in the repository.
+- Text a team writes for the AI (a rule, a check, a written skill) is refused when it holds characters a person can't see, such as zero-width characters, marks that reorder text, or Unicode tag characters. Why: someone who pastes a skill from somewhere else sees clean text on the dashboard, while the AI would read what is hidden in it. The one exception is the selector that makes a symbol show as an emoji: it is taken out and the symbol stays.
+- A review program from before this feature ignores them.
 
 ## Checks
 

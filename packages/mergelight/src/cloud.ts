@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { PriorFinding, TeamCheck, TeamMemory, TeamRule } from "./prompt.js";
-import { isSkillPath } from "./skills.js";
+import { hasHiddenCharacters, isSkillPath, isSkillText, type WrittenSkill } from "./skills.js";
 import type { Review } from "./types.js";
 
 /**
@@ -211,11 +211,13 @@ export interface CloudContext {
   skills: string[];
   /** The team's own checks for this repository. */
   checks: TeamCheck[];
+  /** Skills the team wrote on its dashboard for this repository. */
+  writtenSkills: WrittenSkill[];
   /** True when a server is set and it couldn't be asked. The review then says that it ran without the team's rules. */
   failed?: boolean;
 }
 
-const NOTHING: CloudContext = { connected: false, memories: [], rules: [], skills: [], checks: [] };
+const NOTHING: CloudContext = { connected: false, memories: [], rules: [], skills: [], checks: [], writtenSkills: [] };
 /** One line of plain text: no line breaks and no control characters, so it can't pass for anything but itself. */
 const isText = (v: unknown, max: number): v is string => typeof v === "string" && v.length > 0 && v.length <= max && !/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u2028-\u202e\u2066-\u2069]/.test(v);
 const isLine = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 10_000_000;
@@ -255,7 +257,7 @@ export function readChecks(value: unknown): TeamCheck[] {
     if (checks.length === 5) break;
     const c = raw as Record<string, unknown> | null;
     if (!c || typeof c !== "object") continue;
-    if (typeof c.id !== "string" || !/^K\d{1,12}$/.test(c.id) || !isText(c.text, 500)) continue;
+    if (typeof c.id !== "string" || !/^K\d{1,12}$/.test(c.id) || !isText(c.text, 500) || hasHiddenCharacters(c.text)) continue;
     if (typeof c.name !== "string" || c.name.length > 40 || !/^[A-Za-z0-9](?:[A-Za-z0-9._-]| (?! ))*$/.test(c.name) || c.name.endsWith(" ")) continue;
     if (!Array.isArray(c.paths) || c.paths.length < 1 || c.paths.length > 10 || !c.paths.every(isPattern)) continue;
     if (checks.some((other) => other.name.toLowerCase() === (c.name as string).toLowerCase())) continue;
@@ -264,13 +266,32 @@ export function readChecks(value: unknown): TeamCheck[] {
   return checks;
 }
 
+/**
+ * The skills a team wrote on its dashboard, as the server sent them. One that isn't shaped right is
+ * left out: its name and description go into every prompt and its text into a file the reviewers read.
+ */
+export function readWrittenSkills(value: unknown): WrittenSkill[] {
+  if (!Array.isArray(value)) return [];
+  const skills: WrittenSkill[] = [];
+  for (const raw of value.slice(0, 50)) {
+    if (skills.length === 10) break;
+    const s = raw as Record<string, unknown> | null;
+    if (!s || typeof s !== "object") continue;
+    if (typeof s.id !== "string" || !/^S\d{1,12}$/.test(s.id) || !isText(s.description, 300) || hasHiddenCharacters(s.description) || !isSkillText(s.text)) continue;
+    if (typeof s.name !== "string" || s.name.length > 40 || !/^[A-Za-z0-9](?:[A-Za-z0-9._-]| (?! ))*$/.test(s.name) || s.name.endsWith(" ")) continue;
+    if (skills.some((other) => other.name.toLowerCase() === (s.name as string).toLowerCase())) continue;
+    skills.push({ id: s.id, name: s.name, description: s.description, text: s.text });
+  }
+  return skills;
+}
+
 export function readRules(value: unknown): TeamRule[] {
   if (!Array.isArray(value)) return [];
   const rules: TeamRule[] = [];
   for (const raw of value.slice(0, 100)) {
     const r = raw as Record<string, unknown> | null;
     if (!r || typeof r !== "object") continue;
-    if (typeof r.id !== "string" || !/^R\d{1,12}$/.test(r.id) || !isText(r.text, 300)) continue;
+    if (typeof r.id !== "string" || !/^R\d{1,12}$/.test(r.id) || !isText(r.text, 300) || hasHiddenCharacters(r.text)) continue;
     if ((r.kind !== "rule" && r.kind !== "needs_human") || (r.scope !== "org" && r.scope !== "repo")) continue;
     const paths = r.paths === undefined || r.paths === null ? [] : r.paths;
     if (!Array.isArray(paths) || paths.length > 10 || !paths.every(isPattern)) continue;
@@ -292,10 +313,10 @@ export async function fetchContext(deps: CloudDeps = {}): Promise<CloudContext> 
       d.log(`The Mergelight server answered ${res.status}. The review runs without it.`);
       return { ...NOTHING, failed: true };
     }
-    const answer = res.answer as { connected?: unknown; memories?: unknown; rules?: unknown; skills?: unknown; checks?: unknown } | null;
+    const answer = res.answer as { connected?: unknown; memories?: unknown; rules?: unknown; skills?: unknown; checks?: unknown; written_skills?: unknown } | null;
     if (answer?.connected !== true) return NOTHING;
     const skills = Array.isArray(answer.skills) ? answer.skills.filter(isSkillPath).slice(0, 10) : [];
-    return { connected: true, memories: readMemories(answer.memories), rules: readRules(answer.rules), skills, checks: readChecks(answer.checks) };
+    return { connected: true, memories: readMemories(answer.memories), rules: readRules(answer.rules), skills, checks: readChecks(answer.checks), writtenSkills: readWrittenSkills(answer.written_skills) };
   } catch (err) {
     d.log(`Couldn't reach the Mergelight server (${(err as Error).message}). The review runs without it.`);
     return { ...NOTHING, failed: true };
