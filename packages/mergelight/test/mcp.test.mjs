@@ -693,7 +693,7 @@ test("a reason given when resolving a thread is a decision, unless the code ther
       findingThread("cccccccccc", 503, [reply("stranger", "Not a problem.")]),
       findingThread("dddddddddd", 504, []),
     ],
-    compare: { files: [{ filename: "src/b.ts", patch: "@@ -28,5 +28,6 @@\n ctx" }, { filename: "src/a.ts", patch: "@@ -100,2 +100,3 @@\n ctx" }] },
+    compare: { status: "ahead", files: [{ filename: "src/b.ts", patch: "@@ -28,5 +28,6 @@\n ctx" }, { filename: "src/a.ts", patch: "@@ -100,2 +100,3 @@\n ctx" }] },
   });
   const previous = await withFakeGh(env, () => previousFindings(new GitHub("o", "r"), 7, PUSHED));
   const byId = Object.fromEntries(previous.map((p) => [p.id, p.handled]));
@@ -706,6 +706,20 @@ test("a reason given when resolving a thread is a decision, unless the code ther
   const unknown = useScenario({ issueComments: [summaryComment(state)], threads: [findingThread("aaaaaaaaaa", 501, [reply("teammate", "Known.")])] });
   const again = await withFakeGh(unknown.env, () => previousFindings(new GitHub("o", "r"), 7, PUSHED));
   assert.equal(again.find((p) => p.id === "aaaaaaaaaa").handled.from, "thread");
+  // After a force-push the diff's lines don't match the finding's: nothing becomes a decision.
+  const forced = useScenario({ issueComments: [summaryComment(state)], threads: [findingThread("aaaaaaaaaa", 501, [reply("teammate", "Known.")])], compare: { status: "diverged", files: [] } });
+  assert.equal((await withFakeGh(forced.env, () => previousFindings(new GitHub("o", "r"), 7, PUSHED))).find((p) => p.id === "aaaaaaaaaa").handled.from, "thread");
+  // A reply from before the latest review answers an older round: not a decision, though it is still read.
+  const old = useScenario({ issueComments: [summaryComment(state)], threads: [findingThread("aaaaaaaaaa", 501, [reply("teammate", "Fixed in B.", "2001-01-01T00:00:00Z")])], compare: { status: "ahead", files: [] } });
+  const before = (await withFakeGh(old.env, () => previousFindings(new GitHub("o", "r"), 7, PUSHED))).find((p) => p.id === "aaaaaaaaaa").handled;
+  assert.equal(before.from, "thread");
+  assert.equal(before.note, "Fixed in B.");
+  // All of the resolver's replies count, so a later "thanks" doesn't replace the reason; a long one says it was cut.
+  const many = useScenario({ issueComments: [summaryComment(state)], threads: [findingThread("aaaaaaaaaa", 501, [reply("teammate", "Known, ships next release."), reply("teammate", "Thanks!"), reply("teammate", "x".repeat(1200))])], compare: { status: "ahead", files: [] } });
+  const joined = (await withFakeGh(many.env, () => previousFindings(new GitHub("o", "r"), 7, PUSHED))).find((p) => p.id === "aaaaaaaaaa").handled;
+  assert.ok(joined.note.startsWith("Known, ships next release. Thanks! xxx"));
+  assert.equal(joined.note.length, 1000);
+  assert.equal(joined.cut, true);
 });
 
 test("a remembered reason gets one answer in its thread", async () => {

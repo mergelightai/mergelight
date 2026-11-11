@@ -453,3 +453,15 @@ test("the server's list of remembered decisions is read, and only for ids this r
   assert.deepEqual(await reportReview(review, setup(json(201, { stored: true })).deps, declines), { stored: true, remembered: null });
   assert.deepEqual(await reportReview(review, setup(json(500, {})).deps, declines), { stored: false, remembered: null });
 });
+
+test("a report the server refuses for its decisions is sent again without them, so the numbers still count", async () => {
+  const declines = declinesOf([prior(mark())]);
+  const answers = [json(400, { error: "bad_request" }), json(201, { stored: true, remembered: [] })];
+  const s = setup(() => answers.shift());
+  assert.deepEqual(await reportReview(review, s.deps, declines), { stored: true, remembered: [] });
+  const bodies = s.calls.filter((c) => c.url.endsWith("/v1/reviews")).map((c) => JSON.parse(c.init.body));
+  assert.equal(bodies.length, 2);
+  assert.equal("declines" in bodies[0], true);
+  assert.equal("declines" in bodies[1], false);
+  assert.notEqual(bodies[0].report_id, bodies[1].report_id);
+});

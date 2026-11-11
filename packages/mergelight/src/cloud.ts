@@ -408,7 +408,14 @@ export async function reportReview(review: Review, deps: CloudDeps = {}, decline
     // One id for this report, the same on both tries, so the server keeps it once.
     const used = (review.used_memories ?? []).filter((id) => /^M\d{1,12}$/.test(id)).slice(0, 200);
     const body = JSON.stringify({ ...reviewNumbers(review), report_id: randomUUID(), ...(declines.length ? { declines } : {}), ...(used.length ? { used_memories: used } : {}) });
-    const res = await call(d, server, "/v1/reviews", { method: "POST", body });
+    let res = await call(d, server, "/v1/reviews", { method: "POST", body });
+    if (res.status === 400 && declines.length) {
+      // The server refused something in the report. If it was a decision, the numbers still count: send
+      // them again without any. An older server, for one, takes shorter reasons than this version sends.
+      d.log("The Mergelight server refused the report with the team's decisions. Sending the numbers without them.");
+      declines = [];
+      res = await call(d, server, "/v1/reviews", { method: "POST", body: JSON.stringify({ ...JSON.parse(body), declines: undefined, report_id: randomUUID() }) });
+    }
     d.log(res.ok ? "Sent this review's numbers to the Mergelight server." : `The Mergelight server answered ${res.status} to the review's numbers. The review itself is posted.`);
     if (!res.ok) return { stored: false, remembered: null };
     const said = (res.answer as { remembered?: unknown } | null)?.remembered;

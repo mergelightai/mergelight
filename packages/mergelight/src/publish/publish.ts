@@ -72,14 +72,16 @@ const MAX_PREVIOUS = 40;
 function unchangedSince(api: GitHub, since: string | undefined, headSha: string | undefined): (f: Pick<StateFinding, "file" | "line" | "end_line">) => Promise<boolean> {
   if (!since || !headSha) return async () => false;
   if (since === headSha) return async () => true;
-  type Compare = { files?: { filename: string; previous_filename?: string; patch?: string }[] };
+  type Compare = { status?: string; files?: { filename: string; previous_filename?: string; patch?: string }[] };
   let files: Promise<Map<string, string | null> | null> | undefined;
   return async (f) => {
     files ??= api
       .get<Compare>(`compare/${since}...${headSha}`)
       .then((r) => {
-        // GitHub lists at most 300 files. Past that, a file that isn't listed may still have changed.
-        if (!r.files || r.files.length >= 300) return null;
+        // Only a head that builds on the reviewed commit gives line numbers that match the finding's. After a
+        // force-push the diff starts somewhere else. GitHub also lists at most 300 files: past that, a file
+        // that isn't listed may still have changed.
+        if (r.status !== "ahead" || !r.files || r.files.length >= 300) return null;
         const out = new Map<string, string | null>();
         for (const file of r.files) {
           out.set(file.filename, file.patch ?? null);
@@ -105,7 +107,8 @@ export async function previousFindings(api: GitHub, number: number, headSha?: st
   const threads = await reviewThreads(api, number).catch(() => []);
   const resolved = await resolvedByPeople(threads, writeAccess(api));
   const replies = resolverReplies(threads, resolved);
-  const unchanged = unchangedSince(api, state?.rounds.at(-1)?.sha, headSha);
+  const latest = state?.rounds.at(-1);
+  const unchanged = unchangedSince(api, latest?.sha, headSha);
   // A decision not to fix must reach the verifier however long the list gets, or the problem comes back as new.
   const order = (f: StateFinding) => (marks.get(f.id)?.as === "wont_fix" || resolved.has(f.id) ? 0 : f.status === "gone" ? 2 : 1);
   const kept = (state?.findings ?? []).sort((a, b) => order(a) - order(b)).slice(0, MAX_PREVIOUS);
@@ -117,11 +120,14 @@ export async function previousFindings(api: GitHub, number: number, headSha?: st
       const reply = replies.get(id);
       // A resolve with a reason is a decision, unless the code there changed since: then the reply may
       // well say how it was fixed. Only a decision is remembered for later pull requests.
-      const decided = Boolean(reply) && f.status === "open" && (await unchanged(f));
+      // Only a reply written after the latest review: one from before may answer an older round, such as a
+      // fix that review then checked.
+      const after = Boolean(reply && latest && Date.parse(reply.at) > Date.parse(latest.at));
+      const decided = after && f.status === "open" && (await unchanged(f));
       const handled = mark
         ? { as: mark.as, note: mark.note, by: mark.by, sha: mark.sha, from: "mark" as const, at: mark.at }
         : by && reply
-          ? { as: "wont_fix" as const, note: oneLine(reply.text), by, sha: null, from: decided ? ("reply" as const) : ("thread" as const), at: reply.at }
+          ? { as: "wont_fix" as const, ...oneLine(reply.text), by, sha: null, from: decided ? ("reply" as const) : ("thread" as const), at: reply.at }
           : by
             ? { as: "wont_fix" as const, note: "Resolved the comment on the pull request.", by, sha: null, from: "thread" as const }
             : undefined;
@@ -130,9 +136,10 @@ export async function previousFindings(api: GitHub, number: number, headSha?: st
   );
 }
 
-/** A person's reply as the verifier reads it: one line, nothing hidden, not too long. */
-function oneLine(text: string): string {
-  return withoutHidden(text).replace(/\s+/g, " ").trim().slice(0, MAX_NOTE);
+/** A person's reply as the verifier reads it: one line, nothing hidden, not too long. cut: it was longer. */
+function oneLine(text: string): { note: string; cut?: true } {
+  const line = withoutHidden(text).replace(/\s+/g, " ").trim();
+  return { note: line.slice(0, MAX_NOTE), ...(line.length > MAX_NOTE ? { cut: true as const } : {}) };
 }
 
 /**

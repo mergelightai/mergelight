@@ -275,7 +275,7 @@ async function main(): Promise<number> {
         // A reason given in a thread gets an answer there, once the server says it kept it. A mark was
         // written through the agent tools, which say so themselves.
         const fromThreads = (previous ?? []).filter((p) => p.handled?.from === "reply");
-        const cut = new Set(fromThreads.filter((p) => (p.handled?.note?.length ?? 0) >= MAX_REASON).map((p) => p.id));
+        const cut = new Set(fromThreads.filter((p) => p.handled?.cut || (p.handled?.note?.length ?? 0) > MAX_REASON).map((p) => p.id));
         const answer = (remembered ?? []).filter((id) => fromThreads.some((p) => p.id === id));
         const answered = await answerRemembered(api, ref.number, answer, cut, log);
         if (answered) log(`Remembered ${answered} reason${answered === 1 ? "" : "s"} given in a thread, and said so there.`);

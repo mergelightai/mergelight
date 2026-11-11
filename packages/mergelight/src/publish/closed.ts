@@ -120,7 +120,7 @@ export function threadAction(t: ReviewThread, open: Set<string>): ThreadAction |
 export const REMEMBERED_MARKER = "<!-- mergelight:remembered -->";
 
 /**
- * The reason a person gave when they resolved a thread: their own latest reply in it. Only a reply by
+ * The reason a person gave when they resolved a thread: their own replies in it. Only a reply by
  * the person who resolved it counts, so a reason can't come from someone who couldn't have decided.
  * resolved: who resolved each finding's thread, from resolvedByPeople.
  */
@@ -131,11 +131,12 @@ export function resolverReplies(threads: ReviewThread[], resolved: Map<string, s
     if (!found) continue;
     const by = resolved.get(found.id);
     if (!by || t.resolvedBy?.login !== by) continue;
-    const reply = t.comments.nodes
+    const own = t.comments.nodes
       .slice(1)
-      .filter((c) => c.author?.__typename === "User" && c.author.login === by && c.createdAt && c.body.trim() && !c.body.includes("<!-- mergelight:"))
-      .at(-1);
-    if (reply) out.set(found.id, { text: reply.body.trim(), at: reply.createdAt!, commentId: found.commentId });
+      .filter((c) => c.author?.__typename === "User" && c.author.login === by && c.createdAt && c.body.trim() && !c.body.includes("<!-- mergelight:"));
+    const last = own.at(-1);
+    // All of their replies, in order: a later "thanks" mustn't replace the reason. The time is the latest.
+    if (last) out.set(found.id, { text: own.map((c) => c.body.trim()).join("\n\n"), at: last.createdAt!, commentId: found.commentId });
   }
   return out;
 }
