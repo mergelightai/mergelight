@@ -10,7 +10,7 @@ import { publishTeamChecks } from "./publish/team-checks.js";
 import { approveCheck, checkLimitTitle, checkLoginTitle, failCheck, failSummary, previousFindings, publishReview, startCheck, startSummary, syncApproval, UNREVIEWED } from "./publish/publish.js";
 import { LimitError, LoginError, loginFailureMessage } from "./providers/codex.js";
 import { limitNotice, loginNotice } from "./publish/markdown.js";
-import { renderTerminal } from "./render.js";
+import { renderRejected, renderTerminal } from "./render.js";
 import { reviewPullRequest } from "./review.js";
 import { askForApp, connect, githubConnect } from "./connect.js";
 import { init, realInitDeps } from "./init.js";
@@ -253,6 +253,8 @@ async function main(): Promise<number> {
     const json = JSON.stringify(review, null, 2);
     if (values.out) writeFileSync(values.out, `${json}\n`);
     process.stdout.write(values.json ? `${json}\n` : `${renderTerminal(review)}\n`);
+    // GitHub sets RUNNER_DEBUG when someone re-runs a job with debug logging on.
+    if (process.env.RUNNER_DEBUG === "1" || process.env.MERGELIGHT_DEBUG === "1") for (const line of renderRejected(review)) log(line);
 
     if (values.post) {
       const result = await publishReview(review, { dryRun, log, checkRunId, yellowBlocks: values["yellow-blocks"], teamUnread: cloud.failed === true });
