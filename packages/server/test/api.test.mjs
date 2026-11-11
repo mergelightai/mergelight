@@ -234,6 +234,13 @@ test("a pull request that is reviewed again changes nothing: only a later decisi
   assert.deepEqual(row, { reason: DECLINE.reason, untouched: true });
 });
 
+test("a decision written over 90 days ago is not taken in: it would have run out by now", async () => {
+  await connectOrg(pool, ACME.id, ACME.login);
+  const old = new Date(NOW - 91 * 24 * 60 * 60_000).toISOString();
+  assert.equal((await post(makeToken(), { ...REVIEW, declines: [{ ...DECLINE, decided_at: old }] })).status, 201);
+  assert.deepEqual(await rowsOf(ACME.id, "select * from memories"), []);
+});
+
 test("a decision made again starts its 90 days from now, even when the old one was used long ago", async () => {
   await connectOrg(pool, ACME.id, ACME.login);
   assert.equal((await post(makeToken(), { ...REVIEW, declines: [DECLINE] })).status, 201);

@@ -408,7 +408,17 @@ export default function Dashboard() {
                   decisions={view.decisions}
                   total={view.total}
                   onForget={async (d) => {
-                    await forgetDecision(session, org.id, d.id);
+                    try {
+                      await forgetDecision(session, org.id, d.id);
+                    } catch (err) {
+                      // The session ran out while the page was open: sign in again, as loading does.
+                      if (err instanceof SignedOut) {
+                        if (mayRenew()) window.location.assign(signInUrl());
+                        else setSession(null);
+                        return;
+                      }
+                      throw err;
+                    }
                     setView((v) => (v.kind === 'ready' ? { ...v, decisions: v.decisions.filter((x) => x.id !== d.id), total: v.total - 1 } : v));
                   }}
                 />

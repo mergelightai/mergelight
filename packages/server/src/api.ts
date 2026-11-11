@@ -329,6 +329,8 @@ export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"
       // replaces it, and it then starts its 90 days from now. So a pull request that is reviewed again doesn't keep an unused decision alive, and
       // doesn't bring back one that someone made Mergelight forget.
       for (const d of declines) {
+        // One written over 90 days ago would have run out by now. An old pull request that is reviewed again doesn't bring it back.
+        if (Date.parse(d.decided_at) <= now() - MEMORY_DAYS * 24 * 60 * 60_000) continue;
         await db.query(
           `insert into memories (org_id, repo_id, finding_id, title, file, line, end_line, reason, by_login, pr, decided_at)
            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
