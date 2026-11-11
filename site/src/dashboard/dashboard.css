@@ -217,3 +217,13 @@
     mask-image: radial-gradient(ellipse 70% 80% at 40% 0%, black 10%, transparent 75%);
   }
 }
+
+/* A table that fills the page: its rows' panel runs on below the last row, so that row keeps square
+   bottom corners and the filler under it carries the round ones. Outside any layer, so it wins over
+   the rounding utilities on the cells. */
+@media (min-width: 80rem) {
+  [data-fill] > table > tbody > tr:last-child > td {
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+}

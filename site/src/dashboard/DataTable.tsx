@@ -3,12 +3,17 @@ import { cn } from '@/lib/utils';
 
 // The dashboard's tables: a rounded frame with a soft header strip, and the rows on an inner panel.
 
-export function DataTable({ className, children, ...props }: ComponentProps<'table'>) {
+/**
+ * A table in its glass frame. With fill, the frame reaches the bottom of the page on a wide screen,
+ * and the rows' panel runs on below the last row, so a short list doesn't leave the page half empty.
+ */
+export function DataTable({ className, children, fill = false, ...props }: ComponentProps<'table'> & { fill?: boolean }) {
   return (
-    <div className="glass-frame glass-card relative overflow-x-auto rounded-[1.75rem] p-1">
+    <div data-fill={fill || undefined} className={cn('group/table glass-frame glass-card relative overflow-x-auto rounded-[1.75rem] p-1', fill && 'flex flex-col xl:flex-1')}>
       <table className={cn('w-full border-separate border-spacing-0 text-sm', className)} {...props}>
         {children}
       </table>
+      {fill && <div aria-hidden="true" className="hidden min-h-6 flex-1 rounded-b-3xl bg-panel xl:block" />}
     </div>
   );
 }

@@ -27,7 +27,7 @@ export function GlassCard({ label, icon, className, children }: { label?: ReactN
 /** What someone must know before they rely on a feature: the promises the docs make too. */
 export function Facts({ items }: { items: ReactNode[] }) {
   return (
-    <GlassCard label="Good to know" icon={<InfoIcon className="size-4" />}>
+    <GlassCard label="Good to know" icon={<InfoIcon className="size-4" />} className="xl:self-start">
       <ul className="grid gap-3 text-sm leading-relaxed text-muted-foreground">
         {items.map((item, i) => (
           <li key={i} className="flex gap-2.5">
@@ -279,8 +279,8 @@ export const patterns = (text: string) =>
 /** A list with nothing in it yet, inside a glass frame. */
 export function EmptyList({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div className="glass-frame glass-card relative rounded-[1.75rem] p-1">
-      <div className="glass-inner grid place-items-center gap-1.5 rounded-3xl bg-panel px-6 py-12 text-center">
+    <div className="glass-frame glass-card relative flex flex-col rounded-[1.75rem] p-1">
+      <div className="glass-inner grid flex-1 place-content-center place-items-center gap-1.5 rounded-3xl bg-panel px-6 py-12 text-center">
         <p className="font-medium text-foreground">{title}</p>
         <p className="max-w-md text-sm leading-relaxed text-muted-foreground">{children}</p>
       </div>

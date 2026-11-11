@@ -96,29 +96,31 @@ export function ReviewsView({ overview }: { overview: Overview }) {
           })}
         </DataBody>
       </DataTable>
-      <h2 className="mb-3 mt-8 font-heading text-base font-semibold">Repositories</h2>
-      <DataTable>
-        <DataHead>
-          <DataHeadCell>Repository</DataHeadCell>
-          <DataHeadCell className="text-right">Reviews</DataHeadCell>
-          <DataHeadCell className="w-14" aria-label="Open" />
-        </DataHead>
-        <DataBody>
-          {overview.repos.map((repo) => (
-            <DataRow key={repo.id} href={`https://github.com/${repo.name}`}>
-              <DataCell>
-                <TwoLines main={repo.name} sub={`Last review ${ago(repo.last_review_at)}`} />
-              </DataCell>
-              <DataCell className="text-right font-medium tabular-nums">{repo.reviews}</DataCell>
-              <DataCell className="text-right">
-                <Button variant="ghost" size="icon-sm" className="bg-white/[0.07] hover:bg-white/[0.13]" aria-label={`Open ${repo.name} on GitHub`} render={<a href={`https://github.com/${repo.name}`} target="_blank" rel="noreferrer" />} nativeButton={false}>
-                  <ArrowUpRightIcon />
-                </Button>
-              </DataCell>
-            </DataRow>
-          ))}
-        </DataBody>
-      </DataTable>
+      <div className="flex flex-1 flex-col">
+        <h2 className="mb-3 mt-8 font-heading text-base font-semibold">Repositories</h2>
+        <DataTable fill>
+          <DataHead>
+            <DataHeadCell>Repository</DataHeadCell>
+            <DataHeadCell className="text-right">Reviews</DataHeadCell>
+            <DataHeadCell className="w-14" aria-label="Open" />
+          </DataHead>
+          <DataBody>
+            {overview.repos.map((repo) => (
+              <DataRow key={repo.id} href={`https://github.com/${repo.name}`}>
+                <DataCell>
+                  <TwoLines main={repo.name} sub={`Last review ${ago(repo.last_review_at)}`} />
+                </DataCell>
+                <DataCell className="text-right font-medium tabular-nums">{repo.reviews}</DataCell>
+                <DataCell className="text-right">
+                  <Button variant="ghost" size="icon-sm" className="bg-white/[0.07] hover:bg-white/[0.13]" aria-label={`Open ${repo.name} on GitHub`} render={<a href={`https://github.com/${repo.name}`} target="_blank" rel="noreferrer" />} nativeButton={false}>
+                    <ArrowUpRightIcon />
+                  </Button>
+                </DataCell>
+              </DataRow>
+            ))}
+          </DataBody>
+        </DataTable>
+      </div>
     </>
   );
 }

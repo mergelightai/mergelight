@@ -14,8 +14,8 @@ export function DecisionsView({ decisions, total, onForget }: { decisions: Decis
         title="Decisions"
         lead="When someone declines a finding on a pull request and says why, Mergelight remembers it and leaves it out of later reviews of that file. A decision nobody needed for 90 days is dropped."
       />
-      <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
-        <div className="grid gap-3">
+      <div className="grid flex-1 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_320px] xl:items-stretch">
+        <div className="flex flex-col gap-3">
           {total > decisions.length && (
             <p className="text-[13px] text-muted-foreground">
               Showing the {decisions.length} most recent of {total}.
@@ -24,7 +24,7 @@ export function DecisionsView({ decisions, total, onForget }: { decisions: Decis
           {decisions.length === 0 ? (
             <EmptyList title="Nothing yet">Decline a finding with a reason on a pull request, and it shows up here after that pull request's next review.</EmptyList>
           ) : (
-            <DataTable>
+            <DataTable fill>
               <DataHead>
                 <DataHeadCell>Finding</DataHeadCell>
                 <DataHeadCell className="hidden lg:table-cell">Used</DataHeadCell>

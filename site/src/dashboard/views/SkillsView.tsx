@@ -73,11 +73,11 @@ export function SkillsView({ orgId, skills, onAdd, onRemove, resume }: { orgId: 
         lead="Use a skill when your team already wrote one for Claude Code or Codex. Every review of that repository reads it, so it knows what your team knows."
         action={mayAdd ? <NewSkillForm orgId={orgId} skills={skills} onAdd={onAdd} startOpen={resume} /> : <ReadOnly>Only an admin of a repository can pick its skills.</ReadOnly>}
       />
-      <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
+      <div className="grid flex-1 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_320px] xl:items-stretch">
         {skills.skills.length === 0 ? (
           <EmptyList title="No skills yet">Add a skill folder, and every review of its repository reads it.</EmptyList>
         ) : (
-          <DataTable>
+          <DataTable fill>
             <DataHead>
               <DataHeadCell>Skill folder</DataHeadCell>
               <DataHeadCell className="hidden md:table-cell">Repository</DataHeadCell>

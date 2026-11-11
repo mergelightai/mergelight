@@ -90,11 +90,11 @@ export function RulesView({ orgId, rules, onAdd, onRemove, resume }: { orgId: nu
         }
         action={mayAdd ? <NewRuleForm orgId={orgId} rules={rules} onAdd={onAdd} startOpen={resume} /> : <ReadOnly>Only an owner of the org or an admin of a repository can change the rules.</ReadOnly>}
       />
-      <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
+      <div className="grid flex-1 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_320px] xl:items-stretch">
         {rules.rules.length === 0 ? (
           <EmptyList title="No rules yet">Reviews follow Mergelight's own judgement until your team adds a rule.</EmptyList>
         ) : (
-          <DataTable>
+          <DataTable fill>
             <DataHead>
               <DataHeadCell>Rule</DataHeadCell>
               <DataHeadCell className="hidden md:table-cell">Where</DataHeadCell>

@@ -82,11 +82,11 @@ export function ChecksView({ orgId, checks, onAdd, onRemove, resume }: { orgId: 
         }
         action={mayAdd ? <NewCheckForm orgId={orgId} checks={checks} onAdd={onAdd} startOpen={resume} /> : <ReadOnly>Only an admin of a repository can set its checks.</ReadOnly>}
       />
-      <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
+      <div className="grid flex-1 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_320px] xl:items-stretch">
         {checks.checks.length === 0 ? (
           <EmptyList title="No checks yet">Add a check, and each review of its files answers it on the pull request.</EmptyList>
         ) : (
-          <DataTable>
+          <DataTable fill>
             <DataHead>
               <DataHeadCell>Check</DataHeadCell>
               <DataHeadCell className="hidden md:table-cell">Repository</DataHeadCell>

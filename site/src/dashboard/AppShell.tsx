@@ -227,7 +227,7 @@ export function AppShell({ user, orgs, org, onPickOrg, view, onView, onSignOut, 
             <PageMenu orgLogin={org.login} onRefresh={onRefresh} />
           </div>
         </header>
-        <div className="w-full px-4 pb-16 pt-2">{children}</div>
+        <div className="flex w-full flex-1 flex-col px-4 pb-6 pt-2">{children}</div>
         {/* In the page's main region, so a screen reader reads what just happened. */}
         <Toaster position="bottom-right" />
       </SidebarInset>
