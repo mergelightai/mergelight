@@ -462,6 +462,21 @@ test("a decision not to fix reaches the verifier even past the cap on earlier fi
   assert.ok(previous.some((p) => p.id === decided));
 });
 
+test("a failed permission lookup keeps the team's marks, and only GitHub's no drops one", async () => {
+  const comment = (over) => ({ id: 1, html_url: "https://x", created_at: "2030-01-01T00:00:00Z", ...over });
+  const marks = await readMarks(
+    [
+      comment({ body: encodeMark(["aaaaaaaaaa"], "wont_fix", "Only admins", "s"), ...MEMBER }),
+      comment({ body: encodeMark(["bbbbbbbbbb"], "wont_fix", "nah", "s"), ...STRANGER }),
+      comment({ body: encodeMark(["cccccccccc"], "wont_fix", "nah", "s"), user: { type: "User", login: "reader" }, author_association: "MEMBER" }),
+    ],
+    async (login) => (login === "reader" ? false : null),
+  );
+  assert.equal(marks.get("aaaaaaaaaa").as, "wont_fix", "GitHub couldn't be asked: the member's mark counts, as before");
+  assert.equal(marks.has("bbbbbbbbbb"), false, "nor could it for a stranger, who has no association to fall back on");
+  assert.equal(marks.has("cccccccccc"), false, "GitHub said this member can only read");
+});
+
 test("readMarks takes the team's latest word, including members a workflow token can't see", async () => {
   const comment = (over) => ({ id: 1, html_url: "https://x", created_at: "2030-01-01T00:00:00Z", ...over });
   const asked = [];
