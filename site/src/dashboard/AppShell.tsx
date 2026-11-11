@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { ArrowClockwiseIcon, ArrowSquareOutIcon, DotsThreeIcon, BookOpenTextIcon, BrainIcon, LifebuoyIcon, PaperPlaneTiltIcon, CaretDownIcon, CaretUpDownIcon, CheckIcon, GitPullRequestIcon, ListChecksIcon, ScalesIcon, SignOutIcon } from '@phosphor-icons/react';
+import { RotateCwIcon, ExternalLinkIcon, EllipsisIcon, BookOpenTextIcon, BrainIcon, LifeBuoyIcon, SendIcon, ChevronDownIcon, ChevronsUpDownIcon, CheckIcon, GitPullRequestIcon, ListChecksIcon, ScaleIcon, LogOutIcon } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
@@ -17,7 +17,7 @@ export const VIEWS: { group: string; items: { id: ViewId; label: string; icon: t
   {
     group: 'What the reviewer knows',
     items: [
-      { id: 'rules', label: 'Rules', icon: ScalesIcon },
+      { id: 'rules', label: 'Rules', icon: ScaleIcon },
       { id: 'skills', label: 'Skills', icon: BookOpenTextIcon },
       { id: 'checks', label: 'Checks', icon: ListChecksIcon },
       { id: 'decisions', label: 'Decisions', icon: BrainIcon },
@@ -49,7 +49,7 @@ function OrgPicker({ orgs, org, onPick }: { orgs: Org[]; org: Org; onPick: (id: 
       <DropdownMenuTrigger render={<SidebarMenuButton className="w-fit px-1.5" aria-label="Switch org" />}>
         <OrgIcon org={org} />
         <span className="truncate font-medium">{org.login}</span>
-        <CaretDownIcon className="size-3.5 opacity-50" />
+        <ChevronDownIcon className="size-3.5 opacity-50" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="min-w-56">
         <DropdownMenuGroup>
@@ -88,7 +88,7 @@ function NavUser({ user, onSignOut }: { user: Session['user']; onSignOut: () => 
     <DropdownMenu>
       <DropdownMenuTrigger render={<SidebarMenuButton size="lg" aria-label="Your account" />}>
         <Who user={user} />
-        <CaretUpDownIcon className="ml-auto size-4 text-muted-foreground" />
+        <ChevronsUpDownIcon className="ml-auto size-4 text-muted-foreground" />
       </DropdownMenuTrigger>
       <DropdownMenuContent side="top" align="start" className="min-w-56">
         <DropdownMenuGroup>
@@ -98,7 +98,7 @@ function NavUser({ user, onSignOut }: { user: Session['user']; onSignOut: () => 
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={onSignOut}>
-          <SignOutIcon />
+          <LogOutIcon />
           Sign out
         </DropdownMenuItem>
       </DropdownMenuContent>
@@ -122,7 +122,7 @@ function PageMenu({ orgLogin, onRefresh }: { orgLogin: string; onRefresh: () => 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label="More" />}>
-        <DotsThreeIcon weight="bold" />
+        <EllipsisIcon />
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="end"
@@ -132,7 +132,7 @@ function PageMenu({ orgLogin, onRefresh }: { orgLogin: string; onRefresh: () => 
             <span className="mr-auto pl-1 text-[13px] text-muted-foreground">Missing an org?</span>
             <DropdownMenuItem className={link} render={<a href={ADD_REPOS_URL} target="_blank" rel="noreferrer" />}>
               Add it on GitHub
-              <ArrowSquareOutIcon className="size-3.5" />
+              <ExternalLinkIcon className="size-3.5" />
             </DropdownMenuItem>
             <DropdownMenuItem className={link} render={<a href={signInUrl()} />}>
               Sign in again
@@ -141,7 +141,7 @@ function PageMenu({ orgLogin, onRefresh }: { orgLogin: string; onRefresh: () => 
         }
       >
         <DropdownMenuItem onClick={onRefresh}>
-          <ArrowClockwiseIcon />
+          <RotateCwIcon />
           Refresh {orgLogin}
         </DropdownMenuItem>
       </DropdownMenuContent>
@@ -171,7 +171,7 @@ export function AppShell({ user, orgs, org, onPickOrg, view, onView, onSignOut, 
                   {g.items.map((item) => (
                     <SidebarMenuItem key={item.id}>
                       <SidebarMenuButton isActive={view === item.id} onClick={() => onView(item.id)}>
-                        <item.icon weight={view === item.id ? 'fill' : 'regular'} />
+                        <item.icon />
                         <span>{item.label}</span>
                       </SidebarMenuButton>
                     </SidebarMenuItem>
@@ -185,13 +185,13 @@ export function AppShell({ user, orgs, org, onPickOrg, view, onView, onSignOut, 
           <SidebarMenu>
             <SidebarMenuItem>
               <SidebarMenuButton size="sm" render={<a href={`mailto:${EMAIL}?subject=Mergelight%20support`} />}>
-                <LifebuoyIcon />
+                <LifeBuoyIcon />
                 <span>Support</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
             <SidebarMenuItem>
               <SidebarMenuButton size="sm" render={<a href={`${GITHUB}/issues/new`} target="_blank" rel="noreferrer" />}>
-                <PaperPlaneTiltIcon />
+                <SendIcon />
                 <span>Feedback</span>
               </SidebarMenuButton>
             </SidebarMenuItem>

@@ -1,7 +1,7 @@
 "use client"
 
 import { Toaster as Sonner, type ToasterProps } from "sonner"
-import { CheckCircleIcon, InfoIcon, WarningIcon, XCircleIcon, SpinnerIcon } from "@phosphor-icons/react"
+import { CircleCheckIcon, InfoIcon, TriangleAlertIcon, CircleXIcon, LoaderCircleIcon } from "lucide-react"
 
 const Toaster = ({ ...props }: ToasterProps) => {
 
@@ -12,19 +12,19 @@ const Toaster = ({ ...props }: ToasterProps) => {
       className="toaster group"
       icons={{
         success: (
-          <CheckCircleIcon className="size-4" />
+          <CircleCheckIcon className="size-4" />
         ),
         info: (
           <InfoIcon className="size-4" />
         ),
         warning: (
-          <WarningIcon className="size-4" />
+          <TriangleAlertIcon className="size-4" />
         ),
         error: (
-          <XCircleIcon className="size-4" />
+          <CircleXIcon className="size-4" />
         ),
         loading: (
-          <SpinnerIcon className="size-4 animate-spin" />
+          <LoaderCircleIcon className="size-4 animate-spin" />
         ),
       }}
       style={
