@@ -46,6 +46,7 @@ Options
   --verify-model <name> Model for the checker (default for claude: opus)
   --keep                Keep the temporary checkout
   --by <login>          Who approved, for approve
+                        With approve, --at is the commit they approved: an older one doesn't count
   --base <branch>       For setup: add the workflows to this branch (default: the default branch)
   --skip-branches <a,b> For setup: don't review pull requests from these branches
   --relogin             For setup: log in to Codex again
@@ -204,7 +205,7 @@ async function main(): Promise<number> {
       log("approve needs --by <login>");
       return 1;
     }
-    log(await approveCheck(new GitHub(ref.owner, ref.repo, { dryRun, log }), ref.number, values.by));
+    log(await approveCheck(new GitHub(ref.owner, ref.repo, { dryRun, log }), ref.number, values.by, values.at || undefined));
     return 0;
   }
 

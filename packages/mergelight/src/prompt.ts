@@ -75,11 +75,14 @@ function matchesSegment(pattern: string, name: string): boolean {
  * lengths of the pattern and the path. A pattern can't be written that makes it hang.
  */
 export function matchesPath(pattern: string, file: string): boolean {
-  const plain = (path: string) => path.replace(/^(\.\/|\/)+/, "").replace(/\/+$/, "");
+  // Doubled slashes are one, and a slash at either end isn't part of a name.
+  const plain = (path: string) => path.replace(/\/{2,}/g, "/").replace(/^(\.\/|\/)+/, "").replace(/\/+$/, "");
   const trimmed = plain(pattern);
   if (!trimmed) return false;
   // A pattern with no folder in it, like "*.sql" or "migrations", is about that name wherever it sits.
-  const parts = trimmed.includes("/") ? trimmed.split("/") : ["**", trimmed];
+  // One that starts with a slash, like "/Dockerfile", means the repository's root, as in a CODEOWNERS file.
+  const rooted = pattern.trimStart().startsWith("/");
+  const parts = trimmed.includes("/") || rooted ? trimmed.split("/") : ["**", trimmed];
   const all = plain(file).split("/");
   // The file itself, then each folder it sits in: a pattern that matches a folder covers what is inside.
   for (let length = all.length; length >= 1; length--) {

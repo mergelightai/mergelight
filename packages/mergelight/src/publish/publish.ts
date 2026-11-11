@@ -399,8 +399,10 @@ export async function latestCheck(api: GitHub, sha: string): Promise<CheckRun | 
 }
 
 /** When someone approves a PR with a yellow check, it turns green. A blocked check (a bug to fix) stays red. */
-export async function approveCheck(api: GitHub, number: number, by: string): Promise<string> {
+export async function approveCheck(api: GitHub, number: number, by: string, approvedSha?: string): Promise<string> {
   const pr = await api.get<{ head: { sha: string } }>(`pulls/${number}`);
+  // An approval covers the commit the person looked at. Code pushed after it hasn't had its human yet.
+  if (approvedSha && approvedSha !== pr.head.sha) return `${by} approved an earlier commit, so it doesn't turn the Mergelight check on the newest one green.`;
   const latest = await latestCheck(api, pr.head.sha);
   if (!latest) return "No Mergelight check on this commit.";
   if (!isYellowCheck(latest)) return `Mergelight check is ${latest.conclusion ?? "still running"}, nothing to approve.`;

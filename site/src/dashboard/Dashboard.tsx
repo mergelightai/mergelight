@@ -293,6 +293,9 @@ function RulesCard({ rules, onAdd, onRemove }: { rules: Rules; onAdd: (rule: New
       <p className="mt-1.5 max-w-2xl text-[14px] leading-relaxed text-muted">
         A rule is one line that every review follows, for the whole org or for one repository. You can also name files that always need a human, so a pull request that changes them never goes green by itself.
       </p>
+      <p className="mt-2 max-w-2xl text-[13px] leading-relaxed text-faint">
+        "Needs a human" stops a merge only where the Mergelight check is required and the workflow sets <span className="font-mono">yellow-blocks: true</span>. Without that it is a warning on the pull request.
+      </p>
       {rules.rules.length > 0 && (
         <ul className="mt-3">
           {rules.rules.map((r) => (

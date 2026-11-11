@@ -335,9 +335,11 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
     const { kind, text, paths = [], repo_id = null } = body as Record<string, unknown>;
     if (kind !== "rule" && kind !== "needs_human") throw bad("kind");
     if (!isLineOfText(text, 300)) throw bad("text");
-    if (!Array.isArray(paths) || paths.length > 10 || !paths.every(isPathPattern)) throw bad("patterns");
+    if (!Array.isArray(paths) || paths.length > 10 || !paths.every(isPathPattern)) {
+      throw new HttpError(400, "bad_request", "The file patterns aren't valid. Use up to 10, each made of letters, digits, / . - _ @ + and the wildcards * and ?.");
+    }
     // "Always needs a human" is about files, so it has to name some.
-    if (kind === "needs_human" && !paths.length) throw bad("patterns");
+    if (kind === "needs_human" && !paths.length) throw new HttpError(400, "bad_request", "Name the files that always need a human.");
     if (repo_id !== null && !isId(repo_id)) throw bad("repository");
 
     const repo = repo_id === null ? null : reach.repos.get(repo_id);

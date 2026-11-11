@@ -197,7 +197,7 @@ const MAX_RULES = 100;
 /** The summary, with what the reader must know about the team's rules: a guarded file was changed, or the rules couldn't be read. */
 export function summaryWith(summary: string, needsHuman: string[], rulesUnread: boolean): string {
   // As code, so a name like __init__.py shows as it is and not as bold text.
-  const code = (path: string) => `\`${path.replace(/`/g, "'")}\``;
+  const code = (path: string) => `\`${path.replace(/`/g, "'").replace(/[\u0000-\u001f\u007f]/g, "?")}\``;
   const guarded = needsHuman.length
     ? ` It changes ${needsHuman.slice(0, 3).map(code).join(", ")}${needsHuman.length > 3 ? ` and ${needsHuman.length - 3} more` : ""}, which your team marked as always needing a human.`
     : "";

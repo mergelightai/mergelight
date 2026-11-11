@@ -34,6 +34,15 @@ test("an approval turns a 'needs a human' check green only when it comes from so
   assert.equal(api.writes[0].body.conclusion, "success");
 });
 
+test("an approval of an earlier commit doesn't turn the newest one green", async () => {
+  const api = fakeApi();
+  const stale = await approveCheck(api, 7, "ada", "b".repeat(40));
+  assert.match(stale, /approved an earlier commit/);
+  assert.deepEqual(api.writes, []);
+  assert.match(await approveCheck(api, 7, "ada", "a".repeat(40)), /approved by ada/);
+  assert.equal(api.writes.length, 1);
+});
+
 test("when GitHub can't say whether someone can push, their approval doesn't count", async () => {
   const api = fakeApi();
   api.get = async (path) => {

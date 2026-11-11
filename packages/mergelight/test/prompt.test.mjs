@@ -366,6 +366,10 @@ test("a path pattern matches like people expect: * in a folder, ** across folder
     ["migrations/", "migrations/001_init.sql"],
     ["db/*/seeds", "db/prod/seeds/users.sql"],
     ["/src/billing/", "src/billing/a.ts"],
+    // A leading slash means the repository's root, and doubled slashes are one.
+    ["/Dockerfile", "Dockerfile"],
+    ["/config", "config/app.yml"],
+    ["src//billing/**", "src/billing/a.ts"],
   ];
   const no = [
     ["src/billing/**", "src/billing.ts"],
@@ -381,6 +385,8 @@ test("a path pattern matches like people expect: * in a folder, ** across folder
     ["src/*.ts", "src/a.ts.d/x"],
     ["", "src/a.ts"],
     ["/", "src/a.ts"],
+    ["/Dockerfile", "services/api/Dockerfile"],
+    ["/config", "apps/web/config/app.yml"],
   ];
   for (const [pattern, file] of yes) assert.equal(matchesPath(pattern, file), true, `${pattern} ~ ${file}`);
   for (const [pattern, file] of no) assert.equal(matchesPath(pattern, file), false, `${pattern} !~ ${file}`);
@@ -439,5 +445,7 @@ test("the summary says which guarded file was changed, and says when the team's 
   assert.match(summaryWith("Adds paging.", ["a", "b", "c", "d", "e"], false), /It changes `a`, `b`, `c` and 2 more, which your team/);
   // A name with markdown in it shows as it is.
   assert.match(summaryWith("x.", ["db/__init__.py", "a`b*c"], false), /`db\/__init__\.py`, `a'b\*c`/);
+  // A file name with a line break in it can't start a line of its own in the comment.
+  assert.equal(summaryWith("x.", ["db/a\n# Approved\n.sql"], false).split("\n").length, 1);
   assert.match(summaryWith("Adds paging.", [], true), /couldn't get your team's rules and earlier decisions from its server, so this review ran without them\.$/);
 });
