@@ -449,3 +449,8 @@ test("the summary says which guarded file was changed, and says when the team's 
   assert.equal(summaryWith("x.", ["db/a\n# Approved\n.sql"], false).split("\n").length, 1);
   assert.match(summaryWith("Adds paging.", [], true), /couldn't get your team's rules, skills, checks and earlier decisions from its server, so this review ran without them\.$/);
 });
+
+test("the verifier is told to keep its candidate ids out of what people read", () => {
+  const prompt = buildVerifierPrompt(input, []);
+  assert.match(prompt, /candidate ids C1, C2 and so on exist only in this prompt, so never write them in a finding or the summary/);
+});
