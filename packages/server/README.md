@@ -90,7 +90,8 @@ When someone marks a finding "won't fix" and says why, the next review of that p
 
 - A decision is about one problem in one file. It never covers another file or another kind of problem.
 - It reaches the reviewing model as data: one line of escaped JSON in a block of its own, with the rules for using it above the block. Line breaks are taken out before it is stored, so a reason can't start a heading or an instruction of its own.
-- Only a decision by someone who can push to the repository is sent, and only a decision written later than the one on file replaces it.
+- Only a decision by someone who can push to the repository is sent, and only a decision written later than the one on file replaces it. A reason is one line, 1000 characters at most. A review program up to v0.1.15 sends 500 at most, and doesn't use a decision with a longer reason.
+- The server's answer to a review's report names the decisions it put in or replaced (`remembered`). One that was already on file, that is over 90 days old, or that someone made Mergelight forget, is not named. So the review can say "remembered" on the pull request only where that is true.
 - The verifier reads the code first. If the code changed so the reason no longer fits, it ignores the decision. A major bug that can still happen is reported whatever was decided.
 - A decision nobody needed for 90 days is dropped, on a clock, in every repository. A use starts the 90 days again, and a use is only counted when the verifier names the decision as the cause of a rejection in that file. A repository keeps 500 at most.
 - The dashboard lists them. Anyone who can push to the repository can make Mergelight forget one. Its text is wiped and a marker stays, so the pull request it came from can't bring it back. A newer decision can.

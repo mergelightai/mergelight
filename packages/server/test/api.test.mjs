@@ -132,7 +132,7 @@ test("a connected org's review is stored with the repository and run from the si
   const res = await post(makeToken());
   assert.equal(res.status, 201);
   assert.equal(res.headers.get("cache-control"), "no-store");
-  assert.deepEqual(await res.json(), { stored: true });
+  assert.deepEqual(await res.json(), { stored: true, remembered: [] });
 
   const [repo] = await rowsOf(ACME.id, "select org_id, id, name from repos");
   assert.deepEqual(repo, { org_id: "1001", id: "501", name: "acme/widgets" });
@@ -161,7 +161,7 @@ test("the same run can't count twice, and a new attempt counts once more", async
   assert.equal((await post(makeToken())).status, 201);
   const again = await post(makeToken());
   assert.equal(again.status, 200);
-  assert.deepEqual(await again.json(), { stored: false });
+  assert.deepEqual(await again.json(), { stored: false, remembered: [] });
   assert.equal((await post(makeToken({ run_attempt: "2" }))).status, 201);
   assert.equal((await rowsOf(ACME.id, "select 1 from reviews")).length, 2);
 });
@@ -232,6 +232,41 @@ test("a pull request that is reviewed again changes nothing: only a later decisi
   assert.equal((await post(makeToken({ run_id: "9041" }), { ...REVIEW, report_id: randomUUID(), declines: [{ ...DECLINE, reason: "An older reason.", decided_at: "2026-10-01T10:00:00.000Z" }] })).status, 201);
   const [row] = await rowsOf(ACME.id, "select reason, updated_at < now() - interval '29 days' as untouched from memories");
   assert.deepEqual(row, { reason: DECLINE.reason, untouched: true });
+});
+
+test("the answer names the decisions this report put in, and no other", async () => {
+  await connectOrg(pool, ACME.id, ACME.login);
+  const second = { ...DECLINE, finding_id: "cccc000011", title: "Retry has no upper bound" };
+  const old = { ...DECLINE, finding_id: "dddd000022", decided_at: new Date(NOW - 91 * 24 * 60 * 60_000).toISOString() };
+  const report = (run, declines, id = randomUUID()) => post(makeToken({ run_id: run }), { ...REVIEW, report_id: id, declines });
+  const remembered = async (res) => (await res.json()).remembered;
+
+  // New decisions are named. One written over 90 days ago is skipped, so it is not.
+  const id = randomUUID();
+  const first = await report("9101", [DECLINE, second, old], id);
+  assert.equal(first.status, 201);
+  assert.deepEqual(await remembered(first), [DECLINE.finding_id, second.finding_id]);
+  // The same report sent again, as after a failed answer, stores nothing more and names nothing.
+  const again = await report("9101", [DECLINE, second, old], id);
+  assert.equal(again.status, 200);
+  assert.deepEqual(await again.json(), { stored: false, remembered: [] });
+  // A later review of the same pull request sends the same decisions: they are on file, so none is named.
+  assert.deepEqual(await remembered(await report("9102", [DECLINE, second])), []);
+  // A decision made again later replaces the one on file, and is named. An older one changes nothing.
+  assert.deepEqual(await remembered(await report("9103", [{ ...DECLINE, reason: "Decided again.", decided_at: "2026-11-09T10:00:00.000Z" }, { ...second, reason: "An older reason.", decided_at: "2026-10-01T10:00:00.000Z" }])), [DECLINE.finding_id]);
+  // One that someone made Mergelight forget stays forgotten when the same decision comes in again.
+  await withOrg(pool, ACME.id, (db) => db.query("update memories set forgotten_at = now(), title = '', file = '', reason = '', by_login = '' where finding_id = $1", [second.finding_id]));
+  assert.deepEqual(await remembered(await report("9104", [second])), []);
+  // The same finding twice in one report is named once.
+  assert.deepEqual(await remembered(await report("9105", [{ ...second, decided_at: "2026-11-10T10:00:00.000Z" }, { ...second, decided_at: "2026-11-10T11:00:00.000Z" }])), [second.finding_id]);
+});
+
+test("a reason can be a few sentences: 1000 characters, and no more", async () => {
+  await connectOrg(pool, ACME.id, ACME.login);
+  const long = "x".repeat(1000);
+  assert.equal((await post(makeToken(), { ...REVIEW, declines: [{ ...DECLINE, reason: long }] })).status, 201);
+  assert.equal((await context()).memories[0].reason, long);
+  assert.equal((await post(makeToken({ run_id: "9111" }), { ...REVIEW, report_id: randomUUID(), declines: [{ ...DECLINE, reason: `${long}x`, decided_at: "2026-11-09T10:00:00.000Z" }] })).status, 400);
 });
 
 test("a decision written over 90 days ago is not taken in: it would have run out by now", async () => {
@@ -355,7 +390,7 @@ test("a decision that isn't plain bounded text refuses the report, and nothing o
     [{ ...DECLINE, decided_at: "1999-01-01T00:00:00.000Z" }],
     [{ ...DECLINE, file: "x".repeat(401) }],
     [{ ...DECLINE, reason: "   " }],
-    [{ ...DECLINE, reason: "x".repeat(501) }],
+    [{ ...DECLINE, reason: "x".repeat(1001) }],
     [{ ...DECLINE, reason: 7 }],
     [{ ...DECLINE, line: 0 }],
     [{ ...DECLINE, line: "40" }],
