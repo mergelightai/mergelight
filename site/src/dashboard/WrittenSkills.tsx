@@ -148,6 +148,12 @@ function WriteSkillForm({ orgId, repos, onAdd, startOpen }: { orgId: number; rep
 export function WrittenSkillsSection({ session, orgId, signedIn, resume }: { session: Session; orgId: number; signedIn: (change: () => Promise<void>) => Promise<void>; resume: boolean }) {
   const [data, setData] = useState<WrittenSkills | null>(null);
   const [open, setOpen] = useState<number | null>(null);
+  // The page clears its resume mark one render after it sets it, and this list may still be loading
+  // then. So the wish to open the form is kept here until the form is on screen.
+  const [wantOpen, setWantOpen] = useState(resume);
+  useEffect(() => {
+    if (resume) setWantOpen(true);
+  }, [resume]);
 
   useEffect(() => {
     let gone = false;
@@ -177,7 +183,7 @@ export function WrittenSkillsSection({ session, orgId, signedIn, resume }: { ses
           <WriteSkillForm
             orgId={orgId}
             repos={data.repos}
-            startOpen={resume}
+            startOpen={wantOpen}
             onAdd={async (skill) => {
               await signedIn(() => addWrittenSkill(session, orgId, skill));
               // The skill is in. If only the fresh list fails to load, that isn't a failed save.

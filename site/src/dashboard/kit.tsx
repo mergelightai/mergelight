@@ -261,6 +261,7 @@ export function rememberRepo(orgId: number, value: string): void {
 }
 
 const ORG = 'mergelight.dashboard.org';
+const RESUME = 'mergelight.dashboard.resume';
 
 /** The org picked in this tab. A reload, or a new sign-in through GitHub, comes back to it. */
 export function keptOrg(): number | null {
@@ -272,7 +273,32 @@ export function keepOrg(id: number): void {
   write(ORG, String(id));
 }
 
-const RESUME = 'mergelight.dashboard.resume';
+const VIEW = 'mergelight.dashboard.view';
+
+/** The view open in this tab, for the way back from a new sign-in. */
+export function keptView(): string | null {
+  return read(VIEW);
+}
+
+export function keepView(view: string): void {
+  write(VIEW, view);
+}
+
+/**
+ * Forgets what this tab kept for the person who signs out: form drafts, the picked org and view,
+ * and a form waiting to open again. The next person on this browser starts clean.
+ */
+export function forgetTab(): void {
+  try {
+    for (const key of Object.keys(sessionStorage)) {
+      if (key.startsWith('mergelight.dashboard.draft.') || key.startsWith('mergelight.dashboard.written-skill')) sessionStorage.removeItem(key);
+    }
+  } catch {
+    /* No storage: nothing was kept. */
+  }
+  for (const key of [ORG, VIEW, RESUME]) write(key, null);
+}
+
 
 /** Marks a form to open again after a new sign-in, because the session ran out while it was being saved. */
 export function markResume(view: string): void {

@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { addCheck, addRule, addSkill, finishSignIn, forgetDecision, loadChecks, loadDecisions, loadOverview, loadRules, loadSkills, mayRenew, NotConnected, rememberedSession, removeCheck, removeRule, removeSkill, SignedOut, signInUrl, signOut, tidyAddress, type Checks, type Decision, type Overview, type Rules, type Session, type Skills } from './api';
 import { AppShell, VIEWS, type ViewId } from './AppShell';
-import { keepOrg, keptOrg, takeResume } from './kit';
+import { forgetTab, keepOrg, keptOrg, keepView, keptView, takeResume } from './kit';
 import { ChecksView } from './views/ChecksView';
 import { DecisionsView } from './views/DecisionsView';
 import { ReviewsView } from './views/ReviewsView';
@@ -11,10 +11,15 @@ import { SkillsView } from './views/SkillsView';
 import { Centered, LoadError, NoOrg, NothingYet, NotOn, SignIn, Spinning } from './views/States';
 
 const ALL_VIEWS = VIEWS.flatMap((g) => g.items.map((i) => i.id));
-/** The view in the address, such as #rules, so a reload or a shared link opens the same view. */
+/**
+ * The view in the address, such as #rules, so a reload or a shared link opens the same view. A new
+ * sign-in comes back from GitHub without it, so the view kept for this tab comes next.
+ */
 function fromHash(): ViewId {
   const id = window.location.hash.slice(1) as ViewId;
-  return ALL_VIEWS.includes(id) ? id : 'reviews';
+  if (ALL_VIEWS.includes(id)) return id;
+  const kept = keptView() as ViewId | null;
+  return kept && ALL_VIEWS.includes(kept) ? kept : 'reviews';
 }
 
 type View = { kind: 'loading' } | { kind: 'ready'; at: number; overview: Overview; decisions: Decision[]; total: number; rules: Rules | null; skills: Skills | null; checks: Checks | null } | { kind: 'off' } | { kind: 'error' };
@@ -36,6 +41,7 @@ export default function Dashboard() {
   const [view, setView] = useState<View>({ kind: 'loading' });
   const [tab, setTab] = useState<ViewId>(() => fromHash());
   const pickTab = (id: ViewId) => {
+    keepView(id);
     setTab(id);
     window.history.replaceState(null, '', id === 'reviews' ? window.location.pathname : `#${id}`);
   };
@@ -99,7 +105,21 @@ export default function Dashboard() {
       gone = true;
     };
   }, [session, org]);
-  useEffect(() => load(), [load]);
+  const cancelLoad = useRef<() => void>(() => undefined);
+  const reload = useCallback(() => {
+    cancelLoad.current();
+    cancelLoad.current = load();
+  }, [load]);
+  useEffect(() => {
+    reload();
+    return () => cancelLoad.current();
+  }, [reload]);
+  // Someone who types another #view in the address goes there.
+  useEffect(() => {
+    const onHash = () => setTab(fromHash());
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
 
   /** Runs a change. If the session ran out while the page was open, it signs in again, as loading does. */
   const signedIn = async (change: () => Promise<void>): Promise<void> => {
@@ -151,6 +171,7 @@ export default function Dashboard() {
       <Centered>
         <NoOrg
           onSignOut={() => {
+            forgetTab();
             void signOut(session);
             setSession(null);
           }}
@@ -174,16 +195,17 @@ export default function Dashboard() {
       loadedAt={ready ? ready.at : null}
       onRefresh={() => {
         setResume(null);
-        load();
+        reload();
       }}
       onSignOut={() => {
+        forgetTab();
         void signOut(session);
         setSession(null);
       }}
     >
       {view.kind === 'loading' && <Spinning>Loading reviews</Spinning>}
       {view.kind === 'off' && <NotOn org={org} />}
-      {view.kind === 'error' && <LoadError onRetry={() => load()} />}
+      {view.kind === 'error' && <LoadError onRetry={reload} />}
       {ready && tab === 'reviews' && (ready.overview.reviews.length ? <ReviewsView overview={ready.overview} /> : <NothingYet org={org} />)}
       {ready && tab === 'rules' && (ready.rules ? (
         <RulesView
@@ -202,7 +224,7 @@ export default function Dashboard() {
             setView((v) => (v.kind === 'ready' && v.rules ? { ...v, rules: { ...v.rules, rules: v.rules.rules.filter((x) => x.id !== rule.id) } } : v));
           }}
         />
-      ) : <LoadError onRetry={() => load()} />)}
+      ) : <LoadError onRetry={reload} />)}
       {ready && tab === 'skills' && (ready.skills ? (
         <SkillsView
           key={org.id}
@@ -222,7 +244,7 @@ export default function Dashboard() {
             setView((v) => (v.kind === 'ready' && v.skills ? { ...v, skills: { ...v.skills, skills: v.skills.skills.filter((x) => x.id !== skill.id) } } : v));
           }}
         />
-      ) : <LoadError onRetry={() => load()} />)}
+      ) : <LoadError onRetry={reload} />)}
       {ready && tab === 'checks' && (ready.checks ? (
         <ChecksView
           key={org.id}
@@ -240,14 +262,15 @@ export default function Dashboard() {
             setView((v) => (v.kind === 'ready' && v.checks ? { ...v, checks: { ...v.checks, checks: v.checks.checks.filter((x) => x.id !== check.id) } } : v));
           }}
         />
-      ) : <LoadError onRetry={() => load()} />)}
+      ) : <LoadError onRetry={reload} />)}
       {ready && tab === 'decisions' && (
         <DecisionsView
           decisions={ready.decisions}
           total={ready.total}
           onForget={async (d) => {
             await signedIn(() => forgetDecision(session, org.id, d.id));
-            setView((v) => (v.kind === 'ready' ? { ...v, decisions: v.decisions.filter((x) => x.id !== d.id), total: v.total - 1 } : v));
+            // Only counts down if the decision was still in the list: a reload in between already left it out.
+            setView((v) => (v.kind === 'ready' ? { ...v, decisions: v.decisions.filter((x) => x.id !== d.id), total: v.decisions.some((x) => x.id === d.id) ? v.total - 1 : v.total } : v));
           }}
         />
       )}

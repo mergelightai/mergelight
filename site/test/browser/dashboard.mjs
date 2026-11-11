@@ -87,7 +87,7 @@ const OVERVIEWS = {
 let failures = 0;
 const expect = (ok, what) => { console.log(`  ${ok ? 'ok ' : 'FAIL'} ${what}`); if (!ok) failures++; };
 
-async function open(name, { signedOutAfter = Infinity, serverDown = false, forgetFails = false, signedOutOnAdd = false, noOrgs = false } = {}) {
+async function open(name, { signedOutAfter = Infinity, serverDown = false, forgetFails = false, signedOutOnAdd = false, signedOutOnWrite = false, noOrgs = false } = {}) {
   /** Whether the one Add that finds the session ran out has happened. */
   let addSignedOut = false;
   /** Decisions the page asked the server to forget. */
@@ -175,6 +175,10 @@ async function open(name, { signedOutAfter = Infinity, serverDown = false, forge
       const ownSkills = /^\/v1\/orgs\/(\d+)\/written-skills(?:\/(\d+))?$/.exec(u.pathname);
       if (ownSkills && !WRITTEN[ownSkills[1]]) return json(req, { error: 'not_connected' }, 404);
       if (ownSkills && m === 'POST') {
+        if (signedOutOnWrite && !addSignedOut) {
+          addSignedOut = true;
+          return json(req, { error: 'signed_out' }, 401);
+        }
         const body = JSON.parse(req.postData());
         if (body.name === 'Payments') return json(req, { error: 'exists', message: 'This repository already has a skill of that name.' }, 409);
         written.push(body);
@@ -554,6 +558,10 @@ const done = async (t) => {
   expect(/No reviews to show yet/.test(await t.text()) && /repositories this sign-in can't see/.test(await t.text()) && (await t.text()).includes(`server: ${SERVER}`) && /It never sends code/.test(await t.text()), 'an org with no reviews yet shows the one line to add, and what a review sends');
   await t.shot('3-nothing-yet');
 
+  await t.page.evaluate(() => { window.location.hash = 'checks'; });
+  await wait(400);
+  expect(/Only an admin of a repository can set its checks\./.test(await t.text()), 'typing another #view in the address goes to that view');
+  await t.view('Reviews');
   const tripsBefore = t.renewals.length;
   await t.page.reload({ waitUntil: 'networkidle2' });
   await wait(500);
@@ -575,7 +583,11 @@ const done = async (t) => {
   await wait(400);
   await t.view('Reviews');
 
+  const keptBefore = await t.page.evaluate(() => Object.keys(sessionStorage).filter((k) => k.includes('draft') || k.includes('written-skill') || k.endsWith('.org') || k.endsWith('.view')));
+  expect(keptBefore.length > 0, `before signing out, the tab keeps drafts, the org and the view (${keptBefore})`);
   await t.menu('Your account', 'Sign out');
+  const keptAfter = await t.page.evaluate(() => Object.keys(sessionStorage).filter((k) => k.includes('draft') || k.includes('written-skill') || k.endsWith('.org') || k.endsWith('.view') || k.endsWith('.resume')));
+  expect(keptAfter.length === 0, `signing out forgets the drafts, the org and the view, so the next person starts clean (${keptAfter})`);
   expect(/Continue with GitHub/.test(await t.text()), 'signing out goes back to the sign-in screen');
   expect(t.calls.at(-1).m === 'DELETE' && t.calls.at(-1).path === '/v1/session', 'and ends the session on the server');
   await t.page.reload({ waitUntil: 'networkidle2' });
@@ -663,6 +675,29 @@ const done = async (t) => {
   await t.click('[role=dialog] button', 'Add');
   await wait(800);
   expect(t.added.length === 1 && t.added[0].text === 'Keep this text.', 'one more click adds it');
+  await done(t);
+}
+
+{
+  const t = await open('write-after-session-ran-out', { signedOutOnWrite: true });
+  await t.signIn();
+  await t.view('Skills');
+  await t.click('button', 'Write a skill');
+  await wait(500);
+  await t.page.click('[aria-label="Written skill name"]');
+  await t.page.keyboard.type('Migrations');
+  await t.page.click('[aria-label="Written skill description"]');
+  await t.page.keyboard.type('Use for db/migrations.');
+  await t.page.click('[aria-label="Written skill text"]');
+  await t.page.keyboard.type('Every migration has a down step.');
+  await t.click('[role=dialog] button', 'Save skill');
+  await wait(2500);
+  expect(t.renewals.length === 1 && t.written.length === 0, 'when the session ran out while saving a written skill, the page signs in again and nothing was saved');
+  const keptText = await t.page.evaluate(() => document.querySelector('[aria-label="Written skill text"]')?.value);
+  expect(keptText === 'Every migration has a down step.', `after the new sign-in the written skill's form is open again, with its text (${keptText})`);
+  await t.click('[role=dialog] button', 'Save skill');
+  await wait(800);
+  expect(t.written.length === 1 && t.written[0].name === 'Migrations', 'one more click saves it');
   await done(t);
 }
 
