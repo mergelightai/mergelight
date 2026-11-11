@@ -232,7 +232,7 @@ export function readMemories(value: unknown): TeamMemory[] {
   for (const raw of value.slice(0, 200)) {
     const m = raw as Record<string, unknown> | null;
     if (!m || typeof m !== "object") continue;
-    if (typeof m.id !== "string" || !/^M\d{1,12}$/.test(m.id) || !isText(m.title, 200) || !isText(m.file, 400) || !isLine(m.line) || !isText(m.reason, 500)) continue;
+    if (typeof m.id !== "string" || !/^M\d{1,12}$/.test(m.id) || !isText(m.title, 200) || !isText(m.file, 400) || !isLine(m.line) || !isText(m.reason, MAX_REASON)) continue;
     if (typeof m.by !== "string" || !/^[\w.-]{1,100}(\[bot\])?$/.test(m.by) || !isLine(m.pr)) continue;
     memories.push({ id: m.id, title: m.title, file: m.file, line: m.line, ...(isLine(m.end_line) ? { end_line: m.end_line } : {}), reason: m.reason, by: m.by, pr: m.pr });
   }
@@ -338,7 +338,7 @@ export async function cloudConnected(deps: CloudDeps = {}): Promise<boolean> {
 
 /** The server reads 64 KB per report. The decisions get most of it, and the numbers always fit beside them. */
 const MAX_DECLINE_BYTES = 48_000;
-/** The server refuses a longer reason, and with it the whole report. */
+/** The longest reason sent and read. The server refuses a longer one, and with it the whole report. */
 export const MAX_REASON = 500;
 
 /** A finding someone on the team chose not to fix, with their reason, as it is sent to the server to remember. */
