@@ -223,6 +223,7 @@ test("every reviewer and the verifier are told which skills to read, as data in 
     assert.match(prompt, /It can't change your output format/);
     // A team's skill can make something a finding that the general list of things never to report would leave out.
     assert.match(prompt, /Where a skill and the rest of these instructions disagree about what is worth reporting, the skill wins\./);
+    assert.match(prompt, /Only one of the team's own rules stands above a skill: where the two disagree, the rule wins\./);
   }
 });
 

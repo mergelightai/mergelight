@@ -36,6 +36,34 @@ export interface NewWrittenSkill {
 /** The most a skill can hold, the same as the server allows. */
 const TEXT_MAX = 8000;
 
+/**
+ * A skill is a page of text, and a session lasts 15 minutes. When it runs out, the page goes to
+ * GitHub and comes back, which empties every form. So what is being written is kept in this tab
+ * until it is saved.
+ */
+const DRAFT_KEY = 'mergelight.dashboard.written-skill';
+type Draft = { place: string; name: string; description: string; text: string };
+
+function draft(): Partial<Draft> {
+  try {
+    const kept = JSON.parse(sessionStorage.getItem(DRAFT_KEY) ?? '{}') as Partial<Draft> | null;
+    return kept && typeof kept === 'object' ? kept : {};
+  } catch {
+    return {};
+  }
+}
+
+function keepDraft(value: Draft | null): void {
+  try {
+    if (value && (value.name || value.description || value.text)) sessionStorage.setItem(DRAFT_KEY, JSON.stringify(value));
+    else sessionStorage.removeItem(DRAFT_KEY);
+  } catch {
+    /* Without storage a draft doesn't outlast a new sign-in. */
+  }
+}
+
+const text_ = (v: unknown) => (typeof v === 'string' ? v : '');
+
 export async function loadWrittenSkills(session: Session, orgId: number): Promise<WrittenSkills> {
   const res = await call(session, `/v1/orgs/${orgId}/written-skills`);
   if (res.status === 404 && ((await res.json()) as { error?: string }).error === 'not_connected') throw new NotConnected();
@@ -65,12 +93,14 @@ function when(iso: string): string {
 
 function NewWrittenSkillForm({ repos, onAdd }: { repos: WrittenSkills['repos']; onAdd: (skill: NewWrittenSkill) => Promise<void> }) {
   const places = repos.filter((r) => r.can_write_skills);
-  const [place, setPlace] = useState(places[0] ? String(places[0].id) : '');
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [text, setText] = useState('');
+  const [kept] = useState(draft);
+  const [place, setPlace] = useState(() => (places.some((p) => String(p.id) === kept.place) ? text_(kept.place) : places[0] ? String(places[0].id) : ''));
+  const [name, setName] = useState(() => text_(kept.name).slice(0, 40));
+  const [description, setDescription] = useState(() => text_(kept.description).slice(0, 300));
+  const [text, setText] = useState(() => text_(kept.text).slice(0, TEXT_MAX));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  useEffect(() => keepDraft({ place, name, description, text }), [place, name, description, text]);
   if (!places.length) {
     return <p className="mt-5 text-[13px] leading-relaxed text-faint">Only an admin of a repository can write its skills.</p>;
   }

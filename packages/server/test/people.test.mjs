@@ -634,6 +634,11 @@ test("text a team writes for the AI can't hold characters the team can't see", a
   const skill = await writeSkill(ada, { ...PAYMENTS, text: `Refunds.\u202e${tags}` });
   assert.equal(skill.status, 400);
   assert.match((await skill.json()).message, why);
+  // The answer says which field it is in, so the person doesn't search the wrong one.
+  const line = await writeSkill(ada, { ...PAYMENTS, description: "Use for billing.\u200b" });
+  assert.match((await line.json()).message, /^The line on when to use it holds an invisible character \(U\+200B\)/);
+  const body = await writeSkill(ada, { ...PAYMENTS, text: "Refunds.\u2060" });
+  assert.match((await body.json()).message, /^The skill's text holds an invisible character \(U\+2060\)/);
 
   // One joiner between two letters or two emoji is how Persian words and joined emoji are written. A run of them is not.
   assert.equal((await addCheck(ada, { ...TRANSLATIONS, name: "Persian", text: "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645 \u{1f469}\u200d\u{1f4bb}" })).status, 201);

@@ -393,6 +393,11 @@ const done = async (t) => {
   await t.click('button', 'Save skill');
   await wait(600);
   expect(/This repository already has a skill of that name\./.test(await t.text()), 'when the server refuses a skill, the page shows why');
+  // A session lasts 15 minutes and a new sign-in reloads the page. What is being written must still be there.
+  await t.page.reload({ waitUntil: 'networkidle2' });
+  await wait(600);
+  const draftKept = await t.page.evaluate(() => ['Written skill name', 'Written skill description', 'Written skill text'].map((l) => document.querySelector(`[aria-label="${l}"]`).value).join(' | '));
+  expect(draftKept === 'Payments | Again. | Text.', `a skill that is being written is still in the form after the page loads again (${draftKept})`);
   await t.click('button', 'Delete skill');
   await wait(600);
   expect(t.writtenRemoved.join() === '31' && !/Payments · Use when a pull request changes src\/billing/.test(await t.text()), 'Delete takes the skill off the server and the page');
