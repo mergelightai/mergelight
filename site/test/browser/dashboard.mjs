@@ -142,7 +142,7 @@ const done = async (t) => {
   const t = await open('sign-in');
   await t.page.goto(`${base}/dashboard/`, { waitUntil: 'networkidle2' });
   expect(/Your reviews, in one place/.test(await t.text()), 'a signed-out visitor sees the sign-in screen');
-  expect(/numbers about each review, and the findings your team declined/.test(await t.text()) && /Never your code/.test(await t.text()), 'it says what the dashboard holds');
+  expect(/numbers about each review, and the findings your team declined, with who declined each one and why/.test(await t.text()) && /Never your code/.test(await t.text()), 'it says what the dashboard holds');
   expect(t.calls.length === 0, 'nothing is asked of the server before a sign-in');
   await t.shot('1-signed-out');
   const { href, state } = await t.signIn();

@@ -282,6 +282,7 @@ test("only decisions in files this pull request changes reach the verifier", () 
   assert.deepEqual(memoriesFor(all, ["src/cart.ts", "README.md"]).map((m) => m.id), ["M12", "M3"]);
   assert.deepEqual(memoriesFor(all, ["docs/x.md"]), []);
   assert.deepEqual(memoriesFor(undefined, ["src/cart.ts"]), []);
+  assert.deepEqual(memoriesFor([memory({ file: "./src/cart.ts" }), memory({ id: "M4", file: "/src/cart.ts" })], ["src/cart.ts"]).map((m) => m.id), ["M12", "M4"]);
   // A decision made on this pull request is not handed back to its own later reviews.
   assert.deepEqual(memoriesFor(all, ["src/cart.ts"], 7), []);
   assert.deepEqual(memoriesFor([...all, memory({ id: "M9", pr: 8 })], ["src/cart.ts"], 7).map((m) => m.id), ["M9"]);

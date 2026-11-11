@@ -10,7 +10,7 @@ A run that has the input set does tell the server who it is, even before the ser
 
 Stored, per review: the repository's name and GitHub id, the pull request number, the commit, the light (green, yellow, red), how many findings of each kind, which AI ran it (`codex` or `claude`, and the model's name), how long it took, and the size of the change.
 
-Stored, per finding a team declined: its title, the file and lines it was in, the reason the person gave, who declined it and in which pull request. This is the one place the server holds text about your code. It is what lets a later review leave that finding out.
+Stored, per finding a team declined: its title, the file and lines it was in, the reason the person gave, the GitHub login of who declined it, when, and in which pull request. This is the one place the server holds text about your code. It is what lets a later review leave that finding out.
 
 Never stored, because it is never sent: code, diffs, findings nobody declined, pull request titles, AI logins.
 

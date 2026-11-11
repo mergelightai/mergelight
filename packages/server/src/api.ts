@@ -335,7 +335,7 @@ export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"
            on conflict (org_id, repo_id, finding_id) do update
              set title = excluded.title, file = excluded.file, line = excluded.line, end_line = excluded.end_line,
                  reason = excluded.reason, by_login = excluded.by_login, pr = excluded.pr, decided_at = excluded.decided_at,
-                 updated_at = now(), forgotten_at = null, last_used_at = null
+                 updated_at = now(), forgotten_at = null, last_used_at = null, uses = 0
              where excluded.decided_at > memories.decided_at`,
           [who.orgId, who.repoId, d.finding_id, d.title, d.file, d.line, d.end_line, d.reason, d.by, r.pr, d.decided_at],
         );

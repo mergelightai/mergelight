@@ -194,8 +194,10 @@ const MAX_MEMORIES = 30;
  * earlier rounds, and reviewing its own pull request again must not count as a use that keeps it alive.
  */
 export function memoriesFor(memories: TeamMemory[] | undefined, changedFiles: string[], pullRequest?: number): TeamMemory[] {
-  const changed = new Set(changedFiles);
-  return (memories ?? []).filter((m) => changed.has(m.file) && m.pr !== pullRequest).slice(0, MAX_MEMORIES);
+  // The same file, however its path was written down: src/a.ts, ./src/a.ts or /src/a.ts.
+  const plain = (path: string) => path.replace(/^(\.\/|\/)+/, "");
+  const changed = new Set(changedFiles.map(plain));
+  return (memories ?? []).filter((m) => changed.has(plain(m.file)) && m.pr !== pullRequest).slice(0, MAX_MEMORIES);
 }
 
 export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): Promise<Review> {

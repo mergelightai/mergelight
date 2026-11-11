@@ -68,7 +68,7 @@ function SignIn({ failed, cancelled }: { failed: boolean; cancelled: boolean }) 
       <a href={signInUrl()} className={`${PRIMARY} mt-7`}>
         <GitHubIcon className="size-[18px]" /> Continue with GitHub
       </a>
-      <p className="mx-auto mt-6 max-w-[340px] text-[13px] leading-relaxed text-faint">The dashboard holds numbers about each review, and the findings your team declined with the reason. Never your code.</p>
+      <p className="mx-auto mt-6 max-w-[340px] text-[13px] leading-relaxed text-faint">The dashboard holds numbers about each review, and the findings your team declined, with who declined each one and why. Never your code.</p>
     </div>
   );
 }
@@ -226,7 +226,7 @@ function NothingYet({ org }: { org: Org }) {
         <span className="text-mint">{`server: ${SERVER}`}</span>
       </pre>
       <p className="mt-4 max-w-xl text-[13px] leading-relaxed text-faint">
-        A review then sends its numbers: the light, how many findings, which AI ran it and how long it took. It also sends the findings your team declined, with the reason each person gave. It never sends code.
+        A review then sends its numbers: the light, how many findings, which AI ran it and how long it took. It also sends the findings your team declined, with who declined each one and why. It never sends code.
       </p>
       <p className="mt-4 max-w-xl text-[14px] leading-relaxed text-muted">
         Already sending reviews? Then they are in repositories this sign-in can't see.{' '}
@@ -288,7 +288,12 @@ export default function Dashboard() {
     if (!session || !org) return () => undefined;
     let gone = false;
     setView({ kind: 'loading' });
-    Promise.all([loadOverview(session, org.id), loadDecisions(session, org.id)])
+    // The reviews are the page. If only the list of decisions fails, they still show.
+    const decisions = loadDecisions(session, org.id).catch((err) => {
+      if (err instanceof SignedOut || err instanceof NotConnected) throw err;
+      return { decisions: [], total: 0 };
+    });
+    Promise.all([loadOverview(session, org.id), decisions])
       .then(([overview, { decisions, total }]) => !gone && setView({ kind: 'ready', overview, decisions, total }))
       .catch((err) => {
         if (gone) return;
