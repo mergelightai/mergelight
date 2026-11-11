@@ -118,7 +118,9 @@ export function headline(r: Review, handled = 0): string {
   if (minor) parts.push(plural(minor, "minor bug"));
   const fix = parts.length ? `${parts.join(", ")} to fix` : "";
   const call = decisions ? `${decisions} for you to decide` : "";
-  return [fix, call].filter(Boolean).join(", ") || (handled ? "Nothing left to fix" : "Nothing worth fixing");
+  // A guarded file is why this one needs a human, when nothing else is: "Nothing worth fixing" would contradict the light.
+  const guarded = r.needs_human?.length ? "Changes a file that always needs a human" : "";
+  return [fix, call].filter(Boolean).join(", ") || guarded || (handled ? "Nothing left to fix" : "Nothing worth fixing");
 }
 
 export interface SummaryInput {

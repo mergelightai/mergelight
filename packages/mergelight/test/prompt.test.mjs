@@ -358,6 +358,14 @@ test("a path pattern matches like people expect: * in a folder, ** across folder
     ["Dockerfile", "services/api/Dockerfile"],
     ["src/file?.ts", "src/file1.ts"],
     ["src/a+b/c.ts", "src/a+b/c.ts"],
+    // A folder, written the three ways people write one, and a bare folder name anywhere.
+    ["src/billing", "src/billing/invoice.ts"],
+    ["src/billing/", "src/billing/eu/vat/rate.ts"],
+    ["src/billing/**", "src/billing/eu/vat/rate.ts"],
+    ["migrations", "db/migrations/001_init.sql"],
+    ["migrations/", "migrations/001_init.sql"],
+    ["db/*/seeds", "db/prod/seeds/users.sql"],
+    ["/src/billing/", "src/billing/a.ts"],
   ];
   const no = [
     ["src/billing/**", "src/billing.ts"],
@@ -367,6 +375,12 @@ test("a path pattern matches like people expect: * in a folder, ** across folder
     ["src/file?.ts", "src/file12.ts"],
     ["src/a.ts", "src/axts"],
     ["src/a+b/c.ts", "src/aab/c.ts"],
+    ["src/billing", "src/billing-old/a.ts"],
+    ["src/billing/", "lib/src/billing/a.ts"],
+    ["migrations", "db/migrations.md"],
+    ["src/*.ts", "src/a.ts.d/x"],
+    ["", "src/a.ts"],
+    ["/", "src/a.ts"],
   ];
   for (const [pattern, file] of yes) assert.equal(matchesPath(pattern, file), true, `${pattern} ~ ${file}`);
   for (const [pattern, file] of no) assert.equal(matchesPath(pattern, file), false, `${pattern} !~ ${file}`);
@@ -421,7 +435,9 @@ test("a guarded file keeps a pull request from going green, and never makes a li
 
 test("the summary says which guarded file was changed, and says when the team's rules couldn't be read", () => {
   assert.equal(summaryWith("Adds paging.", [], false), "Adds paging.");
-  assert.equal(summaryWith("Adds paging.", ["src/billing/tax.ts"], false), "Adds paging. It changes src/billing/tax.ts, which your team marked as always needing a human.");
-  assert.match(summaryWith("Adds paging.", ["a", "b", "c", "d", "e"], false), /It changes a, b, c and 2 more, which your team/);
-  assert.match(summaryWith("Adds paging.", [], true), /couldn't reach its server, so this review ran without your team's rules and earlier decisions\.$/);
+  assert.equal(summaryWith("Adds paging.", ["src/billing/tax.ts"], false), "Adds paging. It changes `src/billing/tax.ts`, which your team marked as always needing a human.");
+  assert.match(summaryWith("Adds paging.", ["a", "b", "c", "d", "e"], false), /It changes `a`, `b`, `c` and 2 more, which your team/);
+  // A name with markdown in it shows as it is.
+  assert.match(summaryWith("x.", ["db/__init__.py", "a`b*c"], false), /`db\/__init__\.py`, `a'b\*c`/);
+  assert.match(summaryWith("Adds paging.", [], true), /couldn't get your team's rules and earlier decisions from its server, so this review ran without them\.$/);
 });

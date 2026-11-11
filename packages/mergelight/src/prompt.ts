@@ -66,14 +66,29 @@ function matchesSegment(pattern: string, name: string): boolean {
 
 /**
  * One pattern as the dashboard takes them: * within a folder, ** across folders, ? for one character.
+ * A pattern that names a folder covers everything in it, however it is written: "src/billing",
+ * "src/billing/" and "src/billing/**" all cover src/billing/eu/vat.ts, and a bare "migrations"
+ * covers a folder of that name anywhere. People write folders all three ways, and a guard that
+ * silently matched nothing would be worse than no guard.
+ *
  * It is matched folder by folder with a table of what was tried, so the work is bounded by the
  * lengths of the pattern and the path. A pattern can't be written that makes it hang.
  */
 export function matchesPath(pattern: string, file: string): boolean {
-  const plain = (path: string) => path.replace(/^(\.\/|\/)+/, "");
-  // A pattern with no folder in it, like "*.sql", is about the file's name wherever it sits.
-  const parts = pattern.includes("/") ? plain(pattern).split("/") : ["**", pattern];
-  const names = plain(file).split("/");
+  const plain = (path: string) => path.replace(/^(\.\/|\/)+/, "").replace(/\/+$/, "");
+  const trimmed = plain(pattern);
+  if (!trimmed) return false;
+  // A pattern with no folder in it, like "*.sql" or "migrations", is about that name wherever it sits.
+  const parts = trimmed.includes("/") ? trimmed.split("/") : ["**", trimmed];
+  const all = plain(file).split("/");
+  // The file itself, then each folder it sits in: a pattern that matches a folder covers what is inside.
+  for (let length = all.length; length >= 1; length--) {
+    if (matchesNames(parts, all.slice(0, length))) return true;
+  }
+  return false;
+}
+
+function matchesNames(parts: string[], names: string[]): boolean {
   const tried = new Map<number, boolean>();
   const from = (pi: number, ni: number): boolean => {
     const key = pi * (names.length + 1) + ni;

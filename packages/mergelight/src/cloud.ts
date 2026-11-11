@@ -212,7 +212,7 @@ export interface CloudContext {
 
 const NOTHING: CloudContext = { connected: false, memories: [], rules: [] };
 /** One line of plain text: no line breaks and no control characters, so it can't pass for anything but itself. */
-const isText = (v: unknown, max: number): v is string => typeof v === "string" && v.length > 0 && v.length <= max && !/[\u0000-\u001f\u007f\u2028\u2029]/.test(v);
+const isText = (v: unknown, max: number): v is string => typeof v === "string" && v.length > 0 && v.length <= max && !/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u2028-\u202e\u2066-\u2069]/.test(v);
 const isLine = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 10_000_000;
 
 /**
@@ -303,7 +303,7 @@ export interface Decline {
  */
 export function declinesOf(previous: PriorFinding[] | undefined): Decline[] {
   // Line breaks and control characters become spaces: a reason is one line of plain text by the time it is sent.
-  const clean = (text: string, max: number) => text.replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, " ").replace(/ {2,}/g, " ").trim().slice(0, max).trim();
+  const clean = (text: string, max: number) => text.replace(/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u2028-\u202e\u2066-\u2069]+/g, " ").replace(/ {2,}/g, " ").trim().slice(0, max).trim();
   const declines: Decline[] = [];
   for (const p of previous ?? []) {
     const h = p.handled;

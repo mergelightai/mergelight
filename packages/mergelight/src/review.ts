@@ -196,11 +196,13 @@ const MAX_RULES = 100;
 
 /** The summary, with what the reader must know about the team's rules: a guarded file was changed, or the rules couldn't be read. */
 export function summaryWith(summary: string, needsHuman: string[], rulesUnread: boolean): string {
+  // As code, so a name like __init__.py shows as it is and not as bold text.
+  const code = (path: string) => `\`${path.replace(/`/g, "'")}\``;
   const guarded = needsHuman.length
-    ? ` It changes ${needsHuman.slice(0, 3).join(", ")}${needsHuman.length > 3 ? ` and ${needsHuman.length - 3} more` : ""}, which your team marked as always needing a human.`
+    ? ` It changes ${needsHuman.slice(0, 3).map(code).join(", ")}${needsHuman.length > 3 ? ` and ${needsHuman.length - 3} more` : ""}, which your team marked as always needing a human.`
     : "";
   // A team may have rules that would have changed this review. Running without them must never be silent.
-  const unread = rulesUnread ? " Mergelight couldn't reach its server, so this review ran without your team's rules and earlier decisions." : "";
+  const unread = rulesUnread ? " Mergelight couldn't get your team's rules and earlier decisions from its server, so this review ran without them." : "";
   return `${summary}${guarded}${unread}`;
 }
 
@@ -259,7 +261,8 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
       diffTruncated: ws.diffTruncated,
       previous: opts.previous,
       memories: memoriesFor(opts.memories, ws.changedFiles.map((f) => f.path), pr.number),
-      rules: (opts.rules ?? []).filter((r) => r.kind === "rule" && ruleApplies(r, ws.changedFiles.map((f) => f.path))).slice(0, MAX_RULES),
+      // Matched against every path the pull request touches, exactly as git has it.
+      rules: (opts.rules ?? []).filter((r) => r.kind === "rule" && ruleApplies(r, ws.touchedPaths)).slice(0, MAX_RULES),
     };
 
     // Step 1: hunters, one per area, in parallel. One failing doesn't sink the review.

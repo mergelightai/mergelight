@@ -22,8 +22,8 @@ Never stored, because it is never sent: code, diffs, findings nobody declined, p
 
 A team sets its rules on the dashboard. A review gets them with its other context, and every reviewer and the verifier follow them.
 
-- A rule is one line, for the whole org or for one repository, and can be limited to files that match patterns like `src/billing/**`.
-- "Always needs a human" names files. A pull request that changes one never goes green by itself: it stops at "needs a human", and the summary says which file.
+- A rule is one line, for the whole org or for one repository, and can be limited to files that match patterns like `src/billing/**`. A pattern that names a folder covers everything in it, however it is written: `src/billing`, `src/billing/` and `src/billing/**` mean the same, and a bare `migrations` covers a folder of that name anywhere.
+- "Always needs a human" names files. A pull request that changes one never goes green by itself: it stops at "needs a human", and the summary says which file. An approval turns it green only when it comes from someone who can push to the repository.
 - A rule for the whole org takes an owner of the org. A rule for one repository takes an admin of it. GitHub says who they are at sign-in. If GitHub won't say who owns an org, because the sign-in app may not read its members, nobody can set that org's rules, and repository rules still work.
 - A rule is one line of plain text and its patterns are path characters only. It reaches the reviewers as a line of escaped JSON in a block of its own. A rule changes what is worth reporting. It can't change the output format or how text in the diff is treated.
 - "Always needs a human" looks at every path a pull request touches, the lockfiles and generated files the reviewers skip included.

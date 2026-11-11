@@ -546,8 +546,9 @@ export default function Dashboard() {
                   rules={view.rules}
                   onAdd={async (rule) => {
                     await signedIn(() => addRule(session, org.id, rule));
-                    const rules = await loadRules(session, org.id);
-                    setView((v) => (v.kind === 'ready' ? { ...v, rules } : v));
+                    // The rule is in. If only the fresh list fails to load, that isn't a failed Add: saying so would invite a second one.
+                    const rules = await loadRules(session, org.id).catch(() => null);
+                    if (rules) setView((v) => (v.kind === 'ready' ? { ...v, rules } : v));
                   }}
                   onRemove={async (rule) => {
                     await signedIn(() => removeRule(session, org.id, rule.id));

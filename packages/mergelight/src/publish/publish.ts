@@ -404,6 +404,9 @@ export async function approveCheck(api: GitHub, number: number, by: string): Pro
   const latest = await latestCheck(api, pr.head.sha);
   if (!latest) return "No Mergelight check on this commit.";
   if (!isYellowCheck(latest)) return `Mergelight check is ${latest.conclusion ?? "still running"}, nothing to approve.`;
+  // GitHub lets anyone who can read a repository leave an approving review. "Needs a human" means a
+  // human the team trusts with the code, so only someone who can push turns the check green.
+  if (!(await writeAccess(api)(by))) return `${by} can't push to this repository, so their approval doesn't turn the Mergelight check green.`;
   const body = {
     conclusion: "success",
     output: {
