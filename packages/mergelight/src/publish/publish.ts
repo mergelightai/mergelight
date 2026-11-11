@@ -118,17 +118,23 @@ export async function previousFindings(api: GitHub, number: number, headSha?: st
       const mark = marks.get(id);
       const by = resolved.get(id);
       const reply = replies.get(id);
-      // A resolve with a reason is a decision, unless the code there changed since: then the reply may
-      // well say how it was fixed. Only a decision is remembered for later pull requests.
-      // Only replies written after the latest review: one from before may answer an older round, such as
-      // a fix that review then checked. A reply that says it fixed something is no decision either.
-      const fresh = reply?.replies.filter((r) => latest && Date.parse(r.at) > Date.parse(latest.at)) ?? [];
-      const decided = fresh.length > 0 && !fresh.some((r) => FIX_CLAIM.test(r.text)) && f.status === "open" && (await unchanged(f));
-      const said = decided ? fresh : (reply?.replies ?? []);
+      // A resolve whose latest reply isn't a fix claim gives the team's reason, in every review that reads
+      // it: all of the resolver's replies but the fix claims, so a later "thanks" doesn't replace it.
+      const all = reply?.replies ?? [];
+      const last = all.at(-1);
+      const reasons = all.filter((r) => !FIX_CLAIM.test(r.text));
+      const isReason = Boolean(last) && !FIX_CLAIM.test(last!.text);
+      // It is remembered for later pull requests only in the review right after it was written, and only
+      // if the code there didn't change since the review it answers: then the reply may say how it was
+      // fixed. A reply from before the latest review may answer an older round, such as a fix it checked.
+      const fresh = all.filter((r) => latest && Date.parse(r.at) > Date.parse(latest.at));
+      const remember = isReason && fresh.length > 0 && !fresh.some((r) => FIX_CLAIM.test(r.text)) && f.status === "open" && (await unchanged(f));
       const handled = mark
         ? { as: mark.as, note: mark.note, by: mark.by, sha: mark.sha, from: "mark" as const, at: mark.at }
-        : by && reply
-          ? { as: "wont_fix" as const, ...oneLine(said.map((r) => r.text).join("\n\n")), by, sha: null, from: decided ? ("reply" as const) : ("thread" as const), at: said.at(-1)!.at }
+        : by && isReason
+          ? { as: "wont_fix" as const, ...oneLine(reasons.map((r) => r.text).join("\n\n")), by, sha: null, from: "reply" as const, at: reasons.at(-1)!.at, ...(remember ? { remember: true as const } : {}) }
+          : by && last
+            ? { as: "wont_fix" as const, ...oneLine(all.map((r) => r.text).join("\n\n")), by, sha: null, from: "thread" as const, at: last.at }
           : by
             ? { as: "wont_fix" as const, note: RESOLVED_ONLY, by, sha: null, from: "thread" as const }
             : undefined;
@@ -137,8 +143,11 @@ export async function previousFindings(api: GitHub, number: number, headSha?: st
   );
 }
 
-/** A reply that says the problem was fixed: it starts with fixed, done or addressed, or names a commit. */
-const FIX_CLAIM = /^\W*(fixed|done|addressed)\b|\b[0-9a-f]{7,40}\b/i;
+/**
+ * A reply that says the problem was fixed: it starts with fixed, done or addressed, or names a commit.
+ * A commit is 7 to 40 hex characters with both a letter and a digit, so a plain number isn't one.
+ */
+const FIX_CLAIM = /^\W*(fixed|done|addressed)\b|\b(?=[0-9a-f]*[a-f])(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b/i;
 
 /** A person's reply as the verifier reads it: one line, nothing hidden, not too long. cut: it was longer. */
 function oneLine(text: string): { note: string; cut?: true } {

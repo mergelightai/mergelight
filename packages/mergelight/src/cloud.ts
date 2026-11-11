@@ -364,8 +364,8 @@ export function declinesOf(previous: PriorFinding[] | undefined): Decline[] {
   const declines: Decline[] = [];
   for (const p of previous ?? []) {
     const h = p.handled;
-    // A mark, or a reason someone gave when they resolved the thread. A plain resolve has no reason to keep.
-    if (!h || h.as !== "wont_fix" || (h.from !== "mark" && h.from !== "reply") || !h.note?.trim()) continue;
+    // A mark, or a reason someone just gave when they resolved the thread. A plain resolve has no reason to keep.
+    if (!h || h.as !== "wont_fix" || (h.from !== "mark" && !(h.from === "reply" && h.remember)) || !h.note?.trim()) continue;
     if (!/^[a-f0-9]{6,40}$/.test(p.id) || !/^[\w.-]{1,100}(\[bot\])?$/.test(h.by) || !isLine(p.line)) continue;
     const title = clean(p.title, 200);
     const file = clean(p.file, 400);
@@ -412,7 +412,7 @@ export async function reportReview(review: Review, deps: CloudDeps = {}, decline
     if (res.status === 400 && declines.length) {
       // The server refused something in the report. If it was a decision, the numbers still count: send
       // them again without any. An older server, for one, takes shorter reasons than this version sends.
-      d.log("The Mergelight server refused the report with the team's decisions. Sending the numbers without them: the decisions aren't stored this time, and the next review of this pull request sends them again.");
+      d.log("The Mergelight server refused the report with the team's decisions. Sending the numbers without them: the decisions aren't stored this time. The next review of this pull request sends its marks again, but not a reason given in a thread: reply there again to keep it.");
       declines = [];
       res = await call(d, server, "/v1/reviews", { method: "POST", body: JSON.stringify({ ...JSON.parse(body), declines: undefined, report_id: randomUUID() }) });
     }

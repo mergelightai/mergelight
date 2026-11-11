@@ -440,8 +440,10 @@ test("the reviewing model's process can't ask GitHub for a token at all", () => 
 });
 
 test("a reason given when resolving a thread is remembered like a mark, a plain resolve isn't", () => {
-  const [d] = declinesOf([prior(mark({ from: "reply", note: "Known\u200b, ships next release." }))]);
+  const [d] = declinesOf([prior(mark({ from: "reply", remember: true, note: "Known\u200b, ships next release." }))]);
   assert.equal(d.reason, "Known, ships next release.");
+  // A reason from an earlier review was already sent, or can't be told from a fix any more.
+  assert.deepEqual(declinesOf([prior(mark({ from: "reply", note: "Known, ships next release." }))]), []);
   assert.deepEqual(declinesOf([prior(mark({ from: "thread", note: "Resolved the comment on the pull request." }))]), []);
 });
 

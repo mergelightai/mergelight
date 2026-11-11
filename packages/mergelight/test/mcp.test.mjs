@@ -678,60 +678,62 @@ const findingThread = (id, commentId, replies, over = {}) => ({
 });
 const reply = (login, body, at = "2030-01-02T00:00:00Z") => ({ databaseId: 9, body, createdAt: at, author: { __typename: "User", login } });
 
-test("a reason given when resolving a thread is a decision, unless the code there changed or someone else wrote it", async () => {
+test("a reason given when resolving a thread is the team's decision, and is kept for later only when fresh and on unchanged code", async () => {
   const state = stateOf([
     finding({ id: "aaaaaaaaaa", file: "src/a.ts", line: 12, end_line: 12 }),
     finding({ id: "bbbbbbbbbb", file: "src/b.ts", line: 30, end_line: 30 }),
     finding({ id: "cccccccccc", file: "src/c.ts", line: 5, end_line: 5 }),
     finding({ id: "dddddddddd", file: "src/d.ts", line: 5, end_line: 5 }),
+    finding({ id: "eeeeeeeeee", file: "src/b.ts", line: 31, end_line: 31 }),
   ]);
-  const { env } = useScenario({
-    issueComments: [summaryComment(state)],
-    threads: [
+  const scenario = (threads, compare = { status: "ahead", files: [] }) => useScenario({ issueComments: [summaryComment(state)], threads, ...(compare ? { compare } : {}) });
+  const read = async (s, id = "aaaaaaaaaa") => (await withFakeGh(s.env, () => previousFindings(new GitHub("o", "r"), 7, PUSHED))).find((p) => p.id === id).handled;
+
+  const main = scenario(
+    [
       findingThread("aaaaaaaaaa", 501, [reply("teammate", "Valid, and known.\n\nThe repair ships\u200b next release."), reply("mergelight-ai", "<!-- mergelight:remembered -->\nRemembered.")]),
       findingThread("bbbbbbbbbb", 502, [reply("teammate", "Fixed in abc.")]),
       findingThread("cccccccccc", 503, [reply("stranger", "Not a problem.")]),
       findingThread("dddddddddd", 504, []),
+      findingThread("eeeeeeeeee", 505, [reply("teammate", "Known, leave it.")]),
     ],
-    compare: { status: "ahead", files: [{ filename: "src/b.ts", patch: "@@ -28,5 +28,6 @@\n ctx" }, { filename: "src/a.ts", patch: "@@ -100,2 +100,3 @@\n ctx" }] },
-  });
-  const previous = await withFakeGh(env, () => previousFindings(new GitHub("o", "r"), 7, PUSHED));
+    { status: "ahead", files: [{ filename: "src/b.ts", patch: "@@ -28,5 +28,6 @@\n ctx" }, { filename: "src/a.ts", patch: "@@ -100,2 +100,3 @@\n ctx" }] },
+  );
+  const previous = await withFakeGh(main.env, () => previousFindings(new GitHub("o", "r"), 7, PUSHED));
   const byId = Object.fromEntries(previous.map((p) => [p.id, p.handled]));
-  assert.deepEqual(byId.aaaaaaaaaa, { as: "wont_fix", note: "Valid, and known. The repair ships next release.", by: "teammate", sha: null, from: "reply", at: "2030-01-02T00:00:00Z" }, "the file changed, but far from the finding");
-  assert.equal(byId.bbbbbbbbbb.from, "thread", "the lines changed: the reply may say how it was fixed");
+  assert.deepEqual(byId.aaaaaaaaaa, { as: "wont_fix", note: "Valid, and known. The repair ships next release.", by: "teammate", sha: null, from: "reply", at: "2030-01-02T00:00:00Z", remember: true }, "the file changed, but far from the finding");
+  assert.equal(byId.bbbbbbbbbb.from, "thread", "a fix claim isn't a reason");
   assert.equal(byId.bbbbbbbbbb.note, "Fixed in abc.");
   assert.equal(byId.cccccccccc.note, "Resolved the comment on the pull request.", "only the person who resolved it gives the reason");
   assert.equal(byId.dddddddddd.from, "thread");
-  // GitHub can't say what changed: nothing becomes a decision.
-  const unknown = useScenario({ issueComments: [summaryComment(state)], threads: [findingThread("aaaaaaaaaa", 501, [reply("teammate", "Known.")])] });
-  const again = await withFakeGh(unknown.env, () => previousFindings(new GitHub("o", "r"), 7, PUSHED));
-  assert.equal(again.find((p) => p.id === "aaaaaaaaaa").handled.from, "thread");
-  // After a force-push the diff's lines don't match the finding's: nothing becomes a decision.
-  const forced = useScenario({ issueComments: [summaryComment(state)], threads: [findingThread("aaaaaaaaaa", 501, [reply("teammate", "Known.")])], compare: { status: "diverged", files: [] } });
-  assert.equal((await withFakeGh(forced.env, () => previousFindings(new GitHub("o", "r"), 7, PUSHED))).find((p) => p.id === "aaaaaaaaaa").handled.from, "thread");
-  // A reply from before the latest review answers an older round: not a decision, though it is still read.
-  const old = useScenario({ issueComments: [summaryComment(state)], threads: [findingThread("aaaaaaaaaa", 501, [reply("teammate", "Fixed in B.", "2001-01-01T00:00:00Z")])], compare: { status: "ahead", files: [] } });
-  const before = (await withFakeGh(old.env, () => previousFindings(new GitHub("o", "r"), 7, PUSHED))).find((p) => p.id === "aaaaaaaaaa").handled;
-  assert.equal(before.from, "thread");
-  assert.equal(before.note, "Fixed in B.");
-  // All of the resolver's replies count, so a later "thanks" doesn't replace the reason; a long one says it was cut.
-  const many = useScenario({ issueComments: [summaryComment(state)], threads: [findingThread("aaaaaaaaaa", 501, [reply("teammate", "Known, ships next release."), reply("teammate", "Thanks!"), reply("teammate", "x".repeat(1200))])], compare: { status: "ahead", files: [] } });
-  const joined = (await withFakeGh(many.env, () => previousFindings(new GitHub("o", "r"), 7, PUSHED))).find((p) => p.id === "aaaaaaaaaa").handled;
+  assert.equal(byId.eeeeeeeeee.from, "reply", "the lines changed: still the team's reason for this pull request");
+  assert.equal(byId.eeeeeeeeee.remember, undefined, "but not kept for later: the reply may answer the old code");
+
+  // Not kept for later when GitHub can't say what changed, after a force-push, or from before the latest review.
+  assert.equal((await read(scenario([findingThread("aaaaaaaaaa", 501, [reply("teammate", "Known.")])], null))).remember, undefined);
+  assert.equal((await read(scenario([findingThread("aaaaaaaaaa", 501, [reply("teammate", "Known.")])], { status: "diverged", files: [] }))).remember, undefined);
+  const old = await read(scenario([findingThread("aaaaaaaaaa", 501, [reply("teammate", "Known, leave it.", "2001-01-01T00:00:00Z")])]));
+  assert.equal(old.from, "reply", "two reviews later, it still reads as the team's decision");
+  assert.equal(old.remember, undefined);
+
+  // The resolver's replies count together, so a later "thanks" doesn't replace the reason. A long one says it was cut.
+  const joined = await read(scenario([findingThread("aaaaaaaaaa", 501, [reply("teammate", "Known, ships next release."), reply("teammate", "Thanks!"), reply("teammate", "x".repeat(1200))])]));
   assert.ok(joined.note.startsWith("Known, ships next release. Thanks! xxx"));
   assert.equal(joined.note.length, 1000);
   assert.equal(joined.cut, true);
-  // A fresh reply that says it fixed something is no decision: the verifier is told it was resolved, with what was said.
-  const claim = useScenario({ issueComments: [summaryComment(state)], threads: [findingThread("aaaaaaaaaa", 501, [reply("teammate", "Fixed in 3f2a9c1, the check moved to the caller.")])], compare: { status: "ahead", files: [] } });
-  const claimed = (await withFakeGh(claim.env, () => previousFindings(new GitHub("o", "r"), 7, PUSHED))).find((p) => p.id === "aaaaaaaaaa");
-  assert.equal(claimed.handled.from, "thread");
-  const prompt = buildVerifierPrompt({ pr: { owner: "o", repo: "r", number: 7, title: "t", author: "a", baseRef: "main", body: "" }, mergeBase: "b", headSha: "h", diffStat: "", diff: "", diffTruncated: false, previous: [claimed] }, []);
-  assert.ok(prompt.includes("team: resolved the comment, by teammate, saying: Fixed in 3f2a9c1"));
-  assert.ok(!prompt.includes("decided not to fix, by teammate: Fixed"));
-  // Only the replies after the latest review make the decision: an older remark stays out of it.
-  const mixed = useScenario({ issueComments: [summaryComment(state)], threads: [findingThread("aaaaaaaaaa", 501, [reply("teammate", "Looking into it.", "2001-01-01T00:00:00Z"), reply("teammate", "Known, leave it.")])], compare: { status: "ahead", files: [] } });
-  const fresh = (await withFakeGh(mixed.env, () => previousFindings(new GitHub("o", "r"), 7, PUSHED))).find((p) => p.id === "aaaaaaaaaa").handled;
-  assert.equal(fresh.from, "reply");
-  assert.equal(fresh.note, "Known, leave it.");
+
+  // A reply that says it fixed something is no decision: the verifier is told it was resolved, with what was said.
+  const claimed = await read(scenario([findingThread("aaaaaaaaaa", 501, [reply("teammate", "Known, leave it.", "2001-01-01T00:00:00Z"), reply("teammate", "Fixed in 3f2a9c1, the check moved to the caller.")])]));
+  assert.equal(claimed.from, "thread");
+  const prompt = buildVerifierPrompt({ pr: { owner: "o", repo: "r", number: 7, title: "t", author: "a", baseRef: "main", body: "" }, mergeBase: "b", headSha: "h", diffStat: "", diff: "", diffTruncated: false, previous: [{ id: "aaaaaaaaaa", title: "T", file: "src/a.ts", line: 12, handled: claimed }] }, []);
+  assert.ok(prompt.includes("team: resolved the comment, by teammate, saying: Known, leave it. Fixed in 3f2a9c1"));
+  assert.ok(!prompt.includes("decided not to fix, by teammate"));
+
+  // A plain number isn't a commit, so a reason may hold one. An older fix claim stays out of a later reason.
+  const number = await read(scenario([findingThread("aaaaaaaaaa", 501, [reply("teammate", "Fixed in B.", "2001-01-01T00:00:00Z"), reply("teammate", "We keep it: ticket 20261106 covers the rollout.")])]));
+  assert.equal(number.from, "reply");
+  assert.equal(number.remember, true);
+  assert.equal(number.note, "We keep it: ticket 20261106 covers the rollout.");
 });
 
 test("a remembered reason gets one answer in its thread", async () => {

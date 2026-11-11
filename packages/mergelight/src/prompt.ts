@@ -207,8 +207,8 @@ export interface PriorFinding {
   end_line?: number;
   /** How it happens, from the round that found it. Older state doesn't have it. */
   how?: string;
-  /** What the team said about it since, if anything. from: a mark someone wrote, a thread someone resolved, or a thread someone resolved with a reason, on code that hasn't changed since (reply). at: when they wrote it. */
-  handled?: { as: "fixed" | "wont_fix"; note: string | null; by: string; sha: string | null; from?: "mark" | "thread" | "reply"; at?: string; cut?: true };
+  /** What the team said about it since, if anything. from: a mark someone wrote, a thread someone resolved (with what they said there, if it wasn't a reason), or a thread someone resolved with a reason (reply). remember: a reason given since the latest review, on code that hasn't changed, to keep for later pull requests. at: when they wrote it. */
+  handled?: { as: "fixed" | "wont_fix"; note: string | null; by: string; sha: string | null; from?: "mark" | "thread" | "reply"; at?: string; cut?: true; remember?: true };
 }
 
 /** A problem a hunter thinks it found, before the verifier has checked it. */
