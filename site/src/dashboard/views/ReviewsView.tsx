@@ -87,7 +87,7 @@ export function ReviewsView({ overview }: { overview: Overview }) {
                   {r.model ?? r.provider}, {took(r.duration_ms)}
                 </DataCell>
                 <DataCell className="text-right">
-                  <Button variant="secondary" size="icon-sm" aria-label={`Open ${r.repo} #${r.pr} on GitHub`} render={<a href={url} target="_blank" rel="noreferrer" />} nativeButton={false}>
+                  <Button variant="ghost" size="icon-sm" className="bg-white/[0.07] hover:bg-white/[0.13]" aria-label={`Open ${r.repo} #${r.pr} on GitHub`} render={<a href={url} target="_blank" rel="noreferrer" />} nativeButton={false}>
                     <ArrowUpRightIcon />
                   </Button>
                 </DataCell>
@@ -111,7 +111,7 @@ export function ReviewsView({ overview }: { overview: Overview }) {
               </DataCell>
               <DataCell className="text-right font-medium tabular-nums">{repo.reviews}</DataCell>
               <DataCell className="text-right">
-                <Button variant="secondary" size="icon-sm" aria-label={`Open ${repo.name} on GitHub`} render={<a href={`https://github.com/${repo.name}`} target="_blank" rel="noreferrer" />} nativeButton={false}>
+                <Button variant="ghost" size="icon-sm" className="bg-white/[0.07] hover:bg-white/[0.13]" aria-label={`Open ${repo.name} on GitHub`} render={<a href={`https://github.com/${repo.name}`} target="_blank" rel="noreferrer" />} nativeButton={false}>
                   <ArrowUpRightIcon />
                 </Button>
               </DataCell>
