@@ -97,7 +97,7 @@ if (args.includes("--paginate")) {
 const path = args[1].replace("repos/o/r/", "");
 if (path === "pulls/7") out({ number: 7, title: "PR title", body: "", html_url: "https://github.com/o/r/pull/7", user: { login: "a" }, base: { ref: "main", sha: "b" }, head: { sha: s.head || "${REVIEWED}" }, additions: 1, deletions: 0, changed_files: 1 });
 else if (path.startsWith("commits/")) out({ check_runs: s.checkRuns || [] });
-else if (path.startsWith("collaborators/")) { const p = (s.permissions || {})[path.split("/")[1]]; if (!p) fail("HTTP 404"); out({ permission: p }); }
+else if (path.startsWith("collaborators/")) { const p = ({ teammate: "write", ...s.permissions })[path.split("/")[1]]; if (!p) fail("HTTP 404"); out({ permission: p }); }
 else fail("unexpected get " + path);
 `,
   { mode: 0o755 },
@@ -434,6 +434,14 @@ test("marks move a finding out of the work list, and a later review can bring a 
   assert.match(out.next, /Tell the user: the review read why 1 marked won't fix and still reports it/);
 });
 
+test("an org member who can only read the repository can't mark a finding handled", async () => {
+  const mark = { id: 2, html_url: "https://x", created_at: "2030-01-01T00:00:00Z", body: encodeMark(["aaaaaaaaaa"], "wont_fix", "nah", PUSHED), ...MEMBER };
+  const { env } = useScenario({ issueComments: [summaryComment(stateOf([finding()])), mark], permissions: { teammate: "read" } });
+  const out = await call(env, "list_findings", { pr: PR });
+  assert.deepEqual(out.handled, []);
+  assert.equal(out.findings.post[0].state, "open");
+});
+
 test("a mark from someone who can't write to the repository doesn't count", async () => {
   const mark = { id: 2, html_url: "https://x", created_at: "2030-01-01T00:00:00Z", body: encodeMark(["aaaaaaaaaa"], "wont_fix", "nah", PUSHED), ...STRANGER };
   const { env } = useScenario({ issueComments: [summaryComment(stateOf([finding()])), mark] });
@@ -459,7 +467,7 @@ test("readMarks takes the team's latest word, including members a workflow token
   const asked = [];
   const canWrite = async (login) => {
     asked.push(login);
-    return login === "private-member";
+    return login === "private-member" || login === "teammate";
   };
   const marks = await readMarks(
     [
@@ -469,6 +477,8 @@ test("readMarks takes the team's latest word, including members a workflow token
       comment({ body: encodeMark(["cccccccccc"], "fixed", null, "s"), ...STRANGER }),
       comment({ body: "no marker", ...STRANGER }),
       comment({ body: "<!-- mergelight:handled:v1 bm90IGpzb24= -->", ...MEMBER }),
+      comment({ body: encodeMark(["dddddddddd"], "wont_fix", "Not ours", "s"), user: { type: "User", login: "reader" }, author_association: "MEMBER" }),
+      comment({ body: encodeMark(["eeeeeeeeee"], "fixed", null, "s"), user: { type: "Bot", login: "some-app[bot]" }, author_association: "NONE" }),
     ],
     canWrite,
   );
@@ -476,7 +486,9 @@ test("readMarks takes the team's latest word, including members a workflow token
   assert.equal(marks.get("aaaaaaaaaa").note, "Later word");
   assert.equal(marks.get("bbbbbbbbbb").by, "private-member");
   assert.equal(marks.has("cccccccccc"), false);
-  assert.deepEqual(asked.sort(), ["private-member", "stranger"], "only looks up who the association can't vouch for");
+  assert.equal(marks.has("dddddddddd"), false, "an org member who can only read doesn't decide");
+  assert.equal(marks.get("eeeeeeeeee").by, "some-app[bot]");
+  assert.deepEqual([...new Set(asked)].sort(), ["private-member", "reader", "stranger", "teammate"], "every person is asked about, bots aren't");
 });
 
 test("decodeMark keeps out ids and types it doesn't expect", () => {

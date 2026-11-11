@@ -86,7 +86,12 @@ export function decodeMark(body: string | undefined): Pick<Mark, "as" | "note" |
   }
 }
 
-/** The latest mark per finding, from comments by people who can write to the repository. */
+/**
+ * The latest mark per finding, from comments by people who can write to the repository.
+ * A person's association isn't enough: MEMBER means a member of the org, who may only be able to read
+ * this repository, and a won't-fix mark tells the verifier the team decided. So every person is asked
+ * about. Bots are the exception: one can only comment where it was installed.
+ */
 export async function readMarks(comments: PrComment[], canWrite: (login: string) => Promise<boolean>): Promise<Map<string, Mark>> {
   const marked = comments
     .map((comment) => ({ comment, mark: decodeMark(comment.body) }))
@@ -95,7 +100,7 @@ export async function readMarks(comments: PrComment[], canWrite: (login: string)
   const marks = new Map<string, Mark>();
   for (const { comment, mark } of marked) {
     const by = comment.user?.login ?? "";
-    if (!trustedComment(comment) && !(by && (await canWrite(by)))) continue;
+    if (comment.user?.type !== "Bot" && !(by && (await canWrite(by)))) continue;
     for (const id of mark!.ids) {
       marks.set(id, { id, as: mark!.as, note: mark!.note, sha: mark!.sha, by, at: comment.created_at ?? "", url: comment.html_url });
     }
