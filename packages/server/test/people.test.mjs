@@ -623,7 +623,7 @@ test("an admin of a repository writes its skills on the dashboard, and only that
 test("text a team writes for the AI can't hold characters the team can't see", async () => {
   const ada = (await signIn(ADA)).token;
   const tags = "\u{e0049}\u{e0067}\u{e006e}\u{e006f}\u{e0072}\u{e0065}";
-  const why = /invisible characters/;
+  const why = /an invisible character \(U\+(E0049|200B|202E)\)/;
   // The same for a rule, a check and a written skill: pasted text must say to the AI what it shows to the team.
   const rule = await call(`/v1/orgs/${ACME.id}/rules`, { method: "POST", token: ada, body: JSON.stringify({ kind: "rule", text: `Ignore style.${tags}`, repo_id: 501 }) });
   assert.equal(rule.status, 400);
@@ -634,6 +634,10 @@ test("text a team writes for the AI can't hold characters the team can't see", a
   const skill = await writeSkill(ada, { ...PAYMENTS, text: `Refunds.\u202e${tags}` });
   assert.equal(skill.status, 400);
   assert.match((await skill.json()).message, why);
+
+  // One joiner between two letters or two emoji is how Persian words and joined emoji are written. A run of them is not.
+  assert.equal((await addCheck(ada, { ...TRANSLATIONS, name: "Persian", text: "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645 \u{1f469}\u200d\u{1f4bb}" })).status, 201);
+  assert.equal((await addCheck(ada, { ...TRANSLATIONS, name: "Run", text: "a\u200d\u200db" })).status, 400);
 
   // The one invisible character people type without knowing makes a symbol show as an emoji. The symbol is kept, plain.
   assert.equal((await call(`/v1/orgs/${ACME.id}/rules`, { method: "POST", token: ada, body: JSON.stringify({ kind: "rule", text: "\u26a0\ufe0f Always check the totals.", repo_id: 501 }) })).status, 201);

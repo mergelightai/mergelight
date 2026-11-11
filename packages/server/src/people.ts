@@ -12,7 +12,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { HttpError } from "../../token-server/dist/token.js";
 import { isId, MEMORY_DAYS, withOrg, type Db, type Pool } from "./db.js";
 import { DEFAULT_SIGN_IN_APP, lookUp, looksLikePersonToken, type Person, type Reach } from "./github.js";
-import { hasHiddenCharacters, isCheckName, isLineOfText, isPathPattern, isSkillPath, isSkillText, plainEmoji, SKILL_TEXT_MAX } from "./validate.js";
+import { hiddenCharacter, isCheckName, isLineOfText, isPathPattern, isSkillPath, isSkillText, plainEmoji, SKILL_TEXT_MAX } from "./validate.js";
 
 /**
  * How long what GitHub said at sign-in is trusted. Someone who loses access on GitHub stops seeing
@@ -40,8 +40,15 @@ const MAX_RULES = 50;
 const MAX_RULE_BODY = 4096;
 /** Skill folders one repository can have picked. Each one is more for every reviewer to read. */
 const MAX_SKILLS = 10;
-/** What a person hears when a text they wrote, or pasted, holds characters they can't see. */
-const HIDDEN = "The text holds invisible characters, which a reviewer would read and you can't see. This happens with text copied from somewhere else. Type it again, or paste it as plain text.";
+/** Refuses a text a person wrote, or pasted, that holds a character they can't see, and names that character. */
+function refuseHidden(...texts: unknown[]): void {
+  for (const text of texts) {
+    const hidden = typeof text === "string" ? hiddenCharacter(text) : null;
+    if (hidden) {
+      throw new HttpError(400, "bad_request", `The text holds an invisible character (${hidden}), which a reviewer would read and you can't see. This happens with text copied from somewhere else. Remove it, or paste the text as plain text.`);
+    }
+  }
+}
 /** Skills written on the dashboard that one repository can have, and the largest request that can carry one. */
 const MAX_WRITTEN_SKILLS = 10;
 const MAX_SKILL_BODY = 48_000;
@@ -343,7 +350,7 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
     if (typeof body !== "object" || body === null || Array.isArray(body)) throw bad("body");
     const { kind, text: givenText, paths = [], repo_id = null } = body as Record<string, unknown>;
     const text = typeof givenText === "string" ? plainEmoji(givenText) : givenText;
-    if (typeof text === "string" && hasHiddenCharacters(text)) throw new HttpError(400, "bad_request", HIDDEN);
+    refuseHidden(text);
     if (kind !== "rule" && kind !== "needs_human") throw bad("kind");
     if (!isLineOfText(text, 300)) throw bad("text");
     if (!Array.isArray(paths) || paths.length > 10 || !paths.every(isPathPattern)) {
@@ -523,7 +530,7 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
     const description = typeof givenDescription === "string" ? plainEmoji(givenDescription).trim() : givenDescription;
     // Line ends as Windows writes them are the same line ends.
     const text = typeof givenText === "string" ? plainEmoji(givenText).replace(/\r\n?/g, "\n").trim() : givenText;
-    if ([description, text].some((v) => typeof v === "string" && hasHiddenCharacters(v))) throw new HttpError(400, "bad_request", HIDDEN);
+    refuseHidden(description, text);
     if (!isCheckName(name)) throw new HttpError(400, "bad_request", "Give the skill a short name: up to 40 letters, digits and single spaces, with . _ - inside.");
     if (!isLineOfText(description, 300)) throw new HttpError(400, "bad_request", "Say in one line when a reviewer should use this skill, up to 300 characters.");
     if (!isSkillText(text)) throw new HttpError(400, "bad_request", `Write the skill as plain text, up to ${SKILL_TEXT_MAX} characters.`);
@@ -608,7 +615,7 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
     if (typeof body !== "object" || body === null || Array.isArray(body)) throw new HttpError(400, "bad_request", "That isn't a check.");
     const { repo_id, name: givenName, text: givenText, paths } = body as Record<string, unknown>;
     const text = typeof givenText === "string" ? plainEmoji(givenText) : givenText;
-    if (typeof text === "string" && hasHiddenCharacters(text)) throw new HttpError(400, "bad_request", HIDDEN);
+    refuseHidden(text);
     const name = typeof givenName === "string" ? givenName.trim() : givenName;
     if (!isCheckName(name)) throw new HttpError(400, "bad_request", "Give the check a short name: up to 40 letters, digits and single spaces, with . _ - inside.");
     if (!isLineOfText(text, 500)) throw new HttpError(400, "bad_request", "Write the check as one line, up to 500 characters.");

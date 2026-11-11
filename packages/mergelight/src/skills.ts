@@ -74,13 +74,28 @@ export interface WrittenSkill {
 /** The most a written skill can hold, the same as the team's server allows. */
 export const SKILL_TEXT_MAX = 8000;
 
+const IGNORABLE = /^\p{Default_Ignorable_Code_Point}$/u;
+/** A letter, a mark on a letter, or an emoji: something a person sees. */
+const SEEN = /^[\p{L}\p{M}\p{Extended_Pictographic}\p{Emoji_Modifier}]$/u;
+
 /**
- * Whether a text holds characters a person can't see: zero-width and joining characters, marks that
- * reorder text, Unicode "tag" characters and the like. The team reads its rules and skills on a
+ * The text without the characters a person can't see: zero-width characters, marks that reorder
+ * text, Unicode "tag" characters and the like. One kind stays: a single joiner between two letters
+ * or two emoji. Persian and Indic words are written with one, and so are emoji made of several.
+ */
+export function withoutHidden(v: string): string {
+  const points = Array.from(v);
+  return points
+    .filter((ch, i) => !IGNORABLE.test(ch) || ((ch === "\u200c" || ch === "\u200d") && SEEN.test(points[i - 1] ?? "") && SEEN.test(points[i + 1] ?? "")))
+    .join("");
+}
+
+/**
+ * Whether a text holds characters a person can't see. The team reads its rules and skills on a
  * dashboard, so what the reviewing AI reads must be what the team saw there.
  */
 export function hasHiddenCharacters(v: string): boolean {
-  return /\p{Default_Ignorable_Code_Point}/u.test(v);
+  return withoutHidden(v) !== v;
 }
 
 /** Plain text over several lines. Line breaks and tabs are fine. Other control characters, and characters that hide or reorder text, are not. */

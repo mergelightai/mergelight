@@ -186,10 +186,10 @@ test("a written skill is never written through a link the pull request put in th
 });
 
 test("a written skill is plain text: line breaks and tabs, and nothing that hides or reorders text", () => {
-  for (const ok of ["one line", "two\nlines\n\twith a tab", "x".repeat(8000), "æøå and 日本語 and an emoji 🙂"]) assert.equal(isSkillText(ok), true, ok.slice(0, 20));
+  for (const ok of ["one line", "two\nlines\n\twith a tab", "x".repeat(8000), "æøå and 日本語 and an emoji 🙂", "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645", "pair \u{1f469}\u200d\u{1f4bb} and \u{1f469}\u{1f3fd}\u200d\u{1f4bb}"]) assert.equal(isSkillText(ok), true, ok.slice(0, 20));
   for (const bad of ["", "   \n ", "x".repeat(8001), "bell\u0007", "carriage\rreturn", "right-to-left\u202eoverride", "zero\u200bwidth", "line\u2028separator", "\ufeffmark", 7, null]) assert.equal(isSkillText(bad), false, String(bad).slice(0, 20));
   // Characters a person can't see, which would let pasted text say more to the AI than the team read on its dashboard.
-  for (const hidden of ["Allowed versions: \u061c12-34", "clean\u{e0049}\u{e0067}\u{e006e}\u{e006f}\u{e0072}\u{e0065} text", "soft\u00adhyphen", "joined\u2060words", "variation\ufe0fselector", "more\u{e0100}selectors"]) assert.equal(isSkillText(hidden), false, JSON.stringify(hidden));
+  for (const hidden of ["Allowed versions: \u061c12-34", "clean\u{e0049}\u{e0067}\u{e006e}\u{e006f}\u{e0072}\u{e0065} text", "soft\u00adhyphen", "joined\u2060words", "variation\ufe0fselector", "more\u{e0100}selectors", "two\u200d\u200djoiners", "joiner at the end\u200d", "a \u200c b"]) assert.equal(isSkillText(hidden), false, JSON.stringify(hidden));
 });
 
 test("only plain folder paths are taken, and at most 10 skills", async () => {

@@ -126,10 +126,26 @@ test("the team's own checks come with the answer, and one that isn't shaped righ
     "nope",
     null,
   ] }));
-  assert.deepEqual((await fetchContext(s.deps)).checks, [good, { ...good, id: "K12", name: "Money - v2.1_final", paths: ["src/billing/**", "*.sql"] }]);
+  // A check is never dropped for a character a person can't see: that character is taken out, and the check stays.
+  assert.deepEqual((await fetchContext(s.deps)).checks, [good, { ...good, id: "K13", name: "Hidden words", text: "Every key has a text." }, { ...good, id: "K12", name: "Money - v2.1_final", paths: ["src/billing/**", "*.sql"] }]);
   assert.deepEqual((await fetchContext(setup(json(200, { connected: true, checks: "x" })).deps)).checks, []);
   const many = Array.from({ length: 9 }, (_, i) => ({ ...good, id: `K${i + 20}`, name: `Check ${i}` }));
   assert.equal((await fetchContext(setup(json(200, { connected: true, checks: many })).deps)).checks.length, 5);
+});
+
+test("a rule saved with an emoji or a hidden character still reaches the review, without what can't be seen", async () => {
+  const s = setup(json(200, { connected: true, rules: [
+    { id: "R1", kind: "rule", text: "\u26a0\ufe0f Always check the totals.", scope: "repo" },
+    { id: "R2", kind: "needs_human", text: "Billing\u200b needs a second pair of eyes.\u{e0049}\u{e0067}", paths: ["src/billing/**"], scope: "repo" },
+    { id: "R3", kind: "rule", text: "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645 and \u{1f469}\u200d\u{1f4bb} stay as they are.", scope: "org" },
+    { id: "R4", kind: "rule", text: "\u200b\u200b", scope: "org" },
+  ] }));
+  assert.deepEqual((await fetchContext(s.deps)).rules, [
+    { id: "R1", kind: "rule", text: "\u26a0 Always check the totals.", scope: "repo" },
+    { id: "R2", kind: "needs_human", text: "Billing needs a second pair of eyes.", paths: ["src/billing/**"], scope: "repo" },
+    // One joiner between two letters or two emoji is how Persian words and joined emoji are written.
+    { id: "R3", kind: "rule", text: "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645 and \u{1f469}\u200d\u{1f4bb} stay as they are.", scope: "org" },
+  ]);
 });
 
 test("the skills a team wrote on its dashboard come with the answer, and one that isn't shaped right is left out", async () => {
@@ -151,7 +167,14 @@ test("the skills a team wrote on its dashboard come with the answer, and one tha
     "nope",
     null,
   ] }));
-  assert.deepEqual((await fetchContext(s.deps)).writtenSkills, [good, { ...good, id: "S12", name: "Payments v2", text: "x".repeat(8000) }]);
+  // What a person can't see is taken out, so the reviewers read what the team read on its dashboard.
+  assert.deepEqual((await fetchContext(s.deps)).writtenSkills, [
+    good,
+    { ...good, id: "S10", name: "Hidden text", text: "fineevil" },
+    { ...good, id: "S13", name: "Hidden line", description: "Use for billing." },
+    { ...good, id: "S14", name: "Reordered", text: "Allowed versions: 12-34" },
+    { ...good, id: "S12", name: "Payments v2", text: "x".repeat(8000) },
+  ]);
   assert.deepEqual((await fetchContext(setup(json(200, { connected: true, written_skills: "x" })).deps)).writtenSkills, []);
   // A server from before this feature sends none.
   assert.deepEqual((await fetchContext(setup(json(200, { connected: true })).deps)).writtenSkills, []);

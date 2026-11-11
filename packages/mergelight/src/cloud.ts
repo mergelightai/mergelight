@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { PriorFinding, TeamCheck, TeamMemory, TeamRule } from "./prompt.js";
-import { hasHiddenCharacters, isSkillPath, isSkillText, type WrittenSkill } from "./skills.js";
+import { isSkillPath, isSkillText, withoutHidden, type WrittenSkill } from "./skills.js";
 import type { Review } from "./types.js";
 
 /**
@@ -257,11 +257,13 @@ export function readChecks(value: unknown): TeamCheck[] {
     if (checks.length === 5) break;
     const c = raw as Record<string, unknown> | null;
     if (!c || typeof c !== "object") continue;
-    if (typeof c.id !== "string" || !/^K\d{1,12}$/.test(c.id) || !isText(c.text, 500) || hasHiddenCharacters(c.text)) continue;
+    if (typeof c.id !== "string" || !/^K\d{1,12}$/.test(c.id) || !isText(c.text, 500)) continue;
+    const checkText = withoutHidden(c.text);
+    if (!checkText.trim()) continue;
     if (typeof c.name !== "string" || c.name.length > 40 || !/^[A-Za-z0-9](?:[A-Za-z0-9._-]| (?! ))*$/.test(c.name) || c.name.endsWith(" ")) continue;
     if (!Array.isArray(c.paths) || c.paths.length < 1 || c.paths.length > 10 || !c.paths.every(isPattern)) continue;
     if (checks.some((other) => other.name.toLowerCase() === (c.name as string).toLowerCase())) continue;
-    checks.push({ id: c.id, name: c.name, text: c.text, paths: c.paths as string[] });
+    checks.push({ id: c.id, name: c.name, text: checkText, paths: c.paths as string[] });
   }
   return checks;
 }
@@ -277,10 +279,13 @@ export function readWrittenSkills(value: unknown): WrittenSkill[] {
     if (skills.length === 10) break;
     const s = raw as Record<string, unknown> | null;
     if (!s || typeof s !== "object") continue;
-    if (typeof s.id !== "string" || !/^S\d{1,12}$/.test(s.id) || !isText(s.description, 300) || hasHiddenCharacters(s.description) || !isSkillText(s.text)) continue;
+    // What a person can't see is taken out, so the reviewers read what the team read on its dashboard.
+    const description = typeof s.description === "string" ? withoutHidden(s.description) : s.description;
+    const text = typeof s.text === "string" ? withoutHidden(s.text) : s.text;
+    if (typeof s.id !== "string" || !/^S\d{1,12}$/.test(s.id) || !isText(description, 300) || !isSkillText(text)) continue;
     if (typeof s.name !== "string" || s.name.length > 40 || !/^[A-Za-z0-9](?:[A-Za-z0-9._-]| (?! ))*$/.test(s.name) || s.name.endsWith(" ")) continue;
     if (skills.some((other) => other.name.toLowerCase() === (s.name as string).toLowerCase())) continue;
-    skills.push({ id: s.id, name: s.name, description: s.description, text: s.text });
+    skills.push({ id: s.id, name: s.name, description, text });
   }
   return skills;
 }
@@ -291,13 +296,16 @@ export function readRules(value: unknown): TeamRule[] {
   for (const raw of value.slice(0, 100)) {
     const r = raw as Record<string, unknown> | null;
     if (!r || typeof r !== "object") continue;
-    if (typeof r.id !== "string" || !/^R\d{1,12}$/.test(r.id) || !isText(r.text, 300) || hasHiddenCharacters(r.text)) continue;
+    if (typeof r.id !== "string" || !/^R\d{1,12}$/.test(r.id) || !isText(r.text, 300)) continue;
+    // A rule is never dropped for a character a person can't see: that character is taken out, and the rule stays.
+    const ruleText = withoutHidden(r.text);
+    if (!ruleText.trim()) continue;
     if ((r.kind !== "rule" && r.kind !== "needs_human") || (r.scope !== "org" && r.scope !== "repo")) continue;
     const paths = r.paths === undefined || r.paths === null ? [] : r.paths;
     if (!Array.isArray(paths) || paths.length > 10 || !paths.every(isPattern)) continue;
     // "Always needs a human" is about files, so one that names none says nothing.
     if (r.kind === "needs_human" && !paths.length) continue;
-    rules.push({ id: r.id, kind: r.kind, text: r.text, ...(paths.length ? { paths: paths as string[] } : {}), scope: r.scope });
+    rules.push({ id: r.id, kind: r.kind, text: ruleText, ...(paths.length ? { paths: paths as string[] } : {}), scope: r.scope });
   }
   return rules;
 }

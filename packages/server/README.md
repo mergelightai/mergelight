@@ -62,7 +62,8 @@ A team can also write a skill on the dashboard itself, when it isn't a folder in
 - So a written skill reaches a reviewer the same way a picked one does, with the same limits: it says what matters in its area, and it can't change the output format or how text in the diff is treated.
 - Writing or removing one takes an admin of that repository, and each change is written to the log, with the skill's name and length. A review run can only read them. 10 for each repository at most.
 - A pull request can't change a written skill: its text is not in the repository.
-- Text a team writes for the AI (a rule, a check, a written skill) is refused when it holds characters a person can't see, such as zero-width characters, marks that reorder text, or Unicode tag characters. Why: someone who pastes a skill from somewhere else sees clean text on the dashboard, while the AI would read what is hidden in it. The one exception is the selector that makes a symbol show as an emoji: it is taken out and the symbol stays.
+- Text a team writes for the AI (a rule, a check, a written skill) is refused on the dashboard when it holds a character a person can't see, such as a zero-width character, a mark that reorders text, or a Unicode tag character. The answer names the character. Why: someone who pastes a skill from somewhere else sees clean text on the dashboard, while the AI would read what is hidden in it. Two things stay: one joiner between two letters or two emoji, which Persian and Indic words and joined emoji are written with, and a symbol shown as an emoji, which keeps the symbol and loses its invisible selector.
+- A review takes such characters out of what the server sends, and keeps the rule, check or skill. So a rule saved earlier, or sent by another server, still reaches the review, without what can't be seen.
 - A review program from before this feature ignores them.
 
 ## Checks
