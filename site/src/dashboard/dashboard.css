@@ -138,6 +138,10 @@
   html {
     @apply font-sans;
   }
+  /* Everything you can click shows the hand. */
+  button:not(:disabled), [role="button"]:not([aria-disabled="true"]), [role="menuitem"], [role="menuitemradio"], [role="option"], [role="tab"], [role="switch"], [role="checkbox"], a[href], select, summary, label:has(input:not(:disabled)) {
+    cursor: pointer;
+  }
 }
 
 /* Menus, select lists and popovers: a pane of glass around a solid panel.

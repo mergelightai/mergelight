@@ -15,7 +15,7 @@ export type ViewId = 'reviews' | 'rules' | 'skills' | 'checks' | 'decisions';
 export const VIEWS: { group: string; items: { id: ViewId; label: string; icon: typeof GitPullRequestIcon }[] }[] = [
   { group: 'Overview', items: [{ id: 'reviews', label: 'Reviews', icon: GitPullRequestIcon }] },
   {
-    group: 'What the reviewer knows',
+    group: 'Reviewer',
     items: [
       { id: 'rules', label: 'Rules', icon: ScrollTextIcon },
       { id: 'skills', label: 'Skills', icon: PuzzleIcon },
@@ -34,6 +34,15 @@ function OrgIcon({ org }: { org: Org }) {
     </Avatar>
   );
 }
+
+/** A menu item. The one you are on is a raised tile with a small lit bar on its left and a lit icon. */
+const NAV_ITEM = [
+  'relative rounded-[10px]! text-sidebar-foreground/70 hover:bg-white/[0.04] hover:text-sidebar-foreground',
+  'data-active:bg-white/[0.07] data-active:font-medium data-active:text-sidebar-foreground',
+  'data-active:shadow-[inset_0_1px_0_rgb(255_255_255/0.08),0_0_0_1px_rgb(255_255_255/0.05),0_1px_2px_rgb(0_0_0/0.3)]',
+  'data-active:before:absolute data-active:before:left-1 data-active:before:top-1/2 data-active:before:h-3.5 data-active:before:w-[3px] data-active:before:-translate-y-1/2 data-active:before:rounded-full data-active:before:bg-[oklch(0.72_0.16_277)]',
+  'data-active:[&_svg]:text-[oklch(0.8_0.12_277)]',
+].join(' ');
 
 function OrgPicker({ orgs, org, onPick }: { orgs: Org[]; org: Org; onPick: (id: number) => void }) {
   if (orgs.length < 2) {
@@ -165,12 +174,12 @@ export function AppShell({ user, orgs, org, onPickOrg, view, onView, onSignOut, 
         <SidebarContent>
           {VIEWS.map((g) => (
             <SidebarGroup key={g.group}>
-              {g.group !== 'Overview' && <SidebarGroupLabel>{g.group}</SidebarGroupLabel>}
+              {g.group !== 'Overview' && <SidebarGroupLabel className="h-7 text-[11px] font-medium uppercase tracking-[0.08em] text-sidebar-foreground/40">{g.group}</SidebarGroupLabel>}
               <SidebarGroupContent>
                 <SidebarMenu>
                   {g.items.map((item) => (
                     <SidebarMenuItem key={item.id}>
-                      <SidebarMenuButton isActive={view === item.id} onClick={() => onView(item.id)}>
+                      <SidebarMenuButton isActive={view === item.id} onClick={() => onView(item.id)} className={NAV_ITEM}>
                         <item.icon />
                         <span>{item.label}</span>
                       </SidebarMenuButton>
