@@ -490,11 +490,15 @@ test("a dismissal says why, and a review that couldn't run takes an earlier appr
     list: async () => [{ id: 9, state: "APPROVED", commit_id: "older", body: `${APPROVAL_MARKER}\nfine`, user: { login: "mergelight-ai[bot]" } }],
     write: async (method, path, body) => (sent.push([method, path, body]), {}),
   };
-  assert.equal(await syncApproval(api, 3, "yellow", "head", () => {}, UNREVIEWED), "dismissed");
+  assert.equal(await syncApproval(api, 3, "yellow", "head", () => {}, { why: UNREVIEWED, otherCommitsOnly: true }), "dismissed");
   assert.deepEqual(sent, [["PUT", "pulls/3/reviews/9/dismissals", { message: UNREVIEWED, event: "DISMISS" }]]);
   sent.length = 0;
   assert.equal(await syncApproval(api, 3, "yellow", "head"), "dismissed");
   assert.equal(sent[0][2].message, "A newer Mergelight review found something to look at.");
+  // A second run on a commit Mergelight already approved fails: what the first run said about that commit still stands.
+  sent.length = 0;
+  assert.equal(await syncApproval(api, 3, "yellow", "older", () => {}, { why: UNREVIEWED, otherCommitsOnly: true }), "none");
+  assert.deepEqual(sent, []);
 });
 
 test("yellow and red take back Mergelight's approval, and never request changes", async () => {

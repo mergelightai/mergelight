@@ -263,7 +263,9 @@ export async function publishReview(
     },
   };
   await writeCheck(api, opts.checkRunId, review.pr.head_sha, check, log);
-  await syncApproval(api, n, approvalLight(review, opts.teamUnread), review.pr.head_sha, log, approvalHold(review, opts.teamUnread) ?? undefined);
+  // A review that isn't green takes the approval back for what it found. Only a green one is held by something else.
+  const hold = review.light === "green" ? approvalHold(review, opts.teamUnread) : null;
+  await syncApproval(api, n, approvalLight(review, opts.teamUnread), review.pr.head_sha, log, hold ? { why: hold } : {});
 
   return { summaryUrl, inline: inline.length, outside: outside.length, resolved, light: review.light };
 }
@@ -312,8 +314,12 @@ export async function syncApproval(
   light: Light,
   headSha: string,
   log: (line: string) => void = () => {},
-  /** What a dismissal says. The reason has to be the real one: the review can be green while something else holds the approval. */
-  why = "A newer Mergelight review found something to look at.",
+  dismissal: {
+    /** What a dismissal says. The reason has to be the real one: the review can be green while something else holds the approval. */
+    why?: string;
+    /** Only take back approvals of other commits. For a review that couldn't run: what it said about this very commit before still stands. */
+    otherCommitsOnly?: boolean;
+  } = {},
 ): Promise<"approved" | "already" | "dismissed" | "none"> {
   try {
     const ours = (await api.list<PrReview>(`pulls/${number}/reviews`)).filter((r) => OWN_REVIEWERS.has(r.user?.login ?? "") && (r.body ?? "").includes(APPROVAL_MARKER));
@@ -327,10 +333,11 @@ export async function syncApproval(
       });
       return "approved";
     }
-    for (const r of standing) {
-      await api.write("PUT", `pulls/${number}/reviews/${r.id}/dismissals`, { message: why, event: "DISMISS" });
+    const taken = dismissal.otherCommitsOnly ? standing.filter((r) => r.commit_id !== headSha) : standing;
+    for (const r of taken) {
+      await api.write("PUT", `pulls/${number}/reviews/${r.id}/dismissals`, { message: dismissal.why ?? "A newer Mergelight review found something to look at.", event: "DISMISS" });
     }
-    return standing.length ? "dismissed" : "none";
+    return taken.length ? "dismissed" : "none";
   } catch (err) {
     log(`Couldn't update Mergelight's approval: ${err instanceof Error ? err.message : String(err)}`);
     return "none";

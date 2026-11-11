@@ -286,7 +286,7 @@ async function main(): Promise<number> {
       await failCheck(api, checkRunId, headSha, message, log, title).catch((e) => log(`Couldn't update the check: ${(e as Error).message}`));
       await failSummary(api, ref.number, notice).catch((e) => log(`Couldn't update the summary: ${(e as Error).message}`));
       // The newest commit wasn't reviewed. An approval Mergelight gave to an earlier commit must not count for this one.
-      await syncApproval(api, ref.number, "yellow", headSha, log, UNREVIEWED);
+      await syncApproval(api, ref.number, "yellow", headSha, log, { why: UNREVIEWED, otherCommitsOnly: true });
       // Each of the team's checks still gets an answer on GitHub, so a required one says why it holds the merge:
       // the answer it already has, or that it wasn't asked.
       const unasked = cloud.checks.map((c) => ({ id: c.id, name: c.name, text: c.text, outcome: "error" as const, summary: "The review couldn't run, so this check wasn't asked.", problems: [] }));
