@@ -140,6 +140,13 @@ test("a decision's text is cut to size and cleared of control characters before 
   assert.equal(declinesOf(Array.from({ length: 60 }, (_, i) => prior(mark(), { id: `aaaaaa${String(i).padStart(2, "0")}` }))).length, 40);
 });
 
+test("decisions in an alphabet that takes more bytes still fit one report", () => {
+  const long = Array.from({ length: 40 }, (_, i) => prior(mark({ note: "原因".repeat(250) }), { id: `aaaaaa${String(i).padStart(2, "0")}`, title: "标题".repeat(100) }));
+  const fit = declinesOf(long);
+  assert.ok(fit.length > 5 && fit.length < 40, `${fit.length} decisions`);
+  assert.ok(Buffer.byteLength(JSON.stringify({ declines: fit })) < 50_000);
+});
+
 test("the report carries the new decisions and the earlier ones this review used", async () => {
   const s = setup(json(201, { stored: true }));
   const declines = declinesOf([prior(mark())]);

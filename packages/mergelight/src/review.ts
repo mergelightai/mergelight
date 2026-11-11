@@ -188,10 +188,14 @@ export async function verifyCandidates(dir: string, input: PromptInput, found: C
 /** Most recent first, as the server sends them. Enough for the files of one pull request, and not a wall of old decisions. */
 const MAX_MEMORIES = 30;
 
-/** A decision is about one problem in one file, so only those in files this pull request changes are passed on. */
-export function memoriesFor(memories: TeamMemory[] | undefined, changedFiles: string[]): TeamMemory[] {
+/**
+ * A decision is about one problem in one file, so only those in files this pull request changes are
+ * passed on. One made on this very pull request is left out: the verifier already gets it with the
+ * earlier rounds, and reviewing its own pull request again must not count as a use that keeps it alive.
+ */
+export function memoriesFor(memories: TeamMemory[] | undefined, changedFiles: string[], pullRequest?: number): TeamMemory[] {
   const changed = new Set(changedFiles);
-  return (memories ?? []).filter((m) => changed.has(m.file)).slice(0, MAX_MEMORIES);
+  return (memories ?? []).filter((m) => changed.has(m.file) && m.pr !== pullRequest).slice(0, MAX_MEMORIES);
 }
 
 export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): Promise<Review> {
@@ -218,7 +222,7 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
       diff: ws.diff,
       diffTruncated: ws.diffTruncated,
       previous: opts.previous,
-      memories: memoriesFor(opts.memories, ws.changedFiles.map((f) => f.path)),
+      memories: memoriesFor(opts.memories, ws.changedFiles.map((f) => f.path), pr.number),
     };
 
     // Step 1: hunters, one per area, in parallel. One failing doesn't sink the review.

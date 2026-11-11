@@ -282,6 +282,9 @@ test("only decisions in files this pull request changes reach the verifier", () 
   assert.deepEqual(memoriesFor(all, ["src/cart.ts", "README.md"]).map((m) => m.id), ["M12", "M3"]);
   assert.deepEqual(memoriesFor(all, ["docs/x.md"]), []);
   assert.deepEqual(memoriesFor(undefined, ["src/cart.ts"]), []);
+  // A decision made on this pull request is not handed back to its own later reviews.
+  assert.deepEqual(memoriesFor(all, ["src/cart.ts"], 7), []);
+  assert.deepEqual(memoriesFor([...all, memory({ id: "M9", pr: 8 })], ["src/cart.ts"], 7).map((m) => m.id), ["M9"]);
   assert.equal(memoriesFor(Array.from({ length: 80 }, (_, i) => memory({ id: `M${i + 1}` })), ["src/cart.ts"]).length, 30);
 });
 
@@ -301,6 +304,9 @@ test("a decision counts as used only when the verifier named it as the cause, fo
   ];
   assert.deepEqual(usedMemories(given, rejected, candidates), ["M12"]);
   assert.deepEqual(usedMemories(given, [{ candidate: "C3", reason: "decided", decision: "M13" }], candidates), ["M13"]);
+  // The same file, written the way a hunter sometimes writes it.
+  assert.deepEqual(usedMemories(given, [{ candidate: "C1", reason: "decided", decision: "M12" }], [{ file: "./src/cart.ts" }]), ["M12"]);
+  assert.deepEqual(usedMemories(given, [{ candidate: "C1", reason: "decided", decision: "M12" }], [{ file: "/src/cart.ts" }]), ["M12"]);
   assert.deepEqual(usedMemories(undefined, rejected, candidates), []);
   assert.deepEqual(usedMemories(given, [], candidates), []);
 });

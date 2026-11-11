@@ -196,6 +196,7 @@ export async function loadDecisions(session: Session, orgId: number): Promise<{ 
     remember(null);
     throw new SignedOut();
   }
+  if (res.status === 404 && ((await res.json()) as { error?: string }).error === 'not_connected') throw new NotConnected();
   if (!res.ok) throw new Error(`The Mergelight server answered ${res.status}.`);
   const { memories, total } = (await res.json()) as { memories: Decision[]; total?: number };
   return { decisions: memories, total: total ?? memories.length };

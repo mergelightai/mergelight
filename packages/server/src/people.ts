@@ -266,7 +266,9 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
       if (!repo.write) return "read_only";
       // The text is wiped and the row stays. The pull request the decision came from still holds it, and
       // without this its next review would bring the decision straight back.
-      await db.query("update memories set forgotten_at = now(), title = '', file = '', reason = '', by_login = '' where id = $1", [memoryId]);
+      // The marker carries the moment of forgetting, so only a decision someone writes after it counts
+      // again, whichever pull request an older one turns up from.
+      await db.query("update memories set forgotten_at = now(), decided_at = now(), title = '', file = '', reason = '', by_login = '' where id = $1", [memoryId]);
       return "gone";
     });
     if (outcome === "missing") throw new HttpError(404, "not_found", "No such decision.");

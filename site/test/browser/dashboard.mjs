@@ -84,6 +84,8 @@ async function open(name, { signedOutAfter = Infinity, serverDown = false, forge
         forgotten.push(Number(memories[2]));
         return req.respond({ status: 204, headers: cors });
       }
+      // Like the real server: an org that hasn't turned the dashboard on has no list at all.
+      if (memories && !OVERVIEWS[memories[1]]) return json(req, { error: 'not_connected' }, 404);
       if (memories) return json(req, { memories: (DECISIONS[memories[1]] ?? []).filter((d) => !forgotten.includes(d.id)) });
       const org = /^\/v1\/orgs\/(\d+)\/overview$/.exec(u.pathname)?.[1];
       if (org) {

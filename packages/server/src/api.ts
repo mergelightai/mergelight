@@ -291,7 +291,7 @@ export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"
 
   async function saveReview(who: Caller, request: Request): Promise<Response> {
     const text = await request.text();
-    if (text.length > MAX_BODY) throw new HttpError(413, "too_large", "The review is too large.");
+    if (Buffer.byteLength(text) > MAX_BODY) throw new HttpError(413, "too_large", "The review is too large.");
     let body: unknown;
     try {
       body = JSON.parse(text);
@@ -326,7 +326,7 @@ export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"
       if (!fresh) return false;
 
       // What the team decided on this pull request. Only a decision written later than the one on file
-      // replaces it. So a pull request that is reviewed again doesn't keep an unused decision alive, and
+      // replaces it, and it then starts its 90 days from now. So a pull request that is reviewed again doesn't keep an unused decision alive, and
       // doesn't bring back one that someone made Mergelight forget.
       for (const d of declines) {
         await db.query(
@@ -335,7 +335,7 @@ export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"
            on conflict (org_id, repo_id, finding_id) do update
              set title = excluded.title, file = excluded.file, line = excluded.line, end_line = excluded.end_line,
                  reason = excluded.reason, by_login = excluded.by_login, pr = excluded.pr, decided_at = excluded.decided_at,
-                 updated_at = now(), forgotten_at = null
+                 updated_at = now(), forgotten_at = null, last_used_at = null
              where excluded.decided_at > memories.decided_at`,
           [who.orgId, who.repoId, d.finding_id, d.title, d.file, d.line, d.end_line, d.reason, d.by, r.pr, d.decided_at],
         );

@@ -285,10 +285,12 @@ ${list}
 export function usedMemories(memories: TeamMemory[] | undefined, rejected: { candidate: string; decision?: string | null }[], candidates: { file: string }[]): string[] {
   const known = new Map((memories ?? []).map((m) => [m.id, m]));
   const used = new Set<string>();
+  // Hunters sometimes write a path as ./src/a.ts or /src/a.ts. It is the same file.
+  const plain = (path: string | undefined) => path?.replace(/^(\.\/|\/)+/, "");
   for (const { candidate, decision } of rejected) {
     const memory = decision ? known.get(decision) : undefined;
     const index = /^C(\d{1,5})$/.exec(candidate)?.[1];
-    if (memory && index && candidates[Number(index) - 1]?.file === memory.file) used.add(memory.id);
+    if (memory && index && plain(candidates[Number(index) - 1]?.file) === plain(memory.file)) used.add(memory.id);
   }
   return [...used];
 }

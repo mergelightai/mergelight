@@ -250,6 +250,9 @@ export async function cloudConnected(deps: CloudDeps = {}): Promise<boolean> {
   return (await fetchContext(deps)).connected;
 }
 
+/** The server reads 64 KB per report. The decisions get most of it, and the numbers always fit beside them. */
+const MAX_DECLINE_BYTES = 48_000;
+
 /** A finding someone on the team chose not to fix, with their reason, as it is sent to the server to remember. */
 export interface Decline {
   finding_id: string;
@@ -282,7 +285,15 @@ export function declinesOf(previous: PriorFinding[] | undefined): Decline[] {
     if (!title || !file || !reason || !Number.isFinite(at)) continue;
     declines.push({ finding_id: p.id, title, file, line: p.line, ...(isLine(p.end_line) ? { end_line: p.end_line } : {}), reason, by: h.by, decided_at: new Date(at).toISOString() });
   }
-  return declines.slice(0, 40);
+  // What fits one report, counted in bytes: a reason in another alphabet takes more of them than letters.
+  const fit: Decline[] = [];
+  let bytes = 0;
+  for (const d of declines.slice(0, 40)) {
+    bytes += Buffer.byteLength(JSON.stringify(d)) + 1;
+    if (bytes > MAX_DECLINE_BYTES) break;
+    fit.push(d);
+  }
+  return fit;
 }
 
 /**

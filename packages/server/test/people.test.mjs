@@ -313,8 +313,11 @@ test("only someone who can push to a repository can make Mergelight forget a dec
   // The pull request it came from is reviewed again and reports the same decision: it stays forgotten.
   assert.equal((await report({ run_id: "9150" }, { declines: [decline(1, "In widgets")] })).status, 201);
   assert.deepEqual((await decisions(token)).map((m) => m.title), ["In api"]);
+  // A decision written before the Forget, newer than the forgotten one, turning up from another pull request: still forgotten.
+  assert.equal((await report({ run_id: "9152" }, { pr: 50, declines: [{ ...decline(1, "In widgets, from another pull request"), decided_at: "2026-11-05T10:00:00.000Z" }] })).status, 201);
+  assert.deepEqual((await decisions(token)).map((m) => m.title), ["In api"]);
   // Someone decides it again, later: that one counts.
-  assert.equal((await report({ run_id: "9151" }, { declines: [{ ...decline(1, "In widgets, decided again"), decided_at: "2026-11-09T10:00:00.000Z" }] })).status, 201);
+  assert.equal((await report({ run_id: "9151" }, { declines: [{ ...decline(1, "In widgets, decided again"), decided_at: new Date(Date.now() + 60_000).toISOString() }] })).status, 201);
   assert.deepEqual((await decisions(token)).map((m) => m.title).sort(), ["In api", "In widgets, decided again"]);
   assert.equal((await forget(widgets)).status, 204);
   // The next review of that repository no longer gets it.

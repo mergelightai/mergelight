@@ -234,6 +234,16 @@ test("a pull request that is reviewed again changes nothing: only a later decisi
   assert.deepEqual(row, { reason: DECLINE.reason, untouched: true });
 });
 
+test("a decision made again starts its 90 days from now, even when the old one was used long ago", async () => {
+  await connectOrg(pool, ACME.id, ACME.login);
+  assert.equal((await post(makeToken(), { ...REVIEW, declines: [DECLINE] })).status, 201);
+  await withOrg(pool, ACME.id, (db) => db.query("update memories set updated_at = now() - interval '200 days', last_used_at = now() - interval '89 days', uses = 4"));
+  assert.equal((await post(makeToken({ run_id: "9050" }), { ...REVIEW, report_id: randomUUID(), declines: [{ ...DECLINE, reason: "Decided again.", decided_at: "2026-11-09T10:00:00.000Z" }] })).status, 201);
+  const [row] = await rowsOf(ACME.id, "select reason, uses, last_used_at, updated_at > now() - interval '1 minute' as fresh from memories");
+  assert.deepEqual(row, { reason: "Decided again.", uses: 4, last_used_at: null, fresh: true });
+  assert.equal(await purgeExpiredMemories(pool), 0);
+});
+
 test("what nobody needed for 90 days is purged for every org at once, and nothing else is touched or seen", async () => {
   await connectOrg(pool, ACME.id, ACME.login);
   await connectOrg(pool, OTHER.id, OTHER.login);
