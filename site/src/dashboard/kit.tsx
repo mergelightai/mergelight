@@ -138,7 +138,7 @@ export function FormDialog({
         {trigger}
       </Button>
       <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
-        <DialogContent className="glass-frame rounded-[2rem]! bg-transparent! p-2! ring-0! shadow-none! sm:max-w-lg" style={wide ? { maxWidth: '42rem' } : undefined} showCloseButton={false}>
+        <DialogContent className={cn('glass-frame rounded-[2rem]! bg-transparent! p-2! ring-0! shadow-none!', wide ? 'sm:max-w-2xl' : 'sm:max-w-lg')} showCloseButton={false}>
           <form
             className="glass-inner grid max-h-[calc(100svh-3rem)] gap-5 overflow-y-auto rounded-[1.6rem] bg-popover p-6"
             onSubmit={(e: FormEvent) => {
@@ -288,6 +288,7 @@ export function keepView(view: string): void {
  * and a form waiting to open again. The next person on this browser starts clean.
  */
 export function forgetTab(): void {
+  window.history.replaceState(null, '', window.location.pathname + window.location.search);
   try {
     for (const key of Object.keys(sessionStorage)) {
       if (key.startsWith('mergelight.dashboard.draft.') || key.startsWith('mergelight.dashboard.written-skill')) sessionStorage.removeItem(key);

@@ -608,6 +608,7 @@ const done = async (t) => {
   expect(keptAfter.length === 0, `signing out forgets the drafts, the org and the view, so the next person starts clean (${keptAfter})`);
   const picksAfter = await t.page.evaluate(() => [...Object.keys(localStorage), ...Object.keys(sessionStorage)].filter((k) => k.startsWith('mergelight.dashboard.repo')));
   expect(picksAfter.length === 0, `and the remembered repository picks (${picksAfter})`);
+  expect(new URL(t.page.url()).hash === '', `and the view in the address (${t.page.url()})`);
   expect(/Continue with GitHub/.test(await t.text()), 'signing out goes back to the sign-in screen');
   expect(t.calls.at(-1).m === 'DELETE' && t.calls.at(-1).path === '/v1/session', 'and ends the session on the server');
   await t.page.reload({ waitUntil: 'networkidle2' });

@@ -1,17 +1,19 @@
 import * as React from "react"
 
-const MOBILE_BREAKPOINT = 768
+// The same edge as Tailwind's md: breakpoint, in rem as it is, so the menu's phone and desktop
+// forms switch at the same width even when someone sets a larger browser font size.
+const MOBILE_QUERY = "(width < 48rem)"
 
 export function useIsMobile() {
   const [isMobile, setIsMobile] = React.useState<boolean | undefined>(undefined)
 
   React.useEffect(() => {
-    const mql = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT - 1}px)`)
+    const mql = window.matchMedia(MOBILE_QUERY)
     const onChange = () => {
-      setIsMobile(window.innerWidth < MOBILE_BREAKPOINT)
+      setIsMobile(mql.matches)
     }
     mql.addEventListener("change", onChange)
-    setIsMobile(window.innerWidth < MOBILE_BREAKPOINT)
+    setIsMobile(mql.matches)
     return () => mql.removeEventListener("change", onChange)
   }, [])
 
