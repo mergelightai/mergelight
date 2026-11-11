@@ -252,7 +252,7 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
   const ws = await prepareWorkspace(pr, opts.at, opts.skills);
   const skillsMissing = (opts.skills?.length ?? 0) - ws.skills.length;
   if (skillsMissing > 0) progress(`${skillsMissing} of the skill folders your team picked ${skillsMissing === 1 ? "has" : "have"} no SKILL.md on the base branch, or couldn't be read: left out. Name the real folder, not a link to it`);
-  if (ws.skills.length) progress(`Using ${ws.skills.length} of your team's skill${ws.skills.length === 1 ? "" : "s"}: ${ws.skills.map((s) => s.name).join(", ")}`);
+  if (ws.skills.length) progress(`Using your team's skill${ws.skills.length === 1 ? "" : "s"}: ${ws.skills.map((s) => s.name).join(", ")}`);
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const log = (step: string) => join(cacheDir(), "logs", `${pr.owner}-${pr.repo}-${pr.number}-${stamp}-${step}.log`);
 
