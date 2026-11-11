@@ -68,6 +68,7 @@ export function SkillsView({ orgId, skills, onAdd, onRemove, resume }: { orgId: 
   return (
     <>
       <ViewHeader
+        eyebrow="Reviewer"
         title="Skills"
         lead="Use a skill when your team already wrote one for Claude Code or Codex. Every review of that repository reads it, so it knows what your team knows."
         action={mayAdd ? <NewSkillForm orgId={orgId} skills={skills} onAdd={onAdd} startOpen={resume} /> : <ReadOnly>Only an admin of a repository can pick its skills.</ReadOnly>}

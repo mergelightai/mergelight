@@ -10,6 +10,7 @@ export function DecisionsView({ decisions, total, onForget }: { decisions: Decis
   return (
     <>
       <ViewHeader
+        eyebrow="Reviewer"
         title="Decisions"
         lead="When someone declines a finding on a pull request and says why, Mergelight remembers it and leaves it out of later reviews of that file. A decision nobody needed for 90 days is dropped."
       />

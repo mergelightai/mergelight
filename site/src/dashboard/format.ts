@@ -2,9 +2,9 @@ import type { Light, Review } from './api';
 
 /** The three lights, with the words the pull request uses for them. */
 export const LIGHTS: Record<Light, { label: string; dot: string; text: string; soft: string }> = {
-  green: { label: 'Safe to merge', dot: 'bg-safe', text: 'text-safe', soft: 'bg-safe/10' },
-  yellow: { label: 'Needs a human', dot: 'bg-human', text: 'text-human', soft: 'bg-human/10' },
-  red: { label: 'Blocked', dot: 'bg-blocked', text: 'text-blocked', soft: 'bg-blocked/10' },
+  green: { label: 'Safe to merge', dot: 'bg-safe shadow-[0_0_8px_1px_rgb(63_232_184/0.5)]', text: 'text-safe', soft: 'bg-safe/10' },
+  yellow: { label: 'Needs a human', dot: 'bg-human shadow-[0_0_8px_1px_rgb(245_196_81/0.45)]', text: 'text-human', soft: 'bg-human/10' },
+  red: { label: 'Blocked', dot: 'bg-blocked shadow-[0_0_8px_1px_rgb(255_107_122/0.5)]', text: 'text-blocked', soft: 'bg-blocked/10' },
 };
 
 /** "3 minutes ago", from the reader's own clock. */

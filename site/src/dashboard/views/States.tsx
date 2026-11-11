@@ -106,7 +106,7 @@ export function LoadError({ onRetry }: { onRetry: () => void }) {
 export function NothingYet({ org }: { org: Org }) {
   return (
     <>
-      <ViewHeader title="Reviews" lead={`The dashboard is on for ${org.login}. Add one line to the Mergelight step in a repository's workflow, and its next review shows up here.`} />
+      <ViewHeader eyebrow="Overview" title="Reviews" lead={`The dashboard is on for ${org.login}. Add one line to the Mergelight step in a repository's workflow, and its next review shows up here.`} />
       <div className="grid max-w-3xl gap-5">
         <GlassCard label="No reviews to show yet">
           <pre className="overflow-x-auto rounded-2xl bg-black/25 px-5 py-4 font-mono text-[13px] leading-6 text-muted-foreground">

@@ -50,7 +50,7 @@ function Stats({ reviews }: { reviews: Review[] }) {
 export function ReviewsView({ overview }: { overview: Overview }) {
   return (
     <>
-      <ViewHeader title="Reviews" lead="Each pull request Mergelight reviewed, with its light and what it found." />
+      <ViewHeader eyebrow="Overview" title="Reviews" lead="Each pull request Mergelight reviewed, with its light and what it found." />
       <Stats reviews={overview.reviews} />
       <h2 className="mb-3 mt-8 font-heading text-base font-semibold">Latest reviews</h2>
       <DataTable>

@@ -56,7 +56,7 @@ export function Code({ children }: { children: ReactNode }) {
 
 /** A small round tag, such as the repository a rule applies to. */
 export function Tag({ tone = 'plain', children }: { tone?: 'plain' | 'human'; children: ReactNode }) {
-  return <span className={cn('inline-flex h-6 items-center rounded-full px-2.5 text-xs font-medium whitespace-nowrap', tone === 'human' ? 'bg-human/10 text-human' : 'bg-white/[0.06] text-muted-foreground')}>{children}</span>;
+  return <span className={cn('inline-flex h-6 items-center rounded-full px-2.5 text-xs font-medium whitespace-nowrap', tone === 'human' ? 'bg-human/10 text-human shadow-[inset_0_0_0_1px_rgb(245_196_81/0.18)]' : 'bg-white/[0.03] text-muted-foreground shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]')}>{children}</span>;
 }
 
 /**
@@ -128,7 +128,7 @@ export function FormDialog({
 }) {
   return (
     <>
-      <Button onClick={() => onOpenChange(true)} className="h-9 gap-1.5 pl-3 pr-4">
+      <Button onClick={() => onOpenChange(true)} className="h-10 gap-1.5 rounded-full pl-3.5 pr-5 text-[14px] shadow-[0_8px_24px_-10px_rgb(236_234_244/0.35)] hover:bg-white">
         <PlusIcon />
         {trigger}
       </Button>

@@ -39,13 +39,12 @@ function OrgIcon({ org }: { org: Org }) {
 
 /** A menu item. The one you are on is a raised tile with a small lit bar on its left and a lit icon. */
 const NAV_ITEM = [
-  'relative rounded-[10px]! text-sidebar-foreground/70 hover:bg-white/[0.04] hover:text-sidebar-foreground',
-  'data-active:bg-white/[0.07] data-active:font-medium data-active:text-sidebar-foreground',
-  'data-active:shadow-[inset_0_1px_0_rgb(255_255_255/0.08),0_0_0_1px_rgb(255_255_255/0.05),0_1px_2px_rgb(0_0_0/0.3)]',
-  'data-active:before:absolute data-active:before:left-1 data-active:before:top-1/2 data-active:before:h-3.5 data-active:before:w-[3px] data-active:before:-translate-y-1/2 data-active:before:rounded-full data-active:before:bg-[oklch(0.72_0.16_277)]',
-  'data-active:[&_svg]:text-[oklch(0.8_0.12_277)]',
-  // Shrunk to icons, the tile alone shows where you are: the bar would sit on the icon.
-  'group-data-[collapsible=icon]:before:hidden',
+  'relative text-sidebar-foreground/65 hover:bg-white/[0.04] hover:text-sidebar-foreground',
+  'data-active:bg-white/[0.06] data-active:font-medium data-active:text-sidebar-foreground',
+  'data-active:shadow-[inset_0_1px_0_rgb(255_255_255/0.06),0_0_0_1px_rgb(255_255_255/0.05)]',
+  // The light that is on: a small mint dot with a glow, as on the landing page and on a passing review.
+  'data-active:after:absolute data-active:after:right-3 data-active:after:top-1/2 data-active:after:size-1.5 data-active:after:-translate-y-1/2 data-active:after:rounded-full data-active:after:bg-mint data-active:after:shadow-[0_0_10px_2px_rgb(63_232_184/0.55)]',
+  'group-data-[collapsible=icon]:after:hidden',
 ].join(' ');
 
 function OrgPicker({ orgs, org, onPick }: { orgs: Org[]; org: Org; onPick: (id: number) => void }) {
@@ -168,7 +167,7 @@ export function AppShell({ user, orgs, org, onPickOrg, view, onView, onSignOut, 
   return (
     <TooltipProvider>
     <SidebarProvider>
-      <Sidebar variant="floating" collapsible="icon">
+      <Sidebar variant="floating" collapsible="icon" className="[&_[data-sidebar=sidebar]]:bg-[linear-gradient(180deg,#1a1820_0%,#121116_100%)] [&_[data-sidebar=sidebar]]:shadow-[inset_0_1px_0_rgb(255_255_255/0.06),0_24px_48px_-28px_rgb(0_0_0/0.85)]">
         <SidebarHeader>
           <SidebarMenu>
             <SidebarMenuItem>
@@ -217,7 +216,8 @@ export function AppShell({ user, orgs, org, onPickOrg, view, onView, onSignOut, 
           </SidebarMenu>
         </SidebarFooter>
       </Sidebar>
-      <SidebarInset>
+      <SidebarInset className="relative isolate overflow-hidden">
+        <div aria-hidden="true" className="page-light -z-10" />
         <header className="flex h-16 shrink-0 items-center gap-2 px-4">
           <SidebarTrigger className="-ml-1" />
           <Separator orientation="vertical" className="mr-2 data-vertical:h-4 data-vertical:self-center" />
@@ -236,12 +236,13 @@ export function AppShell({ user, orgs, org, onPickOrg, view, onView, onSignOut, 
   );
 }
 
-export function ViewHeader({ title, lead, action }: { title: string; lead?: ReactNode; action?: ReactNode }) {
+export function ViewHeader({ eyebrow, title, lead, action }: { eyebrow?: string; title: string; lead?: ReactNode; action?: ReactNode }) {
   return (
-    <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
+    <div className="mb-8 flex flex-wrap items-end justify-between gap-x-6 gap-y-4 pt-2">
       <div className="max-w-2xl">
-        <h1 className="font-heading text-2xl font-semibold tracking-tight">{title}</h1>
-        {lead && <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">{lead}</p>}
+        {eyebrow && <p className="text-sm font-medium text-mint">{eyebrow}</p>}
+        <h1 className="mt-1.5 font-heading text-[32px] font-semibold leading-[1.1] tracking-[-0.035em] [text-wrap:balance]">{title}</h1>
+        {lead && <p className="mt-3 text-[15px] leading-relaxed text-muted-foreground [text-wrap:pretty]">{lead}</p>}
       </div>
       {action}
     </div>

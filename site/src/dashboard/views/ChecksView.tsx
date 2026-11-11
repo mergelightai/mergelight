@@ -73,6 +73,7 @@ export function ChecksView({ orgId, checks, onAdd, onRemove, resume }: { orgId: 
   return (
     <>
       <ViewHeader
+        eyebrow="Reviewer"
         title="Checks"
         lead={
           <>

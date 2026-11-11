@@ -81,6 +81,7 @@ export function RulesView({ orgId, rules, onAdd, onRemove, resume }: { orgId: nu
   return (
     <>
       <ViewHeader
+        eyebrow="Reviewer"
         title="Rules"
         lead={
           <>
