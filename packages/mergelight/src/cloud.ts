@@ -339,7 +339,7 @@ export async function cloudConnected(deps: CloudDeps = {}): Promise<boolean> {
 /** The server reads 64 KB per report. The decisions get most of it, and the numbers always fit beside them. */
 const MAX_DECLINE_BYTES = 48_000;
 /** The longest reason sent and read. The server refuses a longer one, and with it the whole report. */
-export const MAX_REASON = 500;
+export const MAX_REASON = 1000;
 
 /** A finding someone on the team chose not to fix, with their reason, as it is sent to the server to remember. */
 export interface Decline {
