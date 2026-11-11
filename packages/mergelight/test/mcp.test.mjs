@@ -729,6 +729,9 @@ test("a reason given when resolving a thread is the team's decision, and is kept
   assert.ok(prompt.includes("team: resolved the comment, by teammate, saying: Known, leave it. Fixed in 3f2a9c1"));
   assert.ok(!prompt.includes("decided not to fix, by teammate"));
 
+  // A fix mentioned anywhere is a fix claim; "won't fix" is a reason.
+  assert.equal((await read(scenario([findingThread("aaaaaaaaaa", 501, [reply("teammate", "Good catch, fixed by validating in the caller.")])]))).from, "thread");
+  assert.equal((await read(scenario([findingThread("aaaaaaaaaa", 501, [reply("teammate", "Won't fix: only admins reach this route.")])]))).remember, true);
   // A plain number isn't a commit, so a reason may hold one.
   const number = await read(scenario([findingThread("aaaaaaaaaa", 501, [reply("teammate", "We keep it: ticket 20261106 covers the rollout.")])]));
   assert.equal(number.from, "reply");
@@ -774,4 +777,16 @@ test("a reason the server hasn't confirmed is sent again in later reviews, until
   assert.equal((await read(pending, forged)).remember, true, "only Mergelight's own answer counts");
   const changed = { ...base, remember: [{ id: "aaaaaaaaaa", at: "2000-01-01T00:00:00Z" }] };
   assert.equal((await read(changed, [thread()])).remember, undefined, "the pending reason is an older one");
+});
+
+test("publishing a review without a new list keeps the reasons still waiting for the server", async () => {
+  const state = { ...stateOf([finding()]), remember: [{ id: "aaaaaaaaaa", at: "2030-01-02T00:00:00Z" }] };
+  const { env, writes } = useScenario({ issueComments: [summaryComment(state)], head: PUSHED });
+  await withFakeGh(env, async () => {
+    const review = { pr: { owner: "o", repo: "r", number: 7, head_sha: PUSHED }, provider: { name: "codex", model: null }, light: "green", summary: "S", findings: [], stats: { duration_ms: 1 }, created_at: "2030-01-03T00:00:00Z" };
+    await publishReview(review);
+    assert.deepEqual(decodeState(writes().find((w) => w.path === "issues/comments/1").body).remember, [{ id: "aaaaaaaaaa", at: "2030-01-02T00:00:00Z" }]);
+    await publishReview(review, { remember: [] });
+    assert.equal("remember" in decodeState(writes().filter((w) => w.path === "issues/comments/1").at(-1).body), false, "a review that sent its list replaces it");
+  });
 });

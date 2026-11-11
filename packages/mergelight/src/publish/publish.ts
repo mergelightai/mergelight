@@ -149,10 +149,11 @@ export async function previousFindings(api: GitHub, number: number, headSha?: st
 }
 
 /**
- * A reply that says the problem was fixed: it starts with fixed, done or addressed, or names a commit.
- * A commit is 7 to 40 hex characters with both a letter and a digit, so a plain number isn't one.
+ * A reply that says the problem was fixed: fixed, fixes or addressed anywhere, done at the start, or a
+ * commit. "Won't fix" isn't one. A commit is 7 to 40 hex characters with both a letter and a digit, so a
+ * plain number isn't one. Reading too much as a fix only means a reason isn't kept, the safe side.
  */
-const FIX_CLAIM = /^\W*(fixed|done|addressed)\b|\b(?=[0-9a-f]*[a-f])(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b/i;
+const FIX_CLAIM = /\b(fixed|fixes|addressed)\b|^\W*done\b|\b(?=[0-9a-f]*[a-f])(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b/i;
 
 /** A person's reply as the verifier reads it: one line, nothing hidden, not too long. cut: it was longer. */
 function oneLine(text: string): { note: string; cut?: true } {
@@ -272,7 +273,7 @@ export async function publishReview(
     teamUnread?: boolean;
     /** When this review read the pull request's threads. A reply written after it is newer than this round. */
     startedAt?: Date;
-    /** Reasons given in threads that this review sends to keep, until the server confirms them. */
+    /** Reasons given in threads that this review sends to keep, until the server confirms them. Left out, the earlier list stays. */
     remember?: { id: string; at: string }[];
   } = {},
 ): Promise<PublishResult> {
@@ -342,7 +343,7 @@ export async function publishReview(
   const { handled, resolved } = await settleThreads(api, review, log);
 
   const started = opts.startedAt ?? new Date(Date.parse(review.created_at) - (review.stats?.duration_ms ?? 0));
-  const state = nextState(prev, review.findings, review.pr.head_sha, review.light, urls, Number.isFinite(started.getTime()) ? started : new Date(), opts.remember);
+  const state = nextState(prev, review.findings, review.pr.head_sha, review.light, urls, Number.isFinite(started.getTime()) ? started : new Date(), opts.remember ?? prev?.remember);
   const summaryInput = { review, state, urls, marks, handled, update: await newerVersion(api) };
   const commentBody = summaryBody(summaryInput);
   let summaryUrl: string | null = summary?.html_url ?? null;
