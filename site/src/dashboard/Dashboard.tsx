@@ -608,7 +608,7 @@ function fromHash(): ViewId {
   return ALL_VIEWS.includes(id) ? id : 'reviews';
 }
 
-type View = { kind: 'loading' } | { kind: 'ready'; overview: Overview; decisions: Decision[]; total: number; rules: Rules | null; skills: Skills | null; checks: Checks | null } | { kind: 'off' } | { kind: 'error' };
+type View = { kind: 'loading' } | { kind: 'ready'; at: number; overview: Overview; decisions: Decision[]; total: number; rules: Rules | null; skills: Skills | null; checks: Checks | null } | { kind: 'off' } | { kind: 'error' };
 
 export default function Dashboard() {
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
@@ -671,7 +671,7 @@ export default function Dashboard() {
       return null;
     });
     Promise.all([loadOverview(session, org.id), decisions, rules, skills, checks])
-      .then(([overview, { decisions, total }, rules, skills, checks]) => !gone && setView({ kind: 'ready', overview, decisions, total, rules, skills, checks }))
+      .then(([overview, { decisions, total }, rules, skills, checks]) => !gone && setView({ kind: 'ready', at: Date.now(), overview, decisions, total, rules, skills, checks }))
       .catch((err) => {
         if (gone) return;
         if (err instanceof SignedOut) {
@@ -741,6 +741,8 @@ export default function Dashboard() {
       onPickOrg={setOrgId}
       view={tab}
       onView={pickTab}
+      loadedAt={view.kind === 'ready' ? view.at : null}
+      onRefresh={() => load()}
       onSignOut={() => {
         void signOut(session);
         setSession(null);

@@ -1,11 +1,12 @@
-import type { ReactNode } from 'react';
-import { BookOpenTextIcon, BrainIcon, LifebuoyIcon, PaperPlaneTiltIcon, CaretUpDownIcon, CheckIcon, GitPullRequestIcon, ListChecksIcon, ScalesIcon, SignOutIcon } from '@phosphor-icons/react';
+import { useEffect, useState, type ReactNode } from 'react';
+import { ArrowClockwiseIcon, ArrowSquareOutIcon, SignInIcon, DotsThreeIcon, PlusIcon, BookOpenTextIcon, BrainIcon, LifebuoyIcon, PaperPlaneTiltIcon, CaretUpDownIcon, CheckIcon, GitPullRequestIcon, ListChecksIcon, ScalesIcon, SignOutIcon } from '@phosphor-icons/react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from '@/components/ui/breadcrumb';
+import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarHeader, SidebarInset, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
-import type { Org, Session } from './api';
+import { ADD_REPOS_URL, signInUrl, type Org, type Session } from './api';
+import { ago } from './format';
 import { EMAIL, GITHUB } from '../links';
 
 export type ViewId = 'reviews' | 'rules' | 'skills' | 'checks' | 'decisions';
@@ -101,9 +102,49 @@ function NavUser({ user, onSignOut }: { user: Session['user']; onSignOut: () => 
   );
 }
 
-export function AppShell({ user, orgs, org, onPickOrg, view, onView, onSignOut, children }: { user: Session['user']; orgs: Org[]; org: Org; onPickOrg: (id: number) => void; view: ViewId; onView: (v: ViewId) => void; onSignOut: () => void; children: ReactNode }) {
+/** "Updated 2 minutes ago". It counts on by itself, so an old page says it is old. */
+function Updated({ at }: { at: number }) {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const id = window.setInterval(() => tick((n) => n + 1), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
+  return <span className="hidden text-sm text-muted-foreground sm:inline">Updated {ago(new Date(at).toISOString())}</span>;
+}
+
+/** The page's own actions, out of the way until someone needs them. */
+function PageMenu({ orgLogin, onRefresh }: { orgLogin: string; onRefresh: () => void }) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label="More" />}>
+        <DotsThreeIcon weight="bold" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-64">
+        <DropdownMenuItem onClick={onRefresh}>
+          <ArrowClockwiseIcon />
+          Refresh {orgLogin}
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>Don't see an org or a repository?</DropdownMenuLabel>
+          <DropdownMenuItem render={<a href={ADD_REPOS_URL} target="_blank" rel="noreferrer" />}>
+            <PlusIcon />
+            Add it on GitHub
+            <ArrowSquareOutIcon className="ml-auto text-muted-foreground" />
+          </DropdownMenuItem>
+          <DropdownMenuItem render={<a href={signInUrl()} />}>
+            <SignInIcon />
+            Then sign in again
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+export function AppShell({ user, orgs, org, onPickOrg, view, onView, onSignOut, loadedAt, onRefresh, children }: { user: Session['user']; orgs: Org[]; org: Org; onPickOrg: (id: number) => void; view: ViewId; onView: (v: ViewId) => void; onSignOut: () => void; loadedAt: number | null; onRefresh: () => void; children: ReactNode }) {
   const group = VIEWS.find((g) => g.items.some((i) => i.id === view)) ?? VIEWS[0];
-  const here = { group: group.group, label: group.items.find((i) => i.id === view)?.label ?? '' };
+  const here = { label: group.items.find((i) => i.id === view)?.label ?? '' };
   return (
     <SidebarProvider>
       <Sidebar variant="floating">
@@ -162,15 +203,11 @@ export function AppShell({ user, orgs, org, onPickOrg, view, onView, onSignOut, 
         <header className="flex h-16 shrink-0 items-center gap-2 px-4">
           <SidebarTrigger className="-ml-1" />
           <Separator orientation="vertical" className="mr-2 data-vertical:h-4 data-vertical:self-center" />
-          <Breadcrumb>
-            <BreadcrumbList>
-              <BreadcrumbItem className="hidden md:block">{here.group}</BreadcrumbItem>
-              <BreadcrumbSeparator className="hidden md:block" />
-              <BreadcrumbItem>
-                <BreadcrumbPage>{here.label}</BreadcrumbPage>
-              </BreadcrumbItem>
-            </BreadcrumbList>
-          </Breadcrumb>
+          <h1 className="truncate text-sm font-medium">{here.label}</h1>
+          <div className="ml-auto flex items-center gap-2">
+            {loadedAt && <Updated at={loadedAt} />}
+            <PageMenu orgLogin={org.login} onRefresh={onRefresh} />
+          </div>
         </header>
         <div className="w-full px-4 pb-16 pt-2">{children}</div>
       </SidebarInset>
