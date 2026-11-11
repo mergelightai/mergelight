@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { PriorFinding, TeamMemory } from "./prompt.js";
 import type { Review } from "./types.js";
 
 /**
@@ -29,7 +30,7 @@ export interface CloudDeps {
   deadlineMs?: number;
 }
 
-/** What the server stores about one review: numbers and names from short fixed lists. No code, no finding text, no file paths. */
+/** What the server stores about one review: numbers and names from short fixed lists. No code, no text of a finding, no file paths. */
 export interface ReviewNumbers {
   pr: number;
   sha: string;
@@ -194,32 +195,108 @@ async function call(d: Deps, server: URL, path: string, init: { method: string; 
   }
 }
 
-/** True when this repository's org uses the dashboard. False for everyone else, and whenever the server can't be asked. */
-export async function cloudConnected(deps: CloudDeps = {}): Promise<boolean> {
+/** What the server gives a review before it starts. */
+export interface CloudContext {
+  /** Whether this repository's org uses the dashboard. False for everyone else, and whenever the server can't be asked. */
+  connected: boolean;
+  /** Findings the team declined in earlier pull requests of this repository. */
+  memories: TeamMemory[];
+}
+
+const NOTHING: CloudContext = { connected: false, memories: [] };
+/** One line of plain text: no line breaks and no control characters, so it can't pass for anything but itself. */
+const isText = (v: unknown, max: number): v is string => typeof v === "string" && v.length > 0 && v.length <= max && !/[\u0000-\u001f\u007f\u2028\u2029]/.test(v);
+const isLine = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 10_000_000;
+
+/**
+ * The server's memories, each field checked. They go into the verifier's prompt, so one that isn't
+ * shaped right is left out, however it got there.
+ */
+export function readMemories(value: unknown): TeamMemory[] {
+  if (!Array.isArray(value)) return [];
+  const memories: TeamMemory[] = [];
+  for (const raw of value.slice(0, 200)) {
+    const m = raw as Record<string, unknown> | null;
+    if (!m || typeof m !== "object") continue;
+    if (typeof m.id !== "string" || !/^M\d{1,12}$/.test(m.id) || !isText(m.title, 200) || !isText(m.file, 400) || !isLine(m.line) || !isText(m.reason, 500)) continue;
+    if (typeof m.by !== "string" || !/^[\w.-]{1,100}(\[bot\])?$/.test(m.by) || !isLine(m.pr)) continue;
+    memories.push({ id: m.id, title: m.title, file: m.file, line: m.line, ...(isLine(m.end_line) ? { end_line: m.end_line } : {}), reason: m.reason, by: m.by, pr: m.pr });
+  }
+  return memories;
+}
+
+/** Asks the server what this review should know. Never throws: without an answer the review runs as it always has. */
+export async function fetchContext(deps: CloudDeps = {}): Promise<CloudContext> {
   const d = defaults(deps);
   const server = serverOrSay(d);
-  if (!server) return false;
+  if (!server) return NOTHING;
   try {
     const res = await call(d, server, "/v1/context", { method: "GET" });
     if (!res.ok) {
       d.log(`The Mergelight server answered ${res.status}. The review runs without it.`);
-      return false;
+      return NOTHING;
     }
-    return (res.answer as { connected?: unknown } | null)?.connected === true;
+    const answer = res.answer as { connected?: unknown; memories?: unknown } | null;
+    if (answer?.connected !== true) return NOTHING;
+    return { connected: true, memories: readMemories(answer.memories) };
   } catch (err) {
     d.log(`Couldn't reach the Mergelight server (${(err as Error).message}). The review runs without it.`);
-    return false;
+    return NOTHING;
   }
 }
 
-/** Sends the review's numbers for the dashboard. Returns whether the server took them. */
-export async function reportReview(review: Review, deps: CloudDeps = {}): Promise<boolean> {
+/** True when this repository's org uses the dashboard. */
+export async function cloudConnected(deps: CloudDeps = {}): Promise<boolean> {
+  return (await fetchContext(deps)).connected;
+}
+
+/** A finding someone on the team chose not to fix, with their reason, as it is sent to the server to remember. */
+export interface Decline {
+  finding_id: string;
+  title: string;
+  file: string;
+  line: number;
+  end_line?: number;
+  reason: string;
+  by: string;
+  /** When the person wrote it. A later decision about the same finding replaces an earlier one. */
+  decided_at: string;
+}
+
+/**
+ * The decisions on this pull request that are worth remembering: someone wrote a mark that says
+ * "not fixing this" and gave a reason. A resolved thread has no reason, so it isn't one.
+ */
+export function declinesOf(previous: PriorFinding[] | undefined): Decline[] {
+  // Line breaks and control characters become spaces: a reason is one line of plain text by the time it is sent.
+  const clean = (text: string, max: number) => text.replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, " ").replace(/ {2,}/g, " ").trim().slice(0, max).trim();
+  const declines: Decline[] = [];
+  for (const p of previous ?? []) {
+    const h = p.handled;
+    if (!h || h.as !== "wont_fix" || h.from !== "mark" || !h.note?.trim()) continue;
+    if (!/^[a-f0-9]{6,40}$/.test(p.id) || !/^[\w.-]{1,100}(\[bot\])?$/.test(h.by) || !isLine(p.line)) continue;
+    const title = clean(p.title, 200);
+    const file = clean(p.file, 400);
+    const reason = clean(h.note, 500);
+    const at = Date.parse(h.at ?? "");
+    if (!title || !file || !reason || !Number.isFinite(at)) continue;
+    declines.push({ finding_id: p.id, title, file, line: p.line, ...(isLine(p.end_line) ? { end_line: p.end_line } : {}), reason, by: h.by, decided_at: new Date(at).toISOString() });
+  }
+  return declines.slice(0, 40);
+}
+
+/**
+ * Sends the review's numbers for the dashboard, with the team's new decisions to remember and the
+ * earlier ones this review used. Returns whether the server took them.
+ */
+export async function reportReview(review: Review, deps: CloudDeps = {}, declines: Decline[] = []): Promise<boolean> {
   const d = defaults(deps);
   const server = serverUrl(d.env);
   if (!server) return false;
   try {
     // One id for this report, the same on both tries, so the server keeps it once.
-    const body = JSON.stringify({ ...reviewNumbers(review), report_id: randomUUID() });
+    const used = (review.used_memories ?? []).filter((id) => /^M\d{1,12}$/.test(id)).slice(0, 200);
+    const body = JSON.stringify({ ...reviewNumbers(review), report_id: randomUUID(), ...(declines.length ? { declines } : {}), ...(used.length ? { used_memories: used } : {}) });
     const res = await call(d, server, "/v1/reviews", { method: "POST", body });
     d.log(res.ok ? "Sent this review's numbers to the Mergelight server." : `The Mergelight server answered ${res.status} to the review's numbers. The review itself is posted.`);
     return res.ok;

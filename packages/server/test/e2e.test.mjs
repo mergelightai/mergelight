@@ -12,7 +12,7 @@ import { connectOrg, createPool, migrate, withOrg } from "../dist/db.js";
 import { createDataServer } from "../dist/server.js";
 import { startPostgres } from "./postgres.mjs";
 
-const { cloudConnected, reportReview } = await import("../../mergelight/dist/cloud.js").catch(() => {
+const { cloudConnected, declinesOf, fetchContext, reportReview } = await import("../../mergelight/dist/cloud.js").catch(() => {
   throw new Error("Build the CLI first: npm test in packages/mergelight.");
 });
 
@@ -109,4 +109,22 @@ test("after it does: connected, and the review's numbers land in the org's rows"
 
   const rows = await withOrg(pool, 1001, async (db) => (await db.query("select r.name, v.pr, v.light, v.bugs, v.risks, v.major, v.tier_post, v.tier_decision, v.provider, v.model, v.verifier from reviews v join repos r on r.org_id = v.org_id and r.id = v.repo_id")).rows);
   assert.deepEqual(rows, [{ name: "acme/widgets", pr: 42, light: "red", bugs: 1, risks: 1, major: 1, tier_post: 1, tier_decision: 1, provider: "codex", model: "gpt-5.5-codex", verifier: null }]);
+});
+
+test("a decision made on one pull request reaches the next review of that repository", async () => {
+  // What the CLI reads from the pull request: someone marked a finding "won't fix", with a reason.
+  const previous = [{ id: "ab12cd34ef", title: "Cart total is rounded before tax", file: "src/cart.ts", line: 40, end_line: 44, handled: { as: "wont_fix", note: "The payment provider needs whole cents.", by: "ada", sha: null, from: "mark", at: "2026-11-01T10:00:00Z" } }];
+  assert.equal(await reportReview(review, deps, declinesOf(previous)), true);
+
+  const context = await fetchContext(deps);
+  assert.equal(context.connected, true);
+  assert.equal(context.memories.length, 1);
+  const [memory] = context.memories;
+  assert.match(memory.id, /^M\d+$/);
+  assert.deepEqual({ ...memory, id: "M" }, { id: "M", title: "Cart total is rounded before tax", file: "src/cart.ts", line: 40, end_line: 44, reason: "The payment provider needs whole cents.", by: "ada", pr: 42 });
+
+  // A later review that used it says so, and the server counts the use.
+  assert.equal(await reportReview({ ...review, used_memories: [memory.id] }, deps), true);
+  const rows = await withOrg(pool, 1001, async (db) => (await db.query("select uses, last_used_at is not null as used from memories")).rows);
+  assert.deepEqual(rows, [{ uses: 1, used: true }]);
 });

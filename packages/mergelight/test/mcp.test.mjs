@@ -584,7 +584,7 @@ test("a review round reads marks: the verifier gets them, and the summary shows 
   await withFakeGh(env, async () => {
     const previous = await previousFindings(new GitHub("o", "r"), 7);
     const byId = Object.fromEntries(previous.map((p) => [p.id, p]));
-    assert.deepEqual(byId.aaaaaaaaaa.handled, { as: "wont_fix", note: "Only admins", by: "private-member", sha: REVIEWED });
+    assert.deepEqual(byId.aaaaaaaaaa.handled, { as: "wont_fix", note: "Only admins", by: "private-member", sha: REVIEWED, from: "mark", at: "2030-01-01T00:00:00Z" });
     assert.equal(byId.bbbbbbbbbb.handled.as, "fixed", "the stranger's later mark doesn't count");
 
     const review = { pr: { owner: "o", repo: "r", number: 7, head_sha: PUSHED }, provider: { name: "codex", model: null }, light: "green", summary: "S", findings: [], stats: { duration_ms: 1 } };

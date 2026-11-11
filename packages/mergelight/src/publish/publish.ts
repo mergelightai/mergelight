@@ -76,9 +76,9 @@ export async function previousFindings(api: GitHub, number: number): Promise<Pri
       const mark = marks.get(id);
       const by = resolved.get(id);
       const handled = mark
-        ? { as: mark.as, note: mark.note, by: mark.by, sha: mark.sha }
+        ? { as: mark.as, note: mark.note, by: mark.by, sha: mark.sha, from: "mark" as const, at: mark.at }
         : by
-          ? { as: "wont_fix" as const, note: "Resolved the comment on the pull request.", by, sha: null }
+          ? { as: "wont_fix" as const, note: "Resolved the comment on the pull request.", by, sha: null, from: "thread" as const }
           : undefined;
       return { id, title, file, line, end_line, how, ...(handled ? { handled } : {}) };
     });

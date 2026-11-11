@@ -3,8 +3,9 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { currentRepo, fetchPullRequest, parsePrRef } from "./github.js";
 import { serve } from "./mcp/server.js";
-import { cloudConnected, reportReview } from "./cloud.js";
+import { declinesOf, fetchContext, reportReview } from "./cloud.js";
 import { GitHub } from "./publish/api.js";
+import { writeAccess } from "./publish/handled.js";
 import { approveCheck, checkLimitTitle, checkLoginTitle, failCheck, failSummary, previousFindings, publishReview, startCheck, startSummary } from "./publish/publish.js";
 import { LimitError, LoginError, loginFailureMessage } from "./providers/codex.js";
 import { limitNotice, loginNotice } from "./publish/markdown.js";
@@ -218,14 +219,16 @@ async function main(): Promise<number> {
   }
 
   // Teams that use the dashboard: ask the server first, so nothing is sent for anyone else.
-  const onDashboard = values.post && !dryRun ? await cloudConnected({ log }) : false;
+  const cloud = values.post && !dryRun ? await fetchContext({ log }) : { connected: false, memories: [] };
 
   const progress = progressPrinter();
   try {
     // The login step already found this login can't be refreshed, so don't send every reviewer to find out.
     if (process.env.MERGELIGHT_LOGIN_LOST === "1") throw new LoginError(loginFailureMessage(process.env.SECRET_NAME || undefined));
+    const previous = values.post ? await previousFindings(api, ref.number) : undefined;
     const review = await reviewPullRequest(ref, {
-      previous: values.post ? await previousFindings(api, ref.number) : undefined,
+      previous,
+      memories: cloud.memories,
       at: values.at,
       provider,
       model: values.model,
@@ -244,7 +247,14 @@ async function main(): Promise<number> {
     if (values.post) {
       const result = await publishReview(review, { dryRun, log, checkRunId, yellowBlocks: values["yellow-blocks"] });
       log(`Posted: ${result.inline} inline, ${result.outside} in the summary only, ${result.resolved} resolved. ${result.summaryUrl ?? ""}`);
-      if (onDashboard) await reportReview(review, { log });
+      if (cloud.connected) {
+        // A decision is only remembered when GitHub says its author can push to this repository. Being a
+        // member of the org is not enough: this outlives the pull request it was made on.
+        const canWrite = writeAccess(api);
+        const declines = [];
+        for (const d of declinesOf(previous)) if (await canWrite(d.by)) declines.push(d);
+        await reportReview(review, { log }, declines);
+      }
       // The check carries the verdict; the job itself only fails on errors.
       return 0;
     }

@@ -3,7 +3,7 @@ import { createSign, generateKeyPairSync, randomUUID } from "node:crypto";
 import { after, before, beforeEach, test } from "node:test";
 import { resetJwksCache } from "../../token-server/dist/token.js";
 import { createApi } from "../dist/api.js";
-import { connectOrg, createPool, deleteOrg, migrate } from "../dist/db.js";
+import { connectOrg, createPool, deleteOrg, migrate, withOrg } from "../dist/db.js";
 import { parseOrigins } from "../dist/people.js";
 import { createDataServer } from "../dist/server.js";
 import { startPostgres } from "./postgres.mjs";
@@ -27,8 +27,8 @@ const CY = "ghu_" + "c".repeat(36);
 /** Dee has no installs at all. */
 const DEE = "ghu_" + "d".repeat(36);
 const people = {
-  [ADA]: { user: { id: 11, login: "ada" }, installations: [{ id: 501, account: ACME, repos: [{ id: 501, full_name: "acme/widgets" }, { id: 502, full_name: "acme/api" }] }, { id: 503, account: QUIET, repos: [{ id: 901, full_name: "quiet/site" }] }] },
-  [BO]: { user: { id: 22, login: "bo" }, installations: [{ id: 601, account: OTHER, repos: [{ id: 777, full_name: "other/vault" }] }] },
+  [ADA]: { user: { id: 11, login: "ada" }, installations: [{ id: 501, account: ACME, repos: [{ id: 501, full_name: "acme/widgets", permissions: { push: true } }, { id: 502, full_name: "acme/api", permissions: { push: false } }] }, { id: 503, account: QUIET, repos: [{ id: 901, full_name: "quiet/site" }] }] },
+  [BO]: { user: { id: 22, login: "bo" }, installations: [{ id: 601, account: OTHER, repos: [{ id: 777, full_name: "other/vault", permissions: { push: true } }] }] },
   [DEE]: { user: { id: 44, login: "dee" }, installations: [] },
   [CY]: { user: { id: 33, login: "cy" }, installations: [{ id: 701, app: "some-other-app", account: ACME, repos: [{ id: 501, full_name: "acme/widgets" }] }] },
 };
@@ -85,6 +85,7 @@ const call = (path, { method = "GET", token, origin = SITE, body } = {}) =>
   api(new Request(`https://server.test${path}`, { method, headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(origin ? { origin } : {}) }, body }));
 const report = (claims, review = {}) =>
   api(new Request("https://server.test/v1/reviews", { method: "POST", headers: { authorization: `Bearer ${runToken(claims)}` }, body: JSON.stringify({ ...REVIEW, report_id: randomUUID(), ...review }) }));
+const withOrgRows = (orgId, sql) => withOrg(pool, orgId, async (db) => (await db.query(sql)).rows);
 const signIn = async (githubToken) => (await call("/v1/session", { method: "POST", token: githubToken })).json();
 
 before(async () => {
@@ -251,6 +252,78 @@ test("the site list must be https, and defaults to mergelight.dev", () => {
   assert.deepEqual(parseOrigins("https://a.example/path, http://localhost:5173"), ["https://a.example", "http://localhost:5173"]);
   assert.throws(() => parseOrigins("http://a.example"), /https/);
   assert.throws(() => parseOrigins("not a url"));
+});
+
+const decline = (n, title) => ({ finding_id: `aaaaaaaa0${n}`, title, file: "src/cart.ts", line: 40, reason: "By design.", by: "ada", decided_at: "2026-11-01T10:00:00.000Z" });
+/** One decision in each of acme's repositories: widgets (Ada can push), api (Ada can only read), secret (Ada can't see). */
+async function seedDecisions() {
+  assert.equal((await report({ run_id: "9101" }, { declines: [decline(1, "In widgets")] })).status, 201);
+  assert.equal((await report({ repository: "acme/api", repository_id: "502", run_id: "9102" }, { declines: [decline(2, "In api")] })).status, 201);
+  assert.equal((await report({ repository: "acme/secret", repository_id: "599", run_id: "9103" }, { declines: [decline(3, "In secret")] })).status, 201);
+}
+const decisions = async (token, org = ACME.id) => (await (await call(`/v1/orgs/${org}/memories`, { token })).json()).memories;
+
+test("a person sees what the team decided in the repositories GitHub shows them, and no others", async () => {
+  await seedDecisions();
+  const { token } = await signIn(ADA);
+  const list = await decisions(token);
+  assert.deepEqual(list.map((m) => [m.repo, m.title, m.can_forget]).sort(), [["acme/api", "In api", false], ["acme/widgets", "In widgets", true]]);
+  const [widgets] = list.filter((m) => m.repo === "acme/widgets");
+  assert.deepEqual([widgets.file, widgets.line, widgets.reason, widgets.by, widgets.pr, widgets.uses], ["src/cart.ts", 40, "By design.", "ada", 42, 0]);
+  assert.doesNotMatch(JSON.stringify(list), /secret/);
+  // The count is of what this person can see, not of the org.
+  assert.equal((await (await call(`/v1/orgs/${ACME.id}/memories`, { token })).json()).total, 2);
+
+  const bo = (await signIn(BO)).token;
+  assert.deepEqual(await decisions(bo, OTHER.id), []);
+  assert.equal((await call(`/v1/orgs/${ACME.id}/memories`, { token: bo })).status, 404);
+  assert.equal((await call(`/v1/orgs/${QUIET.id}/memories`, { token })).status, 404);
+  assert.equal((await call(`/v1/orgs/${ACME.id}/memories`)).status, 401);
+});
+
+test("only someone who can push to a repository can make Mergelight forget a decision made there", async () => {
+  await seedDecisions();
+  const { token } = await signIn(ADA);
+  const all = await withOrgRows(ACME.id, "select id, title from memories");
+  const id = (title) => Number(all.find((m) => m.title === title).id);
+  const forget = (memory, as = token, org = ACME.id, method = "DELETE") => call(`/v1/orgs/${org}/memories/${memory}`, { method, token: as });
+
+  // Read access only: refused. A repository she can't see, or an id that doesn't exist: no such decision.
+  const readOnly = await forget(id("In api"));
+  assert.equal(readOnly.status, 403);
+  assert.equal((await readOnly.json()).error, "read_only");
+  assert.equal((await forget(id("In secret"))).status, 404);
+  assert.equal((await forget(999_999)).status, 404);
+  // Someone from another org, through either org's address.
+  const bo = (await signIn(BO)).token;
+  assert.equal((await forget(id("In widgets"), bo)).status, 404);
+  assert.equal((await forget(id("In widgets"), bo, OTHER.id)).status, 404);
+  assert.equal((await forget(id("In widgets"), null)).status, 401);
+  assert.equal((await forget(id("In widgets"), token, ACME.id, "GET")).status, 405);
+  assert.equal((await withOrgRows(ACME.id, "select 1 from memories where forgotten_at is null")).length, 3);
+
+  const widgets = id("In widgets");
+  assert.equal((await forget(widgets)).status, 204);
+  assert.deepEqual((await withOrgRows(ACME.id, "select title from memories where forgotten_at is null order by title")).map((m) => m.title), ["In api", "In secret"]);
+  // Its text is gone from the database. Only a marker stays, so the old pull request can't bring it back.
+  assert.deepEqual(await withOrgRows(ACME.id, `select title, file, reason, by_login from memories where id = ${widgets}`), [{ title: "", file: "", reason: "", by_login: "" }]);
+  assert.equal((await forget(widgets)).status, 404);
+  assert.deepEqual((await decisions(token)).map((m) => m.title), ["In api"]);
+
+  // The pull request it came from is reviewed again and reports the same decision: it stays forgotten.
+  assert.equal((await report({ run_id: "9150" }, { declines: [decline(1, "In widgets")] })).status, 201);
+  assert.deepEqual((await decisions(token)).map((m) => m.title), ["In api"]);
+  // Someone decides it again, later: that one counts.
+  assert.equal((await report({ run_id: "9151" }, { declines: [{ ...decline(1, "In widgets, decided again"), decided_at: "2026-11-09T10:00:00.000Z" }] })).status, 201);
+  assert.deepEqual((await decisions(token)).map((m) => m.title).sort(), ["In api", "In widgets, decided again"]);
+  assert.equal((await forget(widgets)).status, 204);
+  // The next review of that repository no longer gets it.
+  const ctx = await api(new Request("https://server.test/v1/context", { headers: { authorization: `Bearer ${runToken({ run_id: "9200" })}` } }));
+  assert.deepEqual((await ctx.json()).memories, []);
+
+  const preflight = await call(`/v1/orgs/${ACME.id}/memories/${id("In api")}`, { method: "OPTIONS" });
+  assert.equal(preflight.status, 204);
+  assert.match(preflight.headers.get("access-control-allow-methods"), /DELETE/);
 });
 
 test("signing out always works, even for someone who is being slowed down", async () => {

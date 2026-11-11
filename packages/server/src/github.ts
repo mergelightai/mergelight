@@ -26,8 +26,14 @@ export interface Person {
 export interface Reach {
   id: number;
   login: string;
-  /** Repository id to its owner/name. */
-  repos: Map<number, string>;
+  repos: Map<number, RepoReach>;
+}
+
+export interface RepoReach {
+  /** owner/name */
+  name: string;
+  /** Whether GitHub lets the person push to it. People who can are the ones who may change what the team decided there. */
+  write: boolean;
 }
 
 const isLogin = (v: unknown): v is string => typeof v === "string" && /^[\w.-]{1,100}$/.test(v);
@@ -73,13 +79,13 @@ export async function lookUp(token: string, fetchImpl: typeof fetch = fetch, app
     for (const installation of ours.slice(0, MAX_ORGS)) {
       const { id, account } = installation as { id?: unknown; account?: { id?: unknown; login?: unknown } | null };
       if (!isId(id) || !account || !isId(account.id) || !isLogin(account.login)) continue;
-      const repos = new Map<number, string>();
+      const repos = new Map<number, RepoReach>();
       try {
         for (let page = 1; page <= MAX_REPO_PAGES; page++) {
           const { repositories } = (await ask(fetchImpl, token, `/user/installations/${id}/repositories?per_page=100&page=${page}`, signal)) as { repositories?: unknown };
           const list = Array.isArray(repositories) ? repositories : [];
-          for (const repo of list as { id?: unknown; full_name?: unknown }[]) {
-            if (isId(repo.id) && isRepoName(repo.full_name)) repos.set(repo.id, repo.full_name);
+          for (const repo of list as { id?: unknown; full_name?: unknown; permissions?: { push?: unknown } | null }[]) {
+            if (isId(repo.id) && isRepoName(repo.full_name)) repos.set(repo.id, { name: repo.full_name, write: repo.permissions?.push === true });
           }
           if (list.length < 100) break;
         }

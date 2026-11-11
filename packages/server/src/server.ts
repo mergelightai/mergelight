@@ -18,7 +18,7 @@
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { fileURLToPath } from "node:url";
 import { createApi, MAX_BODY } from "./api.js";
-import { assertRowRulesHold, connectOrg, createPool, migrate, parseConnectOrgs } from "./db.js";
+import { assertRowRulesHold, connectOrg, createPool, migrate, parseConnectOrgs, purgeExpiredMemories } from "./db.js";
 import { parseOrigins } from "./people.js";
 
 async function readBody(req: IncomingMessage): Promise<Buffer> {
@@ -75,6 +75,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     console.error(`Can't start: ${(err as Error).message}`);
     process.exit(1);
   }
+  // What nobody needed for 90 days is dropped on a clock, so it goes even from a repository that stopped being reviewed.
+  const purge = () => void purgeExpiredMemories(pool).catch((err) => console.error("purge error", (err as { code?: string } | null)?.code ?? (err as Error | null)?.name));
+  purge();
+  setInterval(purge, 6 * 60 * 60_000).unref();
   const server = createDataServer(api);
   server.listen(process.env.PORT ? Number(process.env.PORT) : 10001, "0.0.0.0", () => console.log("Mergelight server listening"));
   // Finish requests in flight when the host restarts it for a deploy.

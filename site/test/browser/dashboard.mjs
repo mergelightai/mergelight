@@ -28,6 +28,12 @@ const SESSION = {
   ],
 };
 const review = (over) => ({ repo_id: 501, repo: 'acme/widgets', pr: 42, sha: 'a'.repeat(40), light: 'yellow', bugs: 2, risks: 1, hardening: 3, major: 1, provider: 'claude', model: 'opus', duration_ms: 412_000, created_at: hoursAgo(1), ...over });
+const DECISIONS = {
+  1001: [
+    { id: 12, repo_id: 501, repo: 'acme/widgets', title: 'Cart total is rounded before tax', file: 'src/cart.ts', line: 40, end_line: 44, reason: 'The payment provider needs whole cents.', by: 'ada', pr: 37, created_at: hoursAgo(50), last_used_at: hoursAgo(2), uses: 3, can_forget: true },
+    { id: 13, repo_id: 502, repo: 'acme/api', title: 'Retry has no upper bound', file: 'src/retry.ts', line: 8, end_line: null, reason: 'The queue caps it.', by: 'bo', pr: 5, created_at: hoursAgo(80), last_used_at: null, uses: 0, can_forget: false },
+  ],
+};
 const OVERVIEWS = {
   1001: {
     org: { id: 1001, login: 'acme' },
@@ -40,7 +46,9 @@ const OVERVIEWS = {
 let failures = 0;
 const expect = (ok, what) => { console.log(`  ${ok ? 'ok ' : 'FAIL'} ${what}`); if (!ok) failures++; };
 
-async function open(name, { signedOutAfter = Infinity, serverDown = false } = {}) {
+async function open(name, { signedOutAfter = Infinity, serverDown = false, forgetFails = false } = {}) {
+  /** Decisions the page asked the server to forget. */
+  const forgotten = [];
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 900, deviceScaleFactor: 2 });
   const errors = [];
@@ -70,6 +78,13 @@ async function open(name, { signedOutAfter = Infinity, serverDown = false } = {}
       if (serverDown) return json(req, { error: 'server_error' }, 500);
       if (u.pathname === '/v1/session' && m === 'POST') return json(req, SESSION, 201);
       if (u.pathname === '/v1/session' && m === 'DELETE') return req.respond({ status: 204, headers: cors });
+      const memories = /^\/v1\/orgs\/(\d+)\/memories(?:\/(\d+))?$/.exec(u.pathname);
+      if (memories && m === 'DELETE') {
+        if (forgetFails) return json(req, { error: 'server_error' }, 500);
+        forgotten.push(Number(memories[2]));
+        return req.respond({ status: 204, headers: cors });
+      }
+      if (memories) return json(req, { memories: (DECISIONS[memories[1]] ?? []).filter((d) => !forgotten.includes(d.id)) });
       const org = /^\/v1\/orgs\/(\d+)\/overview$/.exec(u.pathname)?.[1];
       if (org) {
         if (calls.filter((c) => c.path.endsWith('/overview')).length > signedOutAfter) return json(req, { error: 'signed_out' }, 401);
@@ -93,6 +108,8 @@ async function open(name, { signedOutAfter = Infinity, serverDown = false } = {}
     const at = await page.evaluate((s, t) => {
       const el = [...document.querySelectorAll(s)].find((e) => e.textContent.trim() === t);
       if (!el) return null;
+      // A real mouse can only click what is on screen.
+      el.scrollIntoView({ block: 'center', behavior: 'instant' });
       const b = el.getBoundingClientRect();
       return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
     }, selector, label);
@@ -112,7 +129,7 @@ async function open(name, { signedOutAfter = Infinity, serverDown = false } = {}
     return { href, state };
   };
   console.log(`\n== ${name}`);
-  return { page, calls, exchanges, renewals, errors, text, click, signIn, comeBackFromGitHub, shot: (file) => page.screenshot({ path: `${out}${file}.png`, fullPage: true }).catch(() => {}) };
+  return { page, calls, exchanges, renewals, forgotten, errors, text, click, signIn, comeBackFromGitHub, shot: (file) => page.screenshot({ path: `${out}${file}.png`, fullPage: true }).catch(() => {}) };
 }
 const done = async (t) => {
   if (t.errors.length) { console.log('  page errors', t.errors.slice(0, 3)); failures++; }
@@ -123,7 +140,7 @@ const done = async (t) => {
   const t = await open('sign-in');
   await t.page.goto(`${base}/dashboard/`, { waitUntil: 'networkidle2' });
   expect(/Your reviews, in one place/.test(await t.text()), 'a signed-out visitor sees the sign-in screen');
-  expect(/Never your code/.test(await t.text()), 'it says what the dashboard holds');
+  expect(/numbers about each review, and the findings your team declined/.test(await t.text()) && /Never your code/.test(await t.text()), 'it says what the dashboard holds');
   expect(t.calls.length === 0, 'nothing is asked of the server before a sign-in');
   await t.shot('1-signed-out');
   const { href, state } = await t.signIn();
@@ -150,6 +167,14 @@ const done = async (t) => {
   expect(!stored.includes(GITHUB_TOKEN), 'the page keeps no GitHub token, in no kind of storage');
   expect(t.exchanges.length === 1, 'the sign-in code is used once');
 
+  expect(/What your team decided/.test(after) && /Cart total is rounded before tax/.test(after) && /ada: The payment provider needs whole cents\./.test(after), 'what the team decided shows, with who said why');
+  expect(/acme\/widgets · src\/cart\.ts:40/.test(after) && /Left out of 3 reviews since/.test(after) && /Not needed since/.test(after), 'and where it is and how often it was used');
+  const forgetButtons = await t.page.evaluate(() => [...document.querySelectorAll('button')].filter((b) => b.textContent.trim() === 'Forget').length);
+  expect(forgetButtons === 1, 'only a decision in a repository the person can push to has a Forget button');
+  await t.click('button', 'Forget');
+  await wait(500);
+  expect(t.forgotten.join() === '12' && !/Cart total is rounded/.test(await t.text()) && /Retry has no upper bound/.test(await t.text()), 'Forget removes that one decision, on the server and on the page');
+
   await t.click('[role=tab]', 'quiet');
   await wait(500);
   expect(/The dashboard isn't on for quiet/.test(await t.text()), 'an org that hasn\'t turned it on says so');
@@ -168,6 +193,15 @@ const done = async (t) => {
   expect(t.calls.at(-1).m === 'DELETE' && t.calls.at(-1).path === '/v1/session', 'and ends the session on the server');
   await t.page.reload({ waitUntil: 'networkidle2' });
   expect(/Continue with GitHub/.test(await t.text()), 'and a reload stays signed out');
+  await done(t);
+}
+
+{
+  const t = await open('forget-fails', { forgetFails: true });
+  await t.signIn();
+  await t.click('button', 'Forget');
+  await wait(500);
+  expect(/Cart total is rounded before tax/.test(await t.text()) && /That didn't work/.test(await t.text()), 'a Forget that fails leaves the decision on the page, and says so');
   await done(t);
 }
 

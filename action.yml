@@ -67,7 +67,9 @@ inputs:
       nothing about a review leaves your runner. With it, each run first shows the server GitHub's
       signed token, which names the repository, branch, workflow and who started the run. If your
       org turned the dashboard on, the run then sends the review's numbers (how many findings, the
-      light, how long it took). Never code, finding text or your AI login. Needs "id-token: write".
+      light, how long it took) and the findings your team declined on that pull request: each one's
+      title, file and the reason the person gave, so later reviews leave it out. Never code, never
+      other findings, and never your AI login. Needs "id-token: write".
     default: ""
 
 runs:

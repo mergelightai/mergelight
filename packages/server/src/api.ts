@@ -12,7 +12,7 @@
 // and after it has finished.
 
 import { HttpError, verifyOidcToken } from "../../token-server/dist/token.js";
-import { isId, withOrg, type Pool } from "./db.js";
+import { isId, MEMORY_DAYS, withOrg, type Pool } from "./db.js";
 import { createPeopleApi } from "./people.js";
 
 /**
@@ -32,7 +32,15 @@ export function audienceOf(publicUrl: string): string {
 /** Only runs that review a pull request talk to this server. */
 const EVENTS = new Set(["pull_request", "pull_request_target"]);
 
-export const MAX_BODY = 8192;
+/** Room for a review's numbers and up to 40 decisions with their reasons. */
+export const MAX_BODY = 65_536;
+const MAX_DECLINES = 40;
+/** One repository keeps this many decisions. The ones used longest ago go first. */
+const MAX_MEMORIES_PER_REPO = 500;
+/** How many a review is sent at most, most recently used first. */
+const MEMORIES_PER_REVIEW = 100;
+/** And how large that list may be. The client stops reading an answer past 64 KB, so the list stays well under it. */
+const MEMORY_BYTES_PER_REVIEW = 40_000;
 const RATE_WINDOW_MS = 60_000;
 /** A review asks twice, so this is 300 reviews a minute for one org. Far above real use, and still a ceiling. */
 export const RATE_MAX = 600;
@@ -70,6 +78,19 @@ export interface ReviewRow {
   files_changed: number;
   additions: number;
   deletions: number;
+}
+
+/** A finding someone on the team chose not to fix, with their reason. */
+export interface Decline {
+  finding_id: string;
+  title: string;
+  file: string;
+  line: number;
+  end_line: number | null;
+  reason: string;
+  by: string;
+  /** When the person wrote it on GitHub. */
+  decided_at: string;
 }
 
 /** Who a request is from, taken from GitHub's signature alone. */
@@ -137,6 +158,46 @@ export function parseReview(body: unknown): ReviewRow {
   };
 }
 
+const line = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 10_000_000;
+/**
+ * One line of plain text of a bounded length. No line breaks and no control characters: this text is
+ * later shown to the reviewing model, where a line break is what a heading or a new instruction starts with.
+ */
+const text = (v: unknown, max: number): v is string => typeof v === "string" && v.length > 0 && v.length <= max && !/[\u0000-\u001f\u007f\u2028\u2029]/.test(v) && v.trim().length > 0;
+
+/**
+ * The team's new decisions in a report, checked field by field. This is text a run sends and the
+ * server keeps, so each piece has a shape and a length, and one that doesn't fit refuses the report.
+ */
+export function parseDeclines(value: unknown): Decline[] {
+  const bad = (what: string) => new HttpError(400, "bad_request", `The review's ${what} isn't valid.`);
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > MAX_DECLINES) throw bad("list of decisions");
+  return value.map((raw) => {
+    if (!isRecord(raw)) throw bad("decision");
+    const { finding_id, title, file, line: at, end_line, reason, by, decided_at } = raw;
+    if (typeof finding_id !== "string" || !/^[a-f0-9]{6,40}$/.test(finding_id)) throw bad("decision's finding");
+    if (!text(title, 200) || !text(file, 400) || !text(reason, 500)) throw bad("decision's text");
+    if (!line(at) || (end_line != null && !line(end_line))) throw bad("decision's lines");
+    if (typeof by !== "string" || !/^[\w.-]{1,100}(\[bot\])?$/.test(by)) throw bad("decision's author");
+    // A time GitHub could have given: a real date, and not in the future.
+    const when = typeof decided_at === "string" && /^\d{4}-\d{2}-\d{2}T[\d:.]{8,12}Z$/.test(decided_at) ? Date.parse(decided_at) : NaN;
+    if (!Number.isFinite(when) || when < Date.parse("2020-01-01T00:00:00Z") || when > Date.now() + 5 * 60_000) throw bad("decision's time");
+    return { finding_id, title, file, line: at, end_line: end_line ?? null, reason, by, decided_at: new Date(when).toISOString() };
+  });
+}
+
+/** The ids of the earlier decisions a review used, from names like "M12". */
+export function parseUsedMemories(value: unknown): number[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > MEMORIES_PER_REVIEW) throw new HttpError(400, "bad_request", "The review's list of used decisions isn't valid.");
+  return value.map((v) => {
+    const id = typeof v === "string" && /^M\d{1,12}$/.test(v) ? Number(v.slice(1)) : NaN;
+    if (!isId(id)) throw new HttpError(400, "bad_request", "The review's list of used decisions isn't valid.");
+    return id;
+  });
+}
+
 export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"], signInApp, fetchImpl = fetch, now = () => Date.now() }: ApiOptions): (request: Request) => Promise<Response> {
   const audience = audienceOf(publicUrl);
   /** The dashboard's side: signed-in people. Runs and people never share a route or a kind of token. */
@@ -201,10 +262,31 @@ export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"
     return { orgId, repoId, runId, runAttempt, repo, pr: pull ? Number(pull[1]) : null };
   }
 
-  /** What a review needs before it starts. For now only whether the org uses the dashboard at all. */
+  /** What a review needs before it starts: whether the org uses the dashboard, and what the team decided before in this repository. */
   async function context(who: Caller): Promise<Response> {
-    const connected = await withOrg(pool, who.orgId, async (db) => ((await db.query("select 1 from orgs where id = $1", [who.orgId])).rowCount ?? 0) > 0);
-    return respond(200, { connected });
+    const found = await withOrg(pool, who.orgId, async (db) => {
+      if ((await db.query("select 1 from orgs where id = $1", [who.orgId])).rowCount === 0) return null;
+      const { rows } = await db.query(
+        `select id, title, file, line, end_line, reason, by_login, pr
+           from memories
+          where repo_id = $1 and forgotten_at is null and coalesce(last_used_at, updated_at) > now() - make_interval(days => $2)
+          order by coalesce(last_used_at, updated_at) desc
+          limit ${MEMORIES_PER_REVIEW}`,
+        [who.repoId, MEMORY_DAYS],
+      );
+      return rows;
+    });
+    if (!found) return respond(200, { connected: false });
+    // The most recently used ones that fit. A list too large for the client to read would cost it the whole answer.
+    const memories = [];
+    let bytes = 0;
+    for (const m of found) {
+      const memory = { id: `M${m.id}`, title: m.title, file: m.file, line: m.line, ...(m.end_line ? { end_line: m.end_line } : {}), reason: m.reason, by: m.by_login, pr: m.pr };
+      bytes += Buffer.byteLength(JSON.stringify(memory)) + 1;
+      if (bytes > MEMORY_BYTES_PER_REVIEW) break;
+      memories.push(memory);
+    }
+    return respond(200, { connected: true, memories });
   }
 
   async function saveReview(who: Caller, request: Request): Promise<Response> {
@@ -217,6 +299,8 @@ export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"
       throw new HttpError(400, "bad_request", "The review isn't JSON.");
     }
     const r = parseReview(body);
+    const declines = parseDeclines((body as Record<string, unknown>).declines);
+    const used = parseUsedMemories((body as Record<string, unknown>).used_memories);
     // A run can't report numbers for another pull request than the one GitHub signed it for.
     if (who.pr !== null && r.pr !== who.pr) throw new HttpError(400, "bad_request", "The review's pull request number isn't the one this run is for.");
 
@@ -236,7 +320,40 @@ export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"
         [who.orgId, who.repoId, who.runId, who.runAttempt, r.report_id, r.pr, r.sha, r.light, r.bugs, r.risks, r.hardening, r.major, r.tier_post, r.tier_list, r.tier_decision,
          r.provider, r.model, r.verifier, r.duration_ms, r.files_changed, r.additions, r.deletions],
       );
-      return (inserted.rowCount ?? 0) > 0;
+      const fresh = (inserted.rowCount ?? 0) > 0;
+
+      // A second try of a report that is already in changes nothing more.
+      if (!fresh) return false;
+
+      // What the team decided on this pull request. Only a decision written later than the one on file
+      // replaces it. So a pull request that is reviewed again doesn't keep an unused decision alive, and
+      // doesn't bring back one that someone made Mergelight forget.
+      for (const d of declines) {
+        await db.query(
+          `insert into memories (org_id, repo_id, finding_id, title, file, line, end_line, reason, by_login, pr, decided_at)
+           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+           on conflict (org_id, repo_id, finding_id) do update
+             set title = excluded.title, file = excluded.file, line = excluded.line, end_line = excluded.end_line,
+                 reason = excluded.reason, by_login = excluded.by_login, pr = excluded.pr, decided_at = excluded.decided_at,
+                 updated_at = now(), forgotten_at = null
+             where excluded.decided_at > memories.decided_at`,
+          [who.orgId, who.repoId, d.finding_id, d.title, d.file, d.line, d.end_line, d.reason, d.by, r.pr, d.decided_at],
+        );
+      }
+      // The earlier decisions this review used get their 90 days again.
+      if (used.length) {
+        await db.query("update memories set last_used_at = now(), uses = uses + 1 where repo_id = $1 and forgotten_at is null and id = any($2::bigint[])", [who.repoId, used]);
+      }
+      // What ran out in this repository goes now, and the oldest go when it holds too many.
+      await db.query("delete from memories where repo_id = $1 and forgotten_at is null and coalesce(last_used_at, updated_at) <= now() - make_interval(days => $2)", [who.repoId, MEMORY_DAYS]);
+      if (declines.length) {
+        await db.query(
+          `delete from memories where repo_id = $1 and id in (
+             select id from memories where repo_id = $1 and forgotten_at is null order by coalesce(last_used_at, updated_at) desc offset ${MAX_MEMORIES_PER_REPO})`,
+          [who.repoId],
+        );
+      }
+      return true;
     });
     if (stored === null) return respond(404, { error: "not_connected", message: "This org hasn't turned the Mergelight dashboard on." });
     return respond(stored ? 201 : 200, { stored });

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { GitHubIcon, SURFACE, WELL } from '../ui';
-import { ADD_REPOS_URL, finishSignIn, loadOverview, mayRenew, NotConnected, rememberedSession, SERVER, SignedOut, signInUrl, signOut, tidyAddress, type Light, type Org, type Overview, type Review, type Session } from './api';
+import { ADD_REPOS_URL, finishSignIn, forgetDecision, loadDecisions, loadOverview, mayRenew, NotConnected, rememberedSession, SERVER, SignedOut, signInUrl, signOut, tidyAddress, type Decision, type Light, type Org, type Overview, type Review, type Session } from './api';
 
 const LIGHTS: Record<Light, { label: string; dot: string; text: string }> = {
   green: { label: 'Safe to merge', dot: 'bg-mint', text: 'text-mint' },
@@ -68,7 +68,7 @@ function SignIn({ failed, cancelled }: { failed: boolean; cancelled: boolean }) 
       <a href={signInUrl()} className={`${PRIMARY} mt-7`}>
         <GitHubIcon className="size-[18px]" /> Continue with GitHub
       </a>
-      <p className="mx-auto mt-6 max-w-[340px] text-[13px] leading-relaxed text-faint">The dashboard holds numbers about each review. Never your code, and never what a finding says.</p>
+      <p className="mx-auto mt-6 max-w-[340px] text-[13px] leading-relaxed text-faint">The dashboard holds numbers about each review, and the findings your team declined with the reason. Never your code.</p>
     </div>
   );
 }
@@ -147,6 +147,72 @@ function Reviews({ overview }: { overview: Overview }) {
   );
 }
 
+/** What the team decided not to fix. Mergelight leaves these out of later reviews, and anyone who can push can take one back. */
+function Decisions({ decisions, total, onForget }: { decisions: Decision[]; total: number; onForget: (d: Decision) => Promise<void> }) {
+  const [busy, setBusy] = useState<number | null>(null);
+  const [failed, setFailed] = useState<number | null>(null);
+  return (
+    <Card>
+      <h2 className="text-[17px] font-semibold tracking-[-0.01em]">What your team decided</h2>
+      <p className="mt-1.5 max-w-2xl text-[14px] leading-relaxed text-muted">
+        When someone declines a finding and says why, Mergelight remembers it and leaves it out of later reviews of that file. A decision nobody needed for 90 days is dropped.
+      </p>
+      {total > decisions.length && (
+        <p className="mt-3 text-[13px] text-faint">
+          Showing the {decisions.length} most recent of {total}.
+        </p>
+      )}
+      {decisions.length === 0 ? (
+        <p className={`${WELL} mt-5 px-5 py-4 text-[14px] leading-relaxed text-muted`}>
+          Nothing yet. Decline a finding with a reason on a pull request, and it shows up here after that pull request's next review.
+        </p>
+      ) : (
+        <ul className="mt-3">
+          {decisions.map((d) => (
+            <li key={d.id} className="border-t border-line py-4 first:border-t-0">
+              <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+                <div className="min-w-0 flex-1 basis-[320px]">
+                  <p className="text-[15px] font-medium text-fg">{d.title}</p>
+                  <p className="mt-1 truncate font-mono text-[12.5px] text-faint">
+                    {d.repo} · {d.file}:{d.line}
+                  </p>
+                </div>
+                {d.can_forget && (
+                  <button
+                    type="button"
+                    disabled={busy === d.id}
+                    onClick={() => {
+                      setBusy(d.id);
+                      setFailed(null);
+                      onForget(d)
+                        .catch(() => setFailed(d.id))
+                        .finally(() => setBusy(null));
+                    }}
+                    className="rounded-full px-3 py-1.5 text-[13px] text-muted transition-colors hover:bg-white/[0.06] hover:text-fg disabled:opacity-50"
+                  >
+                    {busy === d.id ? 'Forgetting' : 'Forget'}
+                  </button>
+                )}
+              </div>
+              <p className={`${WELL} mt-3 px-4 py-3 text-[14px] leading-relaxed text-muted`}>
+                <span className="text-fg">{d.by}:</span> {d.reason}
+              </p>
+              <p className="mt-2 text-[13px] text-faint">
+                Declined in{' '}
+                <a href={`https://github.com/${d.repo}/pull/${d.pr}`} target="_blank" rel="noreferrer" className="text-muted hover:underline">
+                  #{d.pr}
+                </a>
+                , {ago(d.created_at)}. {d.uses ? `Left out of ${d.uses} review${d.uses === 1 ? '' : 's'} since, last ${ago(d.last_used_at)}.` : 'Not needed since.'}
+              </p>
+              {failed === d.id && <p className="mt-2 text-[13px] text-risk">That didn't work. Please try again.</p>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
+  );
+}
+
 /** How to send the first review's numbers. Shown when the dashboard is on and has nothing yet. */
 function NothingYet({ org }: { org: Org }) {
   return (
@@ -160,7 +226,7 @@ function NothingYet({ org }: { org: Org }) {
         <span className="text-mint">{`server: ${SERVER}`}</span>
       </pre>
       <p className="mt-4 max-w-xl text-[13px] leading-relaxed text-faint">
-        A review then sends its numbers: the light, how many findings, which AI ran it and how long it took. It never sends code or what a finding says.
+        A review then sends its numbers: the light, how many findings, which AI ran it and how long it took. It also sends the findings your team declined, with the reason each person gave. It never sends code.
       </p>
       <p className="mt-4 max-w-xl text-[14px] leading-relaxed text-muted">
         Already sending reviews? Then they are in repositories this sign-in can't see.{' '}
@@ -182,7 +248,7 @@ function NotOn({ org }: { org: Org }) {
   );
 }
 
-type View = { kind: 'loading' } | { kind: 'ready'; overview: Overview } | { kind: 'off' } | { kind: 'error' };
+type View = { kind: 'loading' } | { kind: 'ready'; overview: Overview; decisions: Decision[]; total: number } | { kind: 'off' } | { kind: 'error' };
 
 export default function Dashboard() {
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
@@ -222,8 +288,8 @@ export default function Dashboard() {
     if (!session || !org) return () => undefined;
     let gone = false;
     setView({ kind: 'loading' });
-    loadOverview(session, org.id)
-      .then((overview) => !gone && setView({ kind: 'ready', overview }))
+    Promise.all([loadOverview(session, org.id), loadDecisions(session, org.id)])
+      .then(([overview, { decisions, total }]) => !gone && setView({ kind: 'ready', overview, decisions, total }))
       .catch((err) => {
         if (gone) return;
         if (err instanceof SignedOut) {
@@ -329,7 +395,21 @@ export default function Dashboard() {
               </button>
             </Card>
           )}
-          {view.kind === 'ready' && (view.overview.reviews.length ? <Reviews overview={view.overview} /> : <NothingYet org={org} />)}
+          {view.kind === 'ready' && (
+            <div className="space-y-5">
+              {view.overview.reviews.length ? <Reviews overview={view.overview} /> : <NothingYet org={org} />}
+              {(view.overview.reviews.length > 0 || view.decisions.length > 0) && (
+                <Decisions
+                  decisions={view.decisions}
+                  total={view.total}
+                  onForget={async (d) => {
+                    await forgetDecision(session, org.id, d.id);
+                    setView((v) => (v.kind === 'ready' ? { ...v, decisions: v.decisions.filter((x) => x.id !== d.id), total: v.total - 1 } : v));
+                  }}
+                />
+              )}
+            </div>
+          )}
         </>
       )}
     </Shell>
