@@ -98,15 +98,22 @@ test("the team's earlier decisions come with the answer, and one that isn't shap
 });
 
 test("an org that isn't on the dashboard gets no memories, whatever the answer holds", async () => {
-  assert.deepEqual(await fetchContext(setup(json(200, { connected: false, memories: [MEMORY] })).deps), { connected: false, memories: [], rules: [] });
+  assert.deepEqual(await fetchContext(setup(json(200, { connected: false, memories: [MEMORY] })).deps), { connected: false, memories: [], rules: [], skills: [] });
   // A server that is set but can't be asked is not the same as "off": the review says so.
-  assert.deepEqual(await fetchContext(setup(json(500, {})).deps), { connected: false, memories: [], rules: [], failed: true });
-  assert.deepEqual(await fetchContext(setup(() => { throw new Error("down"); }).deps), { connected: false, memories: [], rules: [], failed: true });
-  assert.deepEqual(await fetchContext({ env: {} }), { connected: false, memories: [], rules: [] });
+  assert.deepEqual(await fetchContext(setup(json(500, {})).deps), { connected: false, memories: [], rules: [], skills: [], failed: true });
+  assert.deepEqual(await fetchContext(setup(() => { throw new Error("down"); }).deps), { connected: false, memories: [], rules: [], skills: [], failed: true });
+  assert.deepEqual(await fetchContext({ env: {} }), { connected: false, memories: [], rules: [], skills: [] });
 });
 
 const RULE = { id: "R3", kind: "rule", text: "Ignore style and naming.", scope: "org" };
 const GUARD = { id: "R4", kind: "needs_human", text: "Billing needs a second pair of eyes.", paths: ["src/billing/**", "*.sql"], scope: "repo" };
+
+test("the team's skill folders come with the answer, and anything that isn't a plain folder is left out", async () => {
+  const s = setup(json(200, { connected: true, skills: [".claude/skills/migrations", "../outside", ".claude/skills/*", "/abs/path", ".claude//x", 7, "a b", ".agents/skills/payments"] }));
+  assert.deepEqual((await fetchContext(s.deps)).skills, [".claude/skills/migrations", ".agents/skills/payments"]);
+  assert.deepEqual((await fetchContext(setup(json(200, { connected: true, skills: "x" })).deps)).skills, []);
+  assert.equal((await fetchContext(setup(json(200, { connected: true, skills: Array.from({ length: 30 }, (_, i) => `.claude/skills/s${i}`) })).deps)).skills.length, 10);
+});
 
 test("the team's rules come with the answer, and one that isn't shaped right is left out", async () => {
   const s = setup(json(200, { connected: true, memories: [], rules: [RULE, GUARD] }));

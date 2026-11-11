@@ -220,7 +220,7 @@ async function main(): Promise<number> {
   }
 
   // Teams that use the dashboard: ask the server first, so nothing is sent for anyone else.
-  const cloud = values.post && !dryRun ? await fetchContext({ log }) : { connected: false, memories: [], rules: [] };
+  const cloud = values.post && !dryRun ? await fetchContext({ log }) : { connected: false, memories: [], rules: [], skills: [] };
 
   const progress = progressPrinter();
   try {
@@ -232,6 +232,7 @@ async function main(): Promise<number> {
       memories: cloud.memories,
       rules: cloud.rules,
       rulesUnread: cloud.failed === true,
+      skills: cloud.skills,
       at: values.at,
       provider,
       model: values.model,
