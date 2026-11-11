@@ -533,8 +533,9 @@ test("an admin of a repository picks its skill folders, and only that repository
   assert.deepEqual(empty.skills, []);
   assert.deepEqual(empty.repos, [{ id: 501, name: "acme/widgets", can_pick_skills: true }, { id: 502, name: "acme/api", can_pick_skills: false }]);
 
-  // A slash at either end is the same folder.
-  assert.equal((await addSkill(ada, { repo_id: 501, path: "/.claude/skills/migrations/" })).status, 201);
+  // A slash at either end, or the path of its SKILL.md, is the same folder.
+  assert.equal((await addSkill(ada, { repo_id: 501, path: "/.claude/skills/migrations/SKILL.md" })).status, 201);
+  assert.equal((await addSkill(ada, { repo_id: 501, path: ".claude/skills/migrations/" })).status, 409);
   assert.equal((await addSkill(ada, { repo_id: 501, path: ".agents/skills/payments" })).status, 201);
   const again = await addSkill(ada, { repo_id: 501, path: ".claude/skills/migrations" });
   assert.equal(again.status, 409);

@@ -427,8 +427,8 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
     }
     if (typeof body !== "object" || body === null || Array.isArray(body)) throw new HttpError(400, "bad_request", "That isn't a skill.");
     const { repo_id, path: given } = body as Record<string, unknown>;
-    // People paste a folder with a slash at either end. It is the same folder.
-    const path = typeof given === "string" ? given.trim().replace(/^\/+|\/+$/g, "") : given;
+    // People paste a folder with a slash at either end, or the path of its SKILL.md. It is the same folder.
+    const path = typeof given === "string" ? given.trim().replace(/^\/+|\/+$/g, "").replace(/\/+SKILL\.md$/i, "") : given;
     if (!isSkillPath(path)) throw new HttpError(400, "bad_request", "Name the skill's folder in the repository, like .claude/skills/migrations. Letters, digits, / . - _ @ + only.");
     if (!isId(repo_id)) throw new HttpError(400, "bad_request", "Pick the repository the skill is in.");
     const repo = reach.repos.get(repo_id);

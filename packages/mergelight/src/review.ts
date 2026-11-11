@@ -204,7 +204,7 @@ export function summaryWith(summary: string, needsHuman: string[], rulesUnread: 
     ? ` It changes ${needsHuman.slice(0, 3).map(code).join(", ")}${needsHuman.length > 3 ? ` and ${needsHuman.length - 3} more` : ""}, which your team marked as always needing a human.`
     : "";
   // A team may have rules that would have changed this review. Running without them must never be silent.
-  const unread = rulesUnread ? " Mergelight couldn't get your team's rules and earlier decisions from its server, so this review ran without them." : "";
+  const unread = rulesUnread ? " Mergelight couldn't get your team's rules, skills and earlier decisions from its server, so this review ran without them." : "";
   return `${summary}${guarded}${unread}`;
 }
 

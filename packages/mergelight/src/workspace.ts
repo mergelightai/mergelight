@@ -182,8 +182,10 @@ export async function prepareWorkspace(pr: PullRequest, at?: string, skillFolder
 
     const dir = mkdtempSync(join(tmpdir(), `mergelight-${pr.repo}-${pr.number}-`));
     await git(["worktree", "add", "--quiet", "--detach", dir, headSha], mirror);
-    // From the merge base: what the team already merged, not what this pull request changed.
-    const skills = await skillsFor(mirror, mergeBase, dir, skillFolders);
+    // From the base branch as it is now: what the team merged. Not from the pull request, and not from
+    // the commit it branched from either. Its author picks that commit, and could pick one from
+    // before a skill was written or tightened.
+    const skills = await skillsFor(mirror, haveBaseBranch ? `refs/mergelight/base/${pr.baseRef}` : baseCandidate, dir, skillFolders);
 
     return {
       dir,

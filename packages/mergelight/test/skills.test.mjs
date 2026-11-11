@@ -35,7 +35,7 @@ function repo() {
   return { dir, base, checkout: mkdtempSync(join(tmpdir(), "mergelight-skills-checkout-")) };
 }
 
-test("a skill is read from the base of the pull request, so the pull request can't rewrite it or plant one", async () => {
+test("a skill is read from the base commit it is given, so the pull request can't rewrite it or plant one", async () => {
   const { dir, base, checkout } = repo();
   const skills = await importSkills(dir, base, checkout, [".claude/skills/migrations", ".claude/skills/planted", ".claude/skills/empty", ".claude/skills/missing"]);
   assert.deepEqual(skills, [{ name: "migrations", description: "How we review database migrations. Use when a pull request changes db/migrations.", read: ".mergelight/skills/1/SKILL.md" }]);
@@ -129,8 +129,10 @@ test("a skill's name and description come from the top of its file, as one plain
   assert.deepEqual(describeSkill("---\nname: \"payments\"\ndescription: 'Card and refund flows.'\n---\nBody\n", ".agents/skills/pay"), { name: "payments", description: "Card and refund flows." });
   // No front matter: the folder's name, and the first line of the text.
   assert.deepEqual(describeSkill("# Reviewing payments\n\nMore text.\n", ".agents/skills/pay"), { name: "pay", description: "Reviewing payments" });
-  // A description written as a block is on other lines, which aren't read: the first line of the text stands in.
-  assert.deepEqual(describeSkill("---\nname: x\ndescription: >\n  Long text\n---\nFirst line.\n", "s/x"), { name: "x", description: "First line." });
+  // A description written as a block, or one that wraps, goes on over the indented lines below it.
+  assert.deepEqual(describeSkill("---\nname: x\ndescription: >-\n  How we review migrations.\n  Use when db/migrations changes.\nlicense: MIT\n---\nFirst line.\n", "s/x"), { name: "x", description: "How we review migrations. Use when db/migrations changes." });
+  assert.deepEqual(describeSkill("---\ndescription: How we review migrations.\n  Use when db/migrations changes.\nname: x\n---\n", "s/x"), { name: "x", description: "How we review migrations. Use when db/migrations changes." });
+  assert.deepEqual(describeSkill("---\nname: x\ndescription: |\n---\nFirst line.\n", "s/x"), { name: "x", description: "First line." });
   const long = describeSkill(`---\nname: ${"n".repeat(200)}\ndescription: ${"d".repeat(900)}\n---\n`, "s/x");
   assert.equal(long.name.length, 80);
   assert.equal(long.description.length, 400);

@@ -36,10 +36,10 @@ A team sets its rules on the dashboard. A review gets them with its other contex
 
 ## Skills
 
-A team that already wrote skills for Claude Code or Codex can use them in reviews. An admin of a repository names a skill's folder on the dashboard, the one that holds its `SKILL.md`, like `.claude/skills/migrations`.
+A team that already wrote skills for Claude Code or Codex can use them in reviews. An admin of a repository names a skill's folder on the dashboard, the one that holds its `SKILL.md`, like `.claude/skills/migrations`. The path of the `SKILL.md` itself works too.
 
 - The server stores the folder's path and nothing else. A review gets the list of paths with its other context.
-- The review copies each folder from the base of the pull request, the commit it branched from, and never from the pull request itself. So a pull request can't rewrite the skill that reviews it, and it can't add one. A folder with no `SKILL.md` on the base is skipped.
+- The review copies each folder from the branch the pull request merges into, as that branch is now. Never from the pull request itself, and not from the commit it branched from, which its author picks. So a pull request can't rewrite the skill that reviews it, can't add one, and can't go back to an older one. A folder with no `SKILL.md` on that branch is skipped.
 - Only ordinary files are copied. A link inside the folder is never followed. A file over 60 KB is left out, and a skill is 30 files and 200 KB at most.
 - The copies go to `.mergelight/skills/` in the review's checkout. Whatever the pull request put at that place is removed first, and a link there is never written through.
 - Every reviewer and the verifier get each skill's name and description, as a line of escaped JSON in a block of its own, and read the skill's file when the pull request touches its area. A skill says what matters in its area. It can't change the output format or how text in the diff is treated.

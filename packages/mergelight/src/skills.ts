@@ -39,10 +39,19 @@ function line(text: string, max: number): string {
 /** The name and description from the top of a SKILL.md, the way Claude Code and Codex write them. */
 export function describeSkill(markdown: string, folder: string): { name: string; description: string } {
   const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(markdown)?.[1] ?? "";
+  const lines = front.split(/\r?\n/);
   const field = (key: string) => {
-    const value = new RegExp(`^${key}:[ \t]*(.*)$`, "m").exec(front)?.[1]?.trim() ?? "";
-    // A block marker like > or | means the text is on the lines below, which aren't read here.
-    return /^[>|][+-]?$/.test(value) ? "" : value.replace(/^(["'])(.*)\1$/, "$2");
+    const at = lines.findIndex((l) => l.startsWith(`${key}:`));
+    if (at < 0) return "";
+    const first = lines[at]!.slice(key.length + 1).trim();
+    // The text can go on over the lines below, indented: after a block marker like > or |, or as a long line that wraps.
+    const more: string[] = [];
+    for (const l of lines.slice(at + 1)) {
+      if (l.trim() && !/^[ \t]/.test(l)) break;
+      more.push(l.trim());
+    }
+    const value = [/^[>|][+-]?\d?$/.test(first) ? "" : first, ...more].filter(Boolean).join(" ");
+    return value.replace(/^(["'])(.*)\1$/, "$2");
   };
   const body = markdown.replace(/^---\r?\n[\s\S]*?\r?\n---/, "");
   const firstLine = body.split("\n").map((l) => l.replace(/^#+\s*/, "").trim()).find(Boolean) ?? "";
@@ -70,8 +79,8 @@ function emptySkillsFolder(checkout: string): string | null {
 }
 
 /**
- * Copies the team's picked skill folders into the checkout, from the base of the pull request and
- * never from its head. A pull request can change a skill's file, and its author must not be able to
+ * Copies the team's picked skill folders into the checkout, from the base branch (the commit in `base`) and
+ * never from the pull request. A pull request can change a skill's file, and its author must not be able to
  * tell the reviewer what to do that way: the copy the reviewer reads is the one the team already merged.
  *
  * Only ordinary files are copied. A link in the folder could point anywhere, so it is left out.
