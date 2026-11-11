@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { buildHunterPrompt, buildSweepPrompt, buildVerifierPrompt } from "../dist/prompt.js";
 import { describeSkill, importSkills, isSkillPath } from "../dist/skills.js";
+import { ownFolder } from "../dist/workspace.js";
 
 const input = { pr: { owner: "acme", repo: "widgets", number: 1, title: "t", author: "a", baseRef: "main", body: "" }, mergeBase: "base", headSha: "head", diffStat: "", diff: "", diffTruncated: false };
 
@@ -108,6 +109,30 @@ test("a git call that fails or hangs costs that file or that skill, never the re
   const some = await importSkills(dir, base, checkout, [".claude/skills/migrations", ".claude/skills/migrations"], slow, () => clock);
   assert.equal(some.length, 1);
   assert.ok(calls <= 4, `stopped asking git after the deadline (${calls} calls)`);
+});
+
+test("Mergelight's own folder in the checkout is never a link, and neither is a file it writes there", () => {
+  const elsewhere = mkdtempSync(join(tmpdir(), "mergelight-own-elsewhere-"));
+  writeFileSync(join(elsewhere, "keep.txt"), "not ours to touch\n");
+  // The pull request made the folder itself a link, then a file.
+  for (const plant of [(at) => symlinkSync(elsewhere, at), (at) => writeFileSync(at, "in the way\n")]) {
+    const checkout = mkdtempSync(join(tmpdir(), "mergelight-own-"));
+    plant(join(checkout, ".mergelight"));
+    const dir = ownFolder(checkout);
+    assert.equal(lstatSync(dir).isDirectory(), true);
+    assert.deepEqual(readdirSync(dir), []);
+  }
+  // The pull request made the big-diff file, and the skills folder, links to somewhere else.
+  const checkout = mkdtempSync(join(tmpdir(), "mergelight-own-"));
+  mkdirSync(join(checkout, ".mergelight"));
+  writeFileSync(join(checkout, ".mergelight/theirs.txt"), "a file of the repository's own\n");
+  symlinkSync(join(elsewhere, "keep.txt"), join(checkout, ".mergelight/pr.diff"));
+  symlinkSync(elsewhere, join(checkout, ".mergelight/skills"));
+  const dir = ownFolder(checkout);
+  writeFileSync(join(dir, "pr.diff"), "the diff\n");
+  assert.deepEqual(readdirSync(dir).sort(), ["pr.diff", "theirs.txt"]);
+  assert.equal(readFileSync(join(elsewhere, "keep.txt"), "utf8"), "not ours to touch\n");
+  assert.deepEqual(readdirSync(elsewhere), ["keep.txt"]);
 });
 
 test("files the pull request put next to a skill's copy are removed", async () => {

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { run, runOk } from "./run.js";
@@ -39,6 +39,21 @@ function git(args: string[], cwd?: string) {
     ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential", ...args],
     { cwd, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } },
   );
+}
+
+/**
+ * Mergelight's own folder in the checkout, for the files it writes there: a diff too large for the
+ * prompt, and the team's skills. The checkout holds the pull request's files, so the pull request
+ * could have put a link at one of those names, to make a write land somewhere else on the machine.
+ * A link or a file in the way is removed, never written through.
+ */
+export function ownFolder(checkout: string): string {
+  const dir = join(checkout, ".mergelight");
+  if (lstatSync(dir, { throwIfNoEntry: false })?.isDirectory() === false) rmSync(dir, { force: true });
+  mkdirSync(dir, { recursive: true });
+  // Removing a link removes the link alone, not what it points at.
+  for (const name of ["pr.diff", "skills"]) rmSync(join(dir, name), { recursive: true, force: true });
+  return dir;
 }
 
 /**
@@ -182,6 +197,7 @@ export async function prepareWorkspace(pr: PullRequest, at?: string, skillFolder
 
     const dir = mkdtempSync(join(tmpdir(), `mergelight-${pr.repo}-${pr.number}-`));
     await git(["worktree", "add", "--quiet", "--detach", dir, headSha], mirror);
+    ownFolder(dir);
     // From the base branch as it is now: what the team merged. Not from the pull request, and not from
     // the commit it branched from either. Its author picks that commit, and could pick one from
     // before a skill was written or tightened.
