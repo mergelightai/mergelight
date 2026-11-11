@@ -585,6 +585,8 @@ test("a skill is a plain folder path in the repository, and a repository has 10 
     { repo_id: 501 },
     { repo_id: 501, path: "" },
     { repo_id: 501, path: "../other-repo/skills" },
+    { repo_id: 501, path: "SKILL.md" },
+    { repo_id: 501, path: "/skill.md" },
     { repo_id: 501, path: ".claude/skills/../../secrets" },
     { repo_id: 501, path: ".claude/./skills" },
     { repo_id: 501, path: ".claude/skills/*" },

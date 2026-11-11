@@ -110,6 +110,7 @@ export async function importSkills(
       .filter((f) => f.path.startsWith(`${folder}/`) && isSkillPath(f.path));
     const main = files.find((f) => f.path === `${folder}/SKILL.md`);
     // No SKILL.md on the base branch: there is no skill there yet, whatever the pull request adds.
+    // A folder that is a link to another folder has none either: git lists the link, not what is behind it.
     if (!main) continue;
 
     const target = join(".mergelight", "skills", String(index + 1));
@@ -119,12 +120,18 @@ export async function importSkills(
       if (now() > deadline) break;
       const sized = await git(["cat-file", "-s", file.sha]);
       const size = sized.code === 0 ? Number(sized.stdout.trim()) : NaN;
-      if (!Number.isFinite(size) || size > MAX_FILE_BYTES || total + size > MAX_SKILL_BYTES) continue;
-      const read = await git(["cat-file", "blob", file.sha]);
-      if (read.code !== 0) continue;
+      const read = Number.isFinite(size) && size <= MAX_FILE_BYTES && total + size <= MAX_SKILL_BYTES ? await git(["cat-file", "blob", file.sha]) : null;
+      if (!read || read.code !== 0) {
+        if (file === main) break;
+        continue;
+      }
       const content = read.stdout;
+      // Not text: a picture, or a file in another encoding. It was read as text, so a copy would be a broken one.
+      if (content.includes("\uFFFD") && file !== main) continue;
       total += size;
       if (file === main) markdown = content;
+      // Without its SKILL.md there is no skill, so its other files aren't read or copied either.
+      if (!markdown) break;
       const dest = join(into, String(index + 1), file.path.slice(folder.length + 1));
       mkdirSync(dirname(dest), { recursive: true });
       writeFileSync(dest, content);

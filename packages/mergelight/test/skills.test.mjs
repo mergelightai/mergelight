@@ -21,6 +21,7 @@ function repo() {
   write(".claude/skills/migrations/SKILL.md", "---\nname: migrations\ndescription: How we review database migrations. Use when a pull request changes db/migrations.\n---\n\n# Migrations\n\nEvery migration must be reversible.\n");
   write(".claude/skills/migrations/reference/locks.md", "Adding a column with a default locks the table.\n");
   write(".claude/skills/migrations/big.bin", "x".repeat(70_000));
+  write(".claude/skills/migrations/reference/diagram.png", Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xff, 0xfe, 0x00, 0x80]));
   write("secrets.txt", "top secret\n");
   symlinkSync("../../../secrets.txt", join(dir, ".claude/skills/migrations/link.md"));
   write(".claude/skills/empty/notes.md", "No SKILL.md here.\n");
@@ -46,9 +47,11 @@ test("a skill is read from the base commit it is given, so the pull request can'
   assert.match(readFileSync(join(checkout, ".mergelight/skills/1/reference/locks.md"), "utf8"), /locks the table/);
 });
 
-test("a link inside a skill folder is never followed, and an oversized file is left out", async () => {
+test("a link inside a skill folder is never followed, and an oversized file or a picture is left out", async () => {
   const { dir, base, checkout } = repo();
   await importSkills(dir, base, checkout, [".claude/skills/migrations"]);
+  assert.equal(existsSync(join(checkout, ".mergelight/skills/1/reference/diagram.png")), false);
+  assert.equal(existsSync(join(checkout, ".mergelight/skills/1/reference/locks.md")), true);
   assert.equal(existsSync(join(checkout, ".mergelight/skills/1/link.md")), false);
   assert.equal(existsSync(join(checkout, ".mergelight/skills/1/big.bin")), false);
   assert.equal(existsSync(join(checkout, ".mergelight/skills/1/SKILL.md")), true);
@@ -93,6 +96,7 @@ test("a git call that fails or hangs costs that file or that skill, never the re
   // Its SKILL.md can't be read: no skill.
   const broken = (args) => (args[0] === "cat-file" && args[1] === "blob" ? Promise.resolve({ code: 128, stdout: "", stderr: "" }) : real(args));
   assert.deepEqual(await importSkills(dir, base, checkout, [".claude/skills/migrations"], broken), []);
+  assert.equal(existsSync(join(checkout, ".mergelight/skills/1")), false, "and none of its other files are copied");
   // Time ran out before the second skill: the first one is kept, and the copy stops.
   let clock = 0;
   let calls = 0;

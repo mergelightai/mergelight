@@ -399,7 +399,7 @@ function SkillsCard({ skills, onAdd, onRemove }: { skills: Skills; onAdd: (skill
         Use the skills your team already wrote for Claude Code or Codex. Name a skill's folder, the one that holds its <span className="font-mono">SKILL.md</span>, and every review of that repository can read it.
       </p>
       <p className="mt-2 max-w-2xl text-[13px] leading-relaxed text-faint">
-        A skill is read from the branch a pull request merges into, so a pull request can't change the skill that reviews it. Only the folder's path is stored here. The skill's text stays in your repository.
+        A skill is read from the branch a pull request merges into, so a pull request can't change the skill that reviews it. Only the folder's path is stored here. The skill's text stays in your repository. Name the real folder, not a link to it.
       </p>
       {skills.skills.length > 0 && (
         <ul className="mt-3">
