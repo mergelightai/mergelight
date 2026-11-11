@@ -58,6 +58,17 @@ export function ownFolder(checkout: string): string {
 }
 
 /**
+ * Skill folders Codex finds by itself and offers to the model. In the checkout they are the pull
+ * request's, so its author could plant one that tells the reviewers what to skip. Codex has a switch
+ * to stop that, but not every version has it, so the folders go. The diff still shows them.
+ */
+export const AGENT_SKILL_FOLDERS = [".agents/skills", ".codex/skills"];
+
+export function removeAgentSkills(checkout: string): void {
+  for (const folder of AGENT_SKILL_FOLDERS) rmSync(join(checkout, folder), { recursive: true, force: true });
+}
+
+/**
  * Copies the team's skills, and never lets that stop or hold up a review. The mirror has no file
  * contents of its own, so reading a skill the pull request changed asks GitHub for it: with the
  * same login as every other git call here, never with a prompt, and never for long.
@@ -92,7 +103,7 @@ export const MAX_CONVENTION_FILES = 12;
 /** A file larger than this isn't read at all. */
 const MAX_CONVENTION_BYTES = 256_000;
 
-/** Which instruction files apply: the root ones, .github/instructions, and AGENTS.md or CLAUDE.md in a folder above a changed file. */
+/** Which instruction files apply: the root ones, AGENTS.md or CLAUDE.md in a folder above a changed file, and .github/instructions. */
 export function conventionPaths(all: string[], changedPaths: string[]): string[] {
   const folders = new Set<string>();
   for (const changed of changedPaths) {
@@ -109,7 +120,8 @@ export function conventionPaths(all: string[], changedPaths: string[]): string[]
     })
     // Closest to the root first: a folder's file comes before the ones in its subfolders.
     .sort((a, b) => a.split("/").length - b.split("/").length || a.localeCompare(b));
-  return [...root, ...github, ...nested];
+  // The rules closest to the changed code come before .github/instructions, so they aren't the ones crowded out.
+  return [...root, ...nested, ...github];
 }
 
 /**
@@ -285,6 +297,7 @@ export async function prepareWorkspace(pr: PullRequest, at?: string, skillFolder
     const dir = mkdtempSync(join(tmpdir(), `mergelight-${pr.repo}-${pr.number}-`));
     await git(["worktree", "add", "--quiet", "--detach", dir, headSha], mirror);
     ownFolder(dir);
+    removeAgentSkills(dir);
     // From the base branch as it is now: what the team merged. Not from the pull request, and not from
     // the commit it branched from either. Its author picks that commit, and could pick one from
     // before a skill was written or tightened.
