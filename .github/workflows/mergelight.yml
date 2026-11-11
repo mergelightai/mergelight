@@ -31,7 +31,7 @@ jobs:
     steps:
       # Pinned to a release, so new code only runs here once you merge an update.
       # Mergelight says on your pull requests when a new version is out.
-      - uses: mergelightai/mergelight@a98eb112c9a115057db66cfc6f798536f886bd41 # v0.1.12
+      - uses: mergelightai/mergelight@1487b12303d0523d99c79e4bb3fba3ea84fe318f # v0.1.15
         with:
           # None set yet? The first pull request shows a link to connect ChatGPT. For Claude, see the setup page.
           codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}
