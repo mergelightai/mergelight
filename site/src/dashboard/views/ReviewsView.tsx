@@ -24,7 +24,7 @@ function Stat({ label, value, sub, light }: { label: string; value: number; sub:
         {light && <span className={cn('size-2 rounded-full', LIGHTS[light].dot)} />}
         {label}
       </p>
-      <div className="glass-inner rounded-3xl bg-card px-5 py-4">
+      <div className="glass-inner rounded-3xl bg-panel px-5 py-4">
         <p className={cn('font-heading text-3xl font-semibold tabular-nums tracking-tight', light && LIGHTS[light].text)}>{value}</p>
         <p className="mt-1 text-xs text-muted-foreground">{sub}</p>
       </div>

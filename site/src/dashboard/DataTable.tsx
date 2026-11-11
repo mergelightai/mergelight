@@ -30,10 +30,10 @@ export function DataBody(props: ComponentProps<'tbody'>) {
     <tbody
       className={cn(
         // The inner panel: each cell carries the panel's colour, and the corner cells its round corners.
-        '[&_td]:bg-card [&_tr:not(:first-child)_td]:border-t [&_tr_td]:border-border',
+        '[&_td]:bg-panel [&_tr:not(:first-child)_td]:border-t [&_tr_td]:border-border',
         '[&_tr:first-child_td:first-child]:rounded-tl-3xl [&_tr:first-child_td:last-child]:rounded-tr-3xl',
         '[&_tr:last-child_td:first-child]:rounded-bl-3xl [&_tr:last-child_td:last-child]:rounded-br-3xl',
-        '[&_tr:hover_td]:bg-[color-mix(in_oklch,var(--card),var(--foreground)_3%)]',
+        '[&_tr:hover_td]:bg-[color-mix(in_oklch,var(--color-panel),var(--foreground)_3%)]',
       )}
       {...props}
     />
