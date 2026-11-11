@@ -729,24 +729,29 @@ test("a reason given when resolving a thread is the team's decision, and is kept
   assert.ok(prompt.includes("team: resolved the comment, by teammate, saying: Known, leave it. Fixed in 3f2a9c1"));
   assert.ok(!prompt.includes("decided not to fix, by teammate"));
 
-  // A plain number isn't a commit, so a reason may hold one. An older fix claim stays out of a later reason.
-  const number = await read(scenario([findingThread("aaaaaaaaaa", 501, [reply("teammate", "Fixed in B.", "2001-01-01T00:00:00Z"), reply("teammate", "We keep it: ticket 20261106 covers the rollout.")])]));
+  // A plain number isn't a commit, so a reason may hold one.
+  const number = await read(scenario([findingThread("aaaaaaaaaa", 501, [reply("teammate", "We keep it: ticket 20261106 covers the rollout.")])]));
   assert.equal(number.from, "reply");
   assert.equal(number.remember, true);
-  assert.equal(number.note, "We keep it: ticket 20261106 covers the rollout.");
+  // After a fix claim, a later "ok thanks" is no reason to leave the problem alone.
+  const thanks = await read(scenario([findingThread("aaaaaaaaaa", 501, [reply("teammate", "Fixed in B.", "2001-01-01T00:00:00Z"), reply("teammate", "ok thanks")])]));
+  assert.equal(thanks.from, "thread");
+  assert.equal(thanks.remember, undefined);
 });
 
 test("a remembered reason gets one answer in its thread", async () => {
   const { env, writes } = useScenario({
     threads: [
       findingThread("aaaaaaaaaa", 501, [reply("teammate", "Known.")]),
-      findingThread("bbbbbbbbbb", 502, [reply("teammate", "Known."), reply("mergelight-ai", "<!-- mergelight:remembered -->\nRemembered.")]),
+      findingThread("bbbbbbbbbb", 502, [reply("teammate", "Known."), { ...reply("mergelight-ai", "<!-- mergelight:remembered -->\nRemembered."), author: { __typename: "Bot", login: "mergelight-ai" } }]),
       findingThread("cccccccccc", 503, [reply("teammate", "Known.")]),
+      // A person's copy of the marker doesn't count as the answer.
+      findingThread("dddddddddd", 504, [reply("teammate", "Known."), reply("teammate", "<!-- mergelight:remembered -->")]),
     ],
   });
-  const answered = await withFakeGh(env, () => answerRemembered(new GitHub("o", "r"), 7, ["aaaaaaaaaa", "bbbbbbbbbb"], new Set(["aaaaaaaaaa"])));
-  assert.equal(answered, 1);
-  assert.deepEqual(writes().map((w) => [w.method, w.path]), [["POST", "pulls/7/comments/501/replies"]]);
+  const answered = await withFakeGh(env, () => answerRemembered(new GitHub("o", "r"), 7, ["aaaaaaaaaa", "bbbbbbbbbb", "dddddddddd"], new Set(["aaaaaaaaaa"])));
+  assert.equal(answered, 2);
+  assert.deepEqual(writes().map((w) => [w.method, w.path]), [["POST", "pulls/7/comments/501/replies"], ["POST", "pulls/7/comments/504/replies"]]);
   assert.match(writes()[0].body, /^<!-- mergelight:remembered -->\n🧠 \*\*Remembered\.\*\*/);
   assert.match(writes()[0].body, /only its start is kept/);
   assert.equal(await withFakeGh(env, () => answerRemembered(new GitHub("o", "r"), 7, [], new Set())), 0);

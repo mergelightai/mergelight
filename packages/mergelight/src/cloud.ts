@@ -414,7 +414,7 @@ export async function reportReview(review: Review, deps: CloudDeps = {}, decline
     if (res.status === 400 && declines.length) {
       // The server refused something in the report. If it was a decision, the numbers still count: send
       // them again without any. An older server, for one, takes shorter reasons than this version sends.
-      d.log("The Mergelight server refused the report with the team's decisions. Sending the numbers without them: the decisions aren't stored this time. The next review of this pull request sends its marks again, but not a reason given in a thread: reply there again to keep it.");
+      d.log("The Mergelight server refused the report with the team's decisions. Sending the numbers without them: the decisions aren't stored this time, and the next review of this pull request sends them again.");
       declines = [];
       res = await call(d, server, "/v1/reviews", { method: "POST", body: JSON.stringify({ ...JSON.parse(body), declines: undefined, report_id: randomUUID() }) });
     }

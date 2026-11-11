@@ -119,12 +119,13 @@ export async function previousFindings(api: GitHub, number: number, headSha?: st
       const mark = marks.get(id);
       const by = resolved.get(id);
       const reply = replies.get(id);
-      // A resolve whose latest reply isn't a fix claim gives the team's reason, in every review that reads
-      // it: all of the resolver's replies but the fix claims, so a later "thanks" doesn't replace it.
+      // A resolve gives the team's reason, in every review that reads it: all of the resolver's replies, so
+      // a later "thanks" doesn't replace it. Unless any of them says it was fixed: then a later "ok thanks"
+      // is no reason to leave a problem alone.
       const all = reply?.replies ?? [];
       const last = all.at(-1);
-      const reasons = all.filter((r) => !FIX_CLAIM.test(r.text));
-      const isReason = Boolean(last) && !FIX_CLAIM.test(last!.text);
+      const reasons = all;
+      const isReason = all.length > 0 && !all.some((r) => FIX_CLAIM.test(r.text));
       // It is remembered for later pull requests only in the review right after it was written, and only
       // if the code there didn't change since the review it answers: then the reply may say how it was
       // fixed. A reply from before the latest review may answer an older round, such as a fix it checked.
@@ -169,7 +170,7 @@ export async function answerRemembered(api: GitHub, number: number, ids: string[
   let answered = 0;
   for (const t of await reviewThreads(api, number).catch(() => [])) {
     const found = threadFinding(t);
-    if (!found || !wanted.has(found.id) || t.comments.nodes.some((c) => c.body.includes(REMEMBERED_MARKER))) continue;
+    if (!found || !wanted.has(found.id) || t.comments.nodes.some((c) => c.author?.__typename === "Bot" && c.body.includes(REMEMBERED_MARKER))) continue;
     const body = [
       REMEMBERED_MARKER,
       `🧠 **Remembered.** Later reviews of this repository read this reason before they report this problem again.${cut.has(found.id) ? " The reason was long, so only its start is kept." : ""} If it stops being true, forget it on your Mergelight dashboard.`,
