@@ -7,7 +7,7 @@ import { declinesOf, fetchContext, reportReview } from "./cloud.js";
 import { GitHub } from "./publish/api.js";
 import { writeAccess } from "./publish/handled.js";
 import { publishTeamChecks } from "./publish/team-checks.js";
-import { approveCheck, checkLimitTitle, checkLoginTitle, failCheck, failSummary, previousFindings, publishReview, startCheck, startSummary } from "./publish/publish.js";
+import { approveCheck, checkLimitTitle, checkLoginTitle, failCheck, failSummary, previousFindings, publishReview, startCheck, startSummary, syncApproval, UNREVIEWED } from "./publish/publish.js";
 import { LimitError, LoginError, loginFailureMessage } from "./providers/codex.js";
 import { limitNotice, loginNotice } from "./publish/markdown.js";
 import { renderTerminal } from "./render.js";
@@ -255,7 +255,7 @@ async function main(): Promise<number> {
     process.stdout.write(values.json ? `${json}\n` : `${renderTerminal(review)}\n`);
 
     if (values.post) {
-      const result = await publishReview(review, { dryRun, log, checkRunId, yellowBlocks: values["yellow-blocks"] });
+      const result = await publishReview(review, { dryRun, log, checkRunId, yellowBlocks: values["yellow-blocks"], teamUnread: cloud.failed === true });
       log(`Posted: ${result.inline} inline, ${result.outside} in the summary only, ${result.resolved} resolved. ${result.summaryUrl ?? ""}`);
       if (review.team_checks?.length) {
         checksPosted = true;
@@ -285,6 +285,8 @@ async function main(): Promise<number> {
       const notice = limit ? limitNotice(limit.plan, limit.resets) : login ? loginNotice(login.plan, message) : undefined;
       await failCheck(api, checkRunId, headSha, message, log, title).catch((e) => log(`Couldn't update the check: ${(e as Error).message}`));
       await failSummary(api, ref.number, notice).catch((e) => log(`Couldn't update the summary: ${(e as Error).message}`));
+      // The newest commit wasn't reviewed. An approval Mergelight gave to an earlier commit must not count for this one.
+      await syncApproval(api, ref.number, "yellow", headSha, log, { why: UNREVIEWED, otherCommitsOnly: true });
       // Each of the team's checks still gets an answer on GitHub, so a required one says why it holds the merge:
       // the answer it already has, or that it wasn't asked.
       const unasked = cloud.checks.map((c) => ({ id: c.id, name: c.name, text: c.text, outcome: "error" as const, summary: "The review couldn't run, so this check wasn't asked.", problems: [] }));

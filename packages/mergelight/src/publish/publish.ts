@@ -168,7 +168,12 @@ export async function failCheck(api: GitHub, checkRunId: number | null, headSha:
 
 export async function publishReview(
   review: Review,
-  opts: ApiOptions & { checkRunId?: number | null; yellowBlocks?: boolean } = {},
+  opts: ApiOptions & {
+    checkRunId?: number | null;
+    yellowBlocks?: boolean;
+    /** True when the team's server couldn't be asked, so its rules and checks weren't used in this review. */
+    teamUnread?: boolean;
+  } = {},
 ): Promise<PublishResult> {
   const log = opts.log ?? (() => {});
   const api = new GitHub(review.pr.owner, review.pr.repo, opts);
@@ -258,10 +263,33 @@ export async function publishReview(
     },
   };
   await writeCheck(api, opts.checkRunId, review.pr.head_sha, check, log);
-  await syncApproval(api, n, review.light, review.pr.head_sha, log);
+  // A review that isn't green takes the approval back for what it found. Only a green one is held by something else.
+  const hold = review.light === "green" ? approvalHold(review, opts.teamUnread) : null;
+  await syncApproval(api, n, approvalLight(review, opts.teamUnread), review.pr.head_sha, log, hold ? { why: hold } : {});
 
   return { summaryUrl, inline: inline.length, outside: outside.length, resolved, light: review.light };
 }
+
+/**
+ * Why a green review still doesn't approve, in words for the pull request, or null when nothing holds it.
+ * One of the team's own checks failed, couldn't tell or couldn't run: Mergelight doesn't approve a
+ * pull request that its own check next to it holds back. Or the team's server couldn't be asked: its
+ * rules and checks weren't used, so nobody knows what they would have said. A skipped check has nothing to say.
+ */
+export function approvalHold(review: Pick<Review, "team_checks">, teamUnread = false): string | null {
+  const held = review.team_checks?.filter((c) => c.outcome !== "pass" && c.outcome !== "skipped") ?? [];
+  if (held.length) return `Your team's check${held.length === 1 ? "" : "s"} ${held.map((c) => `"${c.name}"`).join(", ")} ${held.length === 1 ? "hasn't" : "haven't"} passed.`;
+  if (teamUnread) return "Mergelight couldn't reach your team's server, so this review ran without your team's rules and checks.";
+  return null;
+}
+
+/** The light Mergelight's own approval goes by: the review's own, and not green while something holds the approval. */
+export function approvalLight(review: Pick<Review, "light" | "team_checks">, teamUnread = false): Light {
+  return review.light === "green" && approvalHold(review, teamUnread) ? "yellow" : review.light;
+}
+
+/** What a dismissal says when a review that couldn't run takes Mergelight's earlier approval back. */
+export const UNREVIEWED = "Mergelight couldn't review the newest commit, so its approval of an earlier one no longer stands.";
 
 export const APPROVAL_MARKER = "<!-- mergelight:approval -->";
 /** Only these post Mergelight's reviews, so a person's review that quotes the marker is never touched. */
@@ -280,7 +308,19 @@ interface PrReview {
  * earlier, so an old approval can't stand next to a newer finding. Yellow and red never request changes, so a
  * review from Mergelight never blocks a merge by itself. Failures only log: the check already carries the result.
  */
-export async function syncApproval(api: Pick<GitHub, "list" | "write">, number: number, light: Light, headSha: string, log: (line: string) => void = () => {}): Promise<"approved" | "already" | "dismissed" | "none"> {
+export async function syncApproval(
+  api: Pick<GitHub, "list" | "write">,
+  number: number,
+  light: Light,
+  headSha: string,
+  log: (line: string) => void = () => {},
+  dismissal: {
+    /** What a dismissal says. The reason has to be the real one: the review can be green while something else holds the approval. */
+    why?: string;
+    /** Only take back approvals of other commits. For a review that couldn't run: what it said about this very commit before still stands. */
+    otherCommitsOnly?: boolean;
+  } = {},
+): Promise<"approved" | "already" | "dismissed" | "none"> {
   try {
     const ours = (await api.list<PrReview>(`pulls/${number}/reviews`)).filter((r) => OWN_REVIEWERS.has(r.user?.login ?? "") && (r.body ?? "").includes(APPROVAL_MARKER));
     const standing = ours.filter((r) => r.state === "APPROVED");
@@ -293,10 +333,11 @@ export async function syncApproval(api: Pick<GitHub, "list" | "write">, number: 
       });
       return "approved";
     }
-    for (const r of standing) {
-      await api.write("PUT", `pulls/${number}/reviews/${r.id}/dismissals`, { message: "A newer Mergelight review found something to look at.", event: "DISMISS" });
+    const taken = dismissal.otherCommitsOnly ? standing.filter((r) => r.commit_id !== headSha) : standing;
+    for (const r of taken) {
+      await api.write("PUT", `pulls/${number}/reviews/${r.id}/dismissals`, { message: dismissal.why ?? "A newer Mergelight review found something to look at.", event: "DISMISS" });
     }
-    return standing.length ? "dismissed" : "none";
+    return taken.length ? "dismissed" : "none";
   } catch (err) {
     log(`Couldn't update Mergelight's approval: ${err instanceof Error ? err.message : String(err)}`);
     return "none";
