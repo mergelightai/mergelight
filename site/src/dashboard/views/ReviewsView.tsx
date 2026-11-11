@@ -19,12 +19,12 @@ export function LightBadge({ light }: { light: Light }) {
 /** A number in the same frame as the tables: the label on the frame's strip, the number on the inner panel. */
 function Stat({ label, value, sub, light }: { label: string; value: number; sub: string; light?: Light }) {
   return (
-    <div className="rounded-[1.75rem] bg-muted p-1 ring-1 ring-foreground/5">
+    <div className="glass-frame glass-card relative rounded-[1.75rem] p-1">
       <p className="flex h-10 items-center gap-2 px-5 text-sm text-muted-foreground">
         {light && <span className={cn('size-2 rounded-full', LIGHTS[light].dot)} />}
         {label}
       </p>
-      <div className="rounded-3xl bg-card px-5 py-4">
+      <div className="glass-inner rounded-3xl bg-card px-5 py-4">
         <p className={cn('font-heading text-3xl font-semibold tabular-nums tracking-tight', light && LIGHTS[light].text)}>{value}</p>
         <p className="mt-1 text-xs text-muted-foreground">{sub}</p>
       </div>

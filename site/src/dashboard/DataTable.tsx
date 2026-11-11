@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils';
 
 export function DataTable({ className, children, ...props }: ComponentProps<'table'>) {
   return (
-    <div className="overflow-x-auto rounded-[1.75rem] bg-muted p-1 ring-1 ring-foreground/5">
+    <div className="glass-frame glass-card relative overflow-x-auto rounded-[1.75rem] p-1">
       <table className={cn('w-full border-separate border-spacing-0 text-sm', className)} {...props}>
         {children}
       </table>

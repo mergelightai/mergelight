@@ -170,6 +170,15 @@
     -webkit-mask-composite: xor;
     mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
   }
+  /* Cards sit on the page, not above it, so their shadow is smaller than a menu's. */
+  .glass-card {
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.28),
+      inset 0 -1px 0 rgb(255 255 255 / 0.05),
+      inset 0 0 18px rgb(255 255 255 / 0.04),
+      0 0 0 1px rgb(0 0 0 / 0.4),
+      0 12px 32px -18px rgb(0 0 0 / 0.7);
+  }
   .glass-inner {
     box-shadow: 0 0 0 1px rgb(0 0 0 / 0.5), 0 1px 3px rgb(0 0 0 / 0.45), inset 0 1px 0 rgb(255 255 255 / 0.05);
   }
