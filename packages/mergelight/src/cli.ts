@@ -6,6 +6,7 @@ import { serve } from "./mcp/server.js";
 import { declinesOf, fetchContext, reportReview } from "./cloud.js";
 import { GitHub } from "./publish/api.js";
 import { writeAccess } from "./publish/handled.js";
+import { publishTeamChecks } from "./publish/team-checks.js";
 import { approveCheck, checkLimitTitle, checkLoginTitle, failCheck, failSummary, previousFindings, publishReview, startCheck, startSummary } from "./publish/publish.js";
 import { LimitError, LoginError, loginFailureMessage } from "./providers/codex.js";
 import { limitNotice, loginNotice } from "./publish/markdown.js";
@@ -220,7 +221,7 @@ async function main(): Promise<number> {
   }
 
   // Teams that use the dashboard: ask the server first, so nothing is sent for anyone else.
-  const cloud = values.post && !dryRun ? await fetchContext({ log }) : { connected: false, memories: [], rules: [], skills: [] };
+  const cloud = values.post && !dryRun ? await fetchContext({ log }) : { connected: false, memories: [], rules: [], skills: [], checks: [] };
 
   const progress = progressPrinter();
   try {
@@ -233,6 +234,7 @@ async function main(): Promise<number> {
       rules: cloud.rules,
       rulesUnread: cloud.failed === true,
       skills: cloud.skills,
+      checks: cloud.checks,
       at: values.at,
       provider,
       model: values.model,
@@ -251,6 +253,10 @@ async function main(): Promise<number> {
     if (values.post) {
       const result = await publishReview(review, { dryRun, log, checkRunId, yellowBlocks: values["yellow-blocks"] });
       log(`Posted: ${result.inline} inline, ${result.outside} in the summary only, ${result.resolved} resolved. ${result.summaryUrl ?? ""}`);
+      if (review.team_checks?.length) {
+        const posted = await publishTeamChecks(api, review.pr.head_sha, review.team_checks, log).catch((e) => (log(`Couldn't post your team's checks: ${(e as Error).message}`), 0));
+        if (posted) log(`Posted ${posted} of your team's check${posted === 1 ? "" : "s"}.`);
+      }
       if (cloud.connected) {
         // A decision is only remembered when GitHub says its author can push to this repository. Being a
         // member of the org is not enough: this outlives the pull request it was made on.

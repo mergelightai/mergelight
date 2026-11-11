@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { GitHubIcon, SURFACE, WELL } from '../ui';
-import { addRule, addSkill, ADD_REPOS_URL, finishSignIn, forgetDecision, loadDecisions, loadOverview, loadRules, loadSkills, mayRenew, removeRule, removeSkill, NotConnected, rememberedSession, SERVER, SignedOut, signInUrl, signOut, tidyAddress, type Decision, type Light, type NewRule, type Org, type Overview, type Rule, type Rules, type Review, type Session, type Skill, type Skills } from './api';
+import { addCheck, addRule, addSkill, ADD_REPOS_URL, finishSignIn, forgetDecision, loadChecks, loadDecisions, loadOverview, loadRules, loadSkills, mayRenew, removeCheck, removeRule, removeSkill, NotConnected, rememberedSession, SERVER, SignedOut, signInUrl, signOut, tidyAddress, type Check, type Checks, type Decision, type Light, type NewCheck, type NewRule, type Org, type Overview, type Rule, type Rules, type Review, type Session, type Skill, type Skills } from './api';
 
 const LIGHTS: Record<Light, { label: string; dot: string; text: string }> = {
   green: { label: 'Safe to merge', dot: 'bg-mint', text: 'text-mint' },
@@ -441,6 +441,129 @@ function SkillsCard({ skills, onAdd, onRemove }: { skills: Skills; onAdd: (skill
   );
 }
 
+/** The form for a new check. Only repositories this person is an admin of are offered. */
+function NewCheckForm({ checks, onAdd }: { checks: Checks; onAdd: (check: NewCheck) => Promise<void> }) {
+  const places = checks.repos.filter((r) => r.can_set_checks);
+  const [name, setName] = useState('');
+  const [text, setText] = useState('');
+  const [paths, setPaths] = useState('');
+  const [place, setPlace] = useState(places[0] ? String(places[0].id) : '');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  if (!places.length) {
+    return <p className="mt-5 text-[13px] leading-relaxed text-faint">Only an admin of a repository can set its checks.</p>;
+  }
+  const patterns = paths.split(',').map((p) => p.trim()).filter(Boolean);
+  const ready = name.trim().length > 0 && text.trim().length > 0 && patterns.length > 0 && !busy;
+  return (
+    <form
+      className={`${WELL} mt-5 space-y-3 p-4`}
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (!ready) return;
+        setBusy(true);
+        setError(null);
+        onAdd({ repo_id: Number(place), name: name.trim(), text: text.trim(), paths: patterns })
+          .then(() => {
+            setName('');
+            setText('');
+            setPaths('');
+          })
+          .catch((err: unknown) => setError(err instanceof Error ? err.message : 'That did not work.'))
+          .finally(() => setBusy(false));
+      }}
+    >
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="block text-[13px] text-muted">
+          Repository
+          <select aria-label="Check repository" value={place} onChange={(e) => setPlace(e.target.value)} className={`${FIELD} mt-1.5`}>
+            {places.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="block text-[13px] text-muted">
+          A short name
+          <input aria-label="Check name" value={name} maxLength={40} onChange={(e) => setName(e.target.value)} placeholder="Translations" className={`${FIELD} mt-1.5`} />
+        </label>
+      </div>
+      <label className="block text-[13px] text-muted">
+        The check, in one line
+        <input aria-label="The check" value={text} maxLength={500} onChange={(e) => setText(e.target.value)} placeholder="Every new text in en.json has a translation in da.json." className={`${FIELD} mt-1.5`} />
+      </label>
+      <label className="block text-[13px] text-muted">
+        Which files it is about
+        <input aria-label="Check files" value={paths} onChange={(e) => setPaths(e.target.value)} placeholder="src/i18n/**" className={`${FIELD} mt-1.5 font-mono text-[13px]`} />
+      </label>
+      <div className="flex flex-wrap items-center gap-3 pt-1">
+        <button type="submit" disabled={!ready} className={`${PRIMARY} h-10 px-5 text-[14px] disabled:opacity-40`}>
+          {busy ? 'Adding' : 'Add check'}
+        </button>
+        {error && <span className="text-[13px] text-risk">{error}</span>}
+      </div>
+    </form>
+  );
+}
+
+/** The team's own checks: each is a question in plain words that becomes a pass or fail check on the pull request. */
+function ChecksCard({ checks, onAdd, onRemove }: { checks: Checks; onAdd: (check: NewCheck) => Promise<void>; onRemove: (check: Check) => Promise<void> }) {
+  const [busy, setBusy] = useState<number | null>(null);
+  const [failed, setFailed] = useState<number | null>(null);
+  return (
+    <Card>
+      <h2 className="text-[17px] font-semibold tracking-[-0.01em]">Checks</h2>
+      <p className="mt-1.5 max-w-2xl text-[14px] leading-relaxed text-muted">
+        Write a check in plain words. Each review asks it as a question of its own and posts the answer on the pull request as a check named <span className="font-mono">Mergelight: your name</span>, passed or failed with the places to fix.
+      </p>
+      <p className="mt-2 max-w-2xl text-[13px] leading-relaxed text-faint">
+        A check runs only when a pull request changes its files, and each run is one more AI run on your own plan. It reports, and never changes code. To make it stop a merge, require that check in your branch rules on GitHub.
+      </p>
+      {checks.checks.length > 0 && (
+        <ul className="mt-3">
+          {checks.checks.map((c) => (
+            <li key={c.id} className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2 border-t border-line py-3.5 first:border-t-0">
+              <div className="min-w-0 flex-1 basis-[320px]">
+                <p className="text-[15px] text-fg">
+                  <span className="font-medium">{c.name}</span>
+                  <span className="text-muted"> · {c.text}</span>
+                </p>
+                <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-faint">
+                  <span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-muted">{c.repo}</span>
+                  <span className="font-mono">{c.paths.join(', ')}</span>
+                  <span>
+                    set by {c.by}, {ago(c.created_at)}
+                  </span>
+                </p>
+                {failed === c.id && <p className="mt-2 text-[13px] text-risk">That didn't work. Please try again.</p>}
+              </div>
+              {c.can_remove && (
+                <button
+                  type="button"
+                  aria-label={`Remove check ${c.name}`}
+                  disabled={busy === c.id}
+                  onClick={() => {
+                    setBusy(c.id);
+                    setFailed(null);
+                    onRemove(c)
+                      .catch(() => setFailed(c.id))
+                      .finally(() => setBusy(null));
+                  }}
+                  className="rounded-full px-3 py-1.5 text-[13px] text-muted transition-colors hover:bg-white/[0.06] hover:text-fg disabled:opacity-50"
+                >
+                  {busy === c.id ? 'Removing' : 'Remove check'}
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      <NewCheckForm checks={checks} onAdd={onAdd} />
+    </Card>
+  );
+}
+
 /** How to send the first review's numbers. Shown when the dashboard is on and has nothing yet. */
 function NothingYet({ org }: { org: Org }) {
   return (
@@ -476,7 +599,7 @@ function NotOn({ org }: { org: Org }) {
   );
 }
 
-type View = { kind: 'loading' } | { kind: 'ready'; overview: Overview; decisions: Decision[]; total: number; rules: Rules | null; skills: Skills | null } | { kind: 'off' } | { kind: 'error' };
+type View = { kind: 'loading' } | { kind: 'ready'; overview: Overview; decisions: Decision[]; total: number; rules: Rules | null; skills: Skills | null; checks: Checks | null } | { kind: 'off' } | { kind: 'error' };
 
 export default function Dashboard() {
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
@@ -529,8 +652,12 @@ export default function Dashboard() {
       if (err instanceof SignedOut || err instanceof NotConnected) throw err;
       return null;
     });
-    Promise.all([loadOverview(session, org.id), decisions, rules, skills])
-      .then(([overview, { decisions, total }, rules, skills]) => !gone && setView({ kind: 'ready', overview, decisions, total, rules, skills }))
+    const checks = loadChecks(session, org.id).catch((err) => {
+      if (err instanceof SignedOut || err instanceof NotConnected) throw err;
+      return null;
+    });
+    Promise.all([loadOverview(session, org.id), decisions, rules, skills, checks])
+      .then(([overview, { decisions, total }, rules, skills, checks]) => !gone && setView({ kind: 'ready', overview, decisions, total, rules, skills, checks }))
       .catch((err) => {
         if (gone) return;
         if (err instanceof SignedOut) {
@@ -679,6 +806,21 @@ export default function Dashboard() {
                   onRemove={async (skill) => {
                     await signedIn(() => removeSkill(session, org.id, skill.id));
                     setView((v) => (v.kind === 'ready' && v.skills ? { ...v, skills: { ...v.skills, skills: v.skills.skills.filter((x) => x.id !== skill.id) } } : v));
+                  }}
+                />
+              )}
+              {view.checks && (
+                <ChecksCard
+                  checks={view.checks}
+                  onAdd={async (check) => {
+                    await signedIn(() => addCheck(session, org.id, check));
+                    // The check is in. If only the fresh list fails to load, that isn't a failed Add.
+                    const checks = await loadChecks(session, org.id).catch(() => null);
+                    if (checks) setView((v) => (v.kind === 'ready' ? { ...v, checks } : v));
+                  }}
+                  onRemove={async (check) => {
+                    await signedIn(() => removeCheck(session, org.id, check.id));
+                    setView((v) => (v.kind === 'ready' && v.checks ? { ...v, checks: { ...v.checks, checks: v.checks.checks.filter((x) => x.id !== check.id) } } : v));
                   }}
                 />
               )}

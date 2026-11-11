@@ -1,6 +1,6 @@
 # Mergelight server
 
-Stores what the Mergelight dashboard shows and what a review reads before it starts: numbers about each review, the findings a team declined, its rules, and the skill folders it picked.
+Stores what the Mergelight dashboard shows and what a review reads before it starts: numbers about each review, the findings a team declined, its rules, its own checks, and the skill folders it picked.
 
 It is off unless a workflow sets the Action's `server` input, and it stores nothing for an org that hasn't turned the dashboard on.
 
@@ -13,6 +13,8 @@ Stored, per review: the repository's name and GitHub id, the pull request number
 Stored, per rule: its text, its file patterns, where it applies, and the GitHub login and id of who set it.
 
 Stored, per skill a team picked: the path of its folder in the repository, and the GitHub login and id of who picked it. The skill's text is never sent: it stays in the repository.
+
+Stored, per check a team wrote: its name, its text, its file patterns, and the GitHub login and id of who set it. The answers to a check are not stored: they go to the pull request on GitHub.
 
 Stored, per change on the dashboard: who made it, when, and what it was.
 
@@ -48,6 +50,23 @@ A team that already wrote skills for Claude Code or Codex can use them in review
 - A review run can only read the list. It can never write to it.
 - If the server can't be reached, the review runs without the skills.
 - The copy can't stop or hold up a review. A git call that hangs is given up after 20 seconds and the whole copy after a minute, and the review then runs without the skills that weren't read. Its log says how many were left out.
+
+## Checks
+
+A team writes a check in plain words, like "Every new text in en.json has a translation in da.json", and names the files it is about. Each review asks the AI that one question in a run of its own, and posts the answer on the pull request as a check named `Mergelight: <name>`.
+
+- A check passes or fails. A failed one lists the places that break it, with file and line. When the AI couldn't see enough to tell, the check says so and ends neutral: it is never taken for a pass.
+- A check runs only when a pull request changes a file that matches its patterns. Otherwise it is posted as skipped, and no AI run is spent.
+- Each check that runs is one more AI run on the team's own plan. A repository has 5 at most, and 2 run at a time.
+- A check reports. It never changes code, and it doesn't change the light of the Mergelight check. To make it stop a merge, require `Mergelight: <name>` in the branch rules on GitHub.
+- If the AI run for a check fails, or its answer can't be read, the check ends neutral, like a review that couldn't run. It is never taken for a pass, and it doesn't block a merge.
+- A check gets 6 minutes, and all checks together 12. One that takes longer ends neutral. The review itself never waits for its checks beyond that, and a review that fails stops the checks that were waiting for their turn.
+- A check reads the whole change to its own files, lockfiles and generated files included. The reviewers' diff leaves those out.
+- For a check, the repository's instruction files such as `AGENTS.md` and `CLAUDE.md` are data. They are read from the pull request's own checkout, so its author must not be able to say there what counts as a pass.
+- A check is an instruction to the AI, so setting or removing one takes an admin of that repository, and each change is written to the log. A review run can only read the checks.
+- Its name is letters, digits and single spaces, with `. _ -` inside, 40 characters at most. Its text is one line, 500 characters at most. Both are checked on the server and again in the run. The text reaches the AI as a line of escaped JSON in a block of its own, and it can't change the output format or how text in the diff is treated.
+- What the AI answers is cut to size and written as plain text before it goes on GitHub: it can't post a link, a picture, a mention or markup under Mergelight's name. The check's own text is shown as code, for the same reason.
+- If the server can't be reached, the review runs without the checks, and none is posted for that commit.
 
 ## Memory
 

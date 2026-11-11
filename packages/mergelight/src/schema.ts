@@ -28,6 +28,31 @@ export const candidateSchema = {
   },
 } as const;
 
+/** The answer to one of the team's own checks. */
+export const checkSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["verdict", "summary", "problems"],
+  properties: {
+    verdict: { type: "string", enum: ["pass", "fail", "unsure"], description: "pass: you read the change and it does what the check asks. fail: you can name the place where it does not. unsure: you couldn't see enough to tell." },
+    summary: { type: "string", description: "One or two plain sentences: what you checked and what you found." },
+    problems: {
+      type: "array",
+      description: "When it fails: each place that breaks the check, 10 at most. Empty when it passes.",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["file", "line", "note"],
+        properties: {
+          file: { type: "string" },
+          line: { type: "integer", description: "The line in the head version, or 0 when no one line stands for it." },
+          note: { type: "string", description: "One sentence: what is wrong here." },
+        },
+      },
+    },
+  },
+} as const;
+
 export const reviewSchema = {
   type: "object",
   additionalProperties: false,

@@ -121,6 +121,32 @@ export interface Skills {
   repos: { id: number; name: string; can_pick_skills: boolean }[];
 }
 
+/** A check the team wrote in plain words. Each review asks it as a question of its own and posts a pass or fail check. */
+export interface Check {
+  id: number;
+  repo_id: number;
+  repo: string;
+  name: string;
+  text: string;
+  paths: string[];
+  by: string;
+  created_at: string;
+  can_remove: boolean;
+}
+
+export interface Checks {
+  checks: Check[];
+  /** Setting a check takes an admin of that repository. */
+  repos: { id: number; name: string; can_set_checks: boolean }[];
+}
+
+export interface NewCheck {
+  repo_id: number;
+  name: string;
+  text: string;
+  paths: string[];
+}
+
 /** Thrown when the session ran out or the server restarted. The page then asks for a new sign-in. */
 export class SignedOut extends Error {}
 /** Thrown when the org hasn't turned the dashboard on. */
@@ -306,6 +332,25 @@ export async function addSkill(session: Session, orgId: number, skill: { repo_id
 
 export async function removeSkill(session: Session, orgId: number, id: number): Promise<void> {
   const res = await call(session, `/v1/orgs/${orgId}/skills/${id}`, { method: 'DELETE' });
+  // Already gone counts as done.
+  if (!res.ok && res.status !== 404) throw new Error(`The Mergelight server answered ${res.status}.`);
+}
+
+export async function loadChecks(session: Session, orgId: number): Promise<Checks> {
+  const res = await call(session, `/v1/orgs/${orgId}/checks`);
+  if (res.status === 404 && ((await res.json()) as { error?: string }).error === 'not_connected') throw new NotConnected();
+  if (!res.ok) throw new Error(`The Mergelight server answered ${res.status}.`);
+  return (await res.json()) as Checks;
+}
+
+/** Adds a check to a repository. Throws with the server's own words when it says no. */
+export async function addCheck(session: Session, orgId: number, check: NewCheck): Promise<void> {
+  const res = await call(session, `/v1/orgs/${orgId}/checks`, { method: 'POST', body: JSON.stringify(check) });
+  if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { message?: string }).message ?? `The Mergelight server answered ${res.status}.`);
+}
+
+export async function removeCheck(session: Session, orgId: number, id: number): Promise<void> {
+  const res = await call(session, `/v1/orgs/${orgId}/checks/${id}`, { method: 'DELETE' });
   // Already gone counts as done.
   if (!res.ok && res.status !== 404) throw new Error(`The Mergelight server answered ${res.status}.`);
 }

@@ -103,7 +103,7 @@ beforeEach(async () => {
 test("migrations apply once, and a second run changes nothing", async () => {
   await migrate(pool);
   const { rows } = await pool.query("select name from schema_migrations");
-  assert.deepEqual(rows.map((r) => r.name).sort(), ["001_base.sql", "002_memories.sql", "003_rules.sql", "004_skills.sql"]);
+  assert.deepEqual(rows.map((r) => r.name).sort(), ["001_base.sql", "002_memories.sql", "003_rules.sql", "004_skills.sql", "005_checks.sql"]);
 });
 
 test("the server's own role can't bypass the row rules, and a superuser is refused", async () => {
@@ -127,7 +127,7 @@ test("an org that hasn't turned the dashboard on gets connected: false, and noth
 
 test("a connected org's review is stored with the repository and run from the signed token", async () => {
   await connectOrg(pool, ACME.id, ACME.login);
-  assert.deepEqual(await (await get(makeToken())).json(), { connected: true, memories: [], rules: [], skills: [] });
+  assert.deepEqual(await (await get(makeToken())).json(), { connected: true, memories: [], rules: [], skills: [], checks: [] });
 
   const res = await post(makeToken());
   assert.equal(res.status, 201);
@@ -199,7 +199,7 @@ const context = async (claims) => (await get(makeToken(claims))).json();
 
 test("a decision the team made is remembered for that repository, and handed to its later reviews", async () => {
   await connectOrg(pool, ACME.id, ACME.login);
-  assert.deepEqual(await context(), { connected: true, memories: [], rules: [], skills: [] });
+  assert.deepEqual(await context(), { connected: true, memories: [], rules: [], skills: [], checks: [] });
   assert.equal((await post(makeToken(), { ...REVIEW, declines: [DECLINE] })).status, 201);
 
   const { memories } = await context();

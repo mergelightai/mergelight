@@ -17,3 +17,8 @@ export function isPathPattern(v: unknown): v is string {
 export function isSkillPath(v: unknown): v is string {
   return typeof v === "string" && v.length <= 200 && /^[\w.@+\-]+(\/[\w.@+\-]+)*$/.test(v) && !v.split("/").some((part) => part === ".." || part === ".");
 }
+
+/** The name of a team's check, as GitHub shows it: letters, digits and single spaces, with . _ - inside. */
+export function isCheckName(v: unknown): v is string {
+  return typeof v === "string" && /^[A-Za-z0-9](?:[A-Za-z0-9._-]| (?! ))*$/.test(v) && v.length <= 40 && !v.endsWith(" ");
+}
