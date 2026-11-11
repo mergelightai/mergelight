@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { toast } from 'sonner';
-import { SignedOut, type Skill, type Skills } from '../api';
+import { SignedOut, type Session, type Skill, type Skills } from '../api';
+import { WrittenSkillsSection } from '../WrittenSkills';
 import { ViewHeader } from '../AppShell';
 import { DataBody, DataCell, DataHead, DataHeadCell, DataRow, DataTable, TwoLines } from '../DataTable';
 import { ago } from '../format';
@@ -63,21 +64,28 @@ function NewSkillForm({ orgId, skills, onAdd, startOpen }: { orgId: number; skil
   );
 }
 
-export function SkillsView({ orgId, skills, onAdd, onRemove, resume }: { orgId: number; skills: Skills; onAdd: (skill: { repo_id: number; path: string }) => Promise<void>; onRemove: (skill: Skill) => Promise<void>; resume: boolean }) {
+export function SkillsView({ session, signedIn, orgId, skills, onAdd, onRemove, resume }: { session: Session; signedIn: (change: () => Promise<void>) => Promise<void>; orgId: number; skills: Skills; onAdd: (skill: { repo_id: number; path: string }) => Promise<void>; onRemove: (skill: Skill) => Promise<void>; resume: string | null }) {
   const mayAdd = skills.repos.some((r) => r.can_pick_skills);
   return (
     <>
       <ViewHeader
         eyebrow="Reviewer"
         title="Skills"
-        lead="Use a skill when your team already wrote one for Claude Code or Codex. Every review of that repository reads it, so it knows what your team knows."
-        action={mayAdd ? <NewSkillForm orgId={orgId} skills={skills} onAdd={onAdd} startOpen={resume} /> : <ReadOnly>Only an admin of a repository can pick its skills.</ReadOnly>}
+        lead="A skill tells each review what your team knows about one area. Pick a skill folder your team already wrote for Claude Code or Codex, or write one here."
       />
       <div className="grid flex-1 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_320px] xl:items-stretch">
+        <div className="flex min-w-0 flex-col">
+        <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h2 className="font-heading text-base font-semibold">Skill folders</h2>
+            <p className="mt-1 text-sm text-muted-foreground">Read from your repository.</p>
+          </div>
+          {mayAdd ? <NewSkillForm orgId={orgId} skills={skills} onAdd={onAdd} startOpen={resume === 'skills'} /> : <ReadOnly>Only an admin of a repository can pick its skills.</ReadOnly>}
+        </div>
         {skills.skills.length === 0 ? (
-          <EmptyList title="No skills yet">Add a skill folder, and every review of its repository reads it.</EmptyList>
+          <EmptyList title="No skill folders yet">Add a skill folder, and every review of its repository reads it.</EmptyList>
         ) : (
-          <DataTable fill>
+          <DataTable>
             <DataHead>
               <DataHeadCell>Skill folder</DataHeadCell>
               <DataHeadCell className="hidden md:table-cell">Repository</DataHeadCell>
@@ -123,11 +131,15 @@ export function SkillsView({ orgId, skills, onAdd, onRemove, resume }: { orgId: 
             </DataBody>
           </DataTable>
         )}
+        <WrittenSkillsSection session={session} orgId={orgId} signedIn={signedIn} resume={resume === 'skills#write'} />
+        </div>
         <Facts
           items={[
             "A skill is read from the branch a pull request merges into, so a pull request can't change the skill that reviews it.",
             "Only the folder's path is stored here. The skill's text stays in your repository.",
             'Name the real folder, not a link to it.',
+            'The text of a skill written here is stored on the Mergelight server.',
+            "A skill says what matters in its area. It can't change how a review treats the code in a pull request.",
           ]}
         />
       </div>

@@ -113,9 +113,11 @@ export default function Dashboard() {
   const [resume, setResume] = useState<string | null>(null);
   useEffect(() => {
     if (view.kind !== 'ready') return;
+    // A view, and after a # which of its forms, such as "skills#write".
     const again = takeResume();
-    if (!again || !ALL_VIEWS.includes(again as ViewId)) return;
-    pickTab(again as ViewId);
+    const target = again?.split('#')[0] as ViewId | undefined;
+    if (!again || !target || !ALL_VIEWS.includes(target)) return;
+    pickTab(target);
     setResume(again);
     toast.info('You were signed in again. Your text is still there: save it once more.');
     // Runs once each time the data is ready.
@@ -187,9 +189,11 @@ export default function Dashboard() {
       {ready && tab === 'skills' && (ready.skills ? (
         <SkillsView
           key={org.id}
+          session={session}
+          signedIn={signedIn}
           orgId={org.id}
           skills={ready.skills}
-          resume={resume === 'skills'}
+          resume={resume}
           onAdd={async (skill) => {
             await signedIn(() => addSkill(session, org.id, skill));
             // The skill is in. If only the fresh list fails to load, that isn't a failed Add.

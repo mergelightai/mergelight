@@ -221,7 +221,7 @@ async function main(): Promise<number> {
   }
 
   // Teams that use the dashboard: ask the server first, so nothing is sent for anyone else.
-  const cloud = values.post && !dryRun ? await fetchContext({ log }) : { connected: false, memories: [], rules: [], skills: [], checks: [] };
+  const cloud = values.post && !dryRun ? await fetchContext({ log }) : { connected: false, memories: [], rules: [], skills: [], checks: [], writtenSkills: [] };
 
   const progress = progressPrinter();
   /** The team's checks that have an answer which isn't on GitHub yet. */
@@ -237,6 +237,7 @@ async function main(): Promise<number> {
       rules: cloud.rules,
       rulesUnread: cloud.failed === true,
       skills: cloud.skills,
+      writtenSkills: cloud.writtenSkills,
       checks: cloud.checks,
       onTeamChecks: (results) => (answered = results),
       at: values.at,

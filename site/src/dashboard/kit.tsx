@@ -112,7 +112,12 @@ export function FormDialog({
   error,
   onSubmit,
   children,
+  wide = false,
+  quiet = false,
 }: {
+  wide?: boolean;
+  /** A smaller, quieter button, for a second form on the same view. */
+  quiet?: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   trigger: string;
@@ -128,12 +133,12 @@ export function FormDialog({
 }) {
   return (
     <>
-      <Button onClick={() => onOpenChange(true)} className="h-10 gap-1.5 rounded-full pl-3.5 pr-5 text-[14px] shadow-[0_8px_24px_-10px_rgb(236_234_244/0.35)] hover:bg-white">
+      <Button onClick={() => onOpenChange(true)} variant={quiet ? 'secondary' : 'default'} className={quiet ? 'h-9 gap-1.5 rounded-full pl-3 pr-4 text-[13px]' : 'h-10 gap-1.5 rounded-full pl-3.5 pr-5 text-[14px] shadow-[0_8px_24px_-10px_rgb(236_234_244/0.35)] hover:bg-white'}>
         <PlusIcon />
         {trigger}
       </Button>
       <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
-        <DialogContent className="glass-frame rounded-[2rem]! bg-transparent! p-2! ring-0! shadow-none! sm:max-w-lg" showCloseButton={false}>
+        <DialogContent className="glass-frame rounded-[2rem]! bg-transparent! p-2! ring-0! shadow-none! sm:max-w-lg" style={wide ? { maxWidth: '42rem' } : undefined} showCloseButton={false}>
           <form
             className="glass-inner grid gap-5 rounded-[1.6rem] bg-popover p-6"
             onSubmit={(e: FormEvent) => {

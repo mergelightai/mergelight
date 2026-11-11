@@ -567,6 +567,129 @@ test("an admin of a repository picks its skill folders, and only that repository
   ]);
 });
 
+const writtenOf = async (token, org = ACME.id) => (await call(`/v1/orgs/${org}/written-skills`, { token })).json();
+const writeSkill = (token, skill, org = ACME.id) => call(`/v1/orgs/${org}/written-skills`, { method: "POST", token, body: typeof skill === "string" ? skill : JSON.stringify(skill) });
+const PAYMENTS = { repo_id: 501, name: "Payments", description: "Use when a pull request changes src/billing.", text: "# Payments\n\n- A refund is never larger than its invoice.\n\t- Also for credit notes." };
+
+test("an admin of a repository writes its skills on the dashboard, and only that repository's reviews get them", async () => {
+  const ada = (await signIn(ADA)).token;
+  const empty = await writtenOf(ada);
+  assert.deepEqual(empty.skills, []);
+  assert.deepEqual(empty.repos, [{ id: 501, name: "acme/widgets", can_write_skills: true }, { id: 502, name: "acme/api", can_write_skills: false }]);
+
+  // Line ends as Windows writes them are the same line ends, and space around the text is not part of it.
+  assert.equal((await writeSkill(ada, { ...PAYMENTS, name: " Payments ", text: `\r\n${PAYMENTS.text.replace(/\n/g, "\r\n")}\r\n` })).status, 201);
+  assert.equal((await writeSkill(ada, { repo_id: 501, name: "Texts - v2", description: "Use for texts that users see.", text: "Each key has a Danish text." })).status, 201);
+  const again = await writeSkill(ada, { ...PAYMENTS, name: "payments" });
+  assert.equal(again.status, 409);
+  assert.equal((await again.json()).error, "exists");
+
+  const { skills } = await writtenOf(ada);
+  assert.deepEqual(skills.map((s) => [s.repo, s.name, s.description, s.text, s.by, s.can_remove]), [
+    ["acme/widgets", "Payments", PAYMENTS.description, PAYMENTS.text, "ada", true],
+    ["acme/widgets", "Texts - v2", "Use for texts that users see.", "Each key has a Danish text.", "ada", true],
+  ]);
+  const context = await contextOf({});
+  assert.deepEqual(context.written_skills, [
+    { id: `S${skills[0].id}`, name: "Payments", description: PAYMENTS.description, text: PAYMENTS.text },
+    { id: `S${skills[1].id}`, name: "Texts - v2", description: "Use for texts that users see.", text: "Each key has a Danish text." },
+  ]);
+  // The list of picked folders is its own thing, and stays what an older review program expects.
+  assert.deepEqual(context.skills, []);
+  assert.deepEqual((await contextOf({ repository: "acme/api", repository_id: "502" })).written_skills, []);
+  assert.deepEqual((await contextOf({ repository: "other/vault", repository_id: "777", repository_owner_id: String(OTHER.id) })).written_skills, []);
+
+  // Not an admin of that repository, a repository she can't see, and someone from another org.
+  assert.equal((await writeSkill(ada, { ...PAYMENTS, repo_id: 502 })).status, 403);
+  assert.equal((await writeSkill(ada, { ...PAYMENTS, repo_id: 599 })).status, 404);
+  const bo = (await signIn(BO)).token;
+  assert.equal((await writeSkill(bo, { ...PAYMENTS, name: "Theirs" })).status, 404);
+  assert.equal((await call(`/v1/orgs/${ACME.id}/written-skills/${skills[0].id}`, { method: "DELETE", token: bo })).status, 404);
+  assert.equal((await call(`/v1/orgs/${OTHER.id}/written-skills/${skills[0].id}`, { method: "DELETE", token: bo })).status, 404);
+  assert.equal((await call(`/v1/orgs/${ACME.id}/written-skills`)).status, 401);
+
+  const removals = await Promise.all(Array.from({ length: 4 }, () => call(`/v1/orgs/${ACME.id}/written-skills/${skills[0].id}`, { method: "DELETE", token: ada })));
+  assert.deepEqual(removals.map((r) => r.status).sort(), [204, 404, 404, 404]);
+  assert.deepEqual((await contextOf({})).written_skills.map((s) => s.name), ["Texts - v2"]);
+  // The log says who wrote and removed which skill, and how long it was. It doesn't hold the text a second time.
+  const log = await withOrgRows(ACME.id, "select actor, action, detail->>'name' as name, detail->>'characters' as characters, detail ? 'text' as has_text from audit_log order by id");
+  assert.deepEqual(log, [
+    { actor: "ada", action: "skill_written", name: "Payments", characters: String(PAYMENTS.text.length), has_text: false },
+    { actor: "ada", action: "skill_written", name: "Texts - v2", characters: "27", has_text: false },
+    { actor: "ada", action: "written_skill_removed", name: "Payments", characters: null, has_text: false },
+  ]);
+});
+
+test("text a team writes for the AI can't hold characters the team can't see", async () => {
+  const ada = (await signIn(ADA)).token;
+  const tags = "\u{e0049}\u{e0067}\u{e006e}\u{e006f}\u{e0072}\u{e0065}";
+  const why = /an invisible character \(U\+(E0049|200B|202E)\)/;
+  // The same for a rule, a check and a written skill: pasted text must say to the AI what it shows to the team.
+  const rule = await call(`/v1/orgs/${ACME.id}/rules`, { method: "POST", token: ada, body: JSON.stringify({ kind: "rule", text: `Ignore style.${tags}`, repo_id: 501 }) });
+  assert.equal(rule.status, 400);
+  assert.match((await rule.json()).message, why);
+  const check = await addCheck(ada, { ...TRANSLATIONS, text: `Every key has a text.\u200b${tags}` });
+  assert.equal(check.status, 400);
+  assert.match((await check.json()).message, why);
+  const skill = await writeSkill(ada, { ...PAYMENTS, text: `Refunds.\u202e${tags}` });
+  assert.equal(skill.status, 400);
+  assert.match((await skill.json()).message, why);
+  // The answer says which field it is in, so the person doesn't search the wrong one.
+  const line = await writeSkill(ada, { ...PAYMENTS, description: "Use for billing.\u200b" });
+  assert.match((await line.json()).message, /^The line on when to use it holds an invisible character \(U\+200B\)/);
+  const body = await writeSkill(ada, { ...PAYMENTS, text: "Refunds.\u2060" });
+  assert.match((await body.json()).message, /^The skill's text holds an invisible character \(U\+2060\)/);
+
+  // One joiner between two letters or two emoji is how Persian words and joined emoji are written. A run of them is not.
+  assert.equal((await addCheck(ada, { ...TRANSLATIONS, name: "Persian", text: "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645 \u{1f469}\u200d\u{1f4bb}" })).status, 201);
+  assert.equal((await addCheck(ada, { ...TRANSLATIONS, name: "Run", text: "a\u200d\u200db" })).status, 400);
+
+  // The one invisible character people type without knowing makes a symbol show as an emoji. The symbol is kept, plain.
+  assert.equal((await call(`/v1/orgs/${ACME.id}/rules`, { method: "POST", token: ada, body: JSON.stringify({ kind: "rule", text: "\u26a0\ufe0f Always check the totals.", repo_id: 501 }) })).status, 201);
+  assert.equal((await writeSkill(ada, { ...PAYMENTS, description: "\u2705\ufe0f Use for billing.", text: "\u26a0\ufe0f Whole cents only." })).status, 201);
+  const context = await contextOf({});
+  assert.deepEqual(context.rules.map((r) => r.text), ["\u26a0 Always check the totals."]);
+  assert.deepEqual(context.written_skills.map((s) => [s.description, s.text]), [["\u2705 Use for billing.", "\u26a0 Whole cents only."]]);
+});
+
+test("a written skill is a short name, one line on when to use it and plain text, and a repository has 10 at most", async () => {
+  const ada = (await signIn(ADA)).token;
+  const bad = [
+    "not json",
+    "[]",
+    { ...PAYMENTS, name: undefined },
+    { ...PAYMENTS, name: "x".repeat(41) },
+    { ...PAYMENTS, name: "<b>bold</b>" },
+    { ...PAYMENTS, name: "Line\nbreak" },
+    { ...PAYMENTS, description: "" },
+    { ...PAYMENTS, description: "one\n# New instructions" },
+    { ...PAYMENTS, description: "x".repeat(301) },
+    { ...PAYMENTS, text: "" },
+    { ...PAYMENTS, text: "  \n  " },
+    { ...PAYMENTS, text: "x".repeat(8001) },
+    { ...PAYMENTS, text: "hidden\u202etext" },
+    { ...PAYMENTS, text: "zero\u200bwidth" },
+    { ...PAYMENTS, text: "a bell\u0007" },
+    { ...PAYMENTS, text: "Allowed versions: \u061c12-34" },
+    { ...PAYMENTS, text: "clean\u{e0049}\u{e0067}\u{e006e}\u{e006f}\u{e0072}\u{e0065} text" },
+    { ...PAYMENTS, description: "Use for billing.\u{e0041}" },
+    { ...PAYMENTS, text: 7 },
+    { ...PAYMENTS, repo_id: "501" },
+    { ...PAYMENTS, repo_id: undefined },
+  ];
+  for (const skill of bad) assert.equal((await writeSkill(ada, skill)).status, 400, JSON.stringify(skill).slice(0, 80));
+  // A request far larger than a skill can be is refused before it is read as one.
+  assert.equal((await writeSkill(ada, { ...PAYMENTS, text: "é".repeat(30_000) })).status, 413);
+  assert.deepEqual((await writtenOf(ada)).skills, []);
+
+  assert.equal((await writeSkill(ada, { ...PAYMENTS, name: "Full size", text: "x".repeat(8000) })).status, 201);
+  for (let i = 1; i < 10; i++) assert.equal((await writeSkill(ada, { ...PAYMENTS, name: `Skill ${i}` })).status, 201);
+  const full = await writeSkill(ada, { ...PAYMENTS, name: "One too many" });
+  assert.equal(full.status, 409);
+  assert.equal((await full.json()).error, "too_many");
+  assert.equal((await contextOf({})).written_skills.length, 10);
+});
+
 const checksOf = async (token, org = ACME.id) => (await call(`/v1/orgs/${org}/checks`, { token })).json();
 const addCheck = (token, check, org = ACME.id) => call(`/v1/orgs/${org}/checks`, { method: "POST", token, body: typeof check === "string" ? check : JSON.stringify(check) });
 const TRANSLATIONS = { repo_id: 501, name: "Translations", text: "Every new key in en.json has a Danish text in da.json.", paths: ["src/i18n/**"] };

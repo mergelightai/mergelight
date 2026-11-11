@@ -25,6 +25,7 @@ import { CHECK_TIMEOUT_MS, startTeamChecks, type ChecksRun } from "./checks.js";
 import { run } from "./run.js";
 import type { Finding, Light, ModelFinding, ModelReview, Review, TeamCheckResult, Tier } from "./types.js";
 import { cacheDir, prepareWorkspace } from "./workspace.js";
+import type { WrittenSkill } from "./skills.js";
 
 export interface ReviewOptions {
   /** Review this commit of the PR instead of its latest one. */
@@ -48,6 +49,8 @@ export interface ReviewOptions {
   rulesUnread?: boolean;
   /** Skill folders in the repository that the team picked for reviews. They are read from the base branch. */
   skills?: string[];
+  /** Skills the team wrote on its dashboard. Their text comes from the team's server, not from the repository. */
+  writtenSkills?: WrittenSkill[];
   /** The team's own checks. Each one that is about a changed file is asked in an AI run of its own. */
   checks?: TeamCheck[];
   /**
@@ -274,10 +277,11 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
   const pr = await fetchPullRequest(ref);
 
   progress("Checking out the code");
-  const ws = await prepareWorkspace(pr, opts.at, opts.skills);
+  const ws = await prepareWorkspace(pr, opts.at, opts.skills, opts.writtenSkills);
   const skillsMissing = (opts.skills?.length ?? 0) - ws.skills.length;
   if (skillsMissing > 0) progress(`${skillsMissing} of the skill folders your team picked ${skillsMissing === 1 ? "has" : "have"} no SKILL.md on the base branch, or couldn't be read: left out. Name the real folder, not a link to it`);
-  if (ws.skills.length) progress(`Using your team's skill${ws.skills.length === 1 ? "" : "s"}: ${ws.skills.map((s) => s.name).join(", ")}`);
+  const teamSkills = [...ws.skills, ...ws.writtenSkills];
+  if (teamSkills.length) progress(`Using your team's skill${teamSkills.length === 1 ? "" : "s"}: ${teamSkills.map((s) => s.name).join(", ")}`);
   if (ws.conventions.length) progress(`Using ${ws.conventions.map((c) => c.path).join(", ")} from ${pr.baseRef}`);
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const log = (step: string) => join(cacheDir(), "logs", `${pr.owner}-${pr.repo}-${pr.number}-${stamp}-${step}.log`);
@@ -294,7 +298,7 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
       previous: opts.previous,
       memories: memoriesFor(opts.memories, ws.changedFiles.map((f) => f.path), pr.number),
       // Matched against every path the pull request touches, exactly as git has it.
-      skills: ws.skills,
+      skills: teamSkills,
       conventions: ws.conventions,
       rules: (opts.rules ?? []).filter((r) => r.kind === "rule" && ruleApplies(r, ws.touchedPaths)).slice(0, MAX_RULES),
     };

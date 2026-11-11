@@ -12,7 +12,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { HttpError } from "../../token-server/dist/token.js";
 import { isId, MEMORY_DAYS, withOrg, type Db, type Pool } from "./db.js";
 import { DEFAULT_SIGN_IN_APP, lookUp, looksLikePersonToken, type Person, type Reach } from "./github.js";
-import { isCheckName, isLineOfText, isPathPattern, isSkillPath } from "./validate.js";
+import { hiddenCharacter, isCheckName, isLineOfText, isPathPattern, isSkillPath, isSkillText, plainEmoji, SKILL_TEXT_MAX } from "./validate.js";
 
 /**
  * How long what GitHub said at sign-in is trusted. Someone who loses access on GitHub stops seeing
@@ -40,6 +40,18 @@ const MAX_RULES = 50;
 const MAX_RULE_BODY = 4096;
 /** Skill folders one repository can have picked. Each one is more for every reviewer to read. */
 const MAX_SKILLS = 10;
+/** Refuses a text a person wrote, or pasted, that holds a character they can't see. It says which field and which character. */
+function refuseHidden(fields: Record<string, unknown>): void {
+  for (const [field, text] of Object.entries(fields)) {
+    const hidden = typeof text === "string" ? hiddenCharacter(text) : null;
+    if (hidden) {
+      throw new HttpError(400, "bad_request", `${field} holds an invisible character (${hidden}), which a reviewer would read and you can't see. This happens with text copied from somewhere else. Remove it, or paste the text as plain text.`);
+    }
+  }
+}
+/** Skills written on the dashboard that one repository can have, and the largest request that can carry one. */
+const MAX_WRITTEN_SKILLS = 10;
+const MAX_SKILL_BODY = 48_000;
 /** Checks one repository can have. Each one that applies is one more AI run in every review, on the team's own plan. */
 const MAX_CHECKS = 5;
 
@@ -336,7 +348,9 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
     }
     const bad = (what: string) => new HttpError(400, "bad_request", `The rule's ${what} isn't valid.`);
     if (typeof body !== "object" || body === null || Array.isArray(body)) throw bad("body");
-    const { kind, text, paths = [], repo_id = null } = body as Record<string, unknown>;
+    const { kind, text: givenText, paths = [], repo_id = null } = body as Record<string, unknown>;
+    const text = typeof givenText === "string" ? plainEmoji(givenText) : givenText;
+    refuseHidden({ "The rule": text });
     if (kind !== "rule" && kind !== "needs_human") throw bad("kind");
     if (!isLineOfText(text, 300)) throw bad("text");
     if (!Array.isArray(paths) || paths.length > 10 || !paths.every(isPathPattern)) {
@@ -474,6 +488,94 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
     return { status: 204, body: null };
   }
 
+  /** The skills a team wrote on the dashboard, in the repositories this person can see. */
+  async function writtenSkills(session: Session, orgId: number): Promise<{ status: number; body: unknown }> {
+    const reach = session.reach.get(orgId);
+    if (!reach) throw new HttpError(404, "not_found", "No such org.");
+    const rows = await withOrg(pool, orgId, async (db) => {
+      if ((await db.query("select 1 from orgs where id = $1", [orgId])).rowCount === 0) return null;
+      return (await db.query("select id, repo_id, name, description, body, added_by, created_at from written_skills where repo_id = any($1::bigint[]) order by repo_id, id", [[...reach.repos.keys()]])).rows;
+    });
+    if (!rows) throw new HttpError(404, "not_connected", "This org hasn't turned the Mergelight dashboard on.");
+    return {
+      status: 200,
+      body: {
+        repos: [...reach.repos].map(([id, r]) => ({ id, name: r.name, can_write_skills: r.admin })),
+        skills: rows.map((s) => {
+          const repo = reach.repos.get(Number(s.repo_id));
+          return { id: Number(s.id), repo_id: Number(s.repo_id), repo: repo?.name ?? "", name: s.name, description: s.description, text: s.body, by: s.added_by, created_at: s.created_at, can_remove: repo?.admin === true };
+        }),
+      },
+    };
+  }
+
+  /**
+   * Adds a skill written on the dashboard to a repository. It takes an admin of that repository:
+   * every review of it may read the skill and follow it.
+   */
+  async function addWrittenSkill(session: Session, orgId: number, request: Request): Promise<{ status: number; body: unknown }> {
+    const reach = session.reach.get(orgId);
+    if (!reach) throw new HttpError(404, "not_found", "No such org.");
+    const raw = await request.text();
+    if (Buffer.byteLength(raw) > MAX_SKILL_BODY) throw new HttpError(413, "too_large", `A skill can hold ${SKILL_TEXT_MAX} characters at most.`);
+    let body: unknown;
+    try {
+      body = JSON.parse(raw);
+    } catch {
+      throw new HttpError(400, "bad_request", "That isn't JSON.");
+    }
+    if (typeof body !== "object" || body === null || Array.isArray(body)) throw new HttpError(400, "bad_request", "That isn't a skill.");
+    const { repo_id, name: givenName, description: givenDescription, text: givenText } = body as Record<string, unknown>;
+    const name = typeof givenName === "string" ? givenName.trim() : givenName;
+    const description = typeof givenDescription === "string" ? plainEmoji(givenDescription).trim() : givenDescription;
+    // Line ends as Windows writes them are the same line ends.
+    const text = typeof givenText === "string" ? plainEmoji(givenText).replace(/\r\n?/g, "\n").trim() : givenText;
+    refuseHidden({ "The line on when to use it": description, "The skill's text": text });
+    if (!isCheckName(name)) throw new HttpError(400, "bad_request", "Give the skill a short name: up to 40 letters, digits and single spaces, with . _ - inside.");
+    if (!isLineOfText(description, 300)) throw new HttpError(400, "bad_request", "Say in one line when a reviewer should use this skill, up to 300 characters.");
+    if (!isSkillText(text)) throw new HttpError(400, "bad_request", `Write the skill as plain text, up to ${SKILL_TEXT_MAX} characters.`);
+    if (!isId(repo_id)) throw new HttpError(400, "bad_request", "Pick the repository the skill is for.");
+    const repo = reach.repos.get(repo_id);
+    if (!repo) throw new HttpError(404, "not_found", "No such repository.");
+    if (!repo.admin) throw new HttpError(403, "read_only", "Only an admin of this repository can write its skills.");
+
+    const created = await withOrg(pool, orgId, async (db) => {
+      if ((await db.query("select 1 from orgs where id = $1 for update", [orgId])).rowCount === 0) return null;
+      if (((await db.query("select count(*)::int as n from written_skills where repo_id = $1", [repo_id])).rows[0]?.n ?? 0) >= MAX_WRITTEN_SKILLS) return "full";
+      await db.query("insert into repos (org_id, id, name) values ($1, $2, $3) on conflict (org_id, id) do nothing", [orgId, repo_id, repo.name]);
+      const { rows } = await db.query(
+        "insert into written_skills (org_id, repo_id, name, description, body, added_by, added_by_id) values ($1, $2, $3, $4, $5, $6, $7) on conflict (org_id, repo_id, lower(name)) do nothing returning id",
+        [orgId, repo_id, name, description, text, session.person.login, session.person.id],
+      );
+      if (!rows[0]) return "exists";
+      const id = Number(rows[0].id);
+      // The log says that a skill was written and how long it is. The text itself is in the skill.
+      await record(db, orgId, session.person, "skill_written", { id, repo_id, name, description, characters: text.length });
+      return id;
+    });
+    if (created === null) throw new HttpError(404, "not_connected", "This org hasn't turned the Mergelight dashboard on.");
+    if (created === "full") throw new HttpError(409, "too_many", `A repository can have ${MAX_WRITTEN_SKILLS} written skills at most. Remove one first.`);
+    if (created === "exists") throw new HttpError(409, "exists", "This repository already has a skill of that name.");
+    return { status: 201, body: { id: created } };
+  }
+
+  async function removeWrittenSkill(session: Session, orgId: number, skillId: number): Promise<{ status: number; body: unknown }> {
+    const reach = session.reach.get(orgId);
+    if (!reach) throw new HttpError(404, "not_found", "No such org.");
+    const outcome = await withOrg(pool, orgId, async (db) => {
+      const { rows } = await db.query("select repo_id, name, description from written_skills where id = $1 for update", [skillId]);
+      const repo = rows[0] ? reach.repos.get(Number(rows[0].repo_id)) : undefined;
+      if (!repo) return "missing";
+      if (!repo.admin) return "read_only";
+      await db.query("delete from written_skills where id = $1", [skillId]);
+      await record(db, orgId, session.person, "written_skill_removed", { id: skillId, repo_id: Number(rows[0]!.repo_id), name: rows[0]!.name, description: rows[0]!.description });
+      return "gone";
+    });
+    if (outcome === "missing") throw new HttpError(404, "not_found", "No such skill.");
+    if (outcome === "read_only") throw new HttpError(403, "read_only", "Only an admin of this repository can remove its skills.");
+    return { status: 204, body: null };
+  }
+
   /** The team's own checks, in the repositories this person can see. */
   async function checks(session: Session, orgId: number): Promise<{ status: number; body: unknown }> {
     const reach = session.reach.get(orgId);
@@ -511,7 +613,9 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
       throw new HttpError(400, "bad_request", "That isn't JSON.");
     }
     if (typeof body !== "object" || body === null || Array.isArray(body)) throw new HttpError(400, "bad_request", "That isn't a check.");
-    const { repo_id, name: givenName, text, paths } = body as Record<string, unknown>;
+    const { repo_id, name: givenName, text: givenText, paths } = body as Record<string, unknown>;
+    const text = typeof givenText === "string" ? plainEmoji(givenText) : givenText;
+    refuseHidden({ "The check": text });
     const name = typeof givenName === "string" ? givenName.trim() : givenName;
     if (!isCheckName(name)) throw new HttpError(400, "bad_request", "Give the check a short name: up to 40 letters, digits and single spaces, with . _ - inside.");
     if (!isLineOfText(text, 500)) throw new HttpError(400, "bad_request", "Write the check as one line, up to 500 characters.");
@@ -564,7 +668,7 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
    * pathname has the server's mount path already taken off.
    */
   return async function handle(request: Request, pathname: string): Promise<Response | null> {
-    const org = /^\/v1\/orgs\/(\d{1,18})\/(overview|memories|rules|skills|checks)(?:\/(\d{1,18}))?$/.exec(pathname);
+    const org = /^\/v1\/orgs\/(\d{1,18})\/(overview|memories|rules|skills|checks|written-skills)(?:\/(\d{1,18}))?$/.exec(pathname);
     if (pathname !== "/v1/session" && !org) return null;
     // Only one decision or one rule at a time has an address of its own.
     if (org && org[3] && org[2] === "overview") return null;
@@ -573,7 +677,7 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
     const origin = request.headers.get("origin");
     if (origin && !origins.includes(origin)) return json(403, { error: "origin_not_allowed" }, {});
     const cors: Record<string, string> = origin ? { "access-control-allow-origin": origin, vary: "Origin" } : {};
-    const writable = org ? ["rules", "skills", "checks"].includes(org[2]!) : false;
+    const writable = org ? ["rules", "skills", "checks", "written-skills"].includes(org[2]!) : false;
     const methods = !org ? "POST, DELETE" : org[3] ? "DELETE" : writable ? "GET, POST" : "GET";
     if (request.method === "OPTIONS") {
       return json(204, null, { ...cors, "access-control-allow-methods": methods, "access-control-allow-headers": "authorization, content-type", "access-control-max-age": "600" });
@@ -590,10 +694,11 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
         if (!allowed.includes(request.method)) return json(405, { error: "method_not_allowed" }, cors);
         if (!isId(orgId) || (itemId !== null && !isId(itemId))) throw new HttpError(404, "not_found", "No such org.");
         const { session } = sessionOf(request, at);
-        if (itemId !== null) result = what === "rules" ? await removeRule(session, orgId, itemId) : what === "skills" ? await removeSkill(session, orgId, itemId) : what === "checks" ? await removeCheck(session, orgId, itemId) : await forget(session, orgId, itemId);
+        if (itemId !== null) result = what === "rules" ? await removeRule(session, orgId, itemId) : what === "skills" ? await removeSkill(session, orgId, itemId) : what === "checks" ? await removeCheck(session, orgId, itemId) : what === "written-skills" ? await removeWrittenSkill(session, orgId, itemId) : await forget(session, orgId, itemId);
         else if (what === "rules") result = request.method === "POST" ? await addRule(session, orgId, request) : await rules(session, orgId);
         else if (what === "skills") result = request.method === "POST" ? await addSkill(session, orgId, request) : await skills(session, orgId);
         else if (what === "checks") result = request.method === "POST" ? await addCheck(session, orgId, request) : await checks(session, orgId);
+        else if (what === "written-skills") result = request.method === "POST" ? await addWrittenSkill(session, orgId, request) : await writtenSkills(session, orgId);
         else result = what === "memories" ? await memories(session, orgId) : await overview(session, orgId);
       } else if (request.method === "POST") {
         result = await signIn(request, at);
