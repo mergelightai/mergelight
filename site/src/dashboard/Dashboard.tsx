@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { GitHubIcon, SURFACE, WELL } from '../ui';
-import { ADD_REPOS_URL, finishSignIn, loadOverview, NotConnected, rememberedSession, SERVER, SignedOut, signInUrl, signOut, tidyAddress, type Light, type Org, type Overview, type Review, type Session } from './api';
+import { ADD_REPOS_URL, finishSignIn, loadOverview, mayRenew, NotConnected, rememberedSession, SERVER, SignedOut, signInUrl, signOut, tidyAddress, type Light, type Org, type Overview, type Review, type Session } from './api';
 
 const LIGHTS: Record<Light, { label: string; dot: string; text: string }> = {
   green: { label: 'Safe to merge', dot: 'bg-mint', text: 'text-mint' },
@@ -164,7 +164,8 @@ function NothingYet({ org }: { org: Org }) {
       </p>
       <p className="mt-4 max-w-xl text-[14px] leading-relaxed text-muted">
         Already sending reviews? Then they are in repositories this sign-in can't see.{' '}
-        <a href={ADD_REPOS_URL} target="_blank" rel="noreferrer" className="text-fg underline decoration-white/30 underline-offset-4 hover:decoration-white">Add them on GitHub</a>, then sign in again.
+        <a href={ADD_REPOS_URL} target="_blank" rel="noreferrer" className="text-fg underline decoration-white/30 underline-offset-4 hover:decoration-white">Add them on GitHub</a>, then{' '}
+        <a href={signInUrl()} className="text-fg underline decoration-white/30 underline-offset-4 hover:decoration-white">sign in again</a>.
       </p>
     </Card>
   );
@@ -225,8 +226,11 @@ export default function Dashboard() {
       .then((overview) => !gone && setView({ kind: 'ready', overview }))
       .catch((err) => {
         if (gone) return;
-        if (err instanceof SignedOut) setSession(null);
-        else setView(err instanceof NotConnected ? { kind: 'off' } : { kind: 'error' });
+        if (err instanceof SignedOut) {
+          // The session ran out. GitHub sends a signed-in person straight back, so the page renews it by itself.
+          if (mayRenew()) window.location.assign(signInUrl());
+          else setSession(null);
+        } else setView(err instanceof NotConnected ? { kind: 'off' } : { kind: 'error' });
       });
     return () => {
       gone = true;
@@ -276,7 +280,8 @@ export default function Dashboard() {
           <h2 className="text-[19px] font-semibold tracking-[-0.01em]">No repositories to show</h2>
           <p className="mt-2 max-w-xl text-[15px] leading-relaxed text-muted">
             The dashboard shows the repositories you gave Mergelight Setup access to on GitHub, and this sign-in has none.{' '}
-            <a href={ADD_REPOS_URL} target="_blank" rel="noreferrer" className="text-fg underline decoration-white/30 underline-offset-4 hover:decoration-white">Add your org or repositories</a>, then sign in again.
+            <a href={ADD_REPOS_URL} target="_blank" rel="noreferrer" className="text-fg underline decoration-white/30 underline-offset-4 hover:decoration-white">Add your org or repositories</a>, then{' '}
+            <a href={signInUrl()} className="text-fg underline decoration-white/30 underline-offset-4 hover:decoration-white">sign in again</a>.
           </p>
         </Card>
       ) : (
@@ -306,7 +311,8 @@ export default function Dashboard() {
           {/* The page can only show what the sign-in's app is installed on, so the way to add more is always in reach. */}
           <p className="-mt-2 mb-6 text-[13px] text-faint">
             Don't see an org or a repository?{' '}
-            <a href={ADD_REPOS_URL} target="_blank" rel="noreferrer" className="text-muted underline decoration-white/20 underline-offset-4 hover:text-fg">Add it on GitHub</a>, then sign in again.
+            <a href={ADD_REPOS_URL} target="_blank" rel="noreferrer" className="text-muted underline decoration-white/20 underline-offset-4 hover:text-fg">Add it on GitHub</a>, then{' '}
+            <a href={signInUrl()} className="text-muted underline decoration-white/20 underline-offset-4 hover:text-fg">sign in again</a>.
           </p>
           {view.kind === 'loading' && (
             <p className="flex items-center justify-center gap-3 py-24 text-[15px] text-muted">

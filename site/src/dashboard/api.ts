@@ -141,6 +141,25 @@ export function rememberedSession(): Session | null {
   }
 }
 
+const RENEWED_KEY = 'mergelight.dashboard.renewed';
+
+/**
+ * Whether the page may send the person to GitHub by itself to sign in again. A session lasts 15
+ * minutes, and GitHub sends an already signed-in person straight back, so this is how the page
+ * stays signed in without a click. Once in a while only, so a sign-in that keeps failing can't
+ * turn into a loop.
+ */
+export function mayRenew(): boolean {
+  try {
+    const last = Number(sessionStorage.getItem(RENEWED_KEY) ?? 0);
+    if (Date.now() - last < 2 * 60_000) return false;
+    sessionStorage.setItem(RENEWED_KEY, String(Date.now()));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function loadOverview(session: Session, orgId: number): Promise<Overview> {
   const res = await fetch(`${SERVER}/v1/orgs/${orgId}/overview`, { headers: { authorization: `Bearer ${session.token}` }, signal: AbortSignal.timeout(TIMEOUT_MS) });
   if (res.status === 401) {

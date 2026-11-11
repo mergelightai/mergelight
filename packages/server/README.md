@@ -16,10 +16,10 @@ Never stored, because it is never sent: code, diffs, finding text, file paths, p
 
 ## The dashboard's side
 
-The dashboard page at `mergelight.dev/dashboard` signs a person in with GitHub and shows the server that GitHub token once (`POST /v1/session`). The server asks GitHub who the person is and which repositories they can see, keeps that answer for an hour under a session token of its own, and drops the GitHub token. It is never stored and never logged.
+The dashboard page at `mergelight.dev/dashboard` signs a person in with GitHub and shows the server that GitHub token once (`POST /v1/session`). The server asks GitHub who the person is and which repositories they can see, keeps that answer for 15 minutes under a session token of its own, and drops the GitHub token. It is never stored and never logged.
 
 - Sign-in goes through one GitHub App, Mergelight Setup by default (`SIGN_IN_APP`). Only that app's tokens count as a sign-in, and a person sees the orgs and repositories that app is installed on. So a team adds Mergelight Setup to the repositories it wants on the dashboard.
-- A person only sees reviews of repositories GitHub shows them. An org they can't reach looks like one that doesn't exist.
+- A person only sees reviews of repositories GitHub shows them. Someone who loses access on GitHub stops seeing them within 15 minutes, when the session runs out and the page signs in again. An org they can't reach looks like one that doesn't exist.
 - Sessions live in memory. Nothing about a sign-in is written to the database, and a restart signs everyone out.
 - A run's token and a person's session never work on each other's routes.
 - Only the sites in `DASHBOARD_ORIGINS` (default `https://mergelight.dev`) can read the answers from a browser.

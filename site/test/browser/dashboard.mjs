@@ -49,6 +49,8 @@ async function open(name, { signedOutAfter = Infinity, serverDown = false } = {}
   const calls = [];
   /** How many sign-in codes were sent to the token server to be swapped for a GitHub token. */
   const exchanges = [];
+  /** Trips to GitHub's sign-in that the page started. */
+  const renewals = [];
   const json = (req, body, code = 200) => req.respond({ status: code, contentType: 'application/json', headers: cors, body: JSON.stringify(body) });
   await page.setRequestInterception(true);
   page.on('request', (req) => {
@@ -74,6 +76,11 @@ async function open(name, { signedOutAfter = Infinity, serverDown = false } = {}
         return OVERVIEWS[org] ? json(req, OVERVIEWS[org]) : json(req, { error: 'not_connected' }, 404);
       }
       return json(req, { error: 'not_found' }, 404);
+    }
+    // GitHub, for a person who is signed in and has authorized the app before: straight back, with a new code.
+    if (u.origin === 'https://github.com' && u.pathname === '/login/oauth/authorize') {
+      renewals.push(u.searchParams.get('state'));
+      return req.respond({ status: 302, headers: { location: `${base}/setup/?code=again&state=${encodeURIComponent(u.searchParams.get('state'))}` } });
     }
     if (u.origin === base) {
       const file = join(dist, u.pathname.endsWith('/') ? `${u.pathname}index.html` : u.pathname);
@@ -105,7 +112,7 @@ async function open(name, { signedOutAfter = Infinity, serverDown = false } = {}
     return { href, state };
   };
   console.log(`\n== ${name}`);
-  return { page, calls, exchanges, errors, text, click, signIn, comeBackFromGitHub, shot: (file) => page.screenshot({ path: `${out}${file}.png`, fullPage: true }).catch(() => {}) };
+  return { page, calls, exchanges, renewals, errors, text, click, signIn, comeBackFromGitHub, shot: (file) => page.screenshot({ path: `${out}${file}.png`, fullPage: true }).catch(() => {}) };
 }
 const done = async (t) => {
   if (t.errors.length) { console.log('  page errors', t.errors.slice(0, 3)); failures++; }
@@ -202,8 +209,11 @@ const done = async (t) => {
   await t.signIn();
   expect(/acme\/widgets #42/.test(await t.text()), 'signed in');
   await t.click('[role=tab]', 'fresh');
-  await wait(500);
-  expect(/Continue with GitHub/.test(await t.text()), 'when the session runs out, the page asks for a new sign-in');
+  await wait(1800);
+  expect(t.renewals.length === 1 && t.renewals[0].startsWith('dash.'), 'when the session runs out, the page goes to GitHub by itself to sign in again');
+  expect(t.exchanges.length === 2 && t.calls.filter((c) => c.path === '/v1/session' && c.m === 'POST').length === 2, 'and comes back with a new session');
+  expect(/Continue with GitHub/.test(await t.text()), 'a session that fails again straight after is not renewed in a loop: the page asks for a sign-in');
+  expect(t.renewals.length === 1, 'so GitHub is visited once');
   await done(t);
 }
 

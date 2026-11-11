@@ -125,7 +125,7 @@ test("a sign-in gets a session of the server's own, and the GitHub token goes no
     { id: QUIET.id, login: "quiet", connected: false, repos: 1 },
   ]);
   assert.match(body.token, /^[\w-]{40,}$/);
-  assert.equal(Date.parse(body.expires_at), NOW + 60 * 60_000);
+  assert.equal(Date.parse(body.expires_at), NOW + 15 * 60_000);
   assert.doesNotMatch(JSON.stringify(body), new RegExp(ADA));
   assert.deepEqual(githubCalls, ["/user", "/user/installations", "/user/installations/501/repositories", "/user/installations/503/repositories"]);
 });
@@ -174,7 +174,7 @@ test("without a session, with a made-up one, or with one that ran out, nothing i
   // The GitHub token itself is not a session.
   assert.equal((await call(`/v1/orgs/${ACME.id}/overview`, { token: ADA })).status, 401);
   assert.equal((await call(`/v1/orgs/${ACME.id}/overview`, { token })).status, 200);
-  clock += 60 * 60_000 + 1;
+  clock += 15 * 60_000 + 1;
   const late = await call(`/v1/orgs/${ACME.id}/overview`, { token });
   assert.equal(late.status, 401);
   assert.equal((await late.json()).error, "signed_out");

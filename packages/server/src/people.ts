@@ -1,8 +1,8 @@
 // What a signed-in person can ask of the Mergelight server: the dashboard's side of the API.
 //
 // A person signs in with GitHub on the dashboard page and shows the server their GitHub token once.
-// The server asks GitHub who they are and which repositories they can see, keeps that answer for an
-// hour under a session token of its own, and drops the GitHub token. From then on the page uses the
+// The server asks GitHub who they are and which repositories they can see, keeps that answer for 15
+// minutes under a session token of its own, and drops the GitHub token. From then on the page uses the
 // session token. A person only ever sees reviews of repositories GitHub shows them.
 //
 // Sessions live in this process's memory. Nothing about a sign-in is written to the database, and a
@@ -13,7 +13,11 @@ import { HttpError } from "../../token-server/dist/token.js";
 import { isId, withOrg, type Pool } from "./db.js";
 import { DEFAULT_SIGN_IN_APP, lookUp, looksLikePersonToken, type Person, type Reach } from "./github.js";
 
-const SESSION_MS = 60 * 60_000;
+/**
+ * How long what GitHub said at sign-in is trusted. Someone who loses access on GitHub stops seeing
+ * the dashboard within this long. The page signs in again by itself when it runs out.
+ */
+const SESSION_MS = 15 * 60_000;
 const MAX_SESSIONS = 20_000;
 /** One person's sessions at a time: enough for a few tabs and devices. A newer one replaces the oldest. */
 const MAX_SESSIONS_PER_PERSON = 5;
