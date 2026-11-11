@@ -575,3 +575,8 @@ test("a patch touches a finding when a hunk's old lines reach it, context includ
   assert.equal(patchTouches(patch, 60, 60), true, "an insertion after line 60 counts for line 60");
   assert.equal(patchTouches(patch, 1, 9), false);
 });
+
+test("a round is dated by when its review started, so a reply written while it ran counts as newer", () => {
+  const state = nextState(null, [], "a".repeat(40), "green", new Map(), new Date("2030-01-01T10:00:00Z"));
+  assert.equal(state.rounds[0].at, "2030-01-01T10:00:00.000Z");
+});

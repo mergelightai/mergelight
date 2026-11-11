@@ -720,6 +720,18 @@ test("a reason given when resolving a thread is a decision, unless the code ther
   assert.ok(joined.note.startsWith("Known, ships next release. Thanks! xxx"));
   assert.equal(joined.note.length, 1000);
   assert.equal(joined.cut, true);
+  // A fresh reply that says it fixed something is no decision: the verifier is told it was resolved, with what was said.
+  const claim = useScenario({ issueComments: [summaryComment(state)], threads: [findingThread("aaaaaaaaaa", 501, [reply("teammate", "Fixed in 3f2a9c1, the check moved to the caller.")])], compare: { status: "ahead", files: [] } });
+  const claimed = (await withFakeGh(claim.env, () => previousFindings(new GitHub("o", "r"), 7, PUSHED))).find((p) => p.id === "aaaaaaaaaa");
+  assert.equal(claimed.handled.from, "thread");
+  const prompt = buildVerifierPrompt({ pr: { owner: "o", repo: "r", number: 7, title: "t", author: "a", baseRef: "main", body: "" }, mergeBase: "b", headSha: "h", diffStat: "", diff: "", diffTruncated: false, previous: [claimed] }, []);
+  assert.ok(prompt.includes("team: resolved the comment, by teammate, saying: Fixed in 3f2a9c1"));
+  assert.ok(!prompt.includes("decided not to fix, by teammate: Fixed"));
+  // Only the replies after the latest review make the decision: an older remark stays out of it.
+  const mixed = useScenario({ issueComments: [summaryComment(state)], threads: [findingThread("aaaaaaaaaa", 501, [reply("teammate", "Looking into it.", "2001-01-01T00:00:00Z"), reply("teammate", "Known, leave it.")])], compare: { status: "ahead", files: [] } });
+  const fresh = (await withFakeGh(mixed.env, () => previousFindings(new GitHub("o", "r"), 7, PUSHED))).find((p) => p.id === "aaaaaaaaaa").handled;
+  assert.equal(fresh.from, "reply");
+  assert.equal(fresh.note, "Known, leave it.");
 });
 
 test("a remembered reason gets one answer in its thread", async () => {

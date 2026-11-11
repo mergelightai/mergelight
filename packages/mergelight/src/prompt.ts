@@ -480,9 +480,14 @@ ${files.join("\n\n")}
 `;
 }
 
+/** What a resolved thread says when nobody wrote anything in it. */
+export const RESOLVED_ONLY = "Resolved the comment on the pull request.";
+
 function teamSaid({ handled: h }: PriorFinding): string {
   if (!h) return "";
   const note = h.note ? `: ${h.note}` : "";
+  // A resolve with a reply that isn't a decision: it may say how it was fixed, so the verifier checks it.
+  if (h.from === "thread" && h.note && h.note !== RESOLVED_ONLY) return `\n  team: resolved the comment, by ${h.by}, saying: ${h.note}`;
   return h.as === "fixed" ? `\n  team: marked fixed by ${h.by}${note}` : `\n  team: decided not to fix, by ${h.by}${note}`;
 }
 

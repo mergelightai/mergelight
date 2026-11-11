@@ -83,8 +83,11 @@ export function decodeState(body: string | undefined): ReviewState | null {
   }
 }
 
-/** Merge this review into the previous state. */
-export function nextState(prev: ReviewState | null, findings: Finding[], sha: string, light: Light, urls: Map<string, string>): ReviewState {
+/**
+ * Merge this review into the previous state. at: when the review started, so whatever people wrote
+ * while it ran counts as newer than it.
+ */
+export function nextState(prev: ReviewState | null, findings: Finding[], sha: string, light: Light, urls: Map<string, string>, at = new Date()): ReviewState {
   const round = (prev?.round ?? 0) + 1;
   const current = new Set(findings.map((f) => f.id));
   const before = new Map((prev?.findings ?? []).map((f) => [f.id, f]));
@@ -119,7 +122,7 @@ export function nextState(prev: ReviewState | null, findings: Finding[], sha: st
     round,
     rounds: [
       ...(prev?.rounds ?? []).slice(-19),
-      { sha, at: new Date().toISOString(), light, posted: findings.filter((f) => f.tier === "post").length },
+      { sha, at: at.toISOString(), light, posted: findings.filter((f) => f.tier === "post").length },
     ],
     findings: merged,
   };

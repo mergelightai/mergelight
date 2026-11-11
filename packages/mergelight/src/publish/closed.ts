@@ -124,8 +124,8 @@ export const REMEMBERED_MARKER = "<!-- mergelight:remembered -->";
  * the person who resolved it counts, so a reason can't come from someone who couldn't have decided.
  * resolved: who resolved each finding's thread, from resolvedByPeople.
  */
-export function resolverReplies(threads: ReviewThread[], resolved: Map<string, string>): Map<string, { text: string; at: string; commentId: number }> {
-  const out = new Map<string, { text: string; at: string; commentId: number }>();
+export function resolverReplies(threads: ReviewThread[], resolved: Map<string, string>): Map<string, { replies: { text: string; at: string }[]; commentId: number }> {
+  const out = new Map<string, { replies: { text: string; at: string }[]; commentId: number }>();
   for (const t of threads) {
     const found = threadFinding(t);
     if (!found) continue;
@@ -134,9 +134,8 @@ export function resolverReplies(threads: ReviewThread[], resolved: Map<string, s
     const own = t.comments.nodes
       .slice(1)
       .filter((c) => c.author?.__typename === "User" && c.author.login === by && c.createdAt && c.body.trim() && !c.body.includes("<!-- mergelight:"));
-    const last = own.at(-1);
-    // All of their replies, in order: a later "thanks" mustn't replace the reason. The time is the latest.
-    if (last) out.set(found.id, { text: own.map((c) => c.body.trim()).join("\n\n"), at: last.createdAt!, commentId: found.commentId });
+    // All of their replies, in order: a later "thanks" mustn't replace the reason.
+    if (own.length) out.set(found.id, { replies: own.map((c) => ({ text: c.body.trim(), at: c.createdAt! })), commentId: found.commentId });
   }
   return out;
 }

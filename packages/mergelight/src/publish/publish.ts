@@ -1,5 +1,5 @@
 import type { Finding, Light, Review } from "../types.js";
-import type { PriorFinding } from "../prompt.js";
+import { RESOLVED_ONLY, type PriorFinding } from "../prompt.js";
 import { GitHub, type ApiOptions } from "./api.js";
 import { commentableLines, place } from "./diff-lines.js";
 import { closedBody, patchTouches, readClosed, REMEMBERED_MARKER, reopenedBody, resolvedByPeople, resolverReplies, threadAction, threadFinding, type Handled, type ReviewThread } from "./closed.js";
@@ -120,21 +120,25 @@ export async function previousFindings(api: GitHub, number: number, headSha?: st
       const reply = replies.get(id);
       // A resolve with a reason is a decision, unless the code there changed since: then the reply may
       // well say how it was fixed. Only a decision is remembered for later pull requests.
-      // Only a reply written after the latest review: one from before may answer an older round, such as a
-      // fix that review then checked.
-      const after = Boolean(reply && latest && Date.parse(reply.at) > Date.parse(latest.at));
-      const decided = after && f.status === "open" && (await unchanged(f));
+      // Only replies written after the latest review: one from before may answer an older round, such as
+      // a fix that review then checked. A reply that says it fixed something is no decision either.
+      const fresh = reply?.replies.filter((r) => latest && Date.parse(r.at) > Date.parse(latest.at)) ?? [];
+      const decided = fresh.length > 0 && !fresh.some((r) => FIX_CLAIM.test(r.text)) && f.status === "open" && (await unchanged(f));
+      const said = decided ? fresh : (reply?.replies ?? []);
       const handled = mark
         ? { as: mark.as, note: mark.note, by: mark.by, sha: mark.sha, from: "mark" as const, at: mark.at }
         : by && reply
-          ? { as: "wont_fix" as const, ...oneLine(reply.text), by, sha: null, from: decided ? ("reply" as const) : ("thread" as const), at: reply.at }
+          ? { as: "wont_fix" as const, ...oneLine(said.map((r) => r.text).join("\n\n")), by, sha: null, from: decided ? ("reply" as const) : ("thread" as const), at: said.at(-1)!.at }
           : by
-            ? { as: "wont_fix" as const, note: "Resolved the comment on the pull request.", by, sha: null, from: "thread" as const }
+            ? { as: "wont_fix" as const, note: RESOLVED_ONLY, by, sha: null, from: "thread" as const }
             : undefined;
       return { id, title, file, line, end_line, how, ...(handled ? { handled } : {}) };
     }),
   );
 }
+
+/** A reply that says the problem was fixed: it starts with fixed, done or addressed, or names a commit. */
+const FIX_CLAIM = /^\W*(fixed|done|addressed)\b|\b[0-9a-f]{7,40}\b/i;
 
 /** A person's reply as the verifier reads it: one line, nothing hidden, not too long. cut: it was longer. */
 function oneLine(text: string): { note: string; cut?: true } {
@@ -319,7 +323,8 @@ export async function publishReview(
 
   const { handled, resolved } = await settleThreads(api, review, log);
 
-  const state = nextState(prev, review.findings, review.pr.head_sha, review.light, urls);
+  const started = new Date(Date.parse(review.created_at) - (review.stats?.duration_ms ?? 0));
+  const state = nextState(prev, review.findings, review.pr.head_sha, review.light, urls, Number.isFinite(started.getTime()) ? started : new Date());
   const summaryInput = { review, state, urls, marks, handled, update: await newerVersion(api) };
   const commentBody = summaryBody(summaryInput);
   let summaryUrl: string | null = summary?.html_url ?? null;
