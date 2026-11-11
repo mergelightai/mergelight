@@ -106,7 +106,7 @@ async function skillsFor(mirror: string, base: string, checkout: string, folders
 }
 
 /** The root instruction files whose conventions the reviewers follow, read from the base branch. */
-export const CONVENTION_FILES = ["AGENTS.md", "CLAUDE.md", "CONTRIBUTING.md", ".github/copilot-instructions.md"];
+export const CONVENTION_FILES = ["AGENTS.md", "CLAUDE.md", "CONTRIBUTING.md", ".github/CONTRIBUTING.md", "docs/CONTRIBUTING.md", ".github/copilot-instructions.md"];
 /** Per file, so one long file can't fill every prompt. */
 export const MAX_CONVENTION_CHARS = 12_000;
 /** All files together, and how many. */

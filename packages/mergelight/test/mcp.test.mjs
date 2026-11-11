@@ -95,7 +95,8 @@ if (args.includes("--paginate")) {
   process.exit(0);
 }
 const path = args[1].replace("repos/o/r/", "");
-if (path === "pulls/7") out({ number: 7, title: "PR title", body: "", html_url: "https://github.com/o/r/pull/7", user: { login: "a" }, base: { ref: "main", sha: "b" }, head: { sha: s.head || "${REVIEWED}" }, additions: 1, deletions: 0, changed_files: 1 });
+if (path === "repos/o/r") out({ permissions: { push: s.push !== false } });
+else if (path === "pulls/7") out({ number: 7, title: "PR title", body: "", html_url: "https://github.com/o/r/pull/7", user: { login: "a" }, base: { ref: "main", sha: "b" }, head: { sha: s.head || "${REVIEWED}" }, additions: 1, deletions: 0, changed_files: 1 });
 else if (path.startsWith("commits/")) out({ check_runs: s.checkRuns || [] });
 else if (path.startsWith("collaborators/")) { const p = ({ teammate: "write", ...s.permissions })[path.split("/")[1]]; if (!p) fail("HTTP 404"); out({ permission: p }); }
 else fail("unexpected get " + path);
@@ -383,6 +384,13 @@ test("a thread that won't take a reply still gets the mark, as a comment", async
   assert.equal(out.marked[0].id, "cccccccccc");
   assert.equal(writes().at(-1).path, "issues/7/comments");
   assert.deepEqual(decodeMark(writes().at(-1).body).ids, ["cccccccccc"]);
+});
+
+test("someone who can't push is told before marking, and nothing is posted", async () => {
+  const { env, writes } = useScenario({ issueComments: [summaryComment(stateOf([finding()]))], head: PUSHED, push: false });
+  const out = await call(env, "mark_finding_handled", { pr: PR, ids: ["aaaaaaaaaa"], as: "wont_fix", note: "Only admins" });
+  assert.match(out.error, /your GitHub login can't push to o\/r/);
+  assert.deepEqual(writes(), []);
 });
 
 test("made-up ids mark nothing, and bad input is refused", async () => {

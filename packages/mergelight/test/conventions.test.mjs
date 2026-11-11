@@ -70,6 +70,7 @@ test("a team's own check doesn't get the conventions: there the instruction file
 });
 
 test("which instruction files apply to the changed files", () => {
+  assert.deepEqual(conventionPaths([".github/CONTRIBUTING.md", "docs/CONTRIBUTING.md", "src/CONTRIBUTING.md"], []), [".github/CONTRIBUTING.md", "docs/CONTRIBUTING.md"]);
   const all = ["AGENTS.md", "README.md", "a/AGENTS.md", "a/b/CLAUDE.md", "a/b/c/AGENTS.md", "z/AGENTS.md", ".github/instructions/x.instructions.md", ".github/instructions/notes.md"];
   assert.deepEqual(conventionPaths(all, ["a/b/file.ts"]), ["AGENTS.md", "a/AGENTS.md", "a/b/CLAUDE.md", ".github/instructions/x.instructions.md"]);
   assert.deepEqual(conventionPaths(all, []), ["AGENTS.md", ".github/instructions/x.instructions.md"]);
