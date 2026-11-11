@@ -67,7 +67,7 @@ Other ways to name the pull request: `owner/repo#123`, or just `123` inside a cl
 Two more commands, used by the GitHub Action:
 
 - `mergelight post review.json` posts a review saved with `--out`.
-- `mergelight approve owner/repo#123 --by login` turns a 🟡 "needs a human" check green after someone approves the PR. A 🔴 check stays red.
+- `mergelight approve owner/repo#123 --by login` turns a 🟡 "needs a human" check green after someone approves the PR. A 🔴 "blocked" check stays blocked until a fix.
 
 `mergelight init` adds Mergelight to your coding agents, and `mergelight mcp` is the MCP server they start, so Claude Code, Codex or Cursor can read a PR's findings and mark them handled. `mergelight setup owner/repo` sets up the GitHub Action from a terminal.
 

@@ -64,3 +64,9 @@ test("the check's headline says why a guarded pull request needs a human", () =>
   const bug = { tier: "post", class: "bug", severity: "major" };
   assert.equal(headline(review({ findings: [bug], needs_human: ["a.sql"] })), "1 bug to fix");
 });
+
+test("an approval of a blocked review says it doesn't clear it, though both end neutral", async () => {
+  const api = fakeApi({ check: { id: 9, conclusion: "neutral", output: { title: "🔴 Blocked: 1 bug to fix", summary: "..." } } });
+  assert.match(await approveCheck(api, 7, "ada"), /blocked\. An approval doesn't clear it/);
+  assert.deepEqual(api.writes, []);
+});

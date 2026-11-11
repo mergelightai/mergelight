@@ -440,13 +440,15 @@ export async function latestCheck(api: GitHub, sha: string): Promise<CheckRun | 
   return [...runs.check_runs].sort((a, b) => b.id - a.id)[0];
 }
 
-/** When someone approves a PR with a yellow check, it turns green. A blocked check (a bug to fix) stays red. */
+/** When someone approves a PR with a yellow check, it turns green. A blocked check (a bug to fix) stays as it is: only a fix changes it. */
 export async function approveCheck(api: GitHub, number: number, by: string, approvedSha?: string): Promise<string> {
   const pr = await api.get<{ head: { sha: string } }>(`pulls/${number}`);
   // An approval covers the commit the person looked at. Code pushed after it hasn't had its human yet.
   if (approvedSha && approvedSha !== pr.head.sha) return `${by} approved an earlier commit, so it doesn't turn the Mergelight check on the newest one green.`;
   const latest = await latestCheck(api, pr.head.sha);
   if (!latest) return "No Mergelight check on this commit.";
+  // A blocked review ends neutral like a yellow one, so say which it is: an approval doesn't clear a bug.
+  if (latest.output.title?.startsWith(LIGHT.red.dot)) return "The Mergelight check is blocked. An approval doesn't clear it: fix the code and push, and the next review checks it again.";
   if (!isYellowCheck(latest)) return `Mergelight check is ${latest.conclusion ?? "still running"}, nothing to approve.`;
   // GitHub lets anyone who can read a repository leave an approving review. "Needs a human" means a
   // human the team trusts with the code, so only someone who can push turns the check green.
