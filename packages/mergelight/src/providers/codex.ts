@@ -166,7 +166,7 @@ export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
     "-o", outFile,
     ...["plugins", "apps", "hooks", "image_generation", "browser_use", "computer_use"].flatMap((f) => ["--disable", f]),
     "-c", "notify=[]",
-    ...(opts.projectDocs === false ? await withoutProjectDocs() : []),
+    ...(opts.projectDocs === true ? [] : await withoutProjectDocs()),
     "-c", 'web_search="disabled"',
     ...mcpServers(config).flatMap((name) => ["-c", `mcp_servers.${name}.enabled=false`]),
   ];

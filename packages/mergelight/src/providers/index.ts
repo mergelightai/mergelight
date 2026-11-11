@@ -15,9 +15,10 @@ export interface ModelOptions {
   logFile?: string;
   timeoutMs?: number;
   /**
-   * False when the agent must not take instructions from files in the checkout, such as AGENTS.md.
-   * The checkout is the pull request's own, so for one of the team's checks its author could
-   * otherwise write there what counts as a pass.
+   * True only when the agent may take instructions from files in the checkout, such as AGENTS.md or a
+   * skill folder. Off by default: the checkout is the pull request's own, so its author could write
+   * there what the reviewers skip, or what counts as a pass for one of the team's checks. The team's
+   * conventions reach the prompt from the base branch instead.
    */
   projectDocs?: boolean;
   /** Called whenever the agent starts a shell command (Codex only). */

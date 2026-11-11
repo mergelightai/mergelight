@@ -3,6 +3,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { run, runOk } from "./run.js";
 import { importSkills, SKILL_GIT_TIMEOUT_MS, SKILL_IMPORT_TIMEOUT_MS, type TeamSkill } from "./skills.js";
+import type { Convention } from "./prompt.js";
 import type { PullRequest } from "./types.js";
 
 /** Lockfiles and generated files are left out of the diff the model sees. */
@@ -81,6 +82,29 @@ async function skillsFor(mirror: string, base: string, checkout: string, folders
   }
 }
 
+/** The instruction files whose conventions the reviewers follow, read from the base branch. */
+export const CONVENTION_FILES = ["AGENTS.md", "CLAUDE.md", "CONTRIBUTING.md", ".github/copilot-instructions.md"];
+/** Per file, so one long file can't fill every prompt. */
+export const MAX_CONVENTION_CHARS = 12_000;
+
+/**
+ * The team's instruction files as the base branch has them. The checkout is the pull request's, and
+ * its author could add or rewrite AGENTS.md there to steer the reviewers. A file that is missing, or
+ * can't be read in time, is left out: it never stops a review.
+ */
+export async function conventionsFor(mirror: string, base: string): Promise<Convention[]> {
+  const read = async (path: string): Promise<Convention | null> => {
+    const r = await run("git", ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential", "-C", mirror, "show", `${base}:${path}`], {
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+      timeoutMs: SKILL_GIT_TIMEOUT_MS,
+    }).catch(() => null);
+    const text = r?.code === 0 ? r.stdout.trim() : "";
+    if (!text) return null;
+    return { path, text: text.slice(0, MAX_CONVENTION_CHARS), truncated: text.length > MAX_CONVENTION_CHARS };
+  };
+  return (await Promise.all(CONVENTION_FILES.map(read))).filter((c): c is Convention => c !== null);
+}
+
 async function hasCommit(mirror: string, sha: string): Promise<boolean> {
   const r = await run("git", ["-C", mirror, "cat-file", "-e", `${sha}^{commit}`]);
   return r.code === 0;
@@ -129,6 +153,8 @@ export interface Workspace {
   touchedPaths: string[];
   /** The team's skills that were found on the base branch and copied into the checkout for the reviewer. */
   skills: TeamSkill[];
+  /** AGENTS.md and the other instruction files, from the base branch. */
+  conventions: Convention[];
   cleanup: () => Promise<void>;
 }
 
@@ -201,7 +227,10 @@ export async function prepareWorkspace(pr: PullRequest, at?: string, skillFolder
     // From the base branch as it is now: what the team merged. Not from the pull request, and not from
     // the commit it branched from either. Its author picks that commit, and could pick one from
     // before a skill was written or tightened.
-    const skills = await skillsFor(mirror, haveBaseBranch ? `refs/mergelight/base/${pr.baseRef}` : baseCandidate, dir, skillFolders);
+    // The same goes for the instruction files.
+    const teamBase = haveBaseBranch ? `refs/mergelight/base/${pr.baseRef}` : baseCandidate;
+    const skills = await skillsFor(mirror, teamBase, dir, skillFolders);
+    const conventions = await conventionsFor(mirror, teamBase);
 
     return {
       dir,
@@ -213,6 +242,7 @@ export async function prepareWorkspace(pr: PullRequest, at?: string, skillFolder
       changedFiles,
       touchedPaths,
       skills,
+      conventions,
       cleanup: async () => {
         await run("git", ["-C", mirror, "worktree", "remove", "--force", dir]);
         rmSync(dir, { recursive: true, force: true });

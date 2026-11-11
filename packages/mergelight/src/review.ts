@@ -278,6 +278,7 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
   const skillsMissing = (opts.skills?.length ?? 0) - ws.skills.length;
   if (skillsMissing > 0) progress(`${skillsMissing} of the skill folders your team picked ${skillsMissing === 1 ? "has" : "have"} no SKILL.md on the base branch, or couldn't be read: left out. Name the real folder, not a link to it`);
   if (ws.skills.length) progress(`Using your team's skill${ws.skills.length === 1 ? "" : "s"}: ${ws.skills.map((s) => s.name).join(", ")}`);
+  if (ws.conventions.length) progress(`Using ${ws.conventions.map((c) => c.path).join(", ")} from ${pr.baseRef}`);
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const log = (step: string) => join(cacheDir(), "logs", `${pr.owner}-${pr.repo}-${pr.number}-${stamp}-${step}.log`);
   let checksRun: ChecksRun | null = null;
@@ -294,6 +295,7 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
       memories: memoriesFor(opts.memories, ws.changedFiles.map((f) => f.path), pr.number),
       // Matched against every path the pull request touches, exactly as git has it.
       skills: ws.skills,
+      conventions: ws.conventions,
       rules: (opts.rules ?? []).filter((r) => r.kind === "rule" && ruleApplies(r, ws.touchedPaths)).slice(0, MAX_RULES),
     };
 
