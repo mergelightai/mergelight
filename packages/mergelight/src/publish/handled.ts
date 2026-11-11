@@ -34,14 +34,23 @@ export function trustedComment(c: Commenter): boolean {
  * CONTRIBUTOR, so the association alone would silently drop their marks.
  */
 export function writeAccess(api: GitHub): (login: string) => Promise<boolean> {
-  const known = new Map<string, Promise<boolean>>();
+  const ask = askWriteAccess(api);
+  return async (login) => (await ask(login)) === true;
+}
+
+/**
+ * The same, but null when GitHub couldn't be asked: an error, or a login that may not see
+ * permissions, which GitHub refuses to anyone who can't push.
+ */
+export function askWriteAccess(api: GitHub): (login: string) => Promise<boolean | null> {
+  const known = new Map<string, Promise<boolean | null>>();
   return (login) => {
     let answer = known.get(login);
     if (!answer) {
       answer = api
         .get<{ permission?: string }>(`collaborators/${encodeURIComponent(login)}/permission`)
         .then((r) => r.permission === "admin" || r.permission === "write")
-        .catch(() => false);
+        .catch(() => null);
       known.set(login, answer);
     }
     return answer;
@@ -86,8 +95,13 @@ export function decodeMark(body: string | undefined): Pick<Mark, "as" | "note" |
   }
 }
 
-/** The latest mark per finding, from comments by people who can write to the repository. */
-export async function readMarks(comments: PrComment[], canWrite: (login: string) => Promise<boolean>): Promise<Map<string, Mark>> {
+/**
+ * The latest mark per finding, from comments by people who can write to the repository.
+ * A person's association isn't enough: MEMBER means a member of the org, who may only be able to read
+ * this repository, and a won't-fix mark tells the verifier the team decided. So every person is asked
+ * about. Bots are the exception: one can only comment where it was installed.
+ */
+export async function readMarks(comments: PrComment[], canWrite: (login: string) => Promise<boolean | null>): Promise<Map<string, Mark>> {
   const marked = comments
     .map((comment) => ({ comment, mark: decodeMark(comment.body) }))
     .filter((c) => c.mark)
@@ -95,7 +109,12 @@ export async function readMarks(comments: PrComment[], canWrite: (login: string)
   const marks = new Map<string, Mark>();
   for (const { comment, mark } of marked) {
     const by = comment.user?.login ?? "";
-    if (!trustedComment(comment) && !(by && (await canWrite(by)))) continue;
+    if (comment.user?.type !== "Bot") {
+      const can = by ? await canWrite(by) : false;
+      // When GitHub can't be asked, the association is all there is. A failed lookup must not throw
+      // away the team's decisions; only GitHub's answer that the person can't push does.
+      if (can === false || (can === null && !trustedComment(comment))) continue;
+    }
     for (const id of mark!.ids) {
       marks.set(id, { id, as: mark!.as, note: mark!.note, sha: mark!.sha, by, at: comment.created_at ?? "", url: comment.html_url });
     }

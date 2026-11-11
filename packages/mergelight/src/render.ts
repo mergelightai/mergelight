@@ -123,3 +123,18 @@ export function renderTerminal(r: Review): string {
   }
   return out.join("\n");
 }
+
+/**
+ * Each candidate the verifier threw out, with its reason. The review's own comment only keeps what was
+ * found, so this is how to answer "why wasn't X reported?". Printed only in debug runs: on a public
+ * repository the Action's log is public, and a wrongly rejected candidate can still be a real hole.
+ */
+export function renderRejected(r: Pick<Review, "trace">): string[] {
+  return r.trace.rejected.map(({ candidate, reason }) => {
+    const number = /^C(\d+)$/.exec(candidate)?.[1];
+    const c = number ? r.trace.candidates[Number(number) - 1] : undefined;
+    // The verifier also rejects earlier rounds' findings, by their own ids.
+    const what = c ? `${c.title} (${c.file}:${c.line}, ${c.focus})` : number ? "a candidate the review didn't list" : "an earlier finding";
+    return `Rejected ${candidate}: ${what}. Why: ${reason}`;
+  });
+}

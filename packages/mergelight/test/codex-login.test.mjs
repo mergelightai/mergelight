@@ -170,3 +170,20 @@ test("Claude runs with file tools only and without the runner's tokens", async (
   assert.ok(env.includes("FAKE_LOGIN"));
 });
 
+
+test("Codex never reads AGENTS.md from the checkout unless a run asks for it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-fake-codex-"));
+  writeFileSync(join(dir, "codex"), `#!/usr/bin/env bash\ncat > /dev/null\n[ "$1" = features ] && exit 1\nprintf '%s\\n' "$@" >> "${dir}/args"\nprintf -- '---\\n' >> "${dir}/args"\nexit 1\n`);
+  chmodSync(join(dir, "codex"), 0o755);
+  const path = process.env.PATH;
+  process.env.PATH = `${dir}${delimiter}${path}`;
+  try {
+    await runCodex({ cwd: dir, prompt: "p", schema: {} }).catch(() => {});
+    await runCodex({ cwd: dir, prompt: "p", schema: {}, projectDocs: true }).catch(() => {});
+  } finally {
+    process.env.PATH = path;
+  }
+  const [plain, allowed] = readFileSync(join(dir, "args"), "utf8").split("---\n");
+  assert.match(plain, /^project_doc_max_bytes=0$/m);
+  assert.doesNotMatch(allowed, /project_doc_max_bytes/);
+});

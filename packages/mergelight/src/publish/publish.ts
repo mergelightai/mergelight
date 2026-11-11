@@ -5,7 +5,7 @@ import { commentableLines, place } from "./diff-lines.js";
 import { closedBody, readClosed, reopenedBody, resolvedByPeople, threadAction, threadFinding, type Handled, type ReviewThread } from "./closed.js";
 import type { FailureNotice } from "./markdown.js";
 import { failedSummaryBody, FINDING_MARKER_RE, headline, inlineBody, isFailedSummary, isPendingSummary, LIGHT, pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "./markdown.js";
-import { readMarks, trustedComment, writeAccess, type Mark, type PrComment } from "./handled.js";
+import { askWriteAccess, readMarks, trustedComment, writeAccess, type Mark, type PrComment } from "./handled.js";
 import { decodeState, nextState, type ReviewState, type StateFinding } from "./state.js";
 import { newerVersion } from "../update.js";
 
@@ -57,7 +57,7 @@ export async function readPrReviewState(api: GitHub, number: number): Promise<Pr
   const issueComments = await api.list<PrComment>(`issues/${number}/comments`);
   const reviewComments = await api.list<ReviewComment>(`pulls/${number}/comments`);
   const summary = await ownSummary(issueComments, () => api.viewer());
-  const marks = await readMarks([...issueComments, ...reviewComments], writeAccess(api));
+  const marks = await readMarks([...issueComments, ...reviewComments], askWriteAccess(api));
   return { summary, state: decodeState(summary?.body), marks, reviewComments };
 }
 

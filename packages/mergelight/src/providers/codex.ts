@@ -127,8 +127,15 @@ let features: Promise<Set<string>> | undefined;
 /** The feature switches this Codex has. Codex stops at one it doesn't know, so a switch is only used where it exists. */
 function codexFeatures(): Promise<Set<string>> {
   features ??= run("codex", ["features", "list"], { timeoutMs: 15_000 })
-    .then((r) => new Set(r.code === 0 ? r.stdout.split("\n").map((line) => line.trim().split(/\s+/)[0] ?? "").filter(Boolean) : []))
-    .catch(() => new Set<string>());
+    .then((r) => {
+      if (r.code !== 0) throw new Error("codex features list failed");
+      return new Set(r.stdout.split("\n").map((line) => line.trim().split(/\s+/)[0] ?? "").filter(Boolean));
+    })
+    .catch(() => {
+      // Not kept: the next run asks again.
+      features = undefined;
+      return new Set<string>();
+    });
   return features;
 }
 
@@ -166,7 +173,7 @@ export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
     "-o", outFile,
     ...["plugins", "apps", "hooks", "image_generation", "browser_use", "computer_use"].flatMap((f) => ["--disable", f]),
     "-c", "notify=[]",
-    ...(opts.projectDocs === false ? await withoutProjectDocs() : []),
+    ...(opts.projectDocs === true ? [] : await withoutProjectDocs()),
     "-c", 'web_search="disabled"',
     ...mcpServers(config).flatMap((name) => ["-c", `mcp_servers.${name}.enabled=false`]),
   ];

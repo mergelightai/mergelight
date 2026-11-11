@@ -183,6 +183,12 @@ export async function markHandled(args: { pr?: unknown; ids?: unknown; as?: unkn
   const unknown = (args.ids as string[]).filter((id) => !known.has(id));
   if (unknown.length) throw new Error(`Not findings on this pull request: ${unknown.join(", ")}. Nothing was marked. list_findings has the ids.`);
 
+  // The review only counts marks by people who can push. Say so now, not after a mark that never counts.
+  const access = await api.get<{ permissions?: { push?: boolean } }>(`/repos/${ref.owner}/${ref.repo}`).catch(() => null);
+  if (access?.permissions?.push === false) {
+    throw new Error(`Nothing was marked: your GitHub login can't push to ${ref.owner}/${ref.repo}, and the review only counts marks by people who can. Ask someone who can push to mark it.`);
+  }
+
   const reviewed = state.rounds.at(-1)?.sha;
   if (as === "fixed" && reviewed === pr.headSha) {
     throw new Error(
