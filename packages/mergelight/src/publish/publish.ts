@@ -2,7 +2,7 @@ import type { Finding, Light, Review } from "../types.js";
 import { RESOLVED_ONLY, type PriorFinding } from "../prompt.js";
 import { GitHub, type ApiOptions } from "./api.js";
 import { commentableLines, place } from "./diff-lines.js";
-import { closedBody, patchTouches, readClosed, REMEMBERED_MARKER, reopenedBody, resolvedByPeople, resolverReplies, threadAction, threadFinding, type Handled, type ReviewThread } from "./closed.js";
+import { answeredRemembered, closedBody, patchTouches, readClosed, REMEMBERED_MARKER, reopenedBody, resolvedByPeople, resolverReplies, threadAction, threadFinding, type Handled, type ReviewThread } from "./closed.js";
 import type { FailureNotice } from "./markdown.js";
 import { failedSummaryBody, FINDING_MARKER_RE, headline, inlineBody, isFailedSummary, isPendingSummary, LIGHT, pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "./markdown.js";
 import { askWriteAccess, MAX_NOTE, readMarks, trustedComment, writeAccess, type Mark, type PrComment } from "./handled.js";
@@ -149,11 +149,12 @@ export async function previousFindings(api: GitHub, number: number, headSha?: st
 }
 
 /**
- * A reply that says the problem was fixed: fixed, fixes or addressed anywhere, done at the start, or a
- * commit. "Won't fix" isn't one. A commit is 7 to 40 hex characters with both a letter and a digit, so a
- * plain number isn't one. Reading too much as a fix only means a reason isn't kept, the safe side.
+ * A reply that says the problem was fixed: fix, fixing, fixed, fixes or addressed anywhere, but not right
+ * after won't, not, don't, no or never; done at the start; or a commit. A commit is 7 to 40 hex
+ * characters with both a letter and a digit, so a plain number isn't one. Reading too much as a fix only
+ * means a reason isn't kept, the safe side.
  */
-const FIX_CLAIM = /\b(fixed|fixes|addressed)\b|^\W*done\b|\b(?=[0-9a-f]*[a-f])(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b/i;
+const FIX_CLAIM = /(?<!\b(?:won[’']?t|not|don[’']?t|no|never)\s+)\b(fix|fixing|fixed|fixes|addressed)\b|^\W*done\b|\b(?=[0-9a-f]*[a-f])(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b/i;
 
 /** A person's reply as the verifier reads it: one line, nothing hidden, not too long. cut: it was longer. */
 function oneLine(text: string): { note: string; cut?: true } {
@@ -171,7 +172,7 @@ export async function answerRemembered(api: GitHub, number: number, ids: string[
   let answered = 0;
   for (const t of await reviewThreads(api, number).catch(() => [])) {
     const found = threadFinding(t);
-    if (!found || !wanted.has(found.id) || t.comments.nodes.some((c) => c.author?.__typename === "Bot" && c.body.includes(REMEMBERED_MARKER))) continue;
+    if (!found || !wanted.has(found.id) || answeredRemembered(t)) continue;
     const body = [
       REMEMBERED_MARKER,
       `🧠 **Remembered.** Later reviews of this repository read this reason before they report this problem again.${cut.has(found.id) ? " The reason was long, so only its start is kept." : ""} If it stops being true, forget it on your Mergelight dashboard.`,

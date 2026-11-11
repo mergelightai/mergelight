@@ -124,6 +124,18 @@ export const REMEMBERED_MARKER = "<!-- mergelight:remembered -->";
  * the person who resolved it counts, so a reason can't come from someone who couldn't have decided.
  * resolved: who resolved each finding's thread, from resolvedByPeople.
  */
+/**
+ * Whether Mergelight already said in this thread that the server kept its reason, after the latest reply
+ * by a person: a newer reply is a new reason, still to be answered. Only Mergelight's own answer counts,
+ * by the login that posted the finding.
+ */
+export function answeredRemembered(t: ReviewThread): boolean {
+  const nodes = t.comments.nodes;
+  const own = nodes[0]?.author?.login;
+  const lastPerson = nodes.map((c, i) => (c.author?.__typename === "User" ? i : -1)).reduce((a, b) => Math.max(a, b), -1);
+  return Boolean(own) && nodes.some((c, i) => i > lastPerson && c.author?.login === own && c.body.includes(REMEMBERED_MARKER));
+}
+
 export function resolverReplies(threads: ReviewThread[], resolved: Map<string, string>): Map<string, { replies: { text: string; at: string }[]; commentId: number; answered: boolean }> {
   const out = new Map<string, { replies: { text: string; at: string }[]; commentId: number; answered: boolean }>();
   for (const t of threads) {
@@ -135,8 +147,7 @@ export function resolverReplies(threads: ReviewThread[], resolved: Map<string, s
       .slice(1)
       .filter((c) => c.author?.__typename === "User" && c.author.login === by && c.createdAt && c.body.trim() && !c.body.includes("<!-- mergelight:"));
     // All of their replies, in order: a later "thanks" mustn't replace the reason.
-    // answered: Mergelight already said in the thread that the server kept a reason from it.
-    const answered = t.comments.nodes.some((c) => c.author?.__typename === "Bot" && c.body.includes(REMEMBERED_MARKER));
+    const answered = answeredRemembered(t);
     if (own.length) out.set(found.id, { replies: own.map((c) => ({ text: c.body.trim(), at: c.createdAt! })), commentId: found.commentId, answered });
   }
   return out;
