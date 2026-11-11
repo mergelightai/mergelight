@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -98,4 +98,18 @@ test("skill folders Codex would find by itself are removed from the checkout", (
   assert.equal(existsSync(join(dir, ".agents/skills")), false);
   assert.equal(existsSync(join(dir, ".codex/skills")), false);
   assert.equal(existsSync(join(dir, "src/a.ts")), true);
+});
+
+test("removing skill folders never goes through a link the pull request made", () => {
+  const outside = mkdtempSync(join(tmpdir(), "mergelight-outside-"));
+  mkdirSync(join(outside, "skills"));
+  writeFileSync(join(outside, "skills", "keep.md"), "x");
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-checkout-"));
+  symlinkSync(outside, join(dir, ".codex"));
+  mkdirSync(join(dir, ".agents"));
+  symlinkSync(outside, join(dir, ".agents", "skills"));
+  removeAgentSkills(dir);
+  assert.equal(existsSync(join(outside, "skills", "keep.md")), true, "the folder outside the checkout is untouched");
+  assert.equal(lstatSync(join(dir, ".codex"), { throwIfNoEntry: false }), undefined, "the link itself is gone");
+  assert.equal(lstatSync(join(dir, ".agents", "skills"), { throwIfNoEntry: false }), undefined);
 });

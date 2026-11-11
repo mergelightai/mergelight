@@ -65,7 +65,19 @@ export function ownFolder(checkout: string): string {
 export const AGENT_SKILL_FOLDERS = [".agents/skills", ".codex/skills"];
 
 export function removeAgentSkills(checkout: string): void {
-  for (const folder of AGENT_SKILL_FOLDERS) rmSync(join(checkout, folder), { recursive: true, force: true });
+  for (const folder of AGENT_SKILL_FOLDERS) {
+    const parent = join(checkout, folder.split("/")[0]!);
+    const kind = lstatSync(parent, { throwIfNoEntry: false });
+    if (!kind) continue;
+    // .codex or .agents can be a link the pull request made, to a folder anywhere on the machine.
+    // Going through it would delete that folder's skills. A link or a file goes, alone.
+    if (!kind.isDirectory()) {
+      rmSync(parent, { force: true });
+      continue;
+    }
+    // rmSync removes a link at this name without following it.
+    rmSync(join(parent, "skills"), { recursive: true, force: true });
+  }
 }
 
 /**
@@ -176,6 +188,20 @@ export async function conventionsFor(mirror: string, base: string, changedPaths:
     total += Math.min(f.text.length, room);
   }
   return conventions;
+}
+
+/** The answer, or the fallback once the time is up, for work that must never hold up a review. */
+async function withDeadline<T>(work: Promise<T>, ms: number, fallback: T): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const gaveUp = new Promise<T>((resolve) => {
+    timer = setTimeout(() => resolve(fallback), ms);
+    timer.unref();
+  });
+  try {
+    return await Promise.race([work.catch(() => fallback), gaveUp]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function hasCommit(mirror: string, sha: string): Promise<boolean> {
@@ -304,7 +330,7 @@ export async function prepareWorkspace(pr: PullRequest, at?: string, skillFolder
     // The same goes for the instruction files.
     const teamBase = haveBaseBranch ? `refs/mergelight/base/${pr.baseRef}` : baseCandidate;
     const skills = await skillsFor(mirror, teamBase, dir, skillFolders);
-    const conventions = await conventionsFor(mirror, teamBase, touchedPaths);
+    const conventions = await withDeadline(conventionsFor(mirror, teamBase, touchedPaths), SKILL_IMPORT_TIMEOUT_MS + 2 * SKILL_GIT_TIMEOUT_MS, []);
 
     return {
       dir,
