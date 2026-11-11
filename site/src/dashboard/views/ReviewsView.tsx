@@ -1,6 +1,5 @@
 import { ArrowUpRightIcon } from '@phosphor-icons/react';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import type { Light, Overview, Review } from '../api';
 import { ViewHeader } from '../AppShell';
@@ -17,18 +16,19 @@ export function LightBadge({ light }: { light: Light }) {
   );
 }
 
+/** A number in the same frame as the tables: the label on the frame's strip, the number on the inner panel. */
 function Stat({ label, value, sub, light }: { label: string; value: number; sub: string; light?: Light }) {
   return (
-    <Card size="sm">
-      <CardContent>
-        <p className="flex items-center gap-2 text-sm text-muted-foreground">
-          {light && <span className={cn('size-2 rounded-full', LIGHTS[light].dot)} />}
-          {label}
-        </p>
-        <p className={cn('mt-2 font-heading text-3xl font-semibold tabular-nums tracking-tight', light && LIGHTS[light].text)}>{value}</p>
+    <div className="rounded-[1.75rem] bg-muted p-1 ring-1 ring-foreground/5">
+      <p className="flex h-10 items-center gap-2 px-5 text-sm text-muted-foreground">
+        {light && <span className={cn('size-2 rounded-full', LIGHTS[light].dot)} />}
+        {label}
+      </p>
+      <div className="rounded-3xl bg-card px-5 py-4">
+        <p className={cn('font-heading text-3xl font-semibold tabular-nums tracking-tight', light && LIGHTS[light].text)}>{value}</p>
         <p className="mt-1 text-xs text-muted-foreground">{sub}</p>
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }
 
