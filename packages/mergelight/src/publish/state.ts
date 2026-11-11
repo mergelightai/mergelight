@@ -42,7 +42,7 @@ export interface ReviewState {
    * in the thread that the server kept them. at: when the reason was written, so a newer reply is a
    * new reason. Older state doesn't have it.
    */
-  remember?: { id: string; at: string }[];
+  remember?: { id: string; at: string; tries?: number }[];
 }
 
 const MARKER = "mergelight:state:v1";
@@ -93,7 +93,7 @@ export function decodeState(body: string | undefined): ReviewState | null {
  * Merge this review into the previous state. at: when the review started, so whatever people wrote
  * while it ran counts as newer than it.
  */
-export function nextState(prev: ReviewState | null, findings: Finding[], sha: string, light: Light, urls: Map<string, string>, at = new Date(), remember: { id: string; at: string }[] = []): ReviewState {
+export function nextState(prev: ReviewState | null, findings: Finding[], sha: string, light: Light, urls: Map<string, string>, at = new Date(), remember: { id: string; at: string; tries?: number }[] = []): ReviewState {
   const round = (prev?.round ?? 0) + 1;
   const current = new Set(findings.map((f) => f.id));
   const before = new Map((prev?.findings ?? []).map((f) => [f.id, f]));

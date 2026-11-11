@@ -262,7 +262,7 @@ async function main(): Promise<number> {
     if (values.post) {
       // Reasons given in threads that this review sends to keep: the state holds them until the server confirms.
       // Also when the server couldn't be asked this time, so a waiting reason isn't dropped from the state.
-      const remember = cloud.connected || cloud.failed ? (previous ?? []).filter((p) => p.handled?.from === "reply" && p.handled.remember && p.handled.at).map((p) => ({ id: p.id, at: p.handled!.at! })) : [];
+      const remember = cloud.connected || cloud.failed ? (previous ?? []).filter((p) => p.handled?.from === "reply" && p.handled.remember && p.handled.at).map((p) => ({ id: p.id, at: p.handled!.at!, tries: (p.handled!.tries ?? 0) + 1 })) : [];
       const result = await publishReview(review, { dryRun, log, checkRunId, yellowBlocks: values["yellow-blocks"], teamUnread: cloud.failed === true, startedAt, remember });
       log(`Posted: ${result.inline} inline, ${result.outside} in the summary only, ${result.resolved} resolved. ${result.summaryUrl ?? ""}`);
       if (review.team_checks?.length) {

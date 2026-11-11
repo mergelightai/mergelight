@@ -108,7 +108,7 @@ export async function previousFindings(api: GitHub, number: number, headSha?: st
   const resolved = await resolvedByPeople(threads, writeAccess(api));
   const replies = resolverReplies(threads, resolved);
   const latest = state?.rounds.at(-1);
-  const waiting = new Map((state?.remember ?? []).map((r) => [r.id, r.at]));
+  const waiting = new Map((state?.remember ?? []).map((r) => [r.id, r]));
   const unchanged = unchangedSince(api, latest?.sha, headSha);
   // A decision not to fix must reach the verifier however long the list gets, or the problem comes back as new.
   const order = (f: StateFinding) => (marks.get(f.id)?.as === "wont_fix" || resolved.has(f.id) ? 0 : f.status === "gone" ? 2 : 1);
@@ -132,12 +132,15 @@ export async function previousFindings(api: GitHub, number: number, headSha?: st
       const fresh = all.filter((r) => latest && Date.parse(r.at) > Date.parse(latest.at));
       // A reason an earlier review judged worth keeping, and the server hasn't confirmed yet (no answer in
       // the thread): sent again, so one failed report doesn't lose it. A newer reply is a new reason.
-      const pending = isReason && !reply!.answered && waiting.get(id) === reasons.at(-1)?.at;
+      // At most MAX_TRIES reviews: a server that kept it but never says so (an older one, or a lost answer)
+      // mustn't get it on every review.
+      const wait = waiting.get(id);
+      const pending = isReason && !reply!.answered && wait?.at === reasons.at(-1)?.at && (wait?.tries ?? 1) < MAX_TRIES;
       const remember = pending || (isReason && fresh.length > 0 && !fresh.some((r) => FIX_CLAIM.test(r.text)) && f.status === "open" && (await unchanged(f)));
       const handled = mark
         ? { as: mark.as, note: mark.note, by: mark.by, sha: mark.sha, from: "mark" as const, at: mark.at }
         : by && isReason
-          ? { as: "wont_fix" as const, ...oneLine(reasons.map((r) => r.text).join("\n\n")), by, sha: null, from: "reply" as const, at: reasons.at(-1)!.at, ...(remember ? { remember: true as const } : {}) }
+          ? { as: "wont_fix" as const, ...oneLine(reasons.map((r) => r.text).join("\n\n")), by, sha: null, from: "reply" as const, at: reasons.at(-1)!.at, ...(remember ? { remember: true as const, ...(pending ? { tries: wait?.tries ?? 1 } : {}) } : {}) }
           : by && last
             ? { as: "wont_fix" as const, ...oneLine(all.map((r) => r.text).join("\n\n")), by, sha: null, from: "thread" as const, at: last.at }
           : by
@@ -149,12 +152,16 @@ export async function previousFindings(api: GitHub, number: number, headSha?: st
 }
 
 /**
- * A reply that says the problem was fixed: fix, fixing, fixed, fixes or addressed anywhere, but not right
- * after won't, not, don't, no or never; done at the start; or a commit. A commit is 7 to 40 hex
- * characters with both a letter and a digit, so a plain number isn't one. Reading too much as a fix only
- * means a reason isn't kept, the safe side.
+ * A reply that says the problem was fixed: fix, fixing, fixed, fixes or addressed anywhere, unless a no,
+ * not, never, nothing or an n't word comes up to 3 words before it in the same phrase ("won't fix", "no
+ * need to fix", but not "not sure, but I fixed it");
+ * done at the start; or a commit. A commit is 7 to 40 hex characters with both a letter and a digit, so a
+ * plain number isn't one. Reading too much as a fix only means a reason isn't kept, the safe side.
  */
-const FIX_CLAIM = /(?<!\b(?:won[’']?t|not|don[’']?t|no|never)\s+)\b(fix|fixing|fixed|fixes|addressed)\b|^\W*done\b|\b(?=[0-9a-f]*[a-f])(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b/i;
+const FIX_CLAIM = /(?<!\b(?:\w*n[’']t|not|no|never|nothing)(?:\s+[^\s.,;:!?]+){0,3}\s+)\b(fix|fixing|fixed|fixes|addressed)\b|^\W*done\b|\b(?=[0-9a-f]*[a-f])(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b/i;
+
+/** How many reviews send a waiting reason before it is given up on. */
+const MAX_TRIES = 3;
 
 /** A person's reply as the verifier reads it: one line, nothing hidden, not too long. cut: it was longer. */
 function oneLine(text: string): { note: string; cut?: true } {
