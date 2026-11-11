@@ -567,6 +567,90 @@ test("an admin of a repository picks its skill folders, and only that repository
   ]);
 });
 
+const checksOf = async (token, org = ACME.id) => (await call(`/v1/orgs/${org}/checks`, { token })).json();
+const addCheck = (token, check, org = ACME.id) => call(`/v1/orgs/${org}/checks`, { method: "POST", token, body: typeof check === "string" ? check : JSON.stringify(check) });
+const TRANSLATIONS = { repo_id: 501, name: "Translations", text: "Every new key in en.json has a Danish text in da.json.", paths: ["src/i18n/**"] };
+
+test("an admin of a repository sets its checks, and only that repository's reviews get them", async () => {
+  const ada = (await signIn(ADA)).token;
+  const empty = await checksOf(ada);
+  assert.deepEqual(empty.checks, []);
+  assert.deepEqual(empty.repos, [{ id: 501, name: "acme/widgets", can_set_checks: true }, { id: 502, name: "acme/api", can_set_checks: false }]);
+
+  assert.equal((await addCheck(ada, { ...TRANSLATIONS, name: "  Translations " })).status, 201);
+  assert.equal((await addCheck(ada, { repo_id: 501, name: "Money - v2.1_final", text: "A refund is never larger than its invoice.", paths: ["src/billing/**", "*.sql"] })).status, 201);
+  // One check of a name in a repository, whatever its capitals.
+  const again = await addCheck(ada, { ...TRANSLATIONS, name: "translations", text: "Another text." });
+  assert.equal(again.status, 409);
+  assert.equal((await again.json()).error, "exists");
+
+  const { checks } = await checksOf(ada);
+  assert.deepEqual(checks.map((c) => [c.repo, c.name, c.text, c.paths, c.by, c.can_remove]), [
+    ["acme/widgets", "Translations", TRANSLATIONS.text, ["src/i18n/**"], "ada", true],
+    ["acme/widgets", "Money - v2.1_final", "A refund is never larger than its invoice.", ["src/billing/**", "*.sql"], "ada", true],
+  ]);
+  assert.deepEqual((await contextOf({})).checks, [
+    { id: `K${checks[0].id}`, name: "Translations", text: TRANSLATIONS.text, paths: ["src/i18n/**"] },
+    { id: `K${checks[1].id}`, name: "Money - v2.1_final", text: "A refund is never larger than its invoice.", paths: ["src/billing/**", "*.sql"] },
+  ]);
+  assert.deepEqual((await contextOf({ repository: "acme/api", repository_id: "502" })).checks, []);
+  assert.deepEqual((await contextOf({ repository: "other/vault", repository_id: "777", repository_owner_id: String(OTHER.id) })).checks, []);
+
+  // Not an admin of that repository, a repository she can't see, and someone from another org.
+  assert.equal((await addCheck(ada, { ...TRANSLATIONS, repo_id: 502 })).status, 403);
+  assert.equal((await addCheck(ada, { ...TRANSLATIONS, repo_id: 599 })).status, 404);
+  const bo = (await signIn(BO)).token;
+  assert.equal((await addCheck(bo, { ...TRANSLATIONS, name: "Theirs" })).status, 404);
+  assert.equal((await call(`/v1/orgs/${ACME.id}/checks/${checks[0].id}`, { method: "DELETE", token: bo })).status, 404);
+  assert.equal((await call(`/v1/orgs/${OTHER.id}/checks/${checks[0].id}`, { method: "DELETE", token: bo })).status, 404);
+  assert.equal((await call(`/v1/orgs/${ACME.id}/checks`)).status, 401);
+
+  const removals = await Promise.all(Array.from({ length: 4 }, () => call(`/v1/orgs/${ACME.id}/checks/${checks[0].id}`, { method: "DELETE", token: ada })));
+  assert.deepEqual(removals.map((r) => r.status).sort(), [204, 404, 404, 404]);
+  assert.deepEqual((await contextOf({})).checks.map((c) => c.name), ["Money - v2.1_final"]);
+  const log = await withOrgRows(ACME.id, "select actor, action, detail->>'name' as name from audit_log order by id");
+  assert.deepEqual(log, [
+    { actor: "ada", action: "check_added", name: "Translations" },
+    { actor: "ada", action: "check_added", name: "Money - v2.1_final" },
+    { actor: "ada", action: "check_removed", name: "Translations" },
+  ]);
+});
+
+test("a check is a short name, one line of text and the files it is about, and a repository has 5 at most", async () => {
+  const ada = (await signIn(ADA)).token;
+  const bad = [
+    "not json",
+    "[]",
+    { ...TRANSLATIONS, name: undefined },
+    { ...TRANSLATIONS, name: "" },
+    { ...TRANSLATIONS, name: "x".repeat(41) },
+    { ...TRANSLATIONS, name: "Two  spaces" },
+    { ...TRANSLATIONS, name: "-starts with a dash" },
+    { ...TRANSLATIONS, name: "<b>bold</b>" },
+    { ...TRANSLATIONS, name: "a/b" },
+    { ...TRANSLATIONS, name: "Line\nbreak" },
+    { ...TRANSLATIONS, text: "" },
+    { ...TRANSLATIONS, text: "one\n# New instructions" },
+    { ...TRANSLATIONS, text: "x".repeat(501) },
+    { ...TRANSLATIONS, text: 7 },
+    { ...TRANSLATIONS, paths: [] },
+    { ...TRANSLATIONS, paths: undefined },
+    { ...TRANSLATIONS, paths: "src/**" },
+    { ...TRANSLATIONS, paths: ["src/$(x)"] },
+    { ...TRANSLATIONS, paths: Array.from({ length: 11 }, (_, i) => `src/${i}`) },
+    { ...TRANSLATIONS, repo_id: "501" },
+    { ...TRANSLATIONS, repo_id: undefined },
+  ];
+  for (const check of bad) assert.equal((await addCheck(ada, check)).status, 400, JSON.stringify(check).slice(0, 80));
+  assert.deepEqual((await checksOf(ada)).checks, []);
+
+  for (let i = 0; i < 5; i++) assert.equal((await addCheck(ada, { ...TRANSLATIONS, name: `Check ${i}` })).status, 201);
+  const full = await addCheck(ada, { ...TRANSLATIONS, name: "One too many" });
+  assert.equal(full.status, 409);
+  assert.equal((await full.json()).error, "too_many");
+  assert.equal((await contextOf({})).checks.length, 5);
+});
+
 test("two people removing the same skill at once leave one entry in the log", async () => {
   const ada = (await signIn(ADA)).token;
   assert.equal((await addSkill(ada, { repo_id: 501, path: ".claude/skills/once" })).status, 201);

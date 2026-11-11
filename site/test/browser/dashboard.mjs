@@ -55,6 +55,16 @@ const SKILLS = {
   },
   4004: { repos: [{ id: 801, name: 'fresh/app', can_pick_skills: false }], skills: [] },
 };
+const CHECKS = {
+  1001: {
+    repos: [{ id: 501, name: 'acme/widgets', can_set_checks: true }, { id: 502, name: 'acme/api', can_set_checks: false }],
+    checks: [
+      { id: 21, repo_id: 501, repo: 'acme/widgets', name: 'Translations', text: 'Every new text in en.json has a translation in da.json.', paths: ['src/i18n/**'], by: 'ada', created_at: hoursAgo(70), can_remove: true },
+      { id: 22, repo_id: 502, repo: 'acme/api', name: 'Refunds', text: 'A refund is never larger than its invoice.', paths: ['src/billing/**', '*.sql'], by: 'bo', created_at: hoursAgo(10), can_remove: false },
+    ],
+  },
+  4004: { repos: [{ id: 801, name: 'fresh/app', can_set_checks: false }], checks: [] },
+};
 const OVERVIEWS = {
   1001: {
     org: { id: 1001, login: 'acme' },
@@ -76,6 +86,9 @@ async function open(name, { signedOutAfter = Infinity, serverDown = false, forge
   /** Skill folders the page asked the server to add and to remove. */
   const skillsAdded = [];
   const skillsRemoved = [];
+  /** Checks the page asked the server to add and to remove. */
+  const checksAdded = [];
+  const checksRemoved = [];
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 900, deviceScaleFactor: 2 });
   const errors = [];
@@ -139,6 +152,23 @@ async function open(name, { signedOutAfter = Infinity, serverDown = false, forge
         const fresh = skillsAdded.map((s, i) => ({ id: 201 + i, ...s, repo: 'acme/widgets', by: 'ada', created_at: new Date().toISOString(), can_remove: true }));
         return json(req, { ...own, skills: [...own.skills, ...(skills[1] === '1001' ? fresh : [])].filter((s) => !skillsRemoved.includes(s.id)) });
       }
+      const checks = /^\/v1\/orgs\/(\d+)\/checks(?:\/(\d+))?$/.exec(u.pathname);
+      if (checks && !CHECKS[checks[1]]) return json(req, { error: 'not_connected' }, 404);
+      if (checks && m === 'POST') {
+        const body = JSON.parse(req.postData());
+        if (body.name === 'Translations') return json(req, { error: 'exists', message: 'This repository already has a check of that name.' }, 409);
+        checksAdded.push(body);
+        return json(req, { id: 300 + checksAdded.length }, 201);
+      }
+      if (checks && m === 'DELETE') {
+        checksRemoved.push(Number(checks[2]));
+        return req.respond({ status: 204, headers: cors });
+      }
+      if (checks) {
+        const own = CHECKS[checks[1]];
+        const fresh = checksAdded.map((c, i) => ({ id: 301 + i, ...c, repo: 'acme/widgets', by: 'ada', created_at: new Date().toISOString(), can_remove: true }));
+        return json(req, { ...own, checks: [...own.checks, ...(checks[1] === '1001' ? fresh : [])].filter((c) => !checksRemoved.includes(c.id)) });
+      }
       const memories = /^\/v1\/orgs\/(\d+)\/memories(?:\/(\d+))?$/.exec(u.pathname);
       if (memories && m === 'DELETE') {
         if (forgetFails) return json(req, { error: 'server_error' }, 500);
@@ -192,7 +222,7 @@ async function open(name, { signedOutAfter = Infinity, serverDown = false, forge
     return { href, state };
   };
   console.log(`\n== ${name}`);
-  return { page, calls, exchanges, renewals, forgotten, added, removed, skillsAdded, skillsRemoved, errors, text, click, signIn, comeBackFromGitHub, shot: (file) => page.screenshot({ path: `${out}${file}.png`, fullPage: true }).catch(() => {}) };
+  return { page, calls, exchanges, renewals, forgotten, added, removed, skillsAdded, skillsRemoved, checksAdded, checksRemoved, errors, text, click, signIn, comeBackFromGitHub, shot: (file) => page.screenshot({ path: `${out}${file}.png`, fullPage: true }).catch(() => {}) };
 }
 const done = async (t) => {
   if (t.errors.length) { console.log('  page errors', t.errors.slice(0, 3)); failures++; }
@@ -298,6 +328,36 @@ const done = async (t) => {
   await wait(600);
   expect(t.skillsRemoved.join() === '7' && !/\.claude\/skills\/migrations acme\/widgets/.test(await t.text()), 'Remove takes the skill off the server and the page');
 
+  // Checks.
+  const withChecks = await t.text();
+  expect(/Translations · Every new text in en\.json has a translation in da\.json\. acme\/widgets src\/i18n\/\*\* set by ada/.test(withChecks), `a check shows with its name, its text, its repository and its files (${withChecks.match(/Checks.{0,60}/)?.[0]})`);
+  expect(/Refunds · A refund is never larger than its invoice\. acme\/api src\/billing\/\*\*, \*\.sql set by bo/.test(withChecks), 'and so does one in a repository this person only reads');
+  expect(/one more AI run on your own plan/.test(withChecks) && /never changes code/.test(withChecks) && /require that check in your branch rules/.test(withChecks), 'the card says what a check costs, that it only reports, and how to make it stop a merge');
+  const checkRemoves = await t.page.evaluate(() => [...document.querySelectorAll('button')].filter((b) => b.textContent.trim() === 'Remove check').length);
+  expect(checkRemoves === 1, 'only a check in a repository this person is an admin of has a Remove button');
+  const checkPlaces = await t.page.evaluate(() => [...document.querySelector('select[aria-label="Check repository"]').options].map((o) => o.textContent));
+  expect(checkPlaces.join() === 'acme/widgets', `a check can be set for repositories this person is an admin of, and no other (${checkPlaces})`);
+  const addCheckIsOff = () => t.page.evaluate(() => [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Add check').disabled);
+  await fill('Check name', 'Migrations');
+  await fill('The check', 'Every migration has a down step.');
+  expect(await addCheckIsOff(), 'a check can\'t be added without the files it is about');
+  await fill('Check files', 'db/migrations/**, *.sql');
+  await t.click('button', 'Add check');
+  await wait(700);
+  expect(JSON.stringify(t.checksAdded) === JSON.stringify([{ repo_id: 501, name: 'Migrations', text: 'Every migration has a down step.', paths: ['db/migrations/**', '*.sql'] }]), `the new check is sent as typed (${JSON.stringify(t.checksAdded)})`);
+  expect(/Migrations · Every migration has a down step\. acme\/widgets db\/migrations\/\*\*, \*\.sql set by ada/.test(await t.text()), 'and shows in the list');
+  const checkFormCleared = await t.page.evaluate(() => ['Check name', 'The check', 'Check files'].map((l) => document.querySelector(`[aria-label="${l}"]`).value).join(''));
+  expect(checkFormCleared === '', 'the form is empty again');
+  await fill('Check name', 'Translations');
+  await fill('The check', 'Another one.');
+  await fill('Check files', 'src/**');
+  await t.click('button', 'Add check');
+  await wait(600);
+  expect(/This repository already has a check of that name\./.test(await t.text()), 'when the server refuses a check, the page shows why');
+  await t.click('button', 'Remove check');
+  await wait(600);
+  expect(t.checksRemoved.join() === '21' && !/Translations · Every new text/.test(await t.text()), 'Remove takes the check off the server and the page');
+
   await t.click('[role=tab]', 'quiet');
   await wait(500);
   expect(/The dashboard isn't on for quiet/.test(await t.text()), 'an org that hasn\'t turned it on says so');
@@ -305,6 +365,7 @@ const done = async (t) => {
   await wait(500);
   expect(/Only an owner of the org or an admin of a repository can change the rules\./.test(await t.text()) && !(await t.page.$('[aria-label="The rule"]')), 'someone who may not set rules sees no form, and is told who can');
   expect(/Only an admin of a repository can pick its skills\./.test(await t.text()) && !(await t.page.$('[aria-label="Skill folder"]')), 'someone who is no admin sees no skill form, and is told who can');
+  expect(/Only an admin of a repository can set its checks\./.test(await t.text()) && !(await t.page.$('[aria-label="The check"]')), 'and no check form either');
   expect(/No reviews to show yet/.test(await t.text()) && /repositories this sign-in can't see/.test(await t.text()) && (await t.text()).includes(`server: ${SERVER}`), 'an org with no reviews yet shows the one line to add');
   await t.shot('3-nothing-yet');
 

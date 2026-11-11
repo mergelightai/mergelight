@@ -14,6 +14,12 @@ export interface ModelOptions {
   /** Where to keep the raw log for debugging. */
   logFile?: string;
   timeoutMs?: number;
+  /**
+   * False when the agent must not take instructions from files in the checkout, such as AGENTS.md.
+   * The checkout is the pull request's own, so for one of the team's checks its author could
+   * otherwise write there what counts as a pass.
+   */
+  projectDocs?: boolean;
   /** Called whenever the agent starts a shell command (Codex only). */
   onCommand?: (command: string) => void;
 }

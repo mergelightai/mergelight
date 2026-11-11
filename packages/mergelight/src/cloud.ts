@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { PriorFinding, TeamMemory, TeamRule } from "./prompt.js";
+import type { PriorFinding, TeamCheck, TeamMemory, TeamRule } from "./prompt.js";
 import { isSkillPath } from "./skills.js";
 import type { Review } from "./types.js";
 
@@ -209,11 +209,13 @@ export interface CloudContext {
   rules: TeamRule[];
   /** Skill folders in this repository that the team picked for reviews. */
   skills: string[];
+  /** The team's own checks for this repository. */
+  checks: TeamCheck[];
   /** True when a server is set and it couldn't be asked. The review then says that it ran without the team's rules. */
   failed?: boolean;
 }
 
-const NOTHING: CloudContext = { connected: false, memories: [], rules: [], skills: [] };
+const NOTHING: CloudContext = { connected: false, memories: [], rules: [], skills: [], checks: [] };
 /** One line of plain text: no line breaks and no control characters, so it can't pass for anything but itself. */
 const isText = (v: unknown, max: number): v is string => typeof v === "string" && v.length > 0 && v.length <= max && !/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u2028-\u202e\u2066-\u2069]/.test(v);
 const isLine = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 10_000_000;
@@ -242,6 +244,26 @@ const isPattern = (v: unknown): v is string => typeof v === "string" && /^[\w.@+
  * The team's rules, each field checked. A rule is an instruction to the reviewers by design, so its
  * shape is held tight: one line of plain text, and patterns made of path characters only.
  */
+/**
+ * The team's own checks, as the server sent them. One that isn't shaped right is left out: its name
+ * ends up in the name of a check on GitHub and its text in a prompt, so both are held to their shapes here too.
+ */
+export function readChecks(value: unknown): TeamCheck[] {
+  if (!Array.isArray(value)) return [];
+  const checks: TeamCheck[] = [];
+  for (const raw of value.slice(0, 50)) {
+    if (checks.length === 5) break;
+    const c = raw as Record<string, unknown> | null;
+    if (!c || typeof c !== "object") continue;
+    if (typeof c.id !== "string" || !/^K\d{1,12}$/.test(c.id) || !isText(c.text, 500)) continue;
+    if (typeof c.name !== "string" || c.name.length > 40 || !/^[A-Za-z0-9](?:[A-Za-z0-9._-]| (?! ))*$/.test(c.name) || c.name.endsWith(" ")) continue;
+    if (!Array.isArray(c.paths) || c.paths.length < 1 || c.paths.length > 10 || !c.paths.every(isPattern)) continue;
+    if (checks.some((other) => other.name.toLowerCase() === (c.name as string).toLowerCase())) continue;
+    checks.push({ id: c.id, name: c.name, text: c.text, paths: c.paths as string[] });
+  }
+  return checks;
+}
+
 export function readRules(value: unknown): TeamRule[] {
   if (!Array.isArray(value)) return [];
   const rules: TeamRule[] = [];
@@ -270,10 +292,10 @@ export async function fetchContext(deps: CloudDeps = {}): Promise<CloudContext> 
       d.log(`The Mergelight server answered ${res.status}. The review runs without it.`);
       return { ...NOTHING, failed: true };
     }
-    const answer = res.answer as { connected?: unknown; memories?: unknown; rules?: unknown; skills?: unknown } | null;
+    const answer = res.answer as { connected?: unknown; memories?: unknown; rules?: unknown; skills?: unknown; checks?: unknown } | null;
     if (answer?.connected !== true) return NOTHING;
     const skills = Array.isArray(answer.skills) ? answer.skills.filter(isSkillPath).slice(0, 10) : [];
-    return { connected: true, memories: readMemories(answer.memories), rules: readRules(answer.rules), skills };
+    return { connected: true, memories: readMemories(answer.memories), rules: readRules(answer.rules), skills, checks: readChecks(answer.checks) };
   } catch (err) {
     d.log(`Couldn't reach the Mergelight server (${(err as Error).message}). The review runs without it.`);
     return { ...NOTHING, failed: true };

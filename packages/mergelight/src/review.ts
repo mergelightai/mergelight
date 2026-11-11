@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { actionsUsedBy, fetchActionSources, notRead, type NotRead } from "./action-source.js";
 import { fetchPullRequest, type PrRef } from "./github.js";
 import {
+  buildCheckPrompt,
   buildHunterPrompt,
   buildSweepPrompt,
   buildVerifierPrompt,
@@ -12,14 +13,17 @@ import {
   type PriorFinding,
   type PromptInput,
   ruleApplies,
+  type TeamCheck,
   type TeamMemory,
   type TeamRule,
   usedMemories,
 } from "./prompt.js";
 import { LimitError, LoginError } from "./providers/codex.js";
 import { claudeAvailable, runModel, TOOLING, type ProviderName } from "./providers/index.js";
-import { candidateSchema, reviewSchema, reviewSchemaWithDecisions } from "./schema.js";
-import type { Finding, Light, ModelFinding, ModelReview, Review, Tier } from "./types.js";
+import { candidateSchema, checkSchema, reviewSchema, reviewSchemaWithDecisions } from "./schema.js";
+import { CHECK_TIMEOUT_MS, startTeamChecks, type ChecksRun } from "./checks.js";
+import { run } from "./run.js";
+import type { Finding, Light, ModelFinding, ModelReview, Review, TeamCheckResult, Tier } from "./types.js";
 import { cacheDir, prepareWorkspace } from "./workspace.js";
 
 export interface ReviewOptions {
@@ -44,6 +48,13 @@ export interface ReviewOptions {
   rulesUnread?: boolean;
   /** Skill folders in the repository that the team picked for reviews. They are read from the base branch. */
   skills?: string[];
+  /** The team's own checks. Each one that is about a changed file is asked in an AI run of its own. */
+  checks?: TeamCheck[];
+  /**
+   * Called with the checks' answers when the review ends, also when it ends in an error. The answers
+   * a failed review already has are then still worth posting.
+   */
+  onTeamChecks?: (results: TeamCheckResult[]) => void;
   /** Keep the temporary checkout for inspection. */
   keep?: boolean;
   /** Progress messages. transient ones (the command the agent is running) are only worth showing live. */
@@ -166,6 +177,20 @@ function forProvider(dir: string, input: PromptInput, provider: ProviderName): P
   return { ...input, tooling, diffFile };
 }
 
+/** The diff one of the team's checks reads: at most this much of it goes into the question. */
+const MAX_CHECK_DIFF = 150_000;
+
+/**
+ * The whole change to the files a check is about. Unlike the reviewers' diff it leaves nothing out:
+ * a check that names a lockfile or a generated file must see what changed in it, removed lines included.
+ */
+async function checkDiff(dir: string, base: string, head: string, files: string[]): Promise<{ text: string; cut: boolean; missing?: boolean }> {
+  // The names come from git itself and go back to it as they are: never as options, never as patterns.
+  const r = await run("git", ["--literal-pathspecs", "-C", dir, "diff", "-U5", "--no-color", "--no-ext-diff", "--no-renames", `${base}...${head}`, "--", ...files.slice(0, 50)], { timeoutMs: 60_000 });
+  if (r.code !== 0) return { text: "", cut: true, missing: true };
+  return r.stdout.length > MAX_CHECK_DIFF ? { text: r.stdout.slice(0, MAX_CHECK_DIFF), cut: true } : { text: r.stdout, cut: files.length > 50 };
+}
+
 /**
  * The verifier: tries to disprove every candidate, merges duplicates, rates the
  * rest and picks the few that matter most. Exported so the eval can replay the
@@ -204,7 +229,7 @@ export function summaryWith(summary: string, needsHuman: string[], rulesUnread: 
     ? ` It changes ${needsHuman.slice(0, 3).map(code).join(", ")}${needsHuman.length > 3 ? ` and ${needsHuman.length - 3} more` : ""}, which your team marked as always needing a human.`
     : "";
   // A team may have rules that would have changed this review. Running without them must never be silent.
-  const unread = rulesUnread ? " Mergelight couldn't get your team's rules, skills and earlier decisions from its server, so this review ran without them." : "";
+  const unread = rulesUnread ? " Mergelight couldn't get your team's rules, skills, checks and earlier decisions from its server, so this review ran without them." : "";
   return `${summary}${guarded}${unread}`;
 }
 
@@ -255,6 +280,7 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
   if (ws.skills.length) progress(`Using your team's skill${ws.skills.length === 1 ? "" : "s"}: ${ws.skills.map((s) => s.name).join(", ")}`);
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const log = (step: string) => join(cacheDir(), "logs", `${pr.owner}-${pr.repo}-${pr.number}-${stamp}-${step}.log`);
+  let checksRun: ChecksRun | null = null;
 
   try {
     const input: PromptInput = {
@@ -339,6 +365,30 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
       });
     }
 
+    // The team's own checks run next to the verifier. They never fail the review and never hold it up
+    // for long: each ends as an answer or as an error of its own.
+    const teamChecks = opts.checks?.length
+      ? startTeamChecks(
+          opts.checks,
+          ws.touchedPaths,
+          async (check, files) =>
+            (
+              await runModel(provider, {
+                cwd: ws.dir,
+                prompt: buildCheckPrompt({ ...input, tooling: TOOLING[provider] }, check, files, await checkDiff(ws.dir, ws.mergeBase, ws.headSha, files)),
+                schema: checkSchema,
+                model: hunterModel,
+                effort,
+                logFile: log(`check-${check.id}`),
+                timeoutMs: CHECK_TIMEOUT_MS,
+                projectDocs: false,
+              })
+            ).output,
+          progress,
+        )
+      : null;
+    checksRun = teamChecks;
+
     // Step 2: the verifier tries to disprove each candidate and sorts the rest.
     // Opus checks better than Codex: in the eval it posted a third less and kept the same finds.
     const verifyWith = opts.verifyWith ?? (provider === "claude" || (await claudeAvailable()) ? "claude" : "codex");
@@ -353,6 +403,7 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
     });
     // Every path the pull request touches counts here, the lockfiles and generated files the reviewers skip included.
     const needsHuman = filesNeedingHuman(opts.rules, ws.touchedPaths);
+    const team_checks = teamChecks ? await teamChecks.done : null;
     const firstHunt = hunts.find((h) => h.status === "fulfilled");
     const servedModel = firstHunt?.status === "fulfilled" ? firstHunt.value.model : null;
 
@@ -374,6 +425,7 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
       ...(needsHuman.length ? { needs_human: needsHuman } : {}),
       findings: verified.findings,
       ...(input.memories?.length ? { used_memories: usedMemories(input.memories, verified.rejected, found) } : {}),
+      ...(team_checks?.length ? { team_checks } : {}),
       ...(unread.length ? { not_read: unread } : {}),
       stats: {
         duration_ms: Date.now() - started,
@@ -390,6 +442,12 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
       created_at: new Date().toISOString(),
     };
   } finally {
+    // The checkout is about to go. A check that is still waiting for its turn must not start in it.
+    // What the checks answered so far goes to the caller, whether the review worked or not.
+    if (checksRun) {
+      (checksRun as ChecksRun).stop();
+      opts.onTeamChecks?.(await (checksRun as ChecksRun).done);
+    }
     if (opts.keep) progress(`Kept the checkout at ${ws.dir}`);
     else await ws.cleanup();
   }

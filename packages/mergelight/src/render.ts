@@ -113,5 +113,13 @@ export function renderTerminal(r: Review): string {
     }
   }
   if (!r.findings.length) out.push("", green("Nothing worth fixing."));
+  if (r.team_checks?.length) {
+    out.push("", bold("Your team's checks"));
+    for (const c of r.team_checks) {
+      const mark = c.outcome === "pass" ? "✅" : c.outcome === "fail" ? "❌" : c.outcome === "skipped" ? "➖" : c.outcome === "unsure" ? "❔" : "⚠️";
+      out.push(`   ${mark} ${c.name}  ${dim(c.summary)}`);
+      for (const p of c.problems) out.push(dim(`      ${p.line ? `${p.file}:${p.line}` : p.file}  ${p.note}`));
+    }
+  }
   return out.join("\n");
 }

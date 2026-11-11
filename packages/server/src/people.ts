@@ -12,7 +12,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { HttpError } from "../../token-server/dist/token.js";
 import { isId, MEMORY_DAYS, withOrg, type Db, type Pool } from "./db.js";
 import { DEFAULT_SIGN_IN_APP, lookUp, looksLikePersonToken, type Person, type Reach } from "./github.js";
-import { isLineOfText, isPathPattern, isSkillPath } from "./validate.js";
+import { isCheckName, isLineOfText, isPathPattern, isSkillPath } from "./validate.js";
 
 /**
  * How long what GitHub said at sign-in is trusted. Someone who loses access on GitHub stops seeing
@@ -40,6 +40,8 @@ const MAX_RULES = 50;
 const MAX_RULE_BODY = 4096;
 /** Skill folders one repository can have picked. Each one is more for every reviewer to read. */
 const MAX_SKILLS = 10;
+/** Checks one repository can have. Each one that applies is one more AI run in every review, on the team's own plan. */
+const MAX_CHECKS = 5;
 
 interface Session {
   person: Person;
@@ -472,12 +474,97 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
     return { status: 204, body: null };
   }
 
+  /** The team's own checks, in the repositories this person can see. */
+  async function checks(session: Session, orgId: number): Promise<{ status: number; body: unknown }> {
+    const reach = session.reach.get(orgId);
+    if (!reach) throw new HttpError(404, "not_found", "No such org.");
+    const rows = await withOrg(pool, orgId, async (db) => {
+      if ((await db.query("select 1 from orgs where id = $1", [orgId])).rowCount === 0) return null;
+      return (await db.query("select id, repo_id, name, text, paths, added_by, created_at from checks where repo_id = any($1::bigint[]) order by repo_id, id", [[...reach.repos.keys()]])).rows;
+    });
+    if (!rows) throw new HttpError(404, "not_connected", "This org hasn't turned the Mergelight dashboard on.");
+    return {
+      status: 200,
+      body: {
+        repos: [...reach.repos].map(([id, r]) => ({ id, name: r.name, can_set_checks: r.admin })),
+        checks: rows.map((c) => {
+          const repo = reach.repos.get(Number(c.repo_id));
+          return { id: Number(c.id), repo_id: Number(c.repo_id), repo: repo?.name ?? "", name: c.name, text: c.text, paths: c.paths, by: c.added_by, created_at: c.created_at, can_remove: repo?.admin === true };
+        }),
+      },
+    };
+  }
+
+  /**
+   * Adds a check to a repository. It takes an admin of that repository: a check is an instruction to
+   * the AI, it costs the team an AI run in every review it applies to, and its result can stop a merge.
+   */
+  async function addCheck(session: Session, orgId: number, request: Request): Promise<{ status: number; body: unknown }> {
+    const reach = session.reach.get(orgId);
+    if (!reach) throw new HttpError(404, "not_found", "No such org.");
+    const raw = await request.text();
+    if (Buffer.byteLength(raw) > MAX_RULE_BODY) throw new HttpError(413, "too_large", "That is too large.");
+    let body: unknown;
+    try {
+      body = JSON.parse(raw);
+    } catch {
+      throw new HttpError(400, "bad_request", "That isn't JSON.");
+    }
+    if (typeof body !== "object" || body === null || Array.isArray(body)) throw new HttpError(400, "bad_request", "That isn't a check.");
+    const { repo_id, name: givenName, text, paths } = body as Record<string, unknown>;
+    const name = typeof givenName === "string" ? givenName.trim() : givenName;
+    if (!isCheckName(name)) throw new HttpError(400, "bad_request", "Give the check a short name: up to 40 letters, digits and single spaces, with . _ - inside.");
+    if (!isLineOfText(text, 500)) throw new HttpError(400, "bad_request", "Write the check as one line, up to 500 characters.");
+    if (!Array.isArray(paths) || paths.length < 1 || paths.length > 10 || !paths.every(isPathPattern)) {
+      throw new HttpError(400, "bad_request", "Name the files the check is about. Use 1 to 10 patterns, each made of letters, digits, / . - _ @ + and the wildcards * and ?.");
+    }
+    if (!isId(repo_id)) throw new HttpError(400, "bad_request", "Pick the repository the check is for.");
+    const repo = reach.repos.get(repo_id);
+    if (!repo) throw new HttpError(404, "not_found", "No such repository.");
+    if (!repo.admin) throw new HttpError(403, "read_only", "Only an admin of this repository can set its checks.");
+
+    const created = await withOrg(pool, orgId, async (db) => {
+      if ((await db.query("select 1 from orgs where id = $1 for update", [orgId])).rowCount === 0) return null;
+      if (((await db.query("select count(*)::int as n from checks where repo_id = $1", [repo_id])).rows[0]?.n ?? 0) >= MAX_CHECKS) return "full";
+      await db.query("insert into repos (org_id, id, name) values ($1, $2, $3) on conflict (org_id, id) do nothing", [orgId, repo_id, repo.name]);
+      const { rows } = await db.query(
+        "insert into checks (org_id, repo_id, name, text, paths, added_by, added_by_id) values ($1, $2, $3, $4, $5, $6, $7) on conflict (org_id, repo_id, lower(name)) do nothing returning id",
+        [orgId, repo_id, name, text.trim(), paths, session.person.login, session.person.id],
+      );
+      if (!rows[0]) return "exists";
+      const id = Number(rows[0].id);
+      await record(db, orgId, session.person, "check_added", { id, repo_id, name, text: text.trim(), paths });
+      return id;
+    });
+    if (created === null) throw new HttpError(404, "not_connected", "This org hasn't turned the Mergelight dashboard on.");
+    if (created === "full") throw new HttpError(409, "too_many", `A repository can have ${MAX_CHECKS} checks at most. Remove one first.`);
+    if (created === "exists") throw new HttpError(409, "exists", "This repository already has a check of that name.");
+    return { status: 201, body: { id: created } };
+  }
+
+  async function removeCheck(session: Session, orgId: number, checkId: number): Promise<{ status: number; body: unknown }> {
+    const reach = session.reach.get(orgId);
+    if (!reach) throw new HttpError(404, "not_found", "No such org.");
+    const outcome = await withOrg(pool, orgId, async (db) => {
+      const { rows } = await db.query("select repo_id, name, text from checks where id = $1 for update", [checkId]);
+      const repo = rows[0] ? reach.repos.get(Number(rows[0].repo_id)) : undefined;
+      if (!repo) return "missing";
+      if (!repo.admin) return "read_only";
+      await db.query("delete from checks where id = $1", [checkId]);
+      await record(db, orgId, session.person, "check_removed", { id: checkId, repo_id: Number(rows[0]!.repo_id), name: rows[0]!.name, text: rows[0]!.text });
+      return "gone";
+    });
+    if (outcome === "missing") throw new HttpError(404, "not_found", "No such check.");
+    if (outcome === "read_only") throw new HttpError(403, "read_only", "Only an admin of this repository can remove its checks.");
+    return { status: 204, body: null };
+  }
+
   /**
    * Answers a dashboard request, or returns null when the path isn't the dashboard's.
    * pathname has the server's mount path already taken off.
    */
   return async function handle(request: Request, pathname: string): Promise<Response | null> {
-    const org = /^\/v1\/orgs\/(\d{1,18})\/(overview|memories|rules|skills)(?:\/(\d{1,18}))?$/.exec(pathname);
+    const org = /^\/v1\/orgs\/(\d{1,18})\/(overview|memories|rules|skills|checks)(?:\/(\d{1,18}))?$/.exec(pathname);
     if (pathname !== "/v1/session" && !org) return null;
     // Only one decision or one rule at a time has an address of its own.
     if (org && org[3] && org[2] === "overview") return null;
@@ -486,7 +573,8 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
     const origin = request.headers.get("origin");
     if (origin && !origins.includes(origin)) return json(403, { error: "origin_not_allowed" }, {});
     const cors: Record<string, string> = origin ? { "access-control-allow-origin": origin, vary: "Origin" } : {};
-    const methods = !org ? "POST, DELETE" : org[3] ? "DELETE" : org[2] === "rules" || org[2] === "skills" ? "GET, POST" : "GET";
+    const writable = org ? ["rules", "skills", "checks"].includes(org[2]!) : false;
+    const methods = !org ? "POST, DELETE" : org[3] ? "DELETE" : writable ? "GET, POST" : "GET";
     if (request.method === "OPTIONS") {
       return json(204, null, { ...cors, "access-control-allow-methods": methods, "access-control-allow-headers": "authorization, content-type", "access-control-max-age": "600" });
     }
@@ -498,13 +586,14 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
         const orgId = Number(org[1]);
         const what = org[2];
         const itemId = org[3] ? Number(org[3]) : null;
-        const allowed = itemId !== null ? ["DELETE"] : what === "rules" || what === "skills" ? ["GET", "POST"] : ["GET"];
+        const allowed = itemId !== null ? ["DELETE"] : writable ? ["GET", "POST"] : ["GET"];
         if (!allowed.includes(request.method)) return json(405, { error: "method_not_allowed" }, cors);
         if (!isId(orgId) || (itemId !== null && !isId(itemId))) throw new HttpError(404, "not_found", "No such org.");
         const { session } = sessionOf(request, at);
-        if (itemId !== null) result = what === "rules" ? await removeRule(session, orgId, itemId) : what === "skills" ? await removeSkill(session, orgId, itemId) : await forget(session, orgId, itemId);
+        if (itemId !== null) result = what === "rules" ? await removeRule(session, orgId, itemId) : what === "skills" ? await removeSkill(session, orgId, itemId) : what === "checks" ? await removeCheck(session, orgId, itemId) : await forget(session, orgId, itemId);
         else if (what === "rules") result = request.method === "POST" ? await addRule(session, orgId, request) : await rules(session, orgId);
         else if (what === "skills") result = request.method === "POST" ? await addSkill(session, orgId, request) : await skills(session, orgId);
+        else if (what === "checks") result = request.method === "POST" ? await addCheck(session, orgId, request) : await checks(session, orgId);
         else result = what === "memories" ? await memories(session, orgId) : await overview(session, orgId);
       } else if (request.method === "POST") {
         result = await signIn(request, at);

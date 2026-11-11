@@ -101,6 +101,8 @@ export interface Review {
   needs_human?: string[];
   /** The team's earlier decisions the verifier used to leave findings out, by id like "M12". */
   used_memories?: string[];
+  /** The team's own checks, each asked as a question of its own. They are posted as checks next to the Mergelight check and don't change the light. */
+  team_checks?: TeamCheckResult[];
   /** Actions a changed workflow uses whose code the reviewers couldn't see. */
   not_read?: { uses: string; why: "program" | "unreadable" }[];
   stats: {
@@ -118,4 +120,22 @@ export interface Review {
     failed_hunters: string[];
   };
   created_at: string;
+}
+
+/** The answer to one of the team's own checks on a pull request. */
+export interface TeamCheckResult {
+  /** The check's id on the team's server, like "K3". */
+  id: string;
+  name: string;
+  /** The check as the team wrote it. */
+  text: string;
+  /**
+   * pass and fail are the AI's answer. unsure: the AI couldn't see enough to tell. skipped: the pull
+   * request changes none of the check's files, so nothing was asked. error: the AI run failed or
+   * took too long, so there is no answer.
+   */
+  outcome: "pass" | "fail" | "unsure" | "skipped" | "error";
+  summary: string;
+  /** Where the pull request breaks the check. line is 0 when no one line stands for it. */
+  problems: { file: string; line: number; note: string }[];
 }

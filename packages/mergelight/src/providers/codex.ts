@@ -122,6 +122,26 @@ export function scrubSecrets(text: string, home = codexHome(), env: NodeJS.Proce
   return secrets.reduce((out, secret) => out.split(secret).join("[removed]"), text).replace(JWT, "[removed]").replace(ANTHROPIC_SECRET, "[removed]");
 }
 
+let features: Promise<Set<string>> | undefined;
+
+/** The feature switches this Codex has. Codex stops at one it doesn't know, so a switch is only used where it exists. */
+function codexFeatures(): Promise<Set<string>> {
+  features ??= run("codex", ["features", "list"], { timeoutMs: 15_000 })
+    .then((r) => new Set(r.code === 0 ? r.stdout.split("\n").map((line) => line.trim().split(/\s+/)[0] ?? "").filter(Boolean) : []))
+    .catch(() => new Set<string>());
+  return features;
+}
+
+/**
+ * Switches for a run that must not take instructions from files in its working directory. Codex
+ * reads AGENTS.md there by itself and follows it, and it tells the model about every skill it finds
+ * under .codex/skills and .agents/skills, which the model then follows too. Tested with Codex
+ * 0.167: a planted file of either kind was obeyed, and with these switches it wasn't.
+ */
+export async function withoutProjectDocs(has: Promise<Set<string>> = codexFeatures()): Promise<string[]> {
+  return ["-c", "project_doc_max_bytes=0", ...((await has).has("omit_skill_descriptions") ? ["--enable", "omit_skill_descriptions"] : [])];
+}
+
 /**
  * Runs the user's own logged-in Codex CLI, headless, in a sandbox that can read but not write or reach the network.
  * Plugins, MCP servers, hooks and notifications are switched off for the run,
@@ -146,6 +166,7 @@ export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
     "-o", outFile,
     ...["plugins", "apps", "hooks", "image_generation", "browser_use", "computer_use"].flatMap((f) => ["--disable", f]),
     "-c", "notify=[]",
+    ...(opts.projectDocs === false ? await withoutProjectDocs() : []),
     "-c", 'web_search="disabled"',
     ...mcpServers(config).flatMap((name) => ["-c", `mcp_servers.${name}.enabled=false`]),
   ];
