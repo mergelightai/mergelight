@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { buildCheckPrompt, buildHunterPrompt, buildVerifierPrompt } from "../dist/prompt.js";
-import { conventionsFor, MAX_CONVENTION_CHARS } from "../dist/workspace.js";
+import { conventionPaths, conventionsFor, MAX_CONVENTION_CHARS, MAX_CONVENTIONS_CHARS } from "../dist/workspace.js";
 
 const input = { pr: { owner: "acme", repo: "widgets", number: 1, title: "t", author: "a", baseRef: "main", body: "" }, mergeBase: "base", headSha: "head", diffStat: "", diff: "", diffTruncated: false };
 
@@ -32,6 +32,18 @@ test("instruction files are read from the base branch, never from the pull reque
   assert.equal(conventions[0].text, "Money is always in cents.");
   assert.equal(conventions[1].text.length, MAX_CONVENTION_CHARS);
   assert.equal(conventions[1].truncated, true);
+  // Nested files only come in for folders above a changed file.
+  git("switch", "-q", "main");
+  write("packages/api/AGENTS.md", "API money is in cents.\n");
+  write("packages/web/AGENTS.md", "Web rules.\n");
+  write(".github/instructions/tests.instructions.md", "Tests use real Postgres.\n");
+  symlinkSync("AGENTS.md", join(dir, "CLAUDE.md"));
+  symlinkSync("../../../etc/passwd", join(dir, "packages/api/CLAUDE.md"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "more");
+  const more = await conventionsFor(dir, "main", ["packages/api/src/money.ts"]);
+  assert.deepEqual(more.map((c) => c.path), ["AGENTS.md", ".github/copilot-instructions.md", ".github/instructions/tests.instructions.md", "packages/api/AGENTS.md"], "the link to AGENTS.md goes in once, and a link out of the repository not at all");
+  assert.equal(more.at(-1).text, "API money is in cents.");
   // A base that can't be read gives none, and doesn't stop the review.
   assert.deepEqual(await conventionsFor(dir, "no-such-branch"), []);
 });
@@ -55,4 +67,23 @@ test("a team's own check doesn't get the conventions: there the instruction file
   const check = { id: "K3", name: "Translations", text: "Every new key in en.json has a Danish text in da.json.", paths: ["src/i18n/**"] };
   const prompt = buildCheckPrompt({ ...input, conventions: [{ path: "AGENTS.md", text: "Money is always in cents.", truncated: false }] }, check, ["src/i18n/en.json"], { text: "+x", cut: false });
   assert.doesNotMatch(prompt, /# This team's conventions/);
+});
+
+test("which instruction files apply to the changed files", () => {
+  const all = ["AGENTS.md", "README.md", "a/AGENTS.md", "a/b/CLAUDE.md", "a/b/c/AGENTS.md", "z/AGENTS.md", ".github/instructions/x.instructions.md", ".github/instructions/notes.md"];
+  assert.deepEqual(conventionPaths(all, ["a/b/file.ts"]), ["AGENTS.md", ".github/instructions/x.instructions.md", "a/AGENTS.md", "a/b/CLAUDE.md"]);
+  assert.deepEqual(conventionPaths(all, []), ["AGENTS.md", ".github/instructions/x.instructions.md"]);
+});
+
+test("all instruction files together stay under the total limit", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-conventions-"));
+  const git = (...args) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t.test", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
+  git("init", "-q", "-b", "main");
+  mkdirSync(join(dir, ".github/instructions"), { recursive: true });
+  for (let i = 0; i < 6; i++) writeFileSync(join(dir, `.github/instructions/${i}.instructions.md`), String(i).repeat(MAX_CONVENTION_CHARS));
+  git("add", "-A");
+  git("commit", "-q", "-m", "base");
+  const conventions = await conventionsFor(dir, "main");
+  assert.equal(conventions.reduce((n, c) => n + c.text.length, 0), MAX_CONVENTIONS_CHARS);
+  assert.equal(conventions.at(-1).truncated, true);
 });

@@ -1,6 +1,6 @@
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import { run, runOk } from "./run.js";
 import { importSkills, SKILL_GIT_TIMEOUT_MS, SKILL_IMPORT_TIMEOUT_MS, type TeamSkill } from "./skills.js";
 import type { Convention } from "./prompt.js";
@@ -82,27 +82,88 @@ async function skillsFor(mirror: string, base: string, checkout: string, folders
   }
 }
 
-/** The instruction files whose conventions the reviewers follow, read from the base branch. */
+/** The root instruction files whose conventions the reviewers follow, read from the base branch. */
 export const CONVENTION_FILES = ["AGENTS.md", "CLAUDE.md", "CONTRIBUTING.md", ".github/copilot-instructions.md"];
 /** Per file, so one long file can't fill every prompt. */
 export const MAX_CONVENTION_CHARS = 12_000;
+/** All files together, and how many. */
+export const MAX_CONVENTIONS_CHARS = 40_000;
+export const MAX_CONVENTION_FILES = 12;
+/** A file larger than this isn't read at all. */
+const MAX_CONVENTION_BYTES = 256_000;
+
+/** Which instruction files apply: the root ones, .github/instructions, and AGENTS.md or CLAUDE.md in a folder above a changed file. */
+export function conventionPaths(all: string[], changedPaths: string[]): string[] {
+  const folders = new Set<string>();
+  for (const changed of changedPaths) {
+    const parts = changed.split("/").slice(0, -1);
+    for (let i = 1; i <= parts.length; i++) folders.add(parts.slice(0, i).join("/"));
+  }
+  const present = new Set(all);
+  const root = CONVENTION_FILES.filter((p) => present.has(p));
+  const github = all.filter((p) => p.startsWith(".github/instructions/") && p.endsWith(".instructions.md")).sort();
+  const nested = all
+    .filter((p) => {
+      const at = p.lastIndexOf("/");
+      return at > 0 && ["AGENTS.md", "CLAUDE.md"].includes(p.slice(at + 1)) && folders.has(p.slice(0, at));
+    })
+    // Closest to the root first: a folder's file comes before the ones in its subfolders.
+    .sort((a, b) => a.split("/").length - b.split("/").length || a.localeCompare(b));
+  return [...root, ...github, ...nested];
+}
 
 /**
  * The team's instruction files as the base branch has them. The checkout is the pull request's, and
- * its author could add or rewrite AGENTS.md there to steer the reviewers. A file that is missing, or
- * can't be read in time, is left out: it never stops a review.
+ * its author could add or rewrite AGENTS.md there to steer the reviewers. A file that is a link is
+ * followed once, to a file inside the repository. A file that is missing, too large, or can't be
+ * read in time is left out: it never stops a review.
  */
-export async function conventionsFor(mirror: string, base: string): Promise<Convention[]> {
-  const read = async (path: string): Promise<Convention | null> => {
-    const r = await run("git", ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential", "-C", mirror, "show", `${base}:${path}`], {
+export async function conventionsFor(mirror: string, base: string, changedPaths: string[] = []): Promise<Convention[]> {
+  const git = (args: string[]) =>
+    run("git", ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential", "-C", mirror, ...args], {
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
       timeoutMs: SKILL_GIT_TIMEOUT_MS,
     }).catch(() => null);
-    const text = r?.code === 0 ? r.stdout.trim() : "";
-    if (!text) return null;
-    return { path, text: text.slice(0, MAX_CONVENTION_CHARS), truncated: text.length > MAX_CONVENTION_CHARS };
+  const listed = await git(["ls-tree", "-r", "-z", "--full-tree", base]);
+  if (listed?.code !== 0) return [];
+  const tree = new Map<string, { mode: string; sha: string }>();
+  for (const entry of listed.stdout.split("\0")) {
+    const m = /^(\d{6}) blob ([0-9a-f]{40,64})\t([\s\S]+)$/.exec(entry);
+    if (m) tree.set(m[3]!, { mode: m[1]!, sha: m[2]! });
+  }
+  const blob = async (sha: string): Promise<string | null> => {
+    const sized = await git(["cat-file", "-s", sha]);
+    if (sized?.code !== 0 || !(Number(sized.stdout.trim()) <= MAX_CONVENTION_BYTES)) return null;
+    const read = await git(["cat-file", "blob", sha]);
+    return read?.code === 0 ? read.stdout : null;
   };
-  return (await Promise.all(CONVENTION_FILES.map(read))).filter((c): c is Convention => c !== null);
+  const read = async (path: string): Promise<{ path: string; sha: string; text: string } | null> => {
+    let file = tree.get(path);
+    if (file?.mode === "120000") {
+      // A link: git keeps the target's path as its content.
+      const target = (await blob(file.sha))?.trim() ?? "";
+      const resolved = posix.normalize(posix.join(posix.dirname(path), target));
+      if (!target || target.startsWith("/") || resolved === ".." || resolved.startsWith("../")) return null;
+      file = tree.get(resolved);
+    }
+    if (!file || (file.mode !== "100644" && file.mode !== "100755")) return null;
+    const text = (await blob(file.sha))?.trim();
+    return text ? { path, sha: file.sha, text } : null;
+  };
+  const found = await Promise.all(conventionPaths([...tree.keys()], changedPaths).slice(0, MAX_CONVENTION_FILES * 2).map(read));
+  const conventions: Convention[] = [];
+  const seen = new Set<string>();
+  let total = 0;
+  for (const f of found) {
+    // AGENTS.md and CLAUDE.md are often one file and a link to it: the text goes in once.
+    if (!f || seen.has(f.sha) || conventions.length >= MAX_CONVENTION_FILES) continue;
+    const room = Math.min(MAX_CONVENTION_CHARS, MAX_CONVENTIONS_CHARS - total);
+    if (room <= 0) break;
+    seen.add(f.sha);
+    conventions.push({ path: f.path, text: f.text.slice(0, room), truncated: f.text.length > room });
+    total += Math.min(f.text.length, room);
+  }
+  return conventions;
 }
 
 async function hasCommit(mirror: string, sha: string): Promise<boolean> {
@@ -230,7 +291,7 @@ export async function prepareWorkspace(pr: PullRequest, at?: string, skillFolder
     // The same goes for the instruction files.
     const teamBase = haveBaseBranch ? `refs/mergelight/base/${pr.baseRef}` : baseCandidate;
     const skills = await skillsFor(mirror, teamBase, dir, skillFolders);
-    const conventions = await conventionsFor(mirror, teamBase);
+    const conventions = await conventionsFor(mirror, teamBase, touchedPaths);
 
     return {
       dir,
