@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { GitHubIcon, SURFACE, WELL } from '../ui';
+import { AppShell, type ViewId, VIEWS } from './AppShell';
+import { ReviewsView } from './views/ReviewsView';
 import { addCheck, addRule, addSkill, ADD_REPOS_URL, finishSignIn, forgetDecision, loadChecks, loadDecisions, loadOverview, loadRules, loadSkills, mayRenew, removeCheck, removeRule, removeSkill, NotConnected, rememberedSession, SERVER, SignedOut, signInUrl, signOut, tidyAddress, type Check, type Checks, type Decision, type Light, type NewCheck, type NewRule, type Org, type Overview, type Rule, type Rules, type Review, type Session, type Skill, type Skills } from './api';
 
 const LIGHTS: Record<Light, { label: string; dot: string; text: string }> = {
@@ -599,6 +601,13 @@ function NotOn({ org }: { org: Org }) {
   );
 }
 
+const ALL_VIEWS = VIEWS.flatMap((g) => g.items.map((i) => i.id));
+/** The view in the address, such as #rules, so a reload or a shared link opens the same view. */
+function fromHash(): ViewId {
+  const id = window.location.hash.slice(1) as ViewId;
+  return ALL_VIEWS.includes(id) ? id : 'reviews';
+}
+
 type View = { kind: 'loading' } | { kind: 'ready'; overview: Overview; decisions: Decision[]; total: number; rules: Rules | null; skills: Skills | null; checks: Checks | null } | { kind: 'off' } | { kind: 'error' };
 
 export default function Dashboard() {
@@ -610,6 +619,11 @@ export default function Dashboard() {
   const [cancelled] = useState(() => params.has('error') && !params.has('code'));
   const [orgId, setOrgId] = useState<number | null>(null);
   const [view, setView] = useState<View>({ kind: 'loading' });
+  const [tab, setTab] = useState<ViewId>(() => fromHash());
+  const pickTab = (id: ViewId) => {
+    setTab(id);
+    window.history.replaceState(null, '', id === 'reviews' ? window.location.pathname : `#${id}`);
+  };
 
   // Coming back from GitHub with a sign-in code.
   useEffect(() => {
@@ -704,25 +718,9 @@ export default function Dashboard() {
     );
   }
 
-  return (
-    <Shell
-      right={
-        <span className="flex items-center gap-4 text-[14px] text-muted">
-          <span className="hidden sm:inline">{session.user.login}</span>
-          <button
-            type="button"
-            onClick={() => {
-              void signOut(session);
-              setSession(null);
-            }}
-            className="rounded-full px-3 py-1.5 text-[13px] text-muted transition-colors hover:bg-white/[0.06] hover:text-fg"
-          >
-            Sign out
-          </button>
-        </span>
-      }
-    >
-      {!org ? (
+  if (!org) {
+    return (
+      <Shell>
         <Card>
           <h2 className="text-[19px] font-semibold tracking-[-0.01em]">No repositories to show</h2>
           <p className="mt-2 max-w-xl text-[15px] leading-relaxed text-muted">
@@ -731,114 +729,95 @@ export default function Dashboard() {
             <a href={signInUrl()} className="text-fg underline decoration-white/30 underline-offset-4 hover:decoration-white">sign in again</a>.
           </p>
         </Card>
-      ) : (
-        <>
-          <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
-            <div>
-              <p className="text-sm font-medium text-mint">Dashboard</p>
-              <h1 className="mt-1.5 text-[30px] font-semibold tracking-[-0.03em]">{org.login}</h1>
-            </div>
-            {session.orgs.length > 1 && (
-              <div className={`${WELL} flex flex-wrap gap-1 p-1`} role="tablist" aria-label="Org">
-                {session.orgs.map((o) => (
-                  <button
-                    key={o.id}
-                    type="button"
-                    role="tab"
-                    aria-selected={o.id === org.id}
-                    onClick={() => setOrgId(o.id)}
-                    className={`rounded-xl px-3.5 py-1.5 text-[14px] transition-colors ${o.id === org.id ? 'bg-white/[0.09] text-fg' : 'text-muted hover:text-fg'}`}
-                  >
-                    {o.login}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-          {/* The page can only show what the sign-in's app is installed on, so the way to add more is always in reach. */}
-          <p className="-mt-2 mb-6 text-[13px] text-faint">
-            Don't see an org or a repository?{' '}
-            <a href={ADD_REPOS_URL} target="_blank" rel="noreferrer" className="text-muted underline decoration-white/20 underline-offset-4 hover:text-fg">Add it on GitHub</a>, then{' '}
-            <a href={signInUrl()} className="text-muted underline decoration-white/20 underline-offset-4 hover:text-fg">sign in again</a>.
-          </p>
-          {view.kind === 'loading' && (
-            <p className="flex items-center justify-center gap-3 py-24 text-[15px] text-muted">
-              <Spinner /> Loading reviews
-            </p>
-          )}
-          {view.kind === 'off' && <NotOn org={org} />}
-          {view.kind === 'error' && (
-            <Card>
-              <h2 className="text-[19px] font-semibold tracking-[-0.01em]">The dashboard couldn't load</h2>
-              <p className="mt-2 text-[15px] text-muted">The Mergelight server didn't answer. Your reviews are not affected.</p>
-              <button type="button" onClick={() => load()} className={`${PRIMARY} mt-5 h-10 px-5 text-[14px]`}>
-                Try again
-              </button>
-            </Card>
-          )}
-          {view.kind === 'ready' && (
-            <div className="space-y-5">
-              {view.overview.reviews.length ? <Reviews overview={view.overview} /> : <NothingYet org={org} />}
-              {view.rules && (
-                <RulesCard
-                  rules={view.rules}
-                  onAdd={async (rule) => {
-                    await signedIn(() => addRule(session, org.id, rule));
-                    // The rule is in. If only the fresh list fails to load, that isn't a failed Add: saying so would invite a second one.
-                    const rules = await loadRules(session, org.id).catch(() => null);
-                    if (rules) setView((v) => (v.kind === 'ready' ? { ...v, rules } : v));
-                  }}
-                  onRemove={async (rule) => {
-                    await signedIn(() => removeRule(session, org.id, rule.id));
-                    setView((v) => (v.kind === 'ready' && v.rules ? { ...v, rules: { ...v.rules, rules: v.rules.rules.filter((x) => x.id !== rule.id) } } : v));
-                  }}
-                />
-              )}
-              {view.skills && (
-                <SkillsCard
-                  skills={view.skills}
-                  onAdd={async (skill) => {
-                    await signedIn(() => addSkill(session, org.id, skill));
-                    // The skill is in. If only the fresh list fails to load, that isn't a failed Add.
-                    const skills = await loadSkills(session, org.id).catch(() => null);
-                    if (skills) setView((v) => (v.kind === 'ready' ? { ...v, skills } : v));
-                  }}
-                  onRemove={async (skill) => {
-                    await signedIn(() => removeSkill(session, org.id, skill.id));
-                    setView((v) => (v.kind === 'ready' && v.skills ? { ...v, skills: { ...v.skills, skills: v.skills.skills.filter((x) => x.id !== skill.id) } } : v));
-                  }}
-                />
-              )}
-              {view.checks && (
-                <ChecksCard
-                  checks={view.checks}
-                  onAdd={async (check) => {
-                    await signedIn(() => addCheck(session, org.id, check));
-                    // The check is in. If only the fresh list fails to load, that isn't a failed Add.
-                    const checks = await loadChecks(session, org.id).catch(() => null);
-                    if (checks) setView((v) => (v.kind === 'ready' ? { ...v, checks } : v));
-                  }}
-                  onRemove={async (check) => {
-                    await signedIn(() => removeCheck(session, org.id, check.id));
-                    setView((v) => (v.kind === 'ready' && v.checks ? { ...v, checks: { ...v.checks, checks: v.checks.checks.filter((x) => x.id !== check.id) } } : v));
-                  }}
-                />
-              )}
-              {(view.overview.reviews.length > 0 || view.decisions.length > 0) && (
-                <Decisions
-                  decisions={view.decisions}
-                  total={view.total}
-                  onForget={async (d) => {
-                    await signedIn(() => forgetDecision(session, org.id, d.id));
-                    setView((v) => (v.kind === 'ready' ? { ...v, decisions: v.decisions.filter((x) => x.id !== d.id), total: v.total - 1 } : v));
-                  }}
-                />
-              )}
-            </div>
-          )}
-        </>
+      </Shell>
+    );
+  }
+
+  return (
+    <AppShell
+      login={session.user.login}
+      orgs={session.orgs}
+      org={org}
+      onPickOrg={setOrgId}
+      view={tab}
+      onView={pickTab}
+      onSignOut={() => {
+        void signOut(session);
+        setSession(null);
+      }}
+    >
+      {view.kind === 'loading' && (
+        <p className="flex items-center justify-center gap-3 py-24 text-[15px] text-muted-foreground">
+          <Spinner /> Loading reviews
+        </p>
       )}
-    </Shell>
+      {view.kind === 'off' && <NotOn org={org} />}
+      {view.kind === 'error' && (
+        <Card>
+          <h2 className="text-[19px] font-semibold tracking-[-0.01em]">The dashboard couldn't load</h2>
+          <p className="mt-2 text-[15px] text-muted">The Mergelight server didn't answer. Your reviews are not affected.</p>
+          <button type="button" onClick={() => load()} className={`${PRIMARY} mt-5 h-10 px-5 text-[14px]`}>
+            Try again
+          </button>
+        </Card>
+      )}
+      {view.kind === 'ready' && tab === 'reviews' && (view.overview.reviews.length ? <ReviewsView overview={view.overview} /> : <NothingYet org={org} />)}
+      {view.kind === 'ready' && tab === 'rules' && view.rules && (
+        <RulesCard
+          rules={view.rules}
+          onAdd={async (rule) => {
+            await signedIn(() => addRule(session, org.id, rule));
+            // The rule is in. If only the fresh list fails to load, that isn't a failed Add: saying so would invite a second one.
+            const rules = await loadRules(session, org.id).catch(() => null);
+            if (rules) setView((v) => (v.kind === 'ready' ? { ...v, rules } : v));
+          }}
+          onRemove={async (rule) => {
+            await signedIn(() => removeRule(session, org.id, rule.id));
+            setView((v) => (v.kind === 'ready' && v.rules ? { ...v, rules: { ...v.rules, rules: v.rules.rules.filter((x) => x.id !== rule.id) } } : v));
+          }}
+        />
+      )}
+      {view.kind === 'ready' && tab === 'skills' && view.skills && (
+        <SkillsCard
+          skills={view.skills}
+          onAdd={async (skill) => {
+            await signedIn(() => addSkill(session, org.id, skill));
+            // The skill is in. If only the fresh list fails to load, that isn't a failed Add.
+            const skills = await loadSkills(session, org.id).catch(() => null);
+            if (skills) setView((v) => (v.kind === 'ready' ? { ...v, skills } : v));
+          }}
+          onRemove={async (skill) => {
+            await signedIn(() => removeSkill(session, org.id, skill.id));
+            setView((v) => (v.kind === 'ready' && v.skills ? { ...v, skills: { ...v.skills, skills: v.skills.skills.filter((x) => x.id !== skill.id) } } : v));
+          }}
+        />
+      )}
+      {view.kind === 'ready' && tab === 'checks' && view.checks && (
+        <ChecksCard
+          checks={view.checks}
+          onAdd={async (check) => {
+            await signedIn(() => addCheck(session, org.id, check));
+            // The check is in. If only the fresh list fails to load, that isn't a failed Add.
+            const checks = await loadChecks(session, org.id).catch(() => null);
+            if (checks) setView((v) => (v.kind === 'ready' ? { ...v, checks } : v));
+          }}
+          onRemove={async (check) => {
+            await signedIn(() => removeCheck(session, org.id, check.id));
+            setView((v) => (v.kind === 'ready' && v.checks ? { ...v, checks: { ...v.checks, checks: v.checks.checks.filter((x) => x.id !== check.id) } } : v));
+          }}
+        />
+      )}
+      {view.kind === 'ready' && tab === 'decisions' && (
+        <Decisions
+          decisions={view.decisions}
+          total={view.total}
+          onForget={async (d) => {
+            await signedIn(() => forgetDecision(session, org.id, d.id));
+            setView((v) => (v.kind === 'ready' ? { ...v, decisions: v.decisions.filter((x) => x.id !== d.id), total: v.total - 1 } : v));
+          }}
+        />
+      )}
+    </AppShell>
   );
 }
 
