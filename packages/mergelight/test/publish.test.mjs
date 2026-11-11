@@ -294,7 +294,7 @@ test("handled findings get their own dropdown, and aren't also listed as no long
 test("yellow doesn't block unless a team asks, and red always does", () => {
   assert.equal(checkConclusion("green"), "success");
   assert.equal(checkConclusion("yellow"), "neutral");
-  assert.equal(checkConclusion("red"), "failure");
+  assert.equal(checkConclusion("red"), "neutral", "a review is a judgment, not a failed build: no red cross unless the team asks for it");
   assert.equal(checkConclusion("yellow", true), "action_required");
   assert.equal(checkConclusion("red", true), "failure");
   assert.equal(checkConclusion("green", true), "success");
