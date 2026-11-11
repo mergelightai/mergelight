@@ -6,6 +6,10 @@
 //                  Tokens must be made for exactly this address, so one made for another server is refused.
 //   PORT           Port to listen on. The host sets it.
 // Optional:
+//   DASHBOARD_ORIGINS  Sites whose pages may show the dashboard, with commas between them.
+//                  Default: https://mergelight.dev
+//   SIGN_IN_APP    The GitHub App people sign in to the dashboard with, by its name in its address.
+//                  Default: mergelight-setup
 //   CONNECT_ORGS   Orgs to turn the dashboard on for at start, as "id:login,id:login" with GitHub's
 //                  number for each account. It stands in until sign-in exists.
 //
@@ -15,6 +19,7 @@ import { createServer, type IncomingMessage, type Server } from "node:http";
 import { fileURLToPath } from "node:url";
 import { createApi, MAX_BODY } from "./api.js";
 import { assertRowRulesHold, connectOrg, createPool, migrate, parseConnectOrgs } from "./db.js";
+import { parseOrigins } from "./people.js";
 
 async function readBody(req: IncomingMessage): Promise<Buffer> {
   const chunks: Buffer[] = [];
@@ -32,7 +37,7 @@ export function createDataServer(api: (request: Request) => Promise<Response>): 
   const server = createServer(async (req, res) => {
     try {
       const headers: Record<string, string> = {};
-      for (const name of ["authorization", "content-type"] as const) {
+      for (const name of ["authorization", "content-type", "origin"] as const) {
         const value = req.headers[name];
         if (value) headers[name] = value;
       }
@@ -60,7 +65,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const pool = createPool(DATABASE_URL);
   let api: (request: Request) => Promise<Response>;
   try {
-    api = createApi({ pool, publicUrl: PUBLIC_URL });
+    api = createApi({ pool, publicUrl: PUBLIC_URL, origins: parseOrigins(process.env.DASHBOARD_ORIGINS), signInApp: process.env.SIGN_IN_APP || undefined });
     const orgs = parseConnectOrgs(process.env.CONNECT_ORGS);
     await assertRowRulesHold(pool);
     await migrate(pool);

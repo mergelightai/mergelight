@@ -13,6 +13,7 @@
 
 import { HttpError, verifyOidcToken } from "../../token-server/dist/token.js";
 import { isId, withOrg, type Pool } from "./db.js";
+import { createPeopleApi } from "./people.js";
 
 /**
  * Who a token must be made for: this server's own public address, like "https://data.example.com",
@@ -87,6 +88,10 @@ export interface ApiOptions {
   pool: Pool;
   /** The address workflows reach this server at. Tokens must be made for exactly this. */
   publicUrl: string;
+  /** Sites whose pages may use the dashboard's side of the API from a browser. */
+  origins?: string[];
+  /** The GitHub App people sign in to the dashboard with. */
+  signInApp?: string;
   fetchImpl?: typeof fetch;
   now?: () => number;
 }
@@ -116,8 +121,8 @@ export function parseReview(body: unknown): ReviewRow {
   if (!isRecord(tiers) || !count(tiers.post) || !count(tiers.list) || !count(tiers.decision)) throw bad("tiers");
   if (!count(major)) throw bad("major count");
   if (!oneOf(PROVIDERS, provider)) throw bad("provider");
-  // The brackets are for names like "sonnet[1m]".
-  if (model != null && (typeof model !== "string" || !/^[\w.:/[\]-]{1,100}$/.test(model))) throw bad("model");
+  // The brackets are for names like "sonnet[1m]", and the @ for ones like "claude-opus@20260101".
+  if (model != null && (typeof model !== "string" || !/^[\w.:/@[\]-]{1,100}$/.test(model))) throw bad("model");
   if (verifier != null && !oneOf(PROVIDERS, verifier)) throw bad("verifier");
   if (!count(duration_ms, MAX_INT)) throw bad("duration_ms");
   if (!count(files_changed, MAX_INT)) throw bad("files_changed");
@@ -132,8 +137,10 @@ export function parseReview(body: unknown): ReviewRow {
   };
 }
 
-export function createApi({ pool, publicUrl, fetchImpl = fetch, now = () => Date.now() }: ApiOptions): (request: Request) => Promise<Response> {
+export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"], signInApp, fetchImpl = fetch, now = () => Date.now() }: ApiOptions): (request: Request) => Promise<Response> {
   const audience = audienceOf(publicUrl);
+  /** The dashboard's side: signed-in people. Runs and people never share a route or a kind of token. */
+  const people = createPeopleApi({ pool, origins, signInApp, fetchImpl, now });
   /** The path the server is mounted under, if any. A proxy may strip it or pass it on, so both forms are routed. */
   const mount = new URL(audience).pathname.replace(/\/+$/, "");
   /** Token ids already used, with when each expires. A token works once, so a copied one is worth nothing. */
@@ -244,6 +251,8 @@ export function createApi({ pool, publicUrl, fetchImpl = fetch, now = () => Date
     const full = new URL(request.url).pathname;
     const pathname = mount && (full === mount || full.startsWith(`${mount}/`)) ? full.slice(mount.length) || "/" : full;
     if (request.method === "GET" && pathname === "/") return respond(200, { service: "mergelight-server" });
+    const forPeople = await people(request, pathname);
+    if (forPeople) return forPeople;
     const route = Object.hasOwn(routes, pathname) ? routes[pathname] : undefined;
     if (!route) return respond(404, { error: "not_found" });
     if (request.method !== route.method) return respond(405, { error: "method_not_allowed" });
