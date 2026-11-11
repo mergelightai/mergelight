@@ -37,7 +37,8 @@ export interface ModelReview {
   summary: string;
   /** same_as: the earlier review's finding this one continues, if any. */
   findings: (ModelFinding & { same_as?: string | null })[];
-  rejected: { candidate: string; reason: string }[];
+  /** decision: the team's earlier decision that caused the rejection, when the verifier was given any. */
+  rejected: { candidate: string; reason: string; decision?: string | null }[];
   /** Up to 3 findings (1-based) a senior reviewer would hold the merge for, most important first. */
   top: number[];
 }
@@ -96,6 +97,8 @@ export interface Review {
   light: Light;
   summary: string;
   findings: Finding[];
+  /** The team's earlier decisions the verifier used to leave findings out, by id like "M12". */
+  used_memories?: string[];
   /** Actions a changed workflow uses whose code the reviewers couldn't see. */
   not_read?: { uses: string; why: "program" | "unreadable" }[];
   stats: {

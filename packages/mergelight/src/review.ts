@@ -11,10 +11,12 @@ import {
   type Candidate,
   type PriorFinding,
   type PromptInput,
+  type TeamMemory,
+  usedMemories,
 } from "./prompt.js";
 import { LimitError, LoginError } from "./providers/codex.js";
 import { claudeAvailable, runModel, TOOLING, type ProviderName } from "./providers/index.js";
-import { candidateSchema, reviewSchema } from "./schema.js";
+import { candidateSchema, reviewSchema, reviewSchemaWithDecisions } from "./schema.js";
 import type { Finding, Light, ModelFinding, ModelReview, Review, Tier } from "./types.js";
 import { cacheDir, prepareWorkspace } from "./workspace.js";
 
@@ -32,6 +34,8 @@ export interface ReviewOptions {
   verifyModel?: string;
   /** What earlier review rounds of this pull request found. The verifier checks each one again. */
   previous?: PriorFinding[];
+  /** Findings the team declined in earlier pull requests. Only those in files this one changes reach the verifier. */
+  memories?: TeamMemory[];
   /** Keep the temporary checkout for inspection. */
   keep?: boolean;
   /** Progress messages. transient ones (the command the agent is running) are only worth showing live. */
@@ -163,7 +167,8 @@ export async function verifyCandidates(dir: string, input: PromptInput, found: C
   const result = await runModel(opts.provider, {
     cwd: dir,
     prompt: buildVerifierPrompt(forProvider(dir, input, opts.provider), found),
-    schema: reviewSchema,
+    // Only a verifier that was given the team's earlier decisions is asked which one it used.
+    schema: input.memories?.length ? reviewSchemaWithDecisions : reviewSchema,
     model: opts.model,
     effort: opts.effort,
     logFile: opts.logFile,
@@ -178,6 +183,21 @@ export async function verifyCandidates(dir: string, input: PromptInput, found: C
     })
     .sort((a, b) => ORDER[a.class] - ORDER[b.class] || a.file.localeCompare(b.file) || a.line - b.line);
   return { summary: review.summary, findings, rejected: review.rejected, model: result.model, cost_usd: result.cost_usd ?? null };
+}
+
+/** Most recent first, as the server sends them. Enough for the files of one pull request, and not a wall of old decisions. */
+const MAX_MEMORIES = 30;
+
+/**
+ * A decision is about one problem in one file, so only those in files this pull request changes are
+ * passed on. One made on this very pull request is left out: the verifier already gets it with the
+ * earlier rounds, and reviewing its own pull request again must not count as a use that keeps it alive.
+ */
+export function memoriesFor(memories: TeamMemory[] | undefined, changedFiles: string[], pullRequest?: number): TeamMemory[] {
+  // The same file, however its path was written down: src/a.ts, ./src/a.ts or /src/a.ts.
+  const plain = (path: string) => path.replace(/^(\.\/|\/)+/, "");
+  const changed = new Set(changedFiles.map(plain));
+  return (memories ?? []).filter((m) => changed.has(plain(m.file)) && m.pr !== pullRequest).slice(0, MAX_MEMORIES);
 }
 
 export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): Promise<Review> {
@@ -204,6 +224,7 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
       diff: ws.diff,
       diffTruncated: ws.diffTruncated,
       previous: opts.previous,
+      memories: memoriesFor(opts.memories, ws.changedFiles.map((f) => f.path), pr.number),
     };
 
     // Step 1: hunters, one per area, in parallel. One failing doesn't sink the review.
@@ -305,6 +326,7 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
       light: mergeLight(verified.findings),
       summary: verified.summary,
       findings: verified.findings,
+      ...(input.memories?.length ? { used_memories: usedMemories(input.memories, verified.rejected, found) } : {}),
       ...(unread.length ? { not_read: unread } : {}),
       stats: {
         duration_ms: Date.now() - started,

@@ -10,7 +10,24 @@ A run that has the input set does tell the server who it is, even before the ser
 
 Stored, per review: the repository's name and GitHub id, the pull request number, the commit, the light (green, yellow, red), how many findings of each kind, which AI ran it (`codex` or `claude`, and the model's name), how long it took, and the size of the change.
 
-Never stored, because it is never sent: code, diffs, finding text, file paths, pull request titles, AI logins.
+Stored, per finding a team declined: its title, the file and lines it was in, the reason the person gave, the GitHub login of who declined it, when, and in which pull request. This is the one place the server holds text about your code. It is what lets a later review leave that finding out.
+
+Never stored, because it is never sent: code, diffs, findings nobody declined, pull request titles, AI logins.
+
+## Memory
+
+When someone marks a finding "won't fix" and says why, the next review of that pull request sends the decision to the server. Later reviews of the same repository get the decisions about files they change, and the verifier leaves those findings out.
+
+- A decision is about one problem in one file. It never covers another file or another kind of problem.
+- It reaches the reviewing model as data: one line of escaped JSON in a block of its own, with the rules for using it above the block. Line breaks are taken out before it is stored, so a reason can't start a heading or an instruction of its own.
+- Only a decision by someone who can push to the repository is sent, and only a decision written later than the one on file replaces it.
+- The verifier reads the code first. If the code changed so the reason no longer fits, it ignores the decision. A major bug that can still happen is reported whatever was decided.
+- A decision nobody needed for 90 days is dropped, on a clock, in every repository. A use starts the 90 days again, and a use is only counted when the verifier names the decision as the cause of a rejection in that file. A repository keeps 500 at most.
+- The dashboard lists them. Anyone who can push to the repository can make Mergelight forget one. Its text is wiped and a marker stays, so the pull request it came from can't bring it back. A newer decision can.
+- Taking a "won't fix" back on GitHub doesn't remove the decision. Forget on the dashboard does.
+- A decision made right before a merge is not learned: it is sent by the next review of that pull request, and a merged one gets none.
+- One GitHub setting widens who can send a decision. If an org lets pull requests from forks of a private repository run with write tokens, a fork's run can send one too. With that setting on, treat decisions as coming from anyone who can open such a pull request.
+- The server takes a run's word for a decision. Someone who can push a branch can send one that nobody made on GitHub. That is the same group of people who can decline a finding for real, and the dashboard shows every decision with its pull request, so a made-up one can be found and removed. A decision is text for the reviewer to weigh, never an instruction to it.
 
 `node dist/admin.js delete <github-account-id>` removes everything stored for an org.
 

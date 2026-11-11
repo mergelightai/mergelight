@@ -57,6 +57,25 @@ export interface Overview {
   reviews: Review[];
 }
 
+/** A finding the team chose not to fix, and why. Mergelight leaves it out of later reviews of that file. */
+export interface Decision {
+  id: number;
+  repo_id: number;
+  repo: string;
+  title: string;
+  file: string;
+  line: number;
+  end_line: number | null;
+  reason: string;
+  by: string;
+  pr: number;
+  created_at: string;
+  last_used_at: string | null;
+  uses: number;
+  /** Whether this person can make Mergelight forget it: they can push to that repository. */
+  can_forget: boolean;
+}
+
 /** Thrown when the session ran out or the server restarted. The page then asks for a new sign-in. */
 export class SignedOut extends Error {}
 /** Thrown when the org hasn't turned the dashboard on. */
@@ -169,6 +188,29 @@ export async function loadOverview(session: Session, orgId: number): Promise<Ove
   if (res.status === 404 && ((await res.json()) as { error?: string }).error === 'not_connected') throw new NotConnected();
   if (!res.ok) throw new Error(`The Mergelight server answered ${res.status}.`);
   return (await res.json()) as Overview;
+}
+
+export async function loadDecisions(session: Session, orgId: number): Promise<{ decisions: Decision[]; total: number }> {
+  const res = await fetch(`${SERVER}/v1/orgs/${orgId}/memories`, { headers: { authorization: `Bearer ${session.token}` }, signal: AbortSignal.timeout(TIMEOUT_MS) });
+  if (res.status === 401) {
+    remember(null);
+    throw new SignedOut();
+  }
+  if (res.status === 404 && ((await res.json()) as { error?: string }).error === 'not_connected') throw new NotConnected();
+  if (!res.ok) throw new Error(`The Mergelight server answered ${res.status}.`);
+  const { memories, total } = (await res.json()) as { memories: Decision[]; total?: number };
+  return { decisions: memories, total: total ?? memories.length };
+}
+
+/** Makes Mergelight forget one decision. Later reviews may raise that finding again. */
+export async function forgetDecision(session: Session, orgId: number, id: number): Promise<void> {
+  const res = await fetch(`${SERVER}/v1/orgs/${orgId}/memories/${id}`, { method: 'DELETE', headers: { authorization: `Bearer ${session.token}` }, signal: AbortSignal.timeout(TIMEOUT_MS) });
+  if (res.status === 401) {
+    remember(null);
+    throw new SignedOut();
+  }
+  // Already gone counts as done.
+  if (!res.ok && res.status !== 404) throw new Error(`The Mergelight server answered ${res.status}.`);
 }
 
 export async function signOut(session: Session): Promise<void> {

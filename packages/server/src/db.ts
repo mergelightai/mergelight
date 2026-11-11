@@ -14,6 +14,9 @@ const MIGRATIONS = join(dirname(fileURLToPath(import.meta.url)), "..", "migratio
 /** Any fixed number: two servers starting at once take turns applying migrations. */
 const MIGRATE_LOCK = 7_234_001;
 
+/** A decision of the team that nobody needed for this many days is dropped. Each use starts the time again. */
+export const MEMORY_DAYS = 90;
+
 /** GitHub's ids are positive whole numbers. Anything else never reaches a query. */
 export function isId(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
@@ -84,6 +87,26 @@ export async function withOrg<T>(pool: Pool, orgId: number, fn: (db: Db) => Prom
     const result = await fn(client);
     await client.query("commit");
     return result;
+  } catch (err) {
+    await client.query("rollback").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Drops every decision that nobody needed for 90 days, in all orgs at once. The database only shows
+ * this transaction the rows that ran out, and only lets it delete them (migrations/002_memories.sql).
+ */
+export async function purgeExpiredMemories(pool: Pool): Promise<number> {
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    await client.query("select set_config('mergelight.purge', 'on', true)");
+    const { rowCount } = await client.query("delete from memories where memory_ran_out(last_used_at, updated_at, forgotten_at)");
+    await client.query("commit");
+    return rowCount ?? 0;
   } catch (err) {
     await client.query("rollback").catch(() => {});
     throw err;

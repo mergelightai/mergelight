@@ -106,3 +106,29 @@ export const reviewSchema = {
     },
   },
 } as const;
+
+/**
+ * The review schema for a verifier that was given the team's earlier decisions. Each rejected
+ * candidate then names the decision that caused it, or null. Reviews without decisions keep the
+ * plain schema, so nothing changes for them.
+ */
+export const reviewSchemaWithDecisions = {
+  ...reviewSchema,
+  properties: {
+    ...reviewSchema.properties,
+    rejected: {
+      ...reviewSchema.properties.rejected,
+      items: {
+        ...reviewSchema.properties.rejected.items,
+        required: ["candidate", "reason", "decision"],
+        properties: {
+          ...reviewSchema.properties.rejected.items.properties,
+          decision: {
+            type: ["string", "null"],
+            description: "The id of the team's earlier decision that is why you rejected it, like M12. Null when you rejected it for any other reason.",
+          },
+        },
+      },
+    },
+  },
+} as const;

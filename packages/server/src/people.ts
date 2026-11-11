@@ -10,7 +10,7 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import { HttpError } from "../../token-server/dist/token.js";
-import { isId, withOrg, type Pool } from "./db.js";
+import { isId, MEMORY_DAYS, withOrg, type Pool } from "./db.js";
 import { DEFAULT_SIGN_IN_APP, lookUp, looksLikePersonToken, type Person, type Reach } from "./github.js";
 
 /**
@@ -32,6 +32,8 @@ const LIMITED_TOKEN_WAITS_MS = 60_000;
 /** Requests a minute for one person, over all their sessions. */
 const REQUESTS_PER_MINUTE = 240;
 const RECENT_REVIEWS = 50;
+/** How many decisions the dashboard lists at once, most recent first. */
+const DECISIONS_PER_PAGE = 500;
 
 interface Session {
   person: Person;
@@ -217,19 +219,78 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
     };
   }
 
+  /** What the team decided not to fix, in the repositories this person can see. */
+  async function memories(session: Session, orgId: number): Promise<{ status: number; body: unknown }> {
+    const reach = session.reach.get(orgId);
+    if (!reach) throw new HttpError(404, "not_found", "No such org.");
+    const rows = await withOrg(pool, orgId, async (db) => {
+      if ((await db.query("select 1 from orgs where id = $1", [orgId])).rowCount === 0) return null;
+      const live = "m.repo_id = any($1::bigint[]) and m.forgotten_at is null and coalesce(m.last_used_at, m.updated_at) > now() - make_interval(days => $2)";
+      const args = [[...reach.repos.keys()], MEMORY_DAYS];
+      const found = await db.query(
+        `select m.id, m.repo_id, m.title, m.file, m.line, m.end_line, m.reason, m.by_login, m.pr, m.decided_at, m.last_used_at, m.uses
+           from memories m where ${live} order by m.updated_at desc limit ${DECISIONS_PER_PAGE}`,
+        args,
+      );
+      const total = await db.query(`select count(*)::int as n from memories m where ${live}`, args);
+      return { list: found.rows, total: total.rows[0]?.n ?? found.rows.length };
+    });
+    if (!rows) throw new HttpError(404, "not_connected", "This org hasn't turned the Mergelight dashboard on.");
+    return {
+      status: 200,
+      body: {
+        // How many there are in all, so the page can say when it shows only the most recent ones.
+        total: rows.total,
+        memories: rows.list.map((m) => {
+          const repo = reach.repos.get(Number(m.repo_id));
+          return {
+            id: Number(m.id), repo_id: Number(m.repo_id), repo: repo?.name ?? "", title: m.title, file: m.file, line: m.line, end_line: m.end_line,
+            reason: m.reason, by: m.by_login, pr: m.pr, created_at: m.decided_at, last_used_at: m.last_used_at, uses: m.uses,
+            // Only someone who can push to the repository can make Mergelight forget a decision made there.
+            can_forget: repo?.write === true,
+          };
+        }),
+      },
+    };
+  }
+
+  /** Makes Mergelight forget one decision. For people who can push to that repository, the ones who could have made it. */
+  async function forget(session: Session, orgId: number, memoryId: number): Promise<{ status: number; body: unknown }> {
+    const reach = session.reach.get(orgId);
+    if (!reach) throw new HttpError(404, "not_found", "No such org.");
+    const outcome = await withOrg(pool, orgId, async (db) => {
+      const { rows } = await db.query("select repo_id from memories where id = $1 and forgotten_at is null", [memoryId]);
+      const repo = rows[0] ? reach.repos.get(Number(rows[0].repo_id)) : undefined;
+      // A decision in a repository this person can't see looks the same as one that doesn't exist.
+      if (!repo) return "missing";
+      if (!repo.write) return "read_only";
+      // The text is wiped and the row stays. The pull request the decision came from still holds it, and
+      // without this its next review would bring the decision straight back.
+      // The marker carries the moment of forgetting, so only a decision someone writes after it counts
+      // again, whichever pull request an older one turns up from.
+      await db.query("update memories set forgotten_at = now(), decided_at = now(), title = '', file = '', reason = '', by_login = '' where id = $1", [memoryId]);
+      return "gone";
+    });
+    if (outcome === "missing") throw new HttpError(404, "not_found", "No such decision.");
+    if (outcome === "read_only") throw new HttpError(403, "read_only", "Only people who can push to this repository can remove a decision.");
+    return { status: 204, body: null };
+  }
+
   /**
    * Answers a dashboard request, or returns null when the path isn't the dashboard's.
    * pathname has the server's mount path already taken off.
    */
   return async function handle(request: Request, pathname: string): Promise<Response | null> {
-    const org = /^\/v1\/orgs\/(\d{1,18})\/overview$/.exec(pathname);
+    const org = /^\/v1\/orgs\/(\d{1,18})\/(overview|memories)(?:\/(\d{1,18}))?$/.exec(pathname);
     if (pathname !== "/v1/session" && !org) return null;
+    // Only one decision at a time has an address of its own.
+    if (org && org[3] && org[2] !== "memories") return null;
 
     // A browser only lets a page read the answer when its site is named here. Other callers send no Origin.
     const origin = request.headers.get("origin");
     if (origin && !origins.includes(origin)) return json(403, { error: "origin_not_allowed" }, {});
     const cors: Record<string, string> = origin ? { "access-control-allow-origin": origin, vary: "Origin" } : {};
-    const methods = org ? "GET" : "POST, DELETE";
+    const methods = !org ? "POST, DELETE" : org[3] ? "DELETE" : "GET";
     if (request.method === "OPTIONS") {
       return json(204, null, { ...cors, "access-control-allow-methods": methods, "access-control-allow-headers": "authorization, content-type", "access-control-max-age": "600" });
     }
@@ -238,10 +299,12 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
       const at = now();
       let result: { status: number; body: unknown };
       if (org) {
-        if (request.method !== "GET") return json(405, { error: "method_not_allowed" }, cors);
         const orgId = Number(org[1]);
-        if (!isId(orgId)) throw new HttpError(404, "not_found", "No such org.");
-        result = await overview(sessionOf(request, at).session, orgId);
+        const memoryId = org[3] ? Number(org[3]) : null;
+        if (request.method !== (memoryId === null ? "GET" : "DELETE")) return json(405, { error: "method_not_allowed" }, cors);
+        if (!isId(orgId) || (memoryId !== null && !isId(memoryId))) throw new HttpError(404, "not_found", "No such org.");
+        const { session } = sessionOf(request, at);
+        result = memoryId !== null ? await forget(session, orgId, memoryId) : org[2] === "memories" ? await memories(session, orgId) : await overview(session, orgId);
       } else if (request.method === "POST") {
         result = await signIn(request, at);
       } else if (request.method === "DELETE") {
