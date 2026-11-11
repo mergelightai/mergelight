@@ -6,7 +6,7 @@ import { Separator } from '@/components/ui/separator';
 import { Toaster } from '@/components/ui/sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarHeader, SidebarInset, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
+import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarHeader, SidebarInset, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider, SidebarTrigger, useSidebar } from '@/components/ui/sidebar';
 import { ADD_REPOS_URL, signInUrl, type Org, type Session } from './api';
 import { ago } from './format';
 import { EMAIL, GITHUB } from '../links';
@@ -46,6 +46,25 @@ const NAV_ITEM = [
   'data-active:after:absolute data-active:after:right-3 data-active:after:top-1/2 data-active:after:size-1.5 data-active:after:-translate-y-1/2 data-active:after:rounded-full data-active:after:bg-mint data-active:after:shadow-[0_0_10px_2px_rgb(63_232_184/0.55)]',
   'group-data-[collapsible=icon]:after:hidden',
 ].join(' ');
+
+/** A view in the menu. On a phone the menu is a sheet over the page, so picking a view closes it. */
+function NavButton({ active, label, icon: Icon, onClick }: { active: boolean; label: string; icon: (props: { className?: string }) => React.JSX.Element; onClick: () => void }) {
+  const { isMobile, setOpenMobile } = useSidebar();
+  return (
+    <SidebarMenuButton
+      isActive={active}
+      onClick={() => {
+        onClick();
+        if (isMobile) setOpenMobile(false);
+      }}
+      className={NAV_ITEM}
+      tooltip={label}
+    >
+      <Icon />
+      <span>{label}</span>
+    </SidebarMenuButton>
+  );
+}
 
 function OrgPicker({ orgs, org, onPick }: { orgs: Org[]; org: Org; onPick: (id: number) => void }) {
   if (orgs.length < 2) {
@@ -183,10 +202,7 @@ export function AppShell({ user, orgs, org, onPickOrg, view, onView, onSignOut, 
                 <SidebarMenu>
                   {g.items.map((item) => (
                     <SidebarMenuItem key={item.id}>
-                      <SidebarMenuButton isActive={view === item.id} onClick={() => onView(item.id)} className={NAV_ITEM} tooltip={item.label}>
-                        <item.icon />
-                        <span>{item.label}</span>
-                      </SidebarMenuButton>
+                      <NavButton active={view === item.id} label={item.label} icon={item.icon} onClick={() => onView(item.id)} />
                     </SidebarMenuItem>
                   ))}
                 </SidebarMenu>

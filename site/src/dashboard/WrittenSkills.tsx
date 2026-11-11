@@ -69,9 +69,13 @@ export async function removeWrittenSkill(session: Session, orgId: number, id: nu
 function WriteSkillForm({ orgId, repos, onAdd, startOpen }: { orgId: number; repos: WrittenSkills['repos']; onAdd: (skill: NewWrittenSkill) => Promise<void>; startOpen: boolean }) {
   const places = repos.filter((r) => r.can_write_skills).map((r) => ({ value: String(r.id), label: r.name }));
   const allowed = places.map((p) => p.value);
-  const [draft, setDraft, clear] = useDraft(DRAFT_KEY, { place: '', name: '', description: '', text: '' });
+  const [draft, setDraft, clear] = useDraft(`${DRAFT_KEY}.${orgId}`, { place: '', name: '', description: '', text: '' });
   const place = allowed.includes(draft.place) ? draft.place : lastRepo(orgId, allowed);
   const [open, setOpen] = useState(startOpen);
+  // Opens when asked to, also when the view was already on screen.
+  useEffect(() => {
+    if (startOpen) setOpen(true);
+  }, [startOpen]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const ready = draft.name.trim().length > 0 && draft.description.trim().length > 0 && draft.text.trim().length > 0 && place !== null;

@@ -87,7 +87,7 @@ const OVERVIEWS = {
 let failures = 0;
 const expect = (ok, what) => { console.log(`  ${ok ? 'ok ' : 'FAIL'} ${what}`); if (!ok) failures++; };
 
-async function open(name, { signedOutAfter = Infinity, serverDown = false, forgetFails = false, signedOutOnAdd = false } = {}) {
+async function open(name, { signedOutAfter = Infinity, serverDown = false, forgetFails = false, signedOutOnAdd = false, noOrgs = false } = {}) {
   /** Whether the one Add that finds the session ran out has happened. */
   let addSignedOut = false;
   /** Decisions the page asked the server to forget. */
@@ -131,7 +131,8 @@ async function open(name, { signedOutAfter = Infinity, serverDown = false, forge
       if (m === 'OPTIONS') return req.respond({ status: 204, headers: cors });
       calls.push({ m, path: u.pathname, auth: req.headers().authorization ?? '' });
       if (serverDown) return json(req, { error: 'server_error' }, 500);
-      if (u.pathname === '/v1/session' && m === 'POST') return json(req, SESSION, 201);
+      // Like the real server: a sign-in with nothing to show gets no session token.
+      if (u.pathname === '/v1/session' && m === 'POST') return json(req, noOrgs ? { ...SESSION, token: null, expires_at: null, orgs: [] } : SESSION, 201);
       if (u.pathname === '/v1/session' && m === 'DELETE') return req.respond({ status: 204, headers: cors });
       const rules = /^\/v1\/orgs\/(\d+)\/rules(?:\/(\d+))?$/.exec(u.pathname);
       if (rules && !RULES[rules[1]]) return json(req, { error: 'not_connected' }, 404);
@@ -236,7 +237,8 @@ async function open(name, { signedOutAfter = Infinity, serverDown = false, forge
   const text = () => page.evaluate(() => document.querySelector('main').innerText.replace(/\s+/g, ' '));
   const click = async (selector, label) => {
     const at = await page.evaluate((s, t) => {
-      const el = [...document.querySelectorAll(s)].find((e) => e.textContent.trim() === t);
+      // Only what is on screen: a phone and a wide screen each hide one copy of the menu.
+      const el = [...document.querySelectorAll(s)].find((e) => e.textContent.trim() === t && e.getClientRects().length > 0);
       if (!el) return null;
       // A real mouse can only click what is on screen.
       el.scrollIntoView({ block: 'center', behavior: 'instant' });
@@ -552,9 +554,26 @@ const done = async (t) => {
   expect(/No reviews to show yet/.test(await t.text()) && /repositories this sign-in can't see/.test(await t.text()) && (await t.text()).includes(`server: ${SERVER}`) && /It never sends code/.test(await t.text()), 'an org with no reviews yet shows the one line to add, and what a review sends');
   await t.shot('3-nothing-yet');
 
+  const tripsBefore = t.renewals.length;
   await t.page.reload({ waitUntil: 'networkidle2' });
   await wait(500);
-  expect(/acme\/widgets #42/.test(await t.text()), 'a reload keeps the session, with no trip to GitHub');
+  expect(/No reviews to show yet/.test(await t.text()) && /fresh/.test(await t.page.evaluate(() => document.querySelector('[aria-label="Switch org"]').textContent)) && t.renewals.length === tripsBefore, 'a reload keeps the session and the org, with no trip to GitHub');
+  await t.menu('Switch org', 'acme');
+  expect(/acme\/widgets #42/.test(await t.text()), 'and switching back shows that org again');
+
+  // On a phone the menu is a sheet over the page. Picking a view closes it.
+  await t.page.setViewport({ width: 390, height: 844, deviceScaleFactor: 2 });
+  await wait(400);
+  await t.page.click('[data-sidebar=trigger]');
+  await wait(500);
+  expect(await t.page.evaluate(() => !!document.querySelector('[data-mobile=true]')), 'on a phone, the menu button opens the menu');
+  await t.view('Checks');
+  await wait(400);
+  const sheetOpen = await t.page.evaluate(() => !!document.querySelector('[data-mobile=true]'));
+  expect(!sheetOpen && /Only a real pass gets through/.test(await t.text()), 'on a phone, picking a view closes the menu and shows the view');
+  await t.page.setViewport({ width: 1280, height: 900, deviceScaleFactor: 2 });
+  await wait(400);
+  await t.view('Reviews');
 
   await t.menu('Your account', 'Sign out');
   expect(/Continue with GitHub/.test(await t.text()), 'signing out goes back to the sign-in screen');
@@ -644,6 +663,16 @@ const done = async (t) => {
   await t.click('[role=dialog] button', 'Add');
   await wait(800);
   expect(t.added.length === 1 && t.added[0].text === 'Keep this text.', 'one more click adds it');
+  await done(t);
+}
+
+{
+  const t = await open('no-orgs', { noOrgs: true });
+  await t.signIn();
+  expect(/No repositories to show/.test(await t.text()), 'a sign-in with no org to show says so');
+  await t.click('button', 'Sign out');
+  await wait(400);
+  expect(/Continue with GitHub/.test(await t.text()), 'and can sign out from there');
   await done(t);
 }
 

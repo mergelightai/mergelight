@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { SignedOut, type Check, type Checks, type NewCheck } from '../api';
 import { ViewHeader } from '../AppShell';
@@ -13,6 +13,10 @@ function NewCheckForm({ orgId, checks, onAdd, startOpen }: { orgId: number; chec
   const [draft, setDraft, clear] = useDraft(`mergelight.dashboard.draft.${orgId}.check`, { name: '', text: '', paths: '', place: '' });
   const place = allowed.includes(draft.place) ? draft.place : lastRepo(orgId, allowed);
   const [open, setOpen] = useState(startOpen);
+  // Opens when asked to, also when the view was already on screen.
+  useEffect(() => {
+    if (startOpen) setOpen(true);
+  }, [startOpen]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const files = patterns(draft.paths);
@@ -101,6 +105,7 @@ export function ChecksView({ orgId, checks, onAdd, onRemove, resume }: { orgId: 
                     <p className="mt-1 text-xs text-muted-foreground/70">
                       set by {c.by}, {ago(c.created_at)}
                       <span className="md:hidden">, {c.repo}</span>
+                      <span className="block font-mono lg:hidden">{c.paths.join(', ')}</span>
                     </p>
                   </DataCell>
                   <DataCell className="hidden md:table-cell">

@@ -260,6 +260,18 @@ export function rememberRepo(orgId: number, value: string): void {
   }
 }
 
+const ORG = 'mergelight.dashboard.org';
+
+/** The org picked in this tab. A reload, or a new sign-in through GitHub, comes back to it. */
+export function keptOrg(): number | null {
+  const id = Number(read(ORG));
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+export function keepOrg(id: number): void {
+  write(ORG, String(id));
+}
+
 const RESUME = 'mergelight.dashboard.resume';
 
 /** Marks a form to open again after a new sign-in, because the session ran out while it was being saved. */

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { SignedOut, type Session, type Skill, type Skills } from '../api';
 import { WrittenSkillsSection } from '../WrittenSkills';
@@ -14,6 +14,10 @@ function NewSkillForm({ orgId, skills, onAdd, startOpen }: { orgId: number; skil
   const [draft, setDraft, clear] = useDraft(`mergelight.dashboard.draft.${orgId}.skill`, { path: '', place: '' });
   const place = allowed.includes(draft.place) ? draft.place : lastRepo(orgId, allowed);
   const [open, setOpen] = useState(startOpen);
+  // Opens when asked to, also when the view was already on screen.
+  useEffect(() => {
+    if (startOpen) setOpen(true);
+  }, [startOpen]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const ready = draft.path.trim().length > 0 && place !== null;

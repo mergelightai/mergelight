@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { SignedOut, type NewRule, type Rule, type Rules } from '../api';
 import { ViewHeader } from '../AppShell';
@@ -20,6 +20,10 @@ function NewRuleForm({ orgId, rules, onAdd, startOpen }: { orgId: number; rules:
   const [draft, setDraft, clear] = useDraft(`mergelight.dashboard.draft.${orgId}.rule`, { kind: 'rule', text: '', paths: '', place: '' });
   const place = allowed.includes(draft.place) ? draft.place : lastRepo(orgId, allowed);
   const [open, setOpen] = useState(startOpen);
+  // Opens when asked to, also when the view was already on screen.
+  useEffect(() => {
+    if (startOpen) setOpen(true);
+  }, [startOpen]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const kind = draft.kind as Rule['kind'];
@@ -116,6 +120,7 @@ export function RulesView({ orgId, rules, onAdd, onRemove, resume }: { orgId: nu
                         <>
                           set by {r.by}, {ago(r.created_at)}
                           <span className="md:hidden">, {r.repo ?? 'every repository'}</span>
+                          <span className="block font-mono text-xs lg:hidden">{r.paths.length ? r.paths.join(', ') : 'All files'}</span>
                         </>
                       }
                     />

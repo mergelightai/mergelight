@@ -59,7 +59,7 @@ export function SignIn({ failed, cancelled }: { failed: boolean; cancelled: bool
   );
 }
 
-export function NoOrg() {
+export function NoOrg({ onSignOut }: { onSignOut: () => void }) {
   return (
     <GlassCard className="w-full max-w-lg">
       <h2 className="font-heading text-lg font-semibold">No repositories to show</h2>
@@ -74,6 +74,9 @@ export function NoOrg() {
         </a>
         .
       </p>
+      <Button variant="secondary" className="mt-5" onClick={onSignOut}>
+        Sign out
+      </Button>
     </GlassCard>
   );
 }

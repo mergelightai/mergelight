@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { addCheck, addRule, addSkill, finishSignIn, forgetDecision, loadChecks, loadDecisions, loadOverview, loadRules, loadSkills, mayRenew, NotConnected, rememberedSession, removeCheck, removeRule, removeSkill, SignedOut, signInUrl, signOut, tidyAddress, type Checks, type Decision, type Overview, type Rules, type Session, type Skills } from './api';
 import { AppShell, VIEWS, type ViewId } from './AppShell';
-import { takeResume } from './kit';
+import { keepOrg, keptOrg, takeResume } from './kit';
 import { ChecksView } from './views/ChecksView';
 import { DecisionsView } from './views/DecisionsView';
 import { ReviewsView } from './views/ReviewsView';
@@ -26,7 +26,13 @@ export default function Dashboard() {
   const [failed, setFailed] = useState(false);
   // GitHub sends a cancelled sign-in back with an error and no code.
   const [cancelled] = useState(() => params.has('error') && !params.has('code'));
-  const [orgId, setOrgId] = useState<number | null>(null);
+  const [resume, setResume] = useState<string | null>(null);
+  const [orgId, setOrgId] = useState<number | null>(() => keptOrg());
+  const pickOrg = (id: number) => {
+    keepOrg(id);
+    setResume(null);
+    setOrgId(id);
+  };
   const [view, setView] = useState<View>({ kind: 'loading' });
   const [tab, setTab] = useState<ViewId>(() => fromHash());
   const pickTab = (id: ViewId) => {
@@ -110,7 +116,6 @@ export default function Dashboard() {
 
 
   // A form whose save was cut off by a new sign-in opens again, once, with its text.
-  const [resume, setResume] = useState<string | null>(null);
   useEffect(() => {
     if (view.kind !== 'ready') return;
     // A view, and after a # which of its forms, such as "skills#write".
@@ -122,6 +127,10 @@ export default function Dashboard() {
     toast.info('You were signed in again. Your text is still there: save it once more.');
     // Runs once each time the data is ready.
   }, [view.kind]);
+  // The form has opened by now. Clear the mark, so a refresh or a new view doesn't open it again.
+  useEffect(() => {
+    if (resume) setResume(null);
+  }, [resume]);
 
   if (signingIn) {
     return (
@@ -140,7 +149,12 @@ export default function Dashboard() {
   if (!org) {
     return (
       <Centered>
-        <NoOrg />
+        <NoOrg
+          onSignOut={() => {
+            void signOut(session);
+            setSession(null);
+          }}
+        />
       </Centered>
     );
   }
@@ -151,14 +165,17 @@ export default function Dashboard() {
       user={session.user}
       orgs={session.orgs}
       org={org}
-      onPickOrg={setOrgId}
+      onPickOrg={pickOrg}
       view={tab}
       onView={(id) => {
         setResume(null);
         pickTab(id);
       }}
       loadedAt={ready ? ready.at : null}
-      onRefresh={() => load()}
+      onRefresh={() => {
+        setResume(null);
+        load();
+      }}
       onSignOut={() => {
         void signOut(session);
         setSession(null);
