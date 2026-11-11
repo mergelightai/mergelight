@@ -139,3 +139,34 @@
     @apply font-sans;
   }
 }
+
+/* Menus, select lists and popovers: a pane of glass around a solid panel.
+   The pane blurs the page behind it, and its rim catches light at the top like a real glass edge. */
+@layer components {
+  .glass-frame {
+    background: linear-gradient(180deg, rgb(255 255 255 / 0.11), rgb(255 255 255 / 0.035));
+    -webkit-backdrop-filter: blur(22px) saturate(180%) brightness(1.08);
+    backdrop-filter: blur(22px) saturate(180%) brightness(1.08);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.32),
+      inset 0 -1px 0 rgb(255 255 255 / 0.06),
+      inset 0 0 18px rgb(255 255 255 / 0.05),
+      0 0 0 1px rgb(0 0 0 / 0.45),
+      0 32px 64px -24px rgb(0 0 0 / 0.85);
+  }
+  .glass-frame::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1px;
+    pointer-events: none;
+    background: linear-gradient(165deg, rgb(255 255 255 / 0.6), rgb(255 255 255 / 0.12) 30%, rgb(255 255 255 / 0.03) 60%, rgb(255 255 255 / 0.22));
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+  }
+  .glass-inner {
+    box-shadow: 0 0 0 1px rgb(0 0 0 / 0.5), 0 1px 3px rgb(0 0 0 / 0.45), inset 0 1px 0 rgb(255 255 255 / 0.05);
+  }
+}
