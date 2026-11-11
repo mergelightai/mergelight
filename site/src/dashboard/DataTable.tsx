@@ -44,6 +44,24 @@ export function DataCell({ className, ...props }: ComponentProps<'td'>) {
   return <td className={cn('px-4 py-4 align-middle first:pl-6 last:pr-6', className)} {...props} />;
 }
 
+/** A row you can click anywhere on to open its page on GitHub, in a new tab. Its links and buttons keep working as they are. */
+export function DataRow({ href, className, ...props }: ComponentProps<'tr'> & { href?: string }) {
+  return (
+    <tr
+      className={cn(href && 'cursor-pointer', className)}
+      onClick={
+        href
+          ? (e) => {
+              if ((e.target as HTMLElement).closest('a, button, [role=menuitem]') || window.getSelection()?.toString()) return;
+              window.open(href, '_blank', 'noopener,noreferrer');
+            }
+          : undefined
+      }
+      {...props}
+    />
+  );
+}
+
 /** A cell with a main line and a quieter line under it. */
 export function TwoLines({ main, sub }: { main: ReactNode; sub: ReactNode }) {
   return (

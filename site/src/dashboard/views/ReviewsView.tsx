@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import type { Light, Overview, Review } from '../api';
 import { ViewHeader } from '../AppShell';
-import { DataBody, DataCell, DataHead, DataHeadCell, DataTable, TwoLines } from '../DataTable';
+import { DataBody, DataCell, DataRow, DataHead, DataHeadCell, DataTable, TwoLines } from '../DataTable';
 import { ago, findings, LIGHTS, took } from '../format';
 
 export function LightBadge({ light }: { light: Light }) {
@@ -65,7 +65,7 @@ export function ReviewsView({ overview }: { overview: Overview }) {
           {overview.reviews.map((r) => {
             const url = `https://github.com/${r.repo}/pull/${r.pr}`;
             return (
-              <tr key={`${r.repo_id}-${r.pr}-${r.created_at}`}>
+              <DataRow key={`${r.repo_id}-${r.pr}-${r.created_at}`} href={url}>
                 <DataCell>
                   <TwoLines
                     main={
@@ -91,7 +91,7 @@ export function ReviewsView({ overview }: { overview: Overview }) {
                     <ArrowUpRightIcon />
                   </Button>
                 </DataCell>
-              </tr>
+              </DataRow>
             );
           })}
         </DataBody>
@@ -105,7 +105,7 @@ export function ReviewsView({ overview }: { overview: Overview }) {
         </DataHead>
         <DataBody>
           {overview.repos.map((repo) => (
-            <tr key={repo.id}>
+            <DataRow key={repo.id} href={`https://github.com/${repo.name}`}>
               <DataCell>
                 <TwoLines main={repo.name} sub={`Last review ${ago(repo.last_review_at)}`} />
               </DataCell>
@@ -115,7 +115,7 @@ export function ReviewsView({ overview }: { overview: Overview }) {
                   <ArrowUpRightIcon />
                 </Button>
               </DataCell>
-            </tr>
+            </DataRow>
           ))}
         </DataBody>
       </DataTable>

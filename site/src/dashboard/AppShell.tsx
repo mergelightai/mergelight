@@ -3,6 +3,7 @@ import { RotateCwIcon, ExternalLinkIcon, EllipsisIcon, PuzzleIcon, BrainIcon, Li
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
+import { TooltipProvider } from '@/components/ui/tooltip';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarHeader, SidebarInset, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import { ADD_REPOS_URL, signInUrl, type Org, type Session } from './api';
@@ -42,6 +43,8 @@ const NAV_ITEM = [
   'data-active:shadow-[inset_0_1px_0_rgb(255_255_255/0.08),0_0_0_1px_rgb(255_255_255/0.05),0_1px_2px_rgb(0_0_0/0.3)]',
   'data-active:before:absolute data-active:before:left-1 data-active:before:top-1/2 data-active:before:h-3.5 data-active:before:w-[3px] data-active:before:-translate-y-1/2 data-active:before:rounded-full data-active:before:bg-[oklch(0.72_0.16_277)]',
   'data-active:[&_svg]:text-[oklch(0.8_0.12_277)]',
+  // Shrunk to icons, the tile alone shows where you are: the bar would sit on the icon.
+  'group-data-[collapsible=icon]:before:hidden',
 ].join(' ');
 
 function OrgPicker({ orgs, org, onPick }: { orgs: Org[]; org: Org; onPick: (id: number) => void }) {
@@ -55,7 +58,7 @@ function OrgPicker({ orgs, org, onPick }: { orgs: Org[]; org: Org; onPick: (id: 
   }
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger render={<SidebarMenuButton className="w-fit px-1.5" aria-label="Switch org" />}>
+      <DropdownMenuTrigger render={<SidebarMenuButton className="w-fit px-1.5 group-data-[collapsible=icon]:p-1!" aria-label="Switch org" />}>
         <OrgIcon org={org} />
         <span className="truncate font-medium">{org.login}</span>
         <ChevronDownIcon className="size-3.5 opacity-50" />
@@ -162,8 +165,9 @@ export function AppShell({ user, orgs, org, onPickOrg, view, onView, onSignOut, 
   const group = VIEWS.find((g) => g.items.some((i) => i.id === view)) ?? VIEWS[0];
   const here = { label: group.items.find((i) => i.id === view)?.label ?? '' };
   return (
+    <TooltipProvider>
     <SidebarProvider>
-      <Sidebar variant="floating">
+      <Sidebar variant="floating" collapsible="icon">
         <SidebarHeader>
           <SidebarMenu>
             <SidebarMenuItem>
@@ -179,7 +183,7 @@ export function AppShell({ user, orgs, org, onPickOrg, view, onView, onSignOut, 
                 <SidebarMenu>
                   {g.items.map((item) => (
                     <SidebarMenuItem key={item.id}>
-                      <SidebarMenuButton isActive={view === item.id} onClick={() => onView(item.id)} className={NAV_ITEM}>
+                      <SidebarMenuButton isActive={view === item.id} onClick={() => onView(item.id)} className={NAV_ITEM} tooltip={item.label}>
                         <item.icon />
                         <span>{item.label}</span>
                       </SidebarMenuButton>
@@ -193,13 +197,13 @@ export function AppShell({ user, orgs, org, onPickOrg, view, onView, onSignOut, 
         <SidebarFooter>
           <SidebarMenu>
             <SidebarMenuItem>
-              <SidebarMenuButton size="sm" render={<a href={`mailto:${EMAIL}?subject=Mergelight%20support`} />}>
+              <SidebarMenuButton size="sm" tooltip="Support" render={<a href={`mailto:${EMAIL}?subject=Mergelight%20support`} />}>
                 <LifeBuoyIcon />
                 <span>Support</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
             <SidebarMenuItem>
-              <SidebarMenuButton size="sm" render={<a href={`${GITHUB}/issues/new`} target="_blank" rel="noreferrer" />}>
+              <SidebarMenuButton size="sm" tooltip="Feedback" render={<a href={`${GITHUB}/issues/new`} target="_blank" rel="noreferrer" />}>
                 <SendIcon />
                 <span>Feedback</span>
               </SidebarMenuButton>
@@ -225,6 +229,7 @@ export function AppShell({ user, orgs, org, onPickOrg, view, onView, onSignOut, 
         <div className="w-full px-4 pb-16 pt-2">{children}</div>
       </SidebarInset>
     </SidebarProvider>
+    </TooltipProvider>
   );
 }
 
