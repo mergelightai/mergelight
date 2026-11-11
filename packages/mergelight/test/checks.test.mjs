@@ -78,6 +78,9 @@ test("a check that takes too long ends as an error, and the review doesn't wait 
   const all = await run(many, () => (asked++, new Promise(() => {})), { each: 5_000, all: 80 });
   assert.deepEqual(all.map((r) => [r.outcome, r.summary]), Array.from({ length: 5 }, () => ["error", "This check took too long and was stopped."]));
   assert.equal(asked, 2, "the checks that were waiting for their turn were never started");
+  // A check that never got its turn and has no file in this pull request is skipped, not an error.
+  const mixed = await run([...many.slice(0, 3), { ...check, id: "K9", name: "Migrations", paths: ["db/migrations/**"] }], () => new Promise(() => {}), { each: 5_000, all: 60 });
+  assert.deepEqual(mixed.map((r) => r.outcome), ["error", "error", "error", "skipped"]);
   clearInterval(alive);
 });
 
@@ -129,6 +132,10 @@ test("a check reads the whole change to its own files, not the reviewers' diff, 
   // A large diff is cut, and the question says how to see the rest: with git where there is a shell, and "unsure" where there is none.
   assert.match(buildCheckPrompt(input, check, ["src/i18n/en.json"], { ...diffOf, cut: true }), /The diff is cut off here, because it is large\. Read the rest yourself with git diff base\.\.\.head -- <path>/);
   assert.match(buildCheckPrompt({ ...input, tooling: "files" }, check, ["src/i18n/en.json"], { ...diffOf, cut: true }), /Only the head version of each file is in the checkout\. If what you need to see is a line that was removed and isn't shown above, answer unsure\./);
+  // No diff at all is said as it is, not as a large one.
+  const none = buildCheckPrompt(input, check, ["src/i18n/en.json"], { text: "", cut: true, missing: true });
+  assert.match(none, /The diff of these files couldn't be made\. Read the changes yourself with git diff/);
+  assert.doesNotMatch(none, /<diff>|because it is large/);
 });
 
 test("a check's words and a file's name can't leave their place in the question", () => {
@@ -180,13 +187,16 @@ test("each outcome becomes a check of its own on GitHub, and no answer never cou
 
   const skipped = teamCheckBody({ ...base, outcome: "skipped", summary: "This pull request changes none of the files this check is about.", problems: [] });
   assert.equal(skipped.conclusion, "skipped");
+  // GitHub lets a neutral check through a branch rule. So "couldn't tell" and "couldn't run" ask for a person
+  // instead: a pull request's author can't get past a required check by making its run fail.
   const unsure = teamCheckBody({ ...base, outcome: "unsure", summary: "The removed lines aren't shown.", problems: [] });
-  assert.equal(unsure.conclusion, "neutral");
-  assert.equal(unsure.output.title, "Couldn't tell");
-  assert.match(unsure.output.summary, /it is not a pass/);
+  assert.equal(unsure.conclusion, "action_required");
+  assert.equal(unsure.output.title, "Couldn't tell: look at this one yourself");
+  assert.match(unsure.output.summary, /This is not a pass/);
   const error = teamCheckBody({ ...base, outcome: "error", summary: "The AI run for this check failed.", problems: [] });
-  assert.equal(error.conclusion, "neutral");
-  assert.match(error.output.summary, /doesn't block merging/);
+  assert.equal(error.conclusion, "action_required");
+  assert.match(error.output.summary, /This is not a pass/);
+  for (const outcome of ["pass", "fail", "unsure", "skipped", "error"]) assert.notEqual(teamCheckBody({ ...base, outcome, summary: "x", problems: [] }).conclusion, "neutral");
 });
 
 test("the checks are posted one by one, and one that can't be posted doesn't stop the others", async () => {

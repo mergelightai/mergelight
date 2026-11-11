@@ -30,16 +30,20 @@ export function plain(text: string): string {
 }
 
 /** What GitHub shows for one check: its conclusion, a title, and the reasons. */
-export function teamCheckBody(r: TeamCheckResult): { conclusion: "success" | "failure" | "skipped" | "neutral"; output: { title: string; summary: string } } {
+/**
+ * A team makes a check stop a merge by requiring it on GitHub, and GitHub lets a neutral check
+ * through. So only a real pass is a success: "couldn't tell" and "couldn't run" ask for a person,
+ * which a required check doesn't let through. Otherwise the author of a pull request could get past
+ * a check by making its run fail.
+ */
+export function teamCheckBody(r: TeamCheckResult): { conclusion: "success" | "failure" | "skipped" | "action_required"; output: { title: string; summary: string } } {
   const asked = `**The check:** ${code(r.text)}`;
   if (r.outcome === "skipped") return { conclusion: "skipped", output: { title: "Not needed: none of its files changed", summary: `${asked}\n\n${r.summary}` } };
-  // Not a pass: the AI couldn't see enough. Like no answer at all, it doesn't block a merge, and it says why.
   if (r.outcome === "unsure") {
-    return { conclusion: "neutral", output: { title: "Couldn't tell", summary: `${asked}\n\n${plain(r.summary)}\n\nThis check is neutral: it is not a pass. Look at this one yourself.` } };
+    return { conclusion: "action_required", output: { title: "Couldn't tell: look at this one yourself", summary: `${asked}\n\n${plain(r.summary)}\n\nThis is not a pass. If your team requires this check, it holds the merge until a run can tell.` } };
   }
-  // No answer is not a pass, and it isn't a fail either: like a review that couldn't run, it doesn't block a merge.
   if (r.outcome === "error") {
-    return { conclusion: "neutral", output: { title: "Couldn't run this check", summary: `${asked}\n\n${plain(r.summary)}\n\nThis check is neutral so a broken run doesn't block merging. The next push tries again.` } };
+    return { conclusion: "action_required", output: { title: "Couldn't run this check", summary: `${asked}\n\n${plain(r.summary)}\n\nThis is not a pass. If your team requires this check, it holds the merge. Run the review again, or push, to try once more.` } };
   }
   const problems = r.problems.map((p) => `- ${code(p.line ? `${p.file}:${p.line}` : p.file)} ${plain(p.note)}`);
   return {

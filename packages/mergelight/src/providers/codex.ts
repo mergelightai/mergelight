@@ -146,6 +146,8 @@ export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
     "-o", outFile,
     ...["plugins", "apps", "hooks", "image_generation", "browser_use", "computer_use"].flatMap((f) => ["--disable", f]),
     "-c", "notify=[]",
+    // Codex reads AGENTS.md from the working directory by itself and follows it. 0 bytes means it reads none.
+    ...(opts.projectDocs === false ? ["-c", "project_doc_max_bytes=0"] : []),
     "-c", 'web_search="disabled"',
     ...mcpServers(config).flatMap((name) => ["-c", `mcp_servers.${name}.enabled=false`]),
   ];

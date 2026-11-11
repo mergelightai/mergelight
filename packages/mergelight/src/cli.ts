@@ -15,7 +15,7 @@ import { reviewPullRequest } from "./review.js";
 import { askForApp, connect, githubConnect } from "./connect.js";
 import { init, realInitDeps } from "./init.js";
 import { realDeps, setup } from "./setup.js";
-import type { Review } from "./types.js";
+import type { Review, TeamCheckResult } from "./types.js";
 
 const HELP = `Mergelight: AI code review on the plan you already pay for.
 
@@ -224,6 +224,9 @@ async function main(): Promise<number> {
   const cloud = values.post && !dryRun ? await fetchContext({ log }) : { connected: false, memories: [], rules: [], skills: [], checks: [] };
 
   const progress = progressPrinter();
+  /** The team's checks that have an answer which isn't on GitHub yet. */
+  let answered: TeamCheckResult[] | undefined;
+  let checksPosted = false;
   try {
     // The login step already found this login can't be refreshed, so don't send every reviewer to find out.
     if (process.env.MERGELIGHT_LOGIN_LOST === "1") throw new LoginError(loginFailureMessage(process.env.SECRET_NAME || undefined));
@@ -245,6 +248,7 @@ async function main(): Promise<number> {
       onProgress: progress.onProgress,
     });
     progress.stop();
+    answered = review.team_checks;
 
     const json = JSON.stringify(review, null, 2);
     if (values.out) writeFileSync(values.out, `${json}\n`);
@@ -254,6 +258,7 @@ async function main(): Promise<number> {
       const result = await publishReview(review, { dryRun, log, checkRunId, yellowBlocks: values["yellow-blocks"] });
       log(`Posted: ${result.inline} inline, ${result.outside} in the summary only, ${result.resolved} resolved. ${result.summaryUrl ?? ""}`);
       if (review.team_checks?.length) {
+        checksPosted = true;
         const posted = await publishTeamChecks(api, review.pr.head_sha, review.team_checks, log).catch((e) => (log(`Couldn't post your team's checks: ${(e as Error).message}`), 0));
         if (posted) log(`Posted ${posted} of your team's check${posted === 1 ? "" : "s"}.`);
       }
@@ -280,6 +285,11 @@ async function main(): Promise<number> {
       const notice = limit ? limitNotice(limit.plan, limit.resets) : login ? loginNotice(login.plan, message) : undefined;
       await failCheck(api, checkRunId, headSha, message, log, title).catch((e) => log(`Couldn't update the check: ${(e as Error).message}`));
       await failSummary(api, ref.number, notice).catch((e) => log(`Couldn't update the summary: ${(e as Error).message}`));
+      // Each of the team's checks still gets an answer on GitHub, so a required one says why it holds the merge:
+      // the answer it already has, or that it wasn't asked.
+      const unasked = cloud.checks.map((c) => ({ id: c.id, name: c.name, text: c.text, outcome: "error" as const, summary: "The review couldn't run, so this check wasn't asked.", problems: [] }));
+      const owed = checksPosted ? [] : (answered ?? unasked);
+      if (owed.length) await publishTeamChecks(api, headSha, owed, log).catch((e) => log(`Couldn't post your team's checks: ${(e as Error).message}`));
     }
     return 1;
   }

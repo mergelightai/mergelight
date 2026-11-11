@@ -65,6 +65,7 @@ export function startTeamChecks(
   const list = checks.slice(0, MAX_CHECKS);
   const results: (TeamCheckResult | undefined)[] = new Array(list.length).fill(undefined);
   const base = (check: TeamCheck) => ({ id: check.id, name: check.name, text: check.text });
+  const skipped = (check: TeamCheck): TeamCheckResult => ({ ...base(check), outcome: "skipped", summary: "This pull request changes none of the files this check is about.", problems: [] });
   let over: string | null = null;
   let finish: (all: TeamCheckResult[]) => void = () => {};
   const done = new Promise<TeamCheckResult[]>((resolve) => (finish = resolve));
@@ -76,7 +77,8 @@ export function startTeamChecks(
     if (over !== null) return;
     over = why;
     clearTimeout(timer);
-    finish(list.map((check, i) => results[i] ?? { ...base(check), outcome: "error", summary: why, problems: [] }));
+    // A check that never got its turn and has no file to look at was never going to run.
+    finish(list.map((check, i) => results[i] ?? (filesOf(check, touched).length ? { ...base(check), outcome: "error", summary: why, problems: [] } : skipped(check))));
   }
 
   let next = 0;
@@ -88,7 +90,7 @@ export function startTeamChecks(
       if (!check) return;
       const files = filesOf(check, touched);
       if (!files.length) {
-        results[index] = { ...base(check), outcome: "skipped", summary: "This pull request changes none of the files this check is about.", problems: [] };
+        results[index] = skipped(check);
         continue;
       }
       onProgress(`Running your team's check "${check.name}"`);

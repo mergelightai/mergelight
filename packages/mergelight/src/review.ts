@@ -179,10 +179,10 @@ const MAX_CHECK_DIFF = 150_000;
  * The whole change to the files a check is about. Unlike the reviewers' diff it leaves nothing out:
  * a check that names a lockfile or a generated file must see what changed in it, removed lines included.
  */
-async function checkDiff(dir: string, base: string, head: string, files: string[]): Promise<{ text: string; cut: boolean }> {
+async function checkDiff(dir: string, base: string, head: string, files: string[]): Promise<{ text: string; cut: boolean; missing?: boolean }> {
   // The names come from git itself and go back to it as they are: never as options, never as patterns.
   const r = await run("git", ["--literal-pathspecs", "-C", dir, "diff", "-U5", "--no-color", "--no-ext-diff", "--no-renames", `${base}...${head}`, "--", ...files.slice(0, 50)], { timeoutMs: 60_000 });
-  if (r.code !== 0) return { text: "(the diff couldn't be made)", cut: true };
+  if (r.code !== 0) return { text: "", cut: true, missing: true };
   return r.stdout.length > MAX_CHECK_DIFF ? { text: r.stdout.slice(0, MAX_CHECK_DIFF), cut: true } : { text: r.stdout, cut: files.length > 50 };
 }
 
@@ -224,7 +224,7 @@ export function summaryWith(summary: string, needsHuman: string[], rulesUnread: 
     ? ` It changes ${needsHuman.slice(0, 3).map(code).join(", ")}${needsHuman.length > 3 ? ` and ${needsHuman.length - 3} more` : ""}, which your team marked as always needing a human.`
     : "";
   // A team may have rules that would have changed this review. Running without them must never be silent.
-  const unread = rulesUnread ? " Mergelight couldn't get your team's rules, skills and earlier decisions from its server, so this review ran without them." : "";
+  const unread = rulesUnread ? " Mergelight couldn't get your team's rules, skills, checks and earlier decisions from its server, so this review ran without them." : "";
   return `${summary}${guarded}${unread}`;
 }
 
@@ -376,6 +376,7 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
                 effort,
                 logFile: log(`check-${check.id}`),
                 timeoutMs: CHECK_TIMEOUT_MS,
+                projectDocs: false,
               })
             ).output,
           progress,
