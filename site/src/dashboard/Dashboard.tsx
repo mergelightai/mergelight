@@ -735,7 +735,7 @@ export default function Dashboard() {
 
   return (
     <AppShell
-      login={session.user.login}
+      user={session.user}
       orgs={session.orgs}
       org={org}
       onPickOrg={setOrgId}

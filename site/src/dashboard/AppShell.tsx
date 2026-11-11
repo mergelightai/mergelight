@@ -1,10 +1,12 @@
 import type { ReactNode } from 'react';
-import { BookOpenTextIcon, BrainIcon, CaretUpDownIcon, CheckIcon, GitPullRequestIcon, ListChecksIcon, ScalesIcon, SignOutIcon } from '@phosphor-icons/react';
+import { BookOpenTextIcon, BrainIcon, LifebuoyIcon, PaperPlaneTiltIcon, CaretUpDownIcon, CheckIcon, GitPullRequestIcon, ListChecksIcon, ScalesIcon, SignOutIcon } from '@phosphor-icons/react';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from '@/components/ui/breadcrumb';
 import { Separator } from '@/components/ui/separator';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarHeader, SidebarInset, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
-import type { Org } from './api';
+import type { Org, Session } from './api';
+import { EMAIL, GITHUB } from '../links';
 
 export type ViewId = 'reviews' | 'rules' | 'skills' | 'checks' | 'decisions';
 
@@ -60,7 +62,46 @@ function OrgPicker({ orgs, org, onPick }: { orgs: Org[]; org: Org; onPick: (id: 
   );
 }
 
-export function AppShell({ login, orgs, org, onPickOrg, view, onView, onSignOut, children }: { login: string; orgs: Org[]; org: Org; onPickOrg: (id: number) => void; view: ViewId; onView: (v: ViewId) => void; onSignOut: () => void; children: ReactNode }) {
+/** The person who is signed in. Their picture comes from GitHub, by their GitHub user id. */
+function Who({ user }: { user: Session['user'] }) {
+  return (
+    <>
+      <Avatar className="size-8 rounded-xl after:rounded-xl">
+        <AvatarImage src={`https://avatars.githubusercontent.com/u/${user.id}?s=80`} alt="" className="rounded-xl" />
+        <AvatarFallback className="rounded-xl uppercase">{user.login.slice(0, 1)}</AvatarFallback>
+      </Avatar>
+      <span className="grid flex-1 text-left leading-tight">
+        <span className="truncate font-medium">{user.login}</span>
+        <span className="truncate text-xs text-muted-foreground">Signed in with GitHub</span>
+      </span>
+    </>
+  );
+}
+
+function NavUser({ user, onSignOut }: { user: Session['user']; onSignOut: () => void }) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger render={<SidebarMenuButton size="lg" aria-label="Your account" />}>
+        <Who user={user} />
+        <CaretUpDownIcon className="ml-auto size-4 text-muted-foreground" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent side="top" align="start" className="min-w-56">
+        <DropdownMenuGroup>
+          <DropdownMenuLabel className="flex items-center gap-2 py-1.5 font-normal text-foreground">
+            <Who user={user} />
+          </DropdownMenuLabel>
+        </DropdownMenuGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onClick={onSignOut}>
+          <SignOutIcon />
+          Sign out
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+export function AppShell({ user, orgs, org, onPickOrg, view, onView, onSignOut, children }: { user: Session['user']; orgs: Org[]; org: Org; onPickOrg: (id: number) => void; view: ViewId; onView: (v: ViewId) => void; onSignOut: () => void; children: ReactNode }) {
   const group = VIEWS.find((g) => g.items.some((i) => i.id === view)) ?? VIEWS[0];
   const here = { group: group.group, label: group.items.find((i) => i.id === view)?.label ?? '' };
   return (
@@ -97,15 +138,22 @@ export function AppShell({ login, orgs, org, onPickOrg, view, onView, onSignOut,
         </SidebarContent>
         <SidebarFooter>
           <SidebarMenu>
-            <SidebarMenuItem className="flex items-center gap-2 px-2 py-1.5">
-              <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium uppercase">{login.slice(0, 1)}</span>
-              <span className="flex-1 truncate text-sm">{login}</span>
+            <SidebarMenuItem>
+              <SidebarMenuButton size="sm" render={<a href={`mailto:${EMAIL}?subject=Mergelight%20support`} />}>
+                <LifebuoyIcon />
+                <span>Support</span>
+              </SidebarMenuButton>
             </SidebarMenuItem>
             <SidebarMenuItem>
-              <SidebarMenuButton onClick={onSignOut}>
-                <SignOutIcon />
-                <span>Sign out</span>
+              <SidebarMenuButton size="sm" render={<a href={`${GITHUB}/issues/new`} target="_blank" rel="noreferrer" />}>
+                <PaperPlaneTiltIcon />
+                <span>Feedback</span>
               </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+          <SidebarMenu className="mt-2">
+            <SidebarMenuItem>
+              <NavUser user={user} onSignOut={onSignOut} />
             </SidebarMenuItem>
           </SidebarMenu>
         </SidebarFooter>
