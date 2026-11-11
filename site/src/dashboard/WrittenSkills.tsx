@@ -1,10 +1,14 @@
-// Skills a team writes on the dashboard itself. Next to the Skills card, where a team picks skill
-// folders that are in its repository. This card is in a file of its own, with its own calls to the
+// Skills a team writes on the dashboard itself. They sit in the Skills view, under the skill folders
+// a team picks from its repository. This part is in a file of its own, with its own calls to the
 // server, so the rest of the page can change without it.
 
-import { useEffect, useState } from 'react';
-import { SURFACE, WELL } from '../ui';
-import { call, NotConnected, type Session } from './api';
+import { Fragment, useEffect, useState } from 'react';
+import { toast } from 'sonner';
+import { Textarea } from '@/components/ui/textarea';
+import { call, NotConnected, SignedOut, type Session } from './api';
+import { DataBody, DataCell, DataHead, DataHeadCell, DataRow, DataTable, TwoLines } from './DataTable';
+import { ago } from './format';
+import { Choose, Confirm, EmptyList, Field, FormDialog, lastRepo, markResume, ReadOnly, rememberRepo, Tag, TextInput, useDraft } from './kit';
 
 /** A skill written on the dashboard. Its text is stored on the Mergelight server. */
 export interface WrittenSkill {
@@ -42,27 +46,6 @@ const TEXT_MAX = 8000;
  * until it is saved.
  */
 const DRAFT_KEY = 'mergelight.dashboard.written-skill';
-type Draft = { place: string; name: string; description: string; text: string };
-
-function draft(): Partial<Draft> {
-  try {
-    const kept = JSON.parse(sessionStorage.getItem(DRAFT_KEY) ?? '{}') as Partial<Draft> | null;
-    return kept && typeof kept === 'object' ? kept : {};
-  } catch {
-    return {};
-  }
-}
-
-function keepDraft(value: Draft | null): void {
-  try {
-    if (value && (value.name || value.description || value.text)) sessionStorage.setItem(DRAFT_KEY, JSON.stringify(value));
-    else sessionStorage.removeItem(DRAFT_KEY);
-  } catch {
-    /* Without storage a draft doesn't outlast a new sign-in. */
-  }
-}
-
-const text_ = (v: unknown) => (typeof v === 'string' ? v : '');
 
 export async function loadWrittenSkills(session: Session, orgId: number): Promise<WrittenSkills> {
   const res = await call(session, `/v1/orgs/${orgId}/written-skills`);
@@ -83,106 +66,100 @@ export async function removeWrittenSkill(session: Session, orgId: number, id: nu
   if (!res.ok && res.status !== 404) throw new Error(`The Mergelight server answered ${res.status}.`);
 }
 
-const FIELD = 'w-full rounded-xl bg-white/[0.04] px-3.5 text-[14px] text-fg shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)] outline-none placeholder:text-faint focus:shadow-[inset_0_0_0_1px_rgb(184_156_255/0.6)]';
-const PRIMARY = 'inline-flex h-10 items-center justify-center gap-2.5 rounded-full bg-fg px-5 text-[14px] font-medium text-ink transition-colors hover:bg-white disabled:opacity-40';
-
-function when(iso: string): string {
-  const days = Math.floor((Date.now() - Date.parse(iso)) / 86_400_000);
-  return days < 1 ? 'today' : days === 1 ? 'yesterday' : `${days} days ago`;
-}
-
-function NewWrittenSkillForm({ repos, onAdd }: { repos: WrittenSkills['repos']; onAdd: (skill: NewWrittenSkill) => Promise<void> }) {
-  const places = repos.filter((r) => r.can_write_skills);
-  const [kept] = useState(draft);
-  const [place, setPlace] = useState(() => (places.some((p) => String(p.id) === kept.place) ? text_(kept.place) : places[0] ? String(places[0].id) : ''));
-  const [name, setName] = useState(() => text_(kept.name).slice(0, 40));
-  const [description, setDescription] = useState(() => text_(kept.description).slice(0, 300));
-  const [text, setText] = useState(() => text_(kept.text).slice(0, TEXT_MAX));
+function WriteSkillForm({ orgId, repos, onAdd, startOpen }: { orgId: number; repos: WrittenSkills['repos']; onAdd: (skill: NewWrittenSkill) => Promise<void>; startOpen: boolean }) {
+  const places = repos.filter((r) => r.can_write_skills).map((r) => ({ value: String(r.id), label: r.name }));
+  const allowed = places.map((p) => p.value);
+  const [draft, setDraft, clear] = useDraft(`${DRAFT_KEY}.${orgId}`, { place: '', name: '', description: '', text: '' });
+  const place = allowed.includes(draft.place) ? draft.place : lastRepo(orgId, allowed);
+  const [open, setOpen] = useState(startOpen);
+  // Opens when asked to, also when the view was already on screen.
+  useEffect(() => {
+    if (startOpen) setOpen(true);
+  }, [startOpen]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  useEffect(() => keepDraft({ place, name, description, text }), [place, name, description, text]);
-  if (!places.length) {
-    return <p className="mt-5 text-[13px] leading-relaxed text-faint">Only an admin of a repository can write its skills.</p>;
-  }
-  const ready = name.trim().length > 0 && description.trim().length > 0 && text.trim().length > 0 && !busy;
+  const ready = draft.name.trim().length > 0 && draft.description.trim().length > 0 && draft.text.trim().length > 0 && place !== null;
   return (
-    <form
-      className={`${WELL} mt-5 space-y-3 p-4`}
-      onSubmit={(e) => {
-        e.preventDefault();
-        if (!ready) return;
+    <FormDialog
+      quiet
+      wide
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        setError(null);
+      }}
+      trigger="Write a skill"
+      title="Write a skill"
+      description="A how-to for one area, with a line that says when to use it. Each review of that repository can read it."
+      submit="Save skill"
+      busyLabel="Saving"
+      ready={ready}
+      busy={busy}
+      error={error}
+      onSubmit={() => {
+        if (!place) return;
         setBusy(true);
         setError(null);
-        onAdd({ repo_id: Number(place), name: name.trim(), description: description.trim(), text: text.trim() })
+        rememberRepo(orgId, place);
+        onAdd({ repo_id: Number(place), name: draft.name.trim(), description: draft.description.trim(), text: draft.text.trim() })
           .then(() => {
-            setName('');
-            setDescription('');
-            setText('');
+            clear();
+            setOpen(false);
+            toast.success('Skill saved');
           })
-          .catch((err: unknown) => setError(err instanceof Error ? err.message : 'That did not work.'))
+          .catch((err: unknown) => {
+            if (err instanceof SignedOut) markResume('skills#write');
+            setError(err instanceof SignedOut ? 'Your session ran out. Signing you in again: your text is kept.' : err instanceof Error ? err.message : 'That did not work.');
+          })
           .finally(() => setBusy(false));
       }}
     >
-      <div className="grid gap-3 sm:grid-cols-2">
-        <label className="block text-[13px] text-muted">
-          Repository
-          <select aria-label="Written skill repository" value={place} onChange={(e) => setPlace(e.target.value)} className={`${FIELD} mt-1.5 h-10`}>
-            {places.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="block text-[13px] text-muted">
-          A short name
-          <input aria-label="Written skill name" value={name} maxLength={40} onChange={(e) => setName(e.target.value)} placeholder="Payments" className={`${FIELD} mt-1.5 h-10`} />
-        </label>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field label="Repository">
+          <Choose label="Written skill repository" value={place} onChange={(v) => setDraft({ place: v })} choices={places} placeholder="Pick a repository" />
+        </Field>
+        <Field label="A short name">
+          <TextInput aria-label="Written skill name" value={draft.name} maxLength={40} onChange={(e) => setDraft({ name: e.target.value })} placeholder="Payments" />
+        </Field>
       </div>
-      <label className="block text-[13px] text-muted">
-        When to use it, in one line
-        <input aria-label="Written skill description" value={description} maxLength={300} onChange={(e) => setDescription(e.target.value)} placeholder="Use when a pull request changes src/billing." className={`${FIELD} mt-1.5 h-10`} />
-      </label>
-      <label className="block text-[13px] text-muted">
-        The skill
-        <textarea
+      <Field label="When to use it, in one line">
+        <TextInput aria-label="Written skill description" value={draft.description} maxLength={300} onChange={(e) => setDraft({ description: e.target.value })} placeholder="Use when a pull request changes src/billing." />
+      </Field>
+      <Field label="The skill" hint={`${draft.text.length} of ${TEXT_MAX} characters`}>
+        <Textarea
           aria-label="Written skill text"
-          value={text}
+          value={draft.text}
           maxLength={TEXT_MAX}
-          rows={8}
-          onChange={(e) => setText(e.target.value)}
+          rows={9}
+          onChange={(e) => setDraft({ text: e.target.value })}
           placeholder={'What matters in this area, and how to check it.\n\n- A refund is never larger than its invoice.\n- Amounts are whole cents, never fractions.'}
-          className={`${FIELD} mt-1.5 py-2.5 font-mono text-[13px] leading-6`}
+          className="field-sizing-fixed max-h-[45vh] min-h-48 resize-y rounded-xl bg-white/[0.05] px-3.5 py-2.5 font-mono text-[13px] leading-6"
         />
-      </label>
-      <div className="flex flex-wrap items-center gap-3 pt-1">
-        <button type="submit" disabled={!ready} className={PRIMARY}>
-          {busy ? 'Saving' : 'Save skill'}
-        </button>
-        <span className="text-[12.5px] text-faint">
-          {text.length} of {TEXT_MAX} characters
-        </span>
-        {error && <span className="text-[13px] text-risk">{error}</span>}
-      </div>
-    </form>
+      </Field>
+    </FormDialog>
   );
 }
 
 /**
- * The card. It loads its own list. signedIn runs a change and signs the person in again when the
- * session ran out, the same way the rest of the page does.
+ * The skills written on the dashboard, as a section of the Skills view. It loads its own list.
+ * signedIn runs a change and signs the person in again when the session ran out, the same way the
+ * rest of the page does.
  */
-export function WrittenSkillsCard({ session, orgId, signedIn }: { session: Session; orgId: number; signedIn: (change: () => Promise<void>) => Promise<void> }) {
+export function WrittenSkillsSection({ session, orgId, signedIn, resume }: { session: Session; orgId: number; signedIn: (change: () => Promise<void>) => Promise<void>; resume: boolean }) {
   const [data, setData] = useState<WrittenSkills | null>(null);
   const [open, setOpen] = useState<number | null>(null);
-  const [busy, setBusy] = useState<number | null>(null);
-  const [failed, setFailed] = useState<number | null>(null);
+  // The page clears its resume mark one render after it sets it, and this list may still be loading
+  // then. So the wish to open the form is kept here until the form is on screen.
+  const [wantOpen, setWantOpen] = useState(resume);
+  useEffect(() => {
+    if (resume) setWantOpen(true);
+  }, [resume]);
 
   useEffect(() => {
     let gone = false;
     setData(null);
     // Through signedIn, so a session that ran out just before this call is renewed, like anywhere else on the page.
-    // An org that isn't on has no card, and any other failure means no card either.
+    // An org that isn't on has no list, and any other failure means no list either.
     signedIn(async () => {
       const loaded = await loadWrittenSkills(session, orgId);
       if (!gone) setData(loaded);
@@ -190,81 +167,97 @@ export function WrittenSkillsCard({ session, orgId, signedIn }: { session: Sessi
     return () => {
       gone = true;
     };
-    // signedIn is a new function on each render of the page. The card loads once for each session and org.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // signedIn is a new function on each render of the page. The list loads once for each session and org.
   }, [session, orgId]);
 
   if (!data) return null;
+  const mayWrite = data.repos.some((r) => r.can_write_skills);
   return (
-    <section className={`${SURFACE} p-6 sm:p-7`}>
-      <h2 className="text-[17px] font-semibold tracking-[-0.01em]">Skills written here</h2>
-      <p className="mt-1.5 max-w-2xl text-[14px] leading-relaxed text-muted">
-        Write a skill on this page when it isn't a folder in your repository: a how-to for one area, with a line that says when to use it. Each review of that repository can read it.
-      </p>
-      <p className="mt-2 max-w-2xl text-[13px] leading-relaxed text-faint">
-        The text of a skill written here is stored on the Mergelight server. A skill says what matters in its area. It can't change how a review treats the code in a pull request.
-      </p>
-      {data.skills.length > 0 && (
-        <ul className="mt-3">
-          {data.skills.map((s) => (
-            <li key={s.id} className="border-t border-line py-3.5 first:border-t-0">
-              <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
-                <div className="min-w-0 flex-1 basis-[320px]">
-                  <p className="text-[15px] text-fg">
-                    <span className="font-medium">{s.name}</span>
-                    <span className="text-muted"> · {s.description}</span>
-                  </p>
-                  <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-faint">
-                    <span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-muted">{s.repo}</span>
-                    <span>
-                      written by {s.by}, {when(s.created_at)}
-                    </span>
-                  </p>
-                  {failed === s.id && <p className="mt-2 text-[13px] text-risk">That didn't work. Please try again.</p>}
-                </div>
-                <div className="flex items-center gap-1">
-                  <button
-                    type="button"
-                    aria-expanded={open === s.id}
-                    onClick={() => setOpen(open === s.id ? null : s.id)}
-                    className="rounded-full px-3 py-1.5 text-[13px] text-muted transition-colors hover:bg-white/[0.06] hover:text-fg"
-                  >
-                    {open === s.id ? 'Hide text' : 'Show text'}
-                  </button>
-                  {s.can_remove && (
-                    <button
-                      type="button"
-                      aria-label={`Delete skill ${s.name}`}
-                      disabled={busy === s.id}
-                      onClick={() => {
-                        setBusy(s.id);
-                        setFailed(null);
-                        signedIn(() => removeWrittenSkill(session, orgId, s.id))
-                          .then(() => setData((d) => (d ? { ...d, skills: d.skills.filter((x) => x.id !== s.id) } : d)))
-                          .catch(() => setFailed(s.id))
-                          .finally(() => setBusy(null));
-                      }}
-                      className="rounded-full px-3 py-1.5 text-[13px] text-muted transition-colors hover:bg-white/[0.06] hover:text-fg disabled:opacity-50"
-                    >
-                      {busy === s.id ? 'Deleting' : 'Delete skill'}
+    <section className="flex flex-col xl:flex-1">
+      <div className="mb-3 mt-8 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h2 className="font-heading text-base font-semibold">Written here</h2>
+          <p className="mt-1 text-sm text-muted-foreground">For an area that has no skill folder in the repository.</p>
+        </div>
+        {mayWrite ? (
+          <WriteSkillForm
+            orgId={orgId}
+            repos={data.repos}
+            startOpen={wantOpen}
+            onAdd={async (skill) => {
+              await signedIn(() => addWrittenSkill(session, orgId, skill));
+              // The skill is in. If only the fresh list fails to load, that isn't a failed save.
+              const fresh = await loadWrittenSkills(session, orgId).catch(() => null);
+              if (fresh) setData(fresh);
+            }}
+          />
+        ) : (
+          <ReadOnly>Only an admin of a repository can write its skills.</ReadOnly>
+        )}
+      </div>
+      {data.skills.length === 0 ? (
+        <EmptyList title="Nothing written yet">Skills written here are for an area that has no skill folder in the repository.</EmptyList>
+      ) : (
+        <DataTable fill>
+          <DataHead>
+            <DataHeadCell>Skill</DataHeadCell>
+            <DataHeadCell className="hidden md:table-cell">Repository</DataHeadCell>
+            <DataHeadCell className="w-56" aria-label="Actions" />
+          </DataHead>
+          <DataBody>
+            {data.skills.map((s) => (
+              <Fragment key={s.id}>
+                <DataRow>
+                  <DataCell className="whitespace-normal">
+                    <TwoLines main={s.name} sub={s.description} />
+                    <p className="mt-1 text-xs text-muted-foreground/70">
+                      written by {s.by}, {ago(s.created_at)}
+                      <span className="md:hidden">, {s.repo}</span>
+                    </p>
+                  </DataCell>
+                  <DataCell className="hidden md:table-cell">
+                    <Tag>{s.repo}</Tag>
+                  </DataCell>
+                  <DataCell className="text-right whitespace-nowrap">
+                    <button type="button" aria-expanded={open === s.id} onClick={() => setOpen(open === s.id ? null : s.id)} className="rounded-full px-3 py-1.5 text-[13px] text-muted-foreground transition-colors hover:bg-white/[0.06] hover:text-foreground">
+                      {open === s.id ? 'Hide text' : 'Show text'}
                     </button>
-                  )}
-                </div>
-              </div>
-              {open === s.id && <pre className={`${WELL} mt-3 max-h-80 overflow-auto whitespace-pre-wrap px-4 py-3 font-mono text-[13px] leading-6 text-muted`}>{s.text}</pre>}
-            </li>
-          ))}
-        </ul>
+                    {s.can_remove && (
+                      <Confirm
+                        label="Delete skill"
+                        ariaLabel={`Delete skill ${s.name}`}
+                        title="Delete this skill?"
+                        body="Its text is deleted from the Mergelight server, and reviews stop reading it."
+                        confirm="Yes, delete"
+                        busyLabel="Deleting"
+                        onConfirm={() =>
+                          signedIn(() => removeWrittenSkill(session, orgId, s.id)).then(
+                            () => {
+                              setData((d) => (d ? { ...d, skills: d.skills.filter((x) => x.id !== s.id) } : d));
+                              toast.success('Skill deleted');
+                            },
+                            (err: unknown) => {
+                              if (!(err instanceof SignedOut)) toast.error("That didn't work. Please try again.");
+                              throw err;
+                            },
+                          )
+                        }
+                      />
+                    )}
+                  </DataCell>
+                </DataRow>
+                {open === s.id && (
+                  <tr>
+                    <td colSpan={3} className="border-t-0! px-6 pb-5">
+                      <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded-2xl bg-black/20 px-4 py-3 font-mono text-[13px] leading-6 text-muted-foreground">{s.text}</pre>
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            ))}
+          </DataBody>
+        </DataTable>
       )}
-      <NewWrittenSkillForm
-        repos={data.repos}
-        onAdd={async (skill) => {
-          await signedIn(() => addWrittenSkill(session, orgId, skill));
-          // The skill is in. If only the fresh list fails to load, that isn't a failed save.
-          const fresh = await loadWrittenSkills(session, orgId).catch(() => null);
-          if (fresh) setData(fresh);
-        }}
-      />
     </section>
   );
 }
