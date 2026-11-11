@@ -76,6 +76,34 @@ export interface Decision {
   can_forget: boolean;
 }
 
+/** A rule the team set. rule: a line every review follows. needs_human: files that never go green by themselves. */
+export interface Rule {
+  id: number;
+  kind: 'rule' | 'needs_human';
+  text: string;
+  paths: string[];
+  by: string;
+  created_at: string;
+  /** Null for a rule of the whole org. */
+  repo_id: number | null;
+  repo: string | null;
+  can_remove: boolean;
+}
+
+export interface Rules {
+  rules: Rule[];
+  /** Whether this person may set rules for the whole org: they own it. */
+  can_set_org_rules: boolean;
+  repos: { id: number; name: string; can_set_rules: boolean }[];
+}
+
+export interface NewRule {
+  kind: Rule['kind'];
+  text: string;
+  paths: string[];
+  repo_id: number | null;
+}
+
 /** Thrown when the session ran out or the server restarted. The page then asks for a new sign-in. */
 export class SignedOut extends Error {}
 /** Thrown when the org hasn't turned the dashboard on. */
@@ -209,6 +237,39 @@ export async function forgetDecision(session: Session, orgId: number, id: number
     remember(null);
     throw new SignedOut();
   }
+  // Already gone counts as done.
+  if (!res.ok && res.status !== 404) throw new Error(`The Mergelight server answered ${res.status}.`);
+}
+
+async function call(session: Session, path: string, init: { method?: string; body?: string } = {}): Promise<Response> {
+  const res = await fetch(`${SERVER}${path}`, {
+    method: init.method ?? 'GET',
+    headers: { authorization: `Bearer ${session.token}`, ...(init.body ? { 'content-type': 'application/json' } : {}) },
+    body: init.body,
+    signal: AbortSignal.timeout(TIMEOUT_MS),
+  });
+  if (res.status === 401) {
+    remember(null);
+    throw new SignedOut();
+  }
+  return res;
+}
+
+export async function loadRules(session: Session, orgId: number): Promise<Rules> {
+  const res = await call(session, `/v1/orgs/${orgId}/rules`);
+  if (res.status === 404 && ((await res.json()) as { error?: string }).error === 'not_connected') throw new NotConnected();
+  if (!res.ok) throw new Error(`The Mergelight server answered ${res.status}.`);
+  return (await res.json()) as Rules;
+}
+
+/** Adds a rule. Throws with the server's own words when it says no, so the person sees why. */
+export async function addRule(session: Session, orgId: number, rule: NewRule): Promise<void> {
+  const res = await call(session, `/v1/orgs/${orgId}/rules`, { method: 'POST', body: JSON.stringify(rule) });
+  if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { message?: string }).message ?? `The Mergelight server answered ${res.status}.`);
+}
+
+export async function removeRule(session: Session, orgId: number, id: number): Promise<void> {
+  const res = await call(session, `/v1/orgs/${orgId}/rules/${id}`, { method: 'DELETE' });
   // Already gone counts as done.
   if (!res.ok && res.status !== 404) throw new Error(`The Mergelight server answered ${res.status}.`);
 }

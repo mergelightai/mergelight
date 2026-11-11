@@ -46,6 +46,7 @@ Options
   --verify-model <name> Model for the checker (default for claude: opus)
   --keep                Keep the temporary checkout
   --by <login>          Who approved, for approve
+                        With approve, --at is the commit they approved: an older one doesn't count
   --base <branch>       For setup: add the workflows to this branch (default: the default branch)
   --skip-branches <a,b> For setup: don't review pull requests from these branches
   --relogin             For setup: log in to Codex again
@@ -204,7 +205,7 @@ async function main(): Promise<number> {
       log("approve needs --by <login>");
       return 1;
     }
-    log(await approveCheck(new GitHub(ref.owner, ref.repo, { dryRun, log }), ref.number, values.by));
+    log(await approveCheck(new GitHub(ref.owner, ref.repo, { dryRun, log }), ref.number, values.by, values.at || undefined));
     return 0;
   }
 
@@ -219,7 +220,7 @@ async function main(): Promise<number> {
   }
 
   // Teams that use the dashboard: ask the server first, so nothing is sent for anyone else.
-  const cloud = values.post && !dryRun ? await fetchContext({ log }) : { connected: false, memories: [] };
+  const cloud = values.post && !dryRun ? await fetchContext({ log }) : { connected: false, memories: [], rules: [] };
 
   const progress = progressPrinter();
   try {
@@ -229,6 +230,8 @@ async function main(): Promise<number> {
     const review = await reviewPullRequest(ref, {
       previous,
       memories: cloud.memories,
+      rules: cloud.rules,
+      rulesUnread: cloud.failed === true,
       at: values.at,
       provider,
       model: values.model,

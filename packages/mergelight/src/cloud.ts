@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { PriorFinding, TeamMemory } from "./prompt.js";
+import type { PriorFinding, TeamMemory, TeamRule } from "./prompt.js";
 import type { Review } from "./types.js";
 
 /**
@@ -17,8 +17,11 @@ import type { Review } from "./types.js";
 
 /** Everything one question to the server may take: asking GitHub for tokens, both tries, and reading the answer. */
 const DEADLINE_MS = 10_000;
-/** The answers are a few hundred bytes. Anything far past that isn't one, and isn't read. */
-const MAX_ANSWER = 64 * 1024;
+/**
+ * The largest answer that is read. A team's full set of rules and decisions fits well inside it,
+ * so a team can't lose its rules by having many. Anything past it isn't an answer, and isn't read.
+ */
+const MAX_ANSWER = 512 * 1024;
 
 export interface CloudDeps {
   env?: Record<string, string | undefined>;
@@ -201,11 +204,15 @@ export interface CloudContext {
   connected: boolean;
   /** Findings the team declined in earlier pull requests of this repository. */
   memories: TeamMemory[];
+  /** The rules the team set on the dashboard, for the org and for this repository. */
+  rules: TeamRule[];
+  /** True when a server is set and it couldn't be asked. The review then says that it ran without the team's rules. */
+  failed?: boolean;
 }
 
-const NOTHING: CloudContext = { connected: false, memories: [] };
+const NOTHING: CloudContext = { connected: false, memories: [], rules: [] };
 /** One line of plain text: no line breaks and no control characters, so it can't pass for anything but itself. */
-const isText = (v: unknown, max: number): v is string => typeof v === "string" && v.length > 0 && v.length <= max && !/[\u0000-\u001f\u007f\u2028\u2029]/.test(v);
+const isText = (v: unknown, max: number): v is string => typeof v === "string" && v.length > 0 && v.length <= max && !/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u2028-\u202e\u2066-\u2069]/.test(v);
 const isLine = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 10_000_000;
 
 /**
@@ -225,6 +232,30 @@ export function readMemories(value: unknown): TeamMemory[] {
   return memories;
 }
 
+/** A pattern for file paths as the dashboard takes them: plain path characters and the wildcards * and ?. */
+const isPattern = (v: unknown): v is string => typeof v === "string" && /^[\w.@+\-/*?]{1,100}$/.test(v);
+
+/**
+ * The team's rules, each field checked. A rule is an instruction to the reviewers by design, so its
+ * shape is held tight: one line of plain text, and patterns made of path characters only.
+ */
+export function readRules(value: unknown): TeamRule[] {
+  if (!Array.isArray(value)) return [];
+  const rules: TeamRule[] = [];
+  for (const raw of value.slice(0, 100)) {
+    const r = raw as Record<string, unknown> | null;
+    if (!r || typeof r !== "object") continue;
+    if (typeof r.id !== "string" || !/^R\d{1,12}$/.test(r.id) || !isText(r.text, 300)) continue;
+    if ((r.kind !== "rule" && r.kind !== "needs_human") || (r.scope !== "org" && r.scope !== "repo")) continue;
+    const paths = r.paths === undefined || r.paths === null ? [] : r.paths;
+    if (!Array.isArray(paths) || paths.length > 10 || !paths.every(isPattern)) continue;
+    // "Always needs a human" is about files, so one that names none says nothing.
+    if (r.kind === "needs_human" && !paths.length) continue;
+    rules.push({ id: r.id, kind: r.kind, text: r.text, ...(paths.length ? { paths: paths as string[] } : {}), scope: r.scope });
+  }
+  return rules;
+}
+
 /** Asks the server what this review should know. Never throws: without an answer the review runs as it always has. */
 export async function fetchContext(deps: CloudDeps = {}): Promise<CloudContext> {
   const d = defaults(deps);
@@ -234,14 +265,14 @@ export async function fetchContext(deps: CloudDeps = {}): Promise<CloudContext> 
     const res = await call(d, server, "/v1/context", { method: "GET" });
     if (!res.ok) {
       d.log(`The Mergelight server answered ${res.status}. The review runs without it.`);
-      return NOTHING;
+      return { ...NOTHING, failed: true };
     }
-    const answer = res.answer as { connected?: unknown; memories?: unknown } | null;
+    const answer = res.answer as { connected?: unknown; memories?: unknown; rules?: unknown } | null;
     if (answer?.connected !== true) return NOTHING;
-    return { connected: true, memories: readMemories(answer.memories) };
+    return { connected: true, memories: readMemories(answer.memories), rules: readRules(answer.rules) };
   } catch (err) {
     d.log(`Couldn't reach the Mergelight server (${(err as Error).message}). The review runs without it.`);
-    return NOTHING;
+    return { ...NOTHING, failed: true };
   }
 }
 
@@ -272,7 +303,7 @@ export interface Decline {
  */
 export function declinesOf(previous: PriorFinding[] | undefined): Decline[] {
   // Line breaks and control characters become spaces: a reason is one line of plain text by the time it is sent.
-  const clean = (text: string, max: number) => text.replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, " ").replace(/ {2,}/g, " ").trim().slice(0, max).trim();
+  const clean = (text: string, max: number) => text.replace(/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u2028-\u202e\u2066-\u2069]+/g, " ").replace(/ {2,}/g, " ").trim().slice(0, max).trim();
   const declines: Decline[] = [];
   for (const p of previous ?? []) {
     const h = p.handled;

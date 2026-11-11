@@ -63,7 +63,8 @@ inputs:
     default: https://api.mergelight.dev/token
   server:
     description: >
-      Address of a Mergelight server, for teams that use the dashboard. Empty means off, and then
+      Address of a Mergelight server, for teams that use the dashboard: reviews in one place, memory
+      of what your team declined, and rules for every review. Empty means off, and then
       nothing about a review leaves your runner. With it, each run first shows the server GitHub's
       signed token, which names the repository, branch, workflow and who started the run. If your
       org turned the dashboard on, the run then sends the review's numbers (how many findings, the
@@ -106,7 +107,9 @@ runs:
         GH_TOKEN: ${{ steps.app.outputs.token || inputs.github-token }}
         PR: ${{ github.event.pull_request.number }}
         BY: ${{ github.event.review.user.login }}
-      run: node "$GITHUB_ACTION_PATH/packages/mergelight/dist/cli.js" approve "$GITHUB_REPOSITORY#$PR" --by "$BY"
+        # The commit the person looked at. An approval of an older commit doesn't cover what was pushed after it.
+        COMMIT: ${{ github.event.review.commit_id }}
+      run: node "$GITHUB_ACTION_PATH/packages/mergelight/dist/cli.js" approve "$GITHUB_REPOSITORY#$PR" --by "$BY" --at "$COMMIT"
 
     - name: Choose the reviewer
       if: github.event_name != 'pull_request_review'

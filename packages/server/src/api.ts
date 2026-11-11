@@ -14,6 +14,7 @@
 import { HttpError, verifyOidcToken } from "../../token-server/dist/token.js";
 import { isId, MEMORY_DAYS, withOrg, type Pool } from "./db.js";
 import { createPeopleApi } from "./people.js";
+import { isLineOfText } from "./validate.js";
 
 /**
  * Who a token must be made for: this server's own public address, like "https://data.example.com",
@@ -39,6 +40,8 @@ const MAX_DECLINES = 40;
 const MAX_MEMORIES_PER_REPO = 500;
 /** How many a review is sent at most, most recently used first. */
 const MEMORIES_PER_REVIEW = 100;
+/** A team's rules are few and short, so all of them are sent. */
+const RULES_PER_REVIEW = 100;
 /** And how large that list may be. The client stops reading an answer past 64 KB, so the list stays well under it. */
 const MEMORY_BYTES_PER_REVIEW = 40_000;
 const RATE_WINDOW_MS = 60_000;
@@ -159,11 +162,7 @@ export function parseReview(body: unknown): ReviewRow {
 }
 
 const line = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 10_000_000;
-/**
- * One line of plain text of a bounded length. No line breaks and no control characters: this text is
- * later shown to the reviewing model, where a line break is what a heading or a new instruction starts with.
- */
-const text = (v: unknown, max: number): v is string => typeof v === "string" && v.length > 0 && v.length <= max && !/[\u0000-\u001f\u007f\u2028\u2029]/.test(v) && v.trim().length > 0;
+const text = isLineOfText;
 
 /**
  * The team's new decisions in a report, checked field by field. This is text a run sends and the
@@ -274,19 +273,22 @@ export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"
           limit ${MEMORIES_PER_REVIEW}`,
         [who.repoId, MEMORY_DAYS],
       );
-      return rows;
+      // The team's rules: those for the whole org and those for this repository.
+      const rules = await db.query(`select id, repo_id, kind, text, paths from rules where repo_id is null or repo_id = $1 order by id limit ${RULES_PER_REVIEW}`, [who.repoId]);
+      return { memories: rows, rules: rules.rows };
     });
     if (!found) return respond(200, { connected: false });
+    const rules = found.rules.map((r) => ({ id: `R${r.id}`, kind: r.kind, text: r.text, ...(r.paths.length ? { paths: r.paths } : {}), scope: r.repo_id === null ? "org" : "repo" }));
     // The most recently used ones that fit. A list too large for the client to read would cost it the whole answer.
     const memories = [];
     let bytes = 0;
-    for (const m of found) {
+    for (const m of found.memories) {
       const memory = { id: `M${m.id}`, title: m.title, file: m.file, line: m.line, ...(m.end_line ? { end_line: m.end_line } : {}), reason: m.reason, by: m.by_login, pr: m.pr };
       bytes += Buffer.byteLength(JSON.stringify(memory)) + 1;
       if (bytes > MEMORY_BYTES_PER_REVIEW) break;
       memories.push(memory);
     }
-    return respond(200, { connected: true, memories });
+    return respond(200, { connected: true, memories, rules });
   }
 
   async function saveReview(who: Caller, request: Request): Promise<Response> {

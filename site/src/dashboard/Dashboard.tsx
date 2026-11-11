@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { GitHubIcon, SURFACE, WELL } from '../ui';
-import { ADD_REPOS_URL, finishSignIn, forgetDecision, loadDecisions, loadOverview, mayRenew, NotConnected, rememberedSession, SERVER, SignedOut, signInUrl, signOut, tidyAddress, type Decision, type Light, type Org, type Overview, type Review, type Session } from './api';
+import { addRule, ADD_REPOS_URL, finishSignIn, forgetDecision, loadDecisions, loadOverview, loadRules, mayRenew, removeRule, NotConnected, rememberedSession, SERVER, SignedOut, signInUrl, signOut, tidyAddress, type Decision, type Light, type NewRule, type Org, type Overview, type Rule, type Rules, type Review, type Session } from './api';
 
 const LIGHTS: Record<Light, { label: string; dot: string; text: string }> = {
   green: { label: 'Safe to merge', dot: 'bg-mint', text: 'text-mint' },
@@ -213,6 +213,130 @@ function Decisions({ decisions, total, onForget }: { decisions: Decision[]; tota
   );
 }
 
+const FIELD = 'h-10 w-full rounded-xl bg-white/[0.04] px-3.5 text-[14px] text-fg shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)] outline-none placeholder:text-faint focus:shadow-[inset_0_0_0_1px_rgb(184_156_255/0.6)]';
+
+/** The form for a new rule. Only the places this person may set rules for are offered. */
+function NewRuleForm({ rules, onAdd }: { rules: Rules; onAdd: (rule: NewRule) => Promise<void> }) {
+  const places = [...(rules.can_set_org_rules ? [{ value: 'org', label: 'Every repository' }] : []), ...rules.repos.filter((r) => r.can_set_rules).map((r) => ({ value: String(r.id), label: r.name }))];
+  const [kind, setKind] = useState<Rule['kind']>('rule');
+  const [text, setText] = useState('');
+  const [paths, setPaths] = useState('');
+  const [place, setPlace] = useState(places[0]?.value ?? 'org');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  if (!places.length) {
+    return <p className="mt-5 text-[13px] leading-relaxed text-faint">Only an owner of the org or an admin of a repository can change the rules.</p>;
+  }
+  const patterns = paths.split(',').map((p) => p.trim()).filter(Boolean);
+  const ready = text.trim().length > 0 && (kind === 'rule' || patterns.length > 0) && !busy;
+  return (
+    <form
+      className={`${WELL} mt-5 space-y-3 p-4`}
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (!ready) return;
+        setBusy(true);
+        setError(null);
+        onAdd({ kind, text: text.trim(), paths: patterns, repo_id: place === 'org' ? null : Number(place) })
+          .then(() => {
+            setText('');
+            setPaths('');
+          })
+          .catch((err: unknown) => setError(err instanceof Error ? err.message : 'That did not work.'))
+          .finally(() => setBusy(false));
+      }}
+    >
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="block text-[13px] text-muted">
+          What it is
+          <select aria-label="What it is" value={kind} onChange={(e) => setKind(e.target.value as Rule['kind'])} className={`${FIELD} mt-1.5`}>
+            <option value="rule">A rule every review follows</option>
+            <option value="needs_human">Files that always need a human</option>
+          </select>
+        </label>
+        <label className="block text-[13px] text-muted">
+          Where it applies
+          <select aria-label="Where it applies" value={place} onChange={(e) => setPlace(e.target.value)} className={`${FIELD} mt-1.5`}>
+            {places.map((p) => (
+              <option key={p.value} value={p.value}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <label className="block text-[13px] text-muted">
+        {kind === 'rule' ? 'The rule, in one line' : 'Why, in one line'}
+        <input aria-label="The rule" value={text} maxLength={300} onChange={(e) => setText(e.target.value)} placeholder={kind === 'rule' ? 'Ignore style and naming.' : 'Billing changes need a second pair of eyes.'} className={`${FIELD} mt-1.5`} />
+      </label>
+      <label className="block text-[13px] text-muted">
+        {kind === 'rule' ? 'Only in these files (optional)' : 'Which files'}
+        <input aria-label="Files" value={paths} onChange={(e) => setPaths(e.target.value)} placeholder="src/billing/**, *.sql" className={`${FIELD} mt-1.5 font-mono text-[13px]`} />
+      </label>
+      <div className="flex flex-wrap items-center gap-3 pt-1">
+        <button type="submit" disabled={!ready} className={`${PRIMARY} h-10 px-5 text-[14px] disabled:opacity-40`}>
+          {busy ? 'Adding' : 'Add'}
+        </button>
+        {error && <span className="text-[13px] text-risk">{error}</span>}
+      </div>
+    </form>
+  );
+}
+
+/** The team's rules: lines every review follows, and files that always need a human. */
+function RulesCard({ rules, onAdd, onRemove }: { rules: Rules; onAdd: (rule: NewRule) => Promise<void>; onRemove: (rule: Rule) => Promise<void> }) {
+  const [busy, setBusy] = useState<number | null>(null);
+  const [failed, setFailed] = useState<number | null>(null);
+  return (
+    <Card>
+      <h2 className="text-[17px] font-semibold tracking-[-0.01em]">Rules</h2>
+      <p className="mt-1.5 max-w-2xl text-[14px] leading-relaxed text-muted">
+        A rule is one line that every review follows, for the whole org or for one repository. You can also name files that always need a human, so a pull request that changes them never goes green by itself.
+      </p>
+      <p className="mt-2 max-w-2xl text-[13px] leading-relaxed text-faint">
+        "Needs a human" stops a merge only where the Mergelight check is required and the workflow sets <span className="font-mono">yellow-blocks: true</span>. Without that it is a warning on the pull request.
+      </p>
+      {rules.rules.length > 0 && (
+        <ul className="mt-3">
+          {rules.rules.map((r) => (
+            <li key={r.id} className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2 border-t border-line py-3.5 first:border-t-0">
+              <div className="min-w-0 flex-1 basis-[320px]">
+                <p className="text-[15px] text-fg">{r.text}</p>
+                <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-faint">
+                  <span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-muted">{r.repo ?? 'Every repository'}</span>
+                  {r.kind === 'needs_human' && <span className="rounded-full bg-risk/10 px-2 py-0.5 text-risk">Always needs a human</span>}
+                  {r.paths.length > 0 && <span className="font-mono">{r.paths.join(', ')}</span>}
+                  <span>
+                    set by {r.by}, {ago(r.created_at)}
+                  </span>
+                </p>
+                {failed === r.id && <p className="mt-2 text-[13px] text-risk">That didn't work. Please try again.</p>}
+              </div>
+              {r.can_remove && (
+                <button
+                  type="button"
+                  disabled={busy === r.id}
+                  onClick={() => {
+                    setBusy(r.id);
+                    setFailed(null);
+                    onRemove(r)
+                      .catch(() => setFailed(r.id))
+                      .finally(() => setBusy(null));
+                  }}
+                  className="rounded-full px-3 py-1.5 text-[13px] text-muted transition-colors hover:bg-white/[0.06] hover:text-fg disabled:opacity-50"
+                >
+                  {busy === r.id ? 'Removing' : 'Remove'}
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      <NewRuleForm rules={rules} onAdd={onAdd} />
+    </Card>
+  );
+}
+
 /** How to send the first review's numbers. Shown when the dashboard is on and has nothing yet. */
 function NothingYet({ org }: { org: Org }) {
   return (
@@ -248,7 +372,7 @@ function NotOn({ org }: { org: Org }) {
   );
 }
 
-type View = { kind: 'loading' } | { kind: 'ready'; overview: Overview; decisions: Decision[]; total: number } | { kind: 'off' } | { kind: 'error' };
+type View = { kind: 'loading' } | { kind: 'ready'; overview: Overview; decisions: Decision[]; total: number; rules: Rules | null } | { kind: 'off' } | { kind: 'error' };
 
 export default function Dashboard() {
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
@@ -293,8 +417,12 @@ export default function Dashboard() {
       if (err instanceof SignedOut || err instanceof NotConnected) throw err;
       return { decisions: [], total: 0 };
     });
-    Promise.all([loadOverview(session, org.id), decisions])
-      .then(([overview, { decisions, total }]) => !gone && setView({ kind: 'ready', overview, decisions, total }))
+    const rules = loadRules(session, org.id).catch((err) => {
+      if (err instanceof SignedOut || err instanceof NotConnected) throw err;
+      return null;
+    });
+    Promise.all([loadOverview(session, org.id), decisions, rules])
+      .then(([overview, { decisions, total }, rules]) => !gone && setView({ kind: 'ready', overview, decisions, total, rules }))
       .catch((err) => {
         if (gone) return;
         if (err instanceof SignedOut) {
@@ -308,6 +436,19 @@ export default function Dashboard() {
     };
   }, [session, org]);
   useEffect(() => load(), [load]);
+
+  /** Runs a change. If the session ran out while the page was open, it signs in again, as loading does. */
+  const signedIn = async (change: () => Promise<void>): Promise<void> => {
+    try {
+      await change();
+    } catch (err) {
+      if (!(err instanceof SignedOut)) throw err;
+      if (mayRenew()) window.location.assign(signInUrl());
+      else setSession(null);
+      // The change didn't happen. The page is on its way to a new sign-in, so there is nothing to show for it.
+      throw err;
+    }
+  };
 
   if (signingIn) {
     return (
@@ -403,22 +544,27 @@ export default function Dashboard() {
           {view.kind === 'ready' && (
             <div className="space-y-5">
               {view.overview.reviews.length ? <Reviews overview={view.overview} /> : <NothingYet org={org} />}
+              {view.rules && (
+                <RulesCard
+                  rules={view.rules}
+                  onAdd={async (rule) => {
+                    await signedIn(() => addRule(session, org.id, rule));
+                    // The rule is in. If only the fresh list fails to load, that isn't a failed Add: saying so would invite a second one.
+                    const rules = await loadRules(session, org.id).catch(() => null);
+                    if (rules) setView((v) => (v.kind === 'ready' ? { ...v, rules } : v));
+                  }}
+                  onRemove={async (rule) => {
+                    await signedIn(() => removeRule(session, org.id, rule.id));
+                    setView((v) => (v.kind === 'ready' && v.rules ? { ...v, rules: { ...v.rules, rules: v.rules.rules.filter((x) => x.id !== rule.id) } } : v));
+                  }}
+                />
+              )}
               {(view.overview.reviews.length > 0 || view.decisions.length > 0) && (
                 <Decisions
                   decisions={view.decisions}
                   total={view.total}
                   onForget={async (d) => {
-                    try {
-                      await forgetDecision(session, org.id, d.id);
-                    } catch (err) {
-                      // The session ran out while the page was open: sign in again, as loading does.
-                      if (err instanceof SignedOut) {
-                        if (mayRenew()) window.location.assign(signInUrl());
-                        else setSession(null);
-                        return;
-                      }
-                      throw err;
-                    }
+                    await signedIn(() => forgetDecision(session, org.id, d.id));
                     setView((v) => (v.kind === 'ready' ? { ...v, decisions: v.decisions.filter((x) => x.id !== d.id), total: v.total - 1 } : v));
                   }}
                 />

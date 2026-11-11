@@ -10,9 +10,27 @@ A run that has the input set does tell the server who it is, even before the ser
 
 Stored, per review: the repository's name and GitHub id, the pull request number, the commit, the light (green, yellow, red), how many findings of each kind, which AI ran it (`codex` or `claude`, and the model's name), how long it took, and the size of the change.
 
+Stored, per rule: its text, its file patterns, where it applies, and the GitHub login and id of who set it.
+
+Stored, per change on the dashboard: who made it, when, and what it was.
+
 Stored, per finding a team declined: its title, the file and lines it was in, the reason the person gave, the GitHub login of who declined it, when, and in which pull request. This is the one place the server holds text about your code. It is what lets a later review leave that finding out.
 
 Never stored, because it is never sent: code, diffs, findings nobody declined, pull request titles, AI logins.
+
+## Rules
+
+A team sets its rules on the dashboard. A review gets them with its other context, and every reviewer and the verifier follow them.
+
+- A rule is one line, for the whole org or for one repository, and can be limited to files that match patterns like `src/billing/**`. A pattern that starts with a slash, like `/Dockerfile`, means the repository's root. A pattern that names a folder covers everything in it, however it is written: `src/billing`, `src/billing/` and `src/billing/**` mean the same, and a bare `migrations` covers a folder of that name anywhere.
+- "Always needs a human" names files. A pull request that changes one never goes green by itself: it stops at "needs a human", and the summary says which file. An approval turns it green only when it comes from someone who can push to the repository, and only for the commit they approved. "Needs a human" stops a merge only where the Mergelight check is required and the workflow sets `yellow-blocks: true`. Without that it is a warning on the pull request.
+- A rule for the whole org takes an owner of the org. A rule for one repository takes an admin of it. GitHub says who they are at sign-in. If GitHub won't say who owns an org, because the sign-in app may not read its members, nobody can set that org's rules, and repository rules still work.
+- A rule is one line of plain text and its patterns are path characters only. It reaches the reviewers as a line of escaped JSON in a block of its own. A rule changes what is worth reporting. It can't change the output format or how text in the diff is treated.
+- "Always needs a human" looks at every path a pull request touches, the lockfiles and generated files the reviewers skip included.
+- If the server can't be reached, the review runs without the team's rules and says so in its summary. It doesn't change the light for that.
+- A review run can only read rules. It can never write one.
+- Every rule added or removed, and every decision forgotten, is written to a log with who did it and when. The log can only be added to.
+- 50 rules for an org and 50 for each repository at most.
 
 ## Memory
 

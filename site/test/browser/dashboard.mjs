@@ -34,6 +34,17 @@ const DECISIONS = {
     { id: 13, repo_id: 502, repo: 'acme/api', title: 'Retry has no upper bound', file: 'src/retry.ts', line: 8, end_line: null, reason: 'The queue caps it.', by: 'bo', pr: 5, created_at: hoursAgo(80), last_used_at: null, uses: 0, can_forget: false },
   ],
 };
+const RULES = {
+  1001: {
+    can_set_org_rules: true,
+    repos: [{ id: 501, name: 'acme/widgets', can_set_rules: true }, { id: 502, name: 'acme/api', can_set_rules: false }],
+    rules: [
+      { id: 3, kind: 'rule', text: 'Ignore style and naming.', paths: [], by: 'ada', created_at: hoursAgo(200), repo_id: null, repo: null, can_remove: true },
+      { id: 4, kind: 'needs_human', text: 'Billing changes need a second pair of eyes.', paths: ['src/billing/**', '*.sql'], by: 'bo', created_at: hoursAgo(30), repo_id: 502, repo: 'acme/api', can_remove: false },
+    ],
+  },
+  4004: { can_set_org_rules: false, repos: [{ id: 801, name: 'fresh/app', can_set_rules: false }], rules: [] },
+};
 const OVERVIEWS = {
   1001: {
     org: { id: 1001, login: 'acme' },
@@ -49,6 +60,9 @@ const expect = (ok, what) => { console.log(`  ${ok ? 'ok ' : 'FAIL'} ${what}`); 
 async function open(name, { signedOutAfter = Infinity, serverDown = false, forgetFails = false } = {}) {
   /** Decisions the page asked the server to forget. */
   const forgotten = [];
+  /** Rules the page asked the server to add and to remove. */
+  const added = [];
+  const removed = [];
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 900, deviceScaleFactor: 2 });
   const errors = [];
@@ -78,6 +92,23 @@ async function open(name, { signedOutAfter = Infinity, serverDown = false, forge
       if (serverDown) return json(req, { error: 'server_error' }, 500);
       if (u.pathname === '/v1/session' && m === 'POST') return json(req, SESSION, 201);
       if (u.pathname === '/v1/session' && m === 'DELETE') return req.respond({ status: 204, headers: cors });
+      const rules = /^\/v1\/orgs\/(\d+)\/rules(?:\/(\d+))?$/.exec(u.pathname);
+      if (rules && !RULES[rules[1]]) return json(req, { error: 'not_connected' }, 404);
+      if (rules && m === 'POST') {
+        const body = JSON.parse(req.postData());
+        if (body.text.includes('refuse me')) return json(req, { error: 'read_only', message: 'Only an owner of the org can set rules for the whole org.' }, 403);
+        added.push(body);
+        return json(req, { id: 100 + added.length }, 201);
+      }
+      if (rules && m === 'DELETE') {
+        removed.push(Number(rules[2]));
+        return req.respond({ status: 204, headers: cors });
+      }
+      if (rules) {
+        const own = RULES[rules[1]];
+        const fresh = added.map((r, i) => ({ id: 101 + i, ...r, by: 'ada', created_at: new Date().toISOString(), repo: r.repo_id ? 'acme/widgets' : null, can_remove: true }));
+        return json(req, { ...own, rules: [...own.rules, ...(rules[1] === '1001' ? fresh : [])].filter((r) => !removed.includes(r.id)) });
+      }
       const memories = /^\/v1\/orgs\/(\d+)\/memories(?:\/(\d+))?$/.exec(u.pathname);
       if (memories && m === 'DELETE') {
         if (forgetFails) return json(req, { error: 'server_error' }, 500);
@@ -131,7 +162,7 @@ async function open(name, { signedOutAfter = Infinity, serverDown = false, forge
     return { href, state };
   };
   console.log(`\n== ${name}`);
-  return { page, calls, exchanges, renewals, forgotten, errors, text, click, signIn, comeBackFromGitHub, shot: (file) => page.screenshot({ path: `${out}${file}.png`, fullPage: true }).catch(() => {}) };
+  return { page, calls, exchanges, renewals, forgotten, added, removed, errors, text, click, signIn, comeBackFromGitHub, shot: (file) => page.screenshot({ path: `${out}${file}.png`, fullPage: true }).catch(() => {}) };
 }
 const done = async (t) => {
   if (t.errors.length) { console.log('  page errors', t.errors.slice(0, 3)); failures++; }
@@ -177,11 +208,49 @@ const done = async (t) => {
   await wait(500);
   expect(t.forgotten.join() === '12' && !/Cart total is rounded/.test(await t.text()) && /Retry has no upper bound/.test(await t.text()), 'Forget removes that one decision, on the server and on the page');
 
+  // Rules.
+  const withRules = await t.text();
+  expect(/Ignore style and naming\. Every repository set by ada/.test(withRules), `a rule of the whole org shows, with who set it (${withRules.match(/Rules.{0,40}/)?.[0]})`);
+  expect(/Billing changes need a second pair of eyes\. acme\/api Always needs a human src\/billing\/\*\*, \*\.sql set by bo/.test(withRules), 'files that always need a human show with their repository and patterns');
+  const removeButtons = await t.page.evaluate(() => [...document.querySelectorAll('button')].filter((b) => b.textContent.trim() === 'Remove').length);
+  expect(removeButtons === 1, 'only a rule this person may remove has a Remove button');
+  const places = await t.page.evaluate(() => [...document.querySelector('select[aria-label="Where it applies"]').options].map((o) => o.textContent));
+  expect(places.join() === 'Every repository,acme/widgets', `a new rule can go where this person may set rules, and nowhere else (${places})`);
+
+  const fill = async (label, value) => {
+    await t.page.evaluate((l) => document.querySelector(`[aria-label="${l}"]`).scrollIntoView({ block: 'center', behavior: 'instant' }), label);
+    await t.page.click(`[aria-label="${label}"]`, { clickCount: 3 });
+    await t.page.keyboard.type(value);
+  };
+  await t.page.select('select[aria-label="What it is"]', 'needs_human');
+  await fill('The rule', 'Migrations are reviewed by the data team.');
+  const disabled = await t.page.evaluate(() => [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Add').disabled);
+  expect(disabled, 'files that always need a human can\'t be added without naming files');
+  await fill('Files', 'db/migrations/**, *.sql');
+  await t.page.select('select[aria-label="Where it applies"]', '501');
+  await t.click('button', 'Add');
+  await wait(700);
+  expect(JSON.stringify(t.added) === JSON.stringify([{ kind: 'needs_human', text: 'Migrations are reviewed by the data team.', paths: ['db/migrations/**', '*.sql'], repo_id: 501 }]), `the new rule is sent as typed (${JSON.stringify(t.added)})`);
+  expect(/Migrations are reviewed by the data team\. acme\/widgets Always needs a human db\/migrations\/\*\*, \*\.sql/.test(await t.text()), 'and shows in the list');
+  const cleared = await t.page.evaluate(() => document.querySelector('[aria-label="The rule"]').value + document.querySelector('[aria-label="Files"]').value);
+  expect(cleared === '', 'the form is empty again');
+
+  await fill('The rule', 'refuse me');
+  await fill('Files', 'src/**');
+  await t.click('button', 'Add');
+  await wait(600);
+  expect(/Only an owner of the org can set rules for the whole org\./.test(await t.text()), 'when the server says no, the page shows why');
+
+  await t.click('button', 'Remove');
+  await wait(600);
+  expect(t.removed.join() === '3' && !/Ignore style and naming/.test(await t.text()), 'Remove takes the rule off the server and the page');
+
   await t.click('[role=tab]', 'quiet');
   await wait(500);
   expect(/The dashboard isn't on for quiet/.test(await t.text()), 'an org that hasn\'t turned it on says so');
   await t.click('[role=tab]', 'fresh');
   await wait(500);
+  expect(/Only an owner of the org or an admin of a repository can change the rules\./.test(await t.text()) && !(await t.page.$('[aria-label="The rule"]')), 'someone who may not set rules sees no form, and is told who can');
   expect(/No reviews to show yet/.test(await t.text()) && /repositories this sign-in can't see/.test(await t.text()) && (await t.text()).includes(`server: ${SERVER}`), 'an org with no reviews yet shows the one line to add');
   await t.shot('3-nothing-yet');
 
