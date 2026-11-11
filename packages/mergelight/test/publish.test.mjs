@@ -10,7 +10,7 @@ import { parsePatch, place } from "../dist/publish/diff-lines.js";
 import { mergeLight, tierOf } from "../dist/review.js";
 import { closedBody, readClosed, reopenedBody, resolvedByPeople, threadAction } from "../dist/publish/closed.js";
 import { clean, failedSummaryBody, isFailedSummary, limitNotice, notReadLine, loginNotice, FINDING_MARKER_RE, inlineBody, isPendingSummary, pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "../dist/publish/markdown.js";
-import { APPROVAL_MARKER, checkConclusion, isYellowCheck, syncApproval, trustedComment, CHECK_FAILED_TITLE, checkLimitTitle, checkLoginTitle, isFailedCheckTitle } from "../dist/publish/publish.js";
+import { APPROVAL_MARKER, approvalLight, checkConclusion, isYellowCheck, syncApproval, trustedComment, CHECK_FAILED_TITLE, checkLimitTitle, checkLoginTitle, isFailedCheckTitle } from "../dist/publish/publish.js";
 import { decodeState, encodeState, nextState } from "../dist/publish/state.js";
 import { buildVerifierPrompt } from "../dist/prompt.js";
 import { assignIds } from "../dist/review.js";
@@ -458,6 +458,18 @@ test("green approves the commit, once", async () => {
   const again = reviewsApi([ours({ commit_id: "head" })]);
   assert.equal(await syncApproval(again, 3, "green", "head"), "already");
   assert.equal(again.writes.length, 0);
+});
+
+test("Mergelight doesn't approve a pull request while one of the team's own checks hasn't passed", () => {
+  const check = (outcome) => ({ id: "K1", name: "Translations", text: "t", outcome, summary: "s", problems: [] });
+  assert.equal(approvalLight({ light: "green" }), "green");
+  assert.equal(approvalLight({ light: "green", team_checks: [] }), "green");
+  assert.equal(approvalLight({ light: "green", team_checks: [check("pass"), check("skipped")] }), "green");
+  // A failed check, one that couldn't tell and one that couldn't run each hold the approval back, and take an earlier one away.
+  for (const outcome of ["fail", "unsure", "error"]) assert.equal(approvalLight({ light: "green", team_checks: [check("pass"), check(outcome)] }), "yellow", outcome);
+  // The review's own light is never made better or worse than it is.
+  assert.equal(approvalLight({ light: "yellow", team_checks: [check("pass")] }), "yellow");
+  assert.equal(approvalLight({ light: "red", team_checks: [check("fail")] }), "red");
 });
 
 test("yellow and red take back Mergelight's approval, and never request changes", async () => {

@@ -258,9 +258,19 @@ export async function publishReview(
     },
   };
   await writeCheck(api, opts.checkRunId, review.pr.head_sha, check, log);
-  await syncApproval(api, n, review.light, review.pr.head_sha, log);
+  await syncApproval(api, n, approvalLight(review), review.pr.head_sha, log);
 
   return { summaryUrl, inline: inline.length, outside: outside.length, resolved, light: review.light };
+}
+
+/**
+ * The light Mergelight's own approval goes by. A green review is not enough when one of the team's
+ * own checks failed, couldn't tell or couldn't run: Mergelight doesn't approve a pull request that
+ * its own check next to it holds back. A check that was skipped has nothing to say.
+ */
+export function approvalLight(review: Pick<Review, "light" | "team_checks">): Light {
+  const held = review.team_checks?.some((c) => c.outcome !== "pass" && c.outcome !== "skipped") ?? false;
+  return review.light === "green" && held ? "yellow" : review.light;
 }
 
 export const APPROVAL_MARKER = "<!-- mergelight:approval -->";
