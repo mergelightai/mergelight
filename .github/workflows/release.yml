@@ -1,6 +1,10 @@
 # Releases whatever version packages/mergelight/package.json says, when that changes on main.
 # To release: bump the version in a pull request and merge it. People on @v0 get it a day later,
 # when roll-out.yml moves the tag.
+#
+# A bad release: mark it as a pre-release on GitHub, also when a fixed release is already out.
+# roll-out.yml takes the newest release that is a day old, so a bad one can still reach @v0 after
+# its fix is out. Only a fix within 6 hours skips it without that step.
 name: Release
 
 on:
