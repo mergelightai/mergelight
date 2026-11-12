@@ -846,6 +846,11 @@ test("a Reviewing comment left by an earlier run says this run's plan, and keeps
   const edit = writes().find((w) => w.path === "issues/comments/1");
   assert.match(edit.body, /Reviewing with Claude Opus\./);
   assert.ok(edit.body.endsWith(state));
+  // A "Connect your AI" comment still waiting for someone is left alone.
+  const { connectBody } = await import("../dist/connect.js");
+  const waiting = useScenario({ issueComments: [{ ...left, body: `${connectBody({ url: "https://auth.openai.com/codex/device", code: "ABCD-1234" })}\n${state}` }] });
+  await withFakeGh(waiting.env, () => startSummary(new GitHub("o", "r"), 7, { reviewer: { name: "claude", model: "opus" } }));
+  assert.deepEqual(waiting.writes(), []);
   // A comment with a result is left alone.
   const done = useScenario({ issueComments: [summaryComment(stateOf([finding()]))] });
   await withFakeGh(done.env, () => startSummary(new GitHub("o", "r"), 7, { reviewer: { name: "claude", model: "opus" } }));

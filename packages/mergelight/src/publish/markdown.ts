@@ -71,6 +71,8 @@ export function modelLabel(name: string, model: string | null | undefined): stri
   // "claude-opus-5-5" and the older "claude-3-7-sonnet" both have a family name and version numbers.
   const parts = m.replace(/^claude-/, "").replace(/-\d{8}$/, "").split("-");
   const family = parts.find((p) => !/^\d+$/.test(p)) ?? "";
+  // Claude Code can run another vendor's model: then its own id is the honest name.
+  if (family && !/^(?:opus|sonnet|haiku|fable)$/i.test(family)) return `${brand} (${m})`;
   const version = parts.filter((p) => /^\d+$/.test(p));
   return `${brand}${family ? ` ${cap(family)}` : ""}${version.length ? ` ${version.join(".")}` : ""}`;
 }
@@ -96,6 +98,9 @@ export function pendingSummaryBody(plan?: ReviewPlan): string {
 }
 
 export const isPendingSummary = (body: string | undefined) => Boolean(body?.includes(PENDING_MARKER));
+
+/** A "Reviewing" comment, not a "Connect your AI" or "install the app" one, which carry the same mark. */
+export const isReviewingSummary = (body: string | undefined) => isPendingSummary(body) && Boolean(body?.includes("### ⏳ Mergelight: Reviewing"));
 
 /** A failure with a known cause and a clear next step, instead of the general message. */
 export interface FailureNotice {

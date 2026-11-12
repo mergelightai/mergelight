@@ -4,7 +4,7 @@ import { GitHub, type ApiOptions } from "./api.js";
 import { commentableLines, place } from "./diff-lines.js";
 import { answeredRemembered, closedBody, patchTouches, readClosed, REMEMBERED_MARKER, reopenedBody, resolvedByPeople, resolverReplies, threadAction, threadFinding, type Handled, type ReviewThread } from "./closed.js";
 import type { FailureNotice } from "./markdown.js";
-import { failedSummaryBody, FINDING_MARKER_RE, headline, inlineBody, isFailedSummary, isPendingSummary, LIGHT, pendingSummaryBody, SUMMARY_MARKER, summaryBody, type ReviewPlan } from "./markdown.js";
+import { failedSummaryBody, FINDING_MARKER_RE, headline, inlineBody, isFailedSummary, isPendingSummary, isReviewingSummary, LIGHT, pendingSummaryBody, SUMMARY_MARKER, summaryBody, type ReviewPlan } from "./markdown.js";
 import { askWriteAccess, MAX_NOTE, readMarks, trustedComment, writeAccess, type Mark, type PrComment } from "./handled.js";
 import { withoutHidden } from "../skills.js";
 import { decodeState, nextState, stateBlock, type ReviewState, type StateFinding } from "./state.js";
@@ -261,7 +261,7 @@ export async function startCheck(api: GitHub, headSha: string, provider?: string
 export async function startSummary(api: GitHub, number: number, plan?: ReviewPlan): Promise<PrComment | null> {
   const { summary } = await readPrReviewState(api, number);
   // A "Reviewing" comment left by an earlier run, or by a reconnect, says this run's plan now, keeping its state.
-  if (summary && plan && isPendingSummary(summary.body)) {
+  if (summary && plan && isReviewingSummary(summary.body)) {
     const state = stateBlock(summary.body);
     const body = state ? `${pendingSummaryBody(plan)}\n${state}` : pendingSummaryBody(plan);
     if (body !== summary.body) await api.write("PATCH", `issues/comments/${summary.id}`, { body }).catch(() => null);
@@ -272,10 +272,10 @@ export async function startSummary(api: GitHub, number: number, plan?: ReviewPla
 
 /** Names the models in a "Reviewing" comment once they are known. A comment with a result is left alone. */
 export async function updatePendingSummary(api: GitHub, summary: PrComment | null, plan: ReviewPlan): Promise<void> {
-  if (!summary || !isPendingSummary(summary.body)) return;
+  if (!summary || !isReviewingSummary(summary.body)) return;
   // Read it again: another run may have finished and written its result since this one began.
   const now = await api.get<PrComment>(`issues/comments/${summary.id}`).catch(() => null);
-  if (!now || !isPendingSummary(now.body)) return;
+  if (!now || !isReviewingSummary(now.body)) return;
   // A "Reviewing" comment can carry earlier rounds' state, after a reconnect: it must stay, or the next
   // result starts again from round 1.
   const state = stateBlock(now.body);
