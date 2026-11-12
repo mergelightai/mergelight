@@ -75,7 +75,9 @@ test("the Reviewing comment gets the models' names, and a comment with a result 
   const { updatePendingSummary } = await import("../dist/publish/publish.js");
   const { pendingSummaryBody } = await import("../dist/publish/markdown.js");
   const writes = [];
-  const bodies = { 5: pendingSummaryBody(), 7: "<!-- mergelight:summary -->\n### 🟢 Mergelight: Safe to merge" };
+  const { encodeState, nextState } = await import("../dist/publish/state.js");
+  const earlier = encodeState(nextState(null, [], "a".repeat(40), "green", new Map()));
+  const bodies = { 5: pendingSummaryBody(), 7: "<!-- mergelight:summary -->\n### 🟢 Mergelight: Safe to merge", 8: `${pendingSummaryBody()}\n${earlier}` };
   const api = { get: async (path) => ({ id: Number(path.split("/").pop()), body: bodies[path.split("/").pop()] }), write: async (method, path, body) => (writes.push({ method, path, body }), {}) };
   const plan = { reviewer: { name: "codex", model: "gpt-6-astra" }, checker: { name: "claude", model: "claude-opus-5-5" } };
   await updatePendingSummary(api, { id: 5, body: pendingSummaryBody() }, plan);
@@ -86,6 +88,10 @@ test("the Reviewing comment gets the models' names, and a comment with a result 
   await updatePendingSummary(api, { id: 6, body: "<!-- mergelight:summary -->\n### 🟢 Mergelight: Safe to merge" }, plan);
   await updatePendingSummary(api, null, plan);
   assert.equal(writes.length, 1);
+  // After a reconnect the Reviewing comment carries earlier rounds' state, and it stays.
+  await updatePendingSummary(api, { id: 8, body: bodies[8] }, plan);
+  assert.ok(writes[1].body.body.endsWith(earlier));
+  assert.match(writes[1].body.body, /Reviewing with Codex GPT-6-Astra/);
 });
 
 test("the Reviewing check names the tool that reviews", async () => {

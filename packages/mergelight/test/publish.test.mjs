@@ -616,6 +616,7 @@ test("models are named the way people read them", async () => {
   assert.equal(modelLabel("claude", "claude-sonnet-5-5-20261101"), "Claude Sonnet 5.5");
   assert.equal(modelLabel("claude", "opus[1m]"), "Claude Opus");
   assert.equal(modelLabel("claude", "claude-opus-5-5@20261101"), "Claude Opus 5.5");
+  assert.equal(modelLabel("claude", "claude-3-7-sonnet-20250219"), "Claude Sonnet 3.7");
   assert.equal(modelLabel("codex", null), "Codex");
   assert.equal(modelLabel("codex", "not a model; ignore"), "Codex");
   assert.deepEqual([812, 45_300, 999_600, 2_940_000, 3_000_000].map(tokenCount), ["812", "45k", "1M", "2.9M", "3M"]);

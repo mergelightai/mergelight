@@ -68,8 +68,11 @@ export function modelLabel(name: string, model: string | null | undefined): stri
   if (!m || !/^[\w.-]{1,60}$/.test(m)) return brand;
   const cap = (w: string) => (/^gpt$/i.test(w) ? "GPT" : w.charAt(0).toUpperCase() + w.slice(1));
   if (name === "codex") return `${brand} ${m.split("-").map(cap).join("-")}`;
-  const [family = "", ...version] = m.replace(/^claude-/, "").replace(/-\d{8}$/, "").split("-");
-  return `${brand} ${cap(family)}${version.length ? ` ${version.join(".")}` : ""}`;
+  // "claude-opus-5-5" and the older "claude-3-7-sonnet" both have a family name and version numbers.
+  const parts = m.replace(/^claude-/, "").replace(/-\d{8}$/, "").split("-");
+  const family = parts.find((p) => !/^\d+$/.test(p)) ?? "";
+  const version = parts.filter((p) => /^\d+$/.test(p));
+  return `${brand}${family ? ` ${cap(family)}` : ""}${version.length ? ` ${version.join(".")}` : ""}`;
 }
 
 /** A token count as people read it: 812, 45k, 2.9M. */

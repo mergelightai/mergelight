@@ -7,7 +7,7 @@ import type { FailureNotice } from "./markdown.js";
 import { failedSummaryBody, FINDING_MARKER_RE, headline, inlineBody, isFailedSummary, isPendingSummary, LIGHT, pendingSummaryBody, SUMMARY_MARKER, summaryBody, type ReviewPlan } from "./markdown.js";
 import { askWriteAccess, MAX_NOTE, readMarks, trustedComment, writeAccess, type Mark, type PrComment } from "./handled.js";
 import { withoutHidden } from "../skills.js";
-import { decodeState, nextState, type ReviewState, type StateFinding } from "./state.js";
+import { decodeState, nextState, stateBlock, type ReviewState, type StateFinding } from "./state.js";
 import { newerVersion } from "../update.js";
 
 export { trustedComment } from "./handled.js";
@@ -269,7 +269,10 @@ export async function updatePendingSummary(api: GitHub, summary: PrComment | nul
   // Read it again: another run may have finished and written its result since this one began.
   const now = await api.get<PrComment>(`issues/comments/${summary.id}`).catch(() => null);
   if (!now || !isPendingSummary(now.body)) return;
-  await api.write("PATCH", `issues/comments/${summary.id}`, { body: pendingSummaryBody(plan) });
+  // A "Reviewing" comment can carry earlier rounds' state, after a reconnect: it must stay, or the next
+  // result starts again from round 1.
+  const state = stateBlock(now.body);
+  await api.write("PATCH", `issues/comments/${summary.id}`, { body: state ? `${pendingSummaryBody(plan)}\n${state}` : pendingSummaryBody(plan) });
 }
 
 /** A first review that couldn't run shouldn't say "Reviewing" forever, and an older failure shouldn't outlive a newer reason. Real results stay. */

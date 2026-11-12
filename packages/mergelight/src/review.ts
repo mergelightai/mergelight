@@ -344,7 +344,8 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
       named = true;
       // The same tool with no model of its own, or an alias of the one that answered ("opus" for
       // "claude-opus-5-5"), is the same model: the comment mustn't say a second one checks.
-      const sameModel = verifyWith === provider && (!verifyModel || (reviewerModel ?? "").includes(verifyModel));
+      const sameModel =
+        verifyWith === provider && (!verifyModel || verifyModel === reviewerModel || (!/\d/.test(verifyModel) && (reviewerModel ?? "").includes(verifyModel)));
       opts.onModels?.({
         reviewer: { name: provider, model: reviewerModel },
         checker: { name: verifyWith, model: sameModel ? reviewerModel : (verifyModel ?? null) },
