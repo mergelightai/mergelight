@@ -88,7 +88,7 @@ The light is red when a major bug must be fixed, yellow when anything else is wo
 
 Plugins, MCP servers, hooks and web search are switched off for every Codex run, so code in a pull request can't reach your other tools. Claude Code runs with only Read, Grep and Glob, confined to the checkout, with plugins, hooks, MCP servers and skills off, and anything that would ask for permission is denied. Every Codex run uses high reasoning effort unless you pass `--effort`, whatever your Codex config says. It matters: in our eval, gpt-6.1-sol at its default low effort found about a third fewer real problems. A review takes about 2 to 15 minutes depending on the size of the PR, around 7 for a typical one.
 
-Nothing is sent to Mergelight. The review runs on your own Codex or Claude login, on your machine or in your own GitHub Actions.
+Your code and your AI login are never sent to Mergelight. The review runs on your own Codex or Claude login, on your machine or in your own GitHub Actions.
 
 ## Eval
 

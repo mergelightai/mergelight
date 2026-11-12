@@ -11,6 +11,7 @@ export default function Footer() {
         </div>
         <div className="flex items-center gap-6">
           <a href={GITHUB} className="transition-colors hover:text-fg">GitHub</a>
+          <a href="/privacy/" className="transition-colors hover:text-fg">Privacy</a>
           <a href={`mailto:${EMAIL}`} className="transition-colors hover:text-fg">{EMAIL}</a>
         </div>
       </Container>
