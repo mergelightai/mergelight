@@ -19,6 +19,6 @@ jobs:
     steps:
       # Pinned to a release, so new code only runs here once you merge an update.
       # Mergelight says on your pull requests when a new version is out.
-      - uses: mergelightai/mergelight@916ea4b5ef7e0d4322f658495d073ff7875e3103 # v0.1.17
+      - uses: mergelightai/mergelight@ea6639bf1783367c67cc3daf70477fb9de04d6e8 # v0.1.18
         with:
           codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}
