@@ -4,7 +4,7 @@ import { GitHub, type ApiOptions } from "./api.js";
 import { commentableLines, place } from "./diff-lines.js";
 import { answeredRemembered, closedBody, patchTouches, readClosed, REMEMBERED_MARKER, reopenedBody, resolvedByPeople, resolverReplies, threadAction, threadFinding, type Handled, type ReviewThread } from "./closed.js";
 import type { FailureNotice } from "./markdown.js";
-import { failedSummaryBody, FINDING_MARKER_RE, headline, inlineBody, isFailedSummary, isPendingSummary, LIGHT, pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "./markdown.js";
+import { failedSummaryBody, FINDING_MARKER_RE, headline, inlineBody, isFailedSummary, isPendingSummary, LIGHT, pendingSummaryBody, SUMMARY_MARKER, summaryBody, type ReviewPlan } from "./markdown.js";
 import { askWriteAccess, MAX_NOTE, readMarks, trustedComment, writeAccess, type Mark, type PrComment } from "./handled.js";
 import { withoutHidden } from "../skills.js";
 import { decodeState, nextState, type ReviewState, type StateFinding } from "./state.js";
@@ -257,9 +257,15 @@ export async function startCheck(api: GitHub, headSha: string): Promise<number |
 }
 
 /** Puts the summary comment on the PR before anything else, so it comes first. Later rounds edit it in place. */
-export async function startSummary(api: GitHub, number: number): Promise<PrComment | null> {
+export async function startSummary(api: GitHub, number: number, plan?: ReviewPlan): Promise<PrComment | null> {
   const { summary } = await readPrReviewState(api, number);
-  return summary ?? (await api.write<PrComment>("POST", `issues/${number}/comments`, { body: pendingSummaryBody() }));
+  return summary ?? (await api.write<PrComment>("POST", `issues/${number}/comments`, { body: pendingSummaryBody(plan) }));
+}
+
+/** Names the models in a "Reviewing" comment once they are known. A comment with a result is left alone. */
+export async function updatePendingSummary(api: GitHub, summary: PrComment | null, plan: ReviewPlan): Promise<void> {
+  if (!summary || !isPendingSummary(summary.body)) return;
+  await api.write("PATCH", `issues/comments/${summary.id}`, { body: pendingSummaryBody(plan) });
 }
 
 /** A first review that couldn't run shouldn't say "Reviewing" forever, and an older failure shouldn't outlive a newer reason. Real results stay. */

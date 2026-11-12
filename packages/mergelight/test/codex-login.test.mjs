@@ -187,3 +187,16 @@ test("Codex never reads AGENTS.md from the checkout unless a run asks for it", a
   assert.match(plain, /^project_doc_max_bytes=0$/m);
   assert.doesNotMatch(allowed, /project_doc_max_bytes/);
 });
+
+test("the model Codex really used is read from its session file", async () => {
+  const { sessionModel } = await import("../dist/providers/codex.js");
+  const home = mkdtempSync(join(tmpdir(), "mergelight-codex-home-"));
+  const day = join(home, "sessions", "2026", "11", "12");
+  (await import("node:fs")).mkdirSync(day, { recursive: true });
+  writeFileSync(join(day, "rollout-2026-11-12T13-30-24-01a1cfbc-df7b-7560-9910-900cd8882a57.jsonl"), '{"type":"session_meta"}\n{"type":"turn_context","payload":{"model":"gpt-6.1-sol","effort":"high"}}\n');
+  assert.equal(sessionModel("01a1cfbc-df7b-7560-9910-900cd8882a57", home), "gpt-6.1-sol");
+  assert.equal(sessionModel("01a1cfbc-0000-0000-0000-000000000000", home), null, "another run's thread");
+  assert.equal(sessionModel(null, home), null);
+  assert.equal(sessionModel("../../etc", home), null, "a thread id that isn't one");
+  assert.equal(sessionModel("01a1cfbc-df7b-7560-9910-900cd8882a57", join(home, "missing")), null);
+});

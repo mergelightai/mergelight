@@ -56,8 +56,38 @@ export function inlineBody(f: Finding): string {
 }
 
 /** Posted when a review starts, so the summary is the first thing on the pull request. */
-export function pendingSummaryBody(): string {
-  return [SUMMARY_MARKER, PENDING_MARKER, "### ⏳ Mergelight: Reviewing", "", "This usually takes 2 to 15 minutes. This comment updates when the review is done."].join("\n");
+/**
+ * A model as people read it: "Codex GPT-6.1-Sol", "Claude Opus 5.5". Just the tool's name when the model
+ * isn't known, and the model's own name when it isn't one these rules know.
+ */
+export function modelLabel(name: string, model: string | null | undefined): string {
+  const brand = name === "codex" ? "Codex" : "Claude";
+  const m = model?.trim();
+  if (!m || !/^[\w.-]{1,60}$/.test(m)) return brand;
+  const cap = (w: string) => (/^gpt$/i.test(w) ? "GPT" : w.charAt(0).toUpperCase() + w.slice(1));
+  if (name === "codex") return `${brand} ${m.split("-").map(cap).join("-")}`;
+  const [family = "", ...version] = m.replace(/^claude-/, "").replace(/-\d{8}$/, "").split("-");
+  return `${brand} ${cap(family)}${version.length ? ` ${version.join(".")}` : ""}`;
+}
+
+/** A token count as people read it: 812, 45k, 2.9M. */
+export function tokenCount(n: number): string {
+  if (n < 1000) return String(Math.round(n));
+  if (n < 1_000_000) return `${Math.round(n / 1000)}k`;
+  return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+}
+
+/** Who reviews and who checks, for the line under "Reviewing". */
+export interface ReviewPlan {
+  reviewer: { name: string; model: string | null };
+  checker?: { name: string; model: string | null };
+}
+
+export function pendingSummaryBody(plan?: ReviewPlan): string {
+  const reviewer = plan ? modelLabel(plan.reviewer.name, plan.reviewer.model) : null;
+  const checker = plan?.checker ? modelLabel(plan.checker.name, plan.checker.model) : null;
+  const who = reviewer ? `Reviewing with ${reviewer}${checker && checker !== reviewer ? `, and ${checker} checks the findings` : ""}. ` : "";
+  return [SUMMARY_MARKER, PENDING_MARKER, "### ⏳ Mergelight: Reviewing", "", `${who}This usually takes 2 to 15 minutes. This comment updates when the review is done.`].join("\n");
 }
 
 export const isPendingSummary = (body: string | undefined) => Boolean(body?.includes(PENDING_MARKER));
@@ -264,11 +294,14 @@ export function summaryBody({ review: r, state, urls, marks = new Map(), handled
   const unread = notReadLine(r.not_read);
   if (unread) out.push("", unread);
 
-  const who = (p: { name: string; model: string | null }) => `${p.name === "codex" ? "Codex" : "Claude"}${p.model ? ` ${p.model.replace(/^claude-/, "")}` : ""}`;
-  const checkedBy = r.verifier && r.verifier.name !== r.provider.name ? `, checked by ${who(r.verifier)},` : "";
+  const reviewer = modelLabel(r.provider.name, r.provider.model);
+  const checker = r.verifier ? modelLabel(r.verifier.name, r.verifier.model) : reviewer;
+  const checkedBy = checker !== reviewer ? `, checked by ${checker},` : "";
+  const t = r.stats.tokens;
+  const used = t && t.input + t.output > 0 ? ` · ${tokenCount(t.input)} tokens in${t.cached ? ` (${tokenCount(t.cached)} from cache)` : ""}, ${tokenCount(t.output)} out` : "";
   out.push(
     "",
-    `<sub>Round ${state.round} · reviewed \`${r.pr.head_sha.slice(0, 7)}\` with ${who(r.provider)}${checkedBy} on your own plan · ${duration(r.stats.duration_ms)}</sub>`,
+    `<sub>Round ${state.round} · reviewed \`${r.pr.head_sha.slice(0, 7)}\` with ${reviewer}${checkedBy} on your own plan · ${duration(r.stats.duration_ms)}${used}</sub>`,
   );
 
   const tail = withState ? `\n${encodeState(state)}` : "";

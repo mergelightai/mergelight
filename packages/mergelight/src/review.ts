@@ -19,7 +19,7 @@ import {
   usedMemories,
 } from "./prompt.js";
 import { LimitError, LoginError } from "./providers/codex.js";
-import { claudeAvailable, runModel, TOOLING, type ProviderName } from "./providers/index.js";
+import { claudeAvailable, runModel as runOneModel, TOOLING, type ModelOptions, type ModelResult, type ProviderName } from "./providers/index.js";
 import { candidateSchema, checkSchema, reviewSchema, reviewSchemaWithDecisions } from "./schema.js";
 import { CHECK_TIMEOUT_MS, startTeamChecks, type ChecksRun } from "./checks.js";
 import { run } from "./run.js";
@@ -62,6 +62,8 @@ export interface ReviewOptions {
   keep?: boolean;
   /** Progress messages. transient ones (the command the agent is running) are only worth showing live. */
   onProgress?: (message: string, transient?: boolean) => void;
+  /** Called once the models are known: after the first reviewer answers, and before the checker starts. */
+  onModels?: (models: { reviewer: { name: ProviderName; model: string | null }; checker: { name: ProviderName; model: string | null } }) => void;
 }
 
 /**
@@ -162,7 +164,25 @@ export interface VerifyOptions {
   onCommand?: (command: string) => void;
 }
 
+/** Every token a review's model calls used: hunters, sweeps, the team's checks and the verifier. */
+export interface TokenTally {
+  input: number;
+  cached: number;
+  output: number;
+}
+
+function counting(tally: TokenTally) {
+  return (provider: ProviderName, opts: ModelOptions): Promise<ModelResult> =>
+    runOneModel(provider, opts).then((r) => {
+      tally.input += r.usage?.input_tokens ?? 0;
+      tally.cached += r.usage?.cached_input_tokens ?? 0;
+      tally.output += r.usage?.output_tokens ?? 0;
+      return r;
+    });
+}
+
 export interface Verified {
+  usage: ModelResult["usage"];
   summary: string;
   findings: Finding[];
   rejected: ModelReview["rejected"];
@@ -200,7 +220,7 @@ async function checkDiff(dir: string, base: string, head: string, files: string[
  * same candidates through another model.
  */
 export async function verifyCandidates(dir: string, input: PromptInput, found: Candidate[], opts: VerifyOptions): Promise<Verified> {
-  const result = await runModel(opts.provider, {
+  const result = await runOneModel(opts.provider, {
     cwd: dir,
     prompt: buildVerifierPrompt(forProvider(dir, input, opts.provider), found),
     // Only a verifier that was given the team's earlier decisions is asked which one it used.
@@ -218,7 +238,7 @@ export async function verifyCandidates(dir: string, input: PromptInput, found: C
       return { ...f, tier: tierOf({ ...f, rank }), rank };
     })
     .sort((a, b) => ORDER[a.class] - ORDER[b.class] || a.file.localeCompare(b.file) || a.line - b.line);
-  return { summary: review.summary, findings, rejected: review.rejected, model: result.model, cost_usd: result.cost_usd ?? null };
+  return { summary: review.summary, findings, rejected: review.rejected, model: result.model, cost_usd: result.cost_usd ?? null, usage: result.usage };
 }
 
 /** Every rule a team can have for one repository: 50 for the org and 50 of its own. None is dropped. */
@@ -269,6 +289,8 @@ export function memoriesFor(memories: TeamMemory[] | undefined, changedFiles: st
 export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): Promise<Review> {
   const started = Date.now();
   const progress = opts.onProgress ?? (() => {});
+  const tokens: TokenTally = { input: 0, cached: 0, output: 0 };
+  const runModel = counting(tokens);
   const effort = opts.effort ?? DEFAULT_EFFORT;
   const provider = opts.provider ?? "codex";
   const hunterModel = provider === "claude" ? (opts.model ?? "opus") : opts.model;
@@ -398,11 +420,17 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
     // Step 2: the verifier tries to disprove each candidate and sorts the rest.
     // Opus checks better than Codex: in the eval it posted a third less and kept the same finds.
     const verifyWith = opts.verifyWith ?? (provider === "claude" || (await claudeAvailable()) ? "claude" : "codex");
+    const verifyModel = verifyWith === "codex" ? (opts.verifyModel ?? opts.model) : (opts.verifyModel ?? "opus");
+    const firstAnswer = hunts.find((h) => h.status === "fulfilled");
+    opts.onModels?.({
+      reviewer: { name: provider, model: firstAnswer?.status === "fulfilled" ? firstAnswer.value.model : (hunterModel ?? null) },
+      checker: { name: verifyWith, model: verifyModel ?? null },
+    });
     if (!opts.verifyWith && verifyWith === "codex") progress("Claude Code isn't installed, so Codex checks the findings");
     progress(`Checking ${found.length} candidate${found.length === 1 ? "" : "s"}${verifyWith === "codex" ? "" : ` with ${verifyWith}`}`);
     const verified = await verifyCandidates(ws.dir, input, found, {
       provider: verifyWith,
-      model: verifyWith === "codex" ? (opts.verifyModel ?? opts.model) : (opts.verifyModel ?? "opus"),
+      model: verifyModel,
       effort,
       logFile: log("verify"),
       onCommand: (cmd) => progress(`Checking ${found.length} candidates: ${cmd.replace(/\s+/g, " ").slice(0, 80)}`, true),
@@ -410,6 +438,9 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
     // Every path the pull request touches counts here, the lockfiles and generated files the reviewers skip included.
     const needsHuman = filesNeedingHuman(opts.rules, ws.touchedPaths);
     const team_checks = teamChecks ? await teamChecks.done : null;
+    tokens.input += verified.usage?.input_tokens ?? 0;
+    tokens.cached += verified.usage?.cached_input_tokens ?? 0;
+    tokens.output += verified.usage?.output_tokens ?? 0;
     const firstHunt = hunts.find((h) => h.status === "fulfilled");
     const servedModel = firstHunt?.status === "fulfilled" ? firstHunt.value.model : null;
 
@@ -439,6 +470,7 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
         files_changed: pr.changedFiles,
         additions: pr.additions,
         deletions: pr.deletions,
+        tokens: { ...tokens },
       },
       trace: {
         candidates: found,

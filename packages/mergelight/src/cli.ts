@@ -7,8 +7,8 @@ import { declinesOf, fetchContext, MAX_REASON, reportReview } from "./cloud.js";
 import { GitHub } from "./publish/api.js";
 import { writeAccess } from "./publish/handled.js";
 import { publishTeamChecks } from "./publish/team-checks.js";
-import { answerRemembered, confirmReasons, approveCheck, checkLimitTitle, checkLoginTitle, failCheck, failSummary, previousFindings, publishReview, startCheck, startSummary, syncApproval, UNREVIEWED, APPROVALS_OFF } from "./publish/publish.js";
-import { LimitError, LoginError, loginFailureMessage } from "./providers/codex.js";
+import { answerRemembered, confirmReasons, approveCheck, checkLimitTitle, checkLoginTitle, failCheck, failSummary, previousFindings, publishReview, startCheck, startSummary, syncApproval, UNREVIEWED, APPROVALS_OFF, updatePendingSummary } from "./publish/publish.js";
+import { configuredModel, LimitError, LoginError, loginFailureMessage } from "./providers/codex.js";
 import { limitNotice, loginNotice } from "./publish/markdown.js";
 import { renderRejected, renderTerminal } from "./render.js";
 import { reviewPullRequest } from "./review.js";
@@ -215,11 +215,17 @@ async function main(): Promise<number> {
   // review
   const api = new GitHub(ref.owner, ref.repo, { dryRun, log });
   let checkRunId: number | null = null;
+  let summaryComment: Awaited<ReturnType<typeof startSummary>> = null;
   let headSha = values.at ?? null;
   if (values.post) {
     headSha ??= (await fetchPullRequest(ref)).headSha;
     checkRunId = await startCheck(api, headSha);
-    await startSummary(api, ref.number).catch((e) => log(`Couldn't post the summary yet: ${(e as Error).message}`));
+    // Says which AI reviews from the start. The models' exact names follow once the first reviewer answers.
+    const firstGuess = values.model ?? (provider === "claude" ? "opus" : provider === "codex" ? configuredModel() : null);
+    summaryComment = await startSummary(api, ref.number, provider ? { reviewer: { name: provider, model: firstGuess ?? null } } : undefined).catch((e) => {
+      log(`Couldn't post the summary yet: ${(e as Error).message}`);
+      return null;
+    });
   }
 
   // Teams that use the dashboard: ask the server first, so nothing is sent for anyone else.
@@ -244,6 +250,7 @@ async function main(): Promise<number> {
       writtenSkills: cloud.writtenSkills,
       checks: cloud.checks,
       onTeamChecks: (results) => (answered = results),
+      onModels: (models) => void updatePendingSummary(api, summaryComment, models).catch((e) => log(`Couldn't name the models yet: ${(e as Error).message}`)),
       // The commit the check and the earlier findings were read for, so a push in between doesn't mix two.
       at: values.at ?? headSha ?? undefined,
       provider,

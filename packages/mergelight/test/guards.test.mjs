@@ -70,3 +70,17 @@ test("an approval of a blocked review says it doesn't clear it, though both end 
   assert.match(await approveCheck(api, 7, "ada"), /blocked\. An approval doesn't clear it/);
   assert.deepEqual(api.writes, []);
 });
+
+test("the Reviewing comment gets the models' names, and a comment with a result is left alone", async () => {
+  const { updatePendingSummary } = await import("../dist/publish/publish.js");
+  const { pendingSummaryBody } = await import("../dist/publish/markdown.js");
+  const writes = [];
+  const api = { write: async (method, path, body) => (writes.push({ method, path, body }), {}) };
+  const plan = { reviewer: { name: "codex", model: "gpt-6-astra" }, checker: { name: "claude", model: "claude-opus-5-5" } };
+  await updatePendingSummary(api, { id: 5, body: pendingSummaryBody() }, plan);
+  assert.equal(writes[0].path, "issues/comments/5");
+  assert.match(writes[0].body.body, /Reviewing with Codex GPT-6-Astra, and Claude Opus 5\.5 checks the findings/);
+  await updatePendingSummary(api, { id: 6, body: "<!-- mergelight:summary -->\n### 🟢 Mergelight: Safe to merge" }, plan);
+  await updatePendingSummary(api, null, plan);
+  assert.equal(writes.length, 1);
+});
