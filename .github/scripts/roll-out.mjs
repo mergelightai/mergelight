@@ -13,10 +13,25 @@ import { pathToFileURL } from "node:url";
 export const CANARY_REPO = "mergelightai/action-sandbox";
 export const canaryBranch = (tag) => `canary/${tag}`;
 
-/** "passed", "failed" or "waiting", from the newest "Mergelight" check on the canary pull request. */
-export function canaryVerdict(check) {
-  if (!check || check.status !== "completed") return "waiting";
-  return /^(🔴|🟡) /u.test(check.output?.title ?? "") ? "passed" : "failed";
+export const PLANTED_FILE = "canary/delete-project.js";
+export const CANARY_TIMEOUT_MS = 3 * 60 * 60 * 1000;
+
+/**
+ * "passed", "failed" or "waiting" for one canary pull request, with the reason.
+ * Passed: the newest "Mergelight" check finished as a review that holds the merge (🔴 or 🟡, or 🟢
+ * only because someone approved it), and the review commented on the planted file. A review that
+ * can't run, that calls the bug safe, or that flags only other things means the release is broken.
+ * A canary with no finished review after 3 hours failed too, so a release that hangs still says so.
+ */
+export function canaryVerdict({ check, flaggedPlantedFile, openedAt, now = Date.now() }) {
+  if (check?.status !== "completed") {
+    if (now - Date.parse(openedAt) > CANARY_TIMEOUT_MS) return { verdict: "failed", why: "no finished review after 3 hours" };
+    return { verdict: "waiting", why: check ? "the review is running" : "no review yet" };
+  }
+  const title = check.output?.title ?? "";
+  if (!/^(🔴|🟡) |^🟢 Approved by /u.test(title)) return { verdict: "failed", why: title || "the review ended without a result" };
+  if (!flaggedPlantedFile) return { verdict: "failed", why: `the review didn't flag the planted bug in ${PLANTED_FILE}` };
+  return { verdict: "passed", why: title };
 }
 
 /** Version order, newest first: v0.1.10 comes after v0.1.9. A tag that isn't a plain version sorts last. */
@@ -31,7 +46,8 @@ export function byVersion(a, b) {
  * Walks the releases newest first and takes the first whose canary passed.
  * Never back: if the tag already points at a release before one passes, it stays, because that
  * release is newer than every release that could still be picked. A pulled release (made a
- * pre-release, or deleted) isn't in the list, so the tag moves off it.
+ * pre-release, or deleted) isn't in the list, so the tag moves off it. When nothing passed, `stuck`
+ * says the tag is still on a pulled release, so the run can say so instead of staying quiet.
  * `now` rolls out the newest release without waiting for its canary.
  */
 export function pickRelease(releases, verdictOf, current, now = false) {
@@ -43,7 +59,7 @@ export function pickRelease(releases, verdictOf, current, now = false) {
     if (verdict === "passed") return { move: release, failed, waiting };
     (verdict === "failed" ? failed : waiting).push(release.tag);
   }
-  return { failed, waiting };
+  return { failed, waiting, stuck: Boolean(current) };
 }
 
 async function github(path, token) {
@@ -61,8 +77,13 @@ async function readCanary(tag, token) {
   if (!pull) return { verdict: "waiting", note: "no canary yet" };
   const { check_runs } = await github(`repos/${CANARY_REPO}/commits/${pull.head.sha}/check-runs?check_name=Mergelight&per_page=20`, token);
   const check = check_runs.sort((a, b) => b.id - a.id)[0];
-  const verdict = canaryVerdict(check);
-  return { verdict, note: `${pull.html_url}: ${check ? (check.output?.title ?? check.status) : "no review yet"}` };
+  let flaggedPlantedFile = false;
+  if (check?.status === "completed") {
+    const comments = await github(`repos/${CANARY_REPO}/pulls/${pull.number}/comments?per_page=100`, token);
+    flaggedPlantedFile = comments.some((c) => c.path === PLANTED_FILE && c.user?.type === "Bot");
+  }
+  const { verdict, why } = canaryVerdict({ check, flaggedPlantedFile, openedAt: pull.created_at });
+  return { verdict, note: `${pull.html_url}: ${why}` };
 }
 
 async function main() {
@@ -108,6 +129,9 @@ async function main() {
     console.log(`${major} goes to ${pick.move.tag}${now ? ", by hand without its canary" : ", whose canary passed"}.`);
   } else if (pick.stay) {
     console.log(`${major} stays on ${pick.stay}.`);
+  } else if (pick.stuck) {
+    console.log(`::error::${major} is on ${current.slice(0, 7)}, which is no longer a release (it was pulled), and no release has a canary that passed. Run the Canary workflow for an older release, or run Roll out with "now".`);
+    process.exitCode = 1;
   } else {
     console.log(`No ${major} release has a canary that passed yet.`);
   }
