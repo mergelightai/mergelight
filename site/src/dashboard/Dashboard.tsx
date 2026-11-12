@@ -222,7 +222,7 @@ export default function Dashboard() {
       {view.kind === 'loading' && <Spinning>Loading reviews</Spinning>}
       {view.kind === 'off' && <NotOn org={org} />}
       {view.kind === 'error' && <LoadError onRetry={reload} />}
-      {ready && tab === 'reviews' && (ready.overview.reviews.length ? <ReviewsView overview={ready.overview} /> : <NothingYet org={org} />)}
+      {ready && tab === 'reviews' && (ready.overview.reviews.length ? <ReviewsView overview={ready.overview} login={session.user.login} orgLogin={org.login} /> : <NothingYet org={org} />)}
       {ready && tab === 'rules' && (ready.rules ? (
         <RulesView
           key={org.id}

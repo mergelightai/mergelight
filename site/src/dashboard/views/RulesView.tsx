@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
+import { CircleAlertIcon, ScrollTextIcon } from '@/lib/icons';
 import { SignedOut, type NewRule, type Rule, type Rules } from '../api';
 import { ViewHeader } from '../AppShell';
-import { DataBody, DataCell, DataHead, DataHeadCell, DataRow, DataTable, TwoLines } from '../DataTable';
+import { DataBody, DataCard, DataCell, Filler, DataHead, DataHeadCell, DataRow, DataTable, TwoLines } from '../DataTable';
 import { ago } from '../format';
 import { Choose, Code, Confirm, EmptyList, Facts, Field, FormDialog, lastRepo, markResume, patterns, ReadOnly, rememberRepo, Tag, TextInput, useDraft, type Choice } from '../kit';
 
@@ -85,7 +86,6 @@ export function RulesView({ orgId, rules, onAdd, onRemove, resume }: { orgId: nu
   return (
     <>
       <ViewHeader
-        eyebrow="Reviewer"
         title="Rules"
         lead={
           <>
@@ -98,7 +98,8 @@ export function RulesView({ orgId, rules, onAdd, onRemove, resume }: { orgId: nu
         {rules.rules.length === 0 ? (
           <EmptyList title="No rules yet">Reviews follow Mergelight's own judgement until your team adds a rule.</EmptyList>
         ) : (
-          <DataTable fill>
+          <DataCard fill title="Rules" count={rules.rules.length} meta={`${rules.rules.filter((r) => r.kind === 'needs_human').length} always need a human`}>
+            <DataTable>
             <DataHead>
               <DataHeadCell>Rule</DataHeadCell>
               <DataHeadCell className="hidden md:table-cell">Where</DataHeadCell>
@@ -109,7 +110,7 @@ export function RulesView({ orgId, rules, onAdd, onRemove, resume }: { orgId: nu
               {rules.rules.map((r) => (
                 <DataRow key={r.id}>
                   <DataCell className="whitespace-normal">
-                    <TwoLines
+                    <TwoLines icon={r.kind === 'needs_human' ? <CircleAlertIcon className="text-human-ink" /> : <ScrollTextIcon />}
                       main={
                         <span className="flex flex-wrap items-center gap-2">
                           {r.text}
@@ -153,6 +154,8 @@ export function RulesView({ orgId, rules, onAdd, onRemove, resume }: { orgId: nu
               ))}
             </DataBody>
           </DataTable>
+            <Filler />
+          </DataCard>
         )}
         <Facts
           items={[

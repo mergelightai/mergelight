@@ -1,5 +1,5 @@
-// The parts the dashboard's views share: the glass card, the facts card, the form window,
-// the "are you sure" popup, the repository picker and the form fields.
+// The parts the dashboard's views share, in the look of the reference: the card, the facts card, the
+// form window, the "are you sure" popup, the repository picker and the form fields.
 import { useEffect, useState, type ComponentProps, type FormEvent, type ReactNode } from 'react';
 import { InfoIcon, LockIcon, PlusIcon } from '@/lib/icons';
 import { Button } from '@/components/ui/button';
@@ -8,18 +8,19 @@ import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
+import { LIGHTS } from './format';
 
-/** A glass card with a quiet label on its rim and a lighter panel inside, like the number cards. */
+/** A card: a header strip with a quiet label, and a darker panel inside with a hairline edge. */
 export function GlassCard({ label, icon, className, children }: { label?: ReactNode; icon?: ReactNode; className?: string; children: ReactNode }) {
   return (
-    <div className={cn('glass-frame glass-card relative rounded-[1.75rem] p-1', className)}>
+    <div className={cn('rounded-[14px] bg-strip p-1 hairline', className)}>
       {label && (
-        <p className="flex h-10 items-center gap-2 px-5 text-sm text-muted-foreground">
+        <p className="flex min-h-10 items-center gap-2 px-3 py-1.5 text-[14px] font-medium text-ink [&_svg]:text-ink-4">
           {icon}
           {label}
         </p>
       )}
-      <div className="glass-inner rounded-3xl bg-panel p-5">{children}</div>
+      <div className="rounded-[10px] bg-panel p-5 hairline">{children}</div>
     </div>
   );
 }
@@ -27,55 +28,59 @@ export function GlassCard({ label, icon, className, children }: { label?: ReactN
 /** What someone must know before they rely on a feature: the promises the docs make too. */
 export function Facts({ items }: { items: ReactNode[] }) {
   return (
-    <GlassCard label="Good to know" icon={<InfoIcon className="size-4" />} className="xl:self-start">
-      <ul className="grid gap-3 text-sm leading-relaxed text-muted-foreground">
+    <div className="rounded-[14px] bg-strip p-1 hairline xl:self-start">
+      <p className="flex min-h-10 items-center gap-2 px-3 py-1.5 text-[14px] font-medium text-ink">
+        <InfoIcon className="size-4 text-ink-4" />
+        Good to know
+      </p>
+      <ul className="rounded-[10px] bg-panel hairline">
         {items.map((item, i) => (
-          <li key={i} className="flex gap-2.5">
-            <span className="mt-2 size-1 shrink-0 rounded-full bg-muted-foreground/60" />
-            <span>{item}</span>
+          <li key={i} className="border-t border-white/[0.05] px-4 py-3 text-[13.5px] leading-relaxed text-ink-3 first:border-t-0">
+            {item}
           </li>
         ))}
       </ul>
-    </GlassCard>
+    </div>
   );
 }
 
 /** Says who may change this, for someone who can only read. */
 export function ReadOnly({ children }: { children: ReactNode }) {
   return (
-    <p className="flex items-center gap-2 rounded-full bg-white/[0.04] px-3.5 py-2 text-[13px] text-muted-foreground">
-      <LockIcon className="size-3.5 shrink-0" />
+    <p className="flex items-center gap-2 rounded-[8px] bg-shell px-3 py-2 text-[13px] text-ink-3 hairline">
+      <LockIcon className="size-3.5 shrink-0 text-ink-4" />
       {children}
     </p>
   );
 }
 
+/** A bit of code in a sentence, as the reference's "npm run migrate". */
 export function Code({ children }: { children: ReactNode }) {
-  return <code className="rounded-md bg-white/[0.06] px-1.5 py-0.5 font-mono text-[0.85em] text-foreground">{children}</code>;
+  return <code className="rounded-[5px] bg-strip px-1.5 py-0.5 font-mono text-[0.86em] text-ink-2">{children}</code>;
 }
 
-/** A small round tag, such as the repository a rule applies to. */
+/** A small tag, as the reference's "Development" pill. The human tone uses the "needs a human" light. */
 export function Tag({ tone = 'plain', children }: { tone?: 'plain' | 'human'; children: ReactNode }) {
-  return <span className={cn('inline-flex h-6 items-center rounded-full px-2.5 text-xs font-medium whitespace-nowrap', tone === 'human' ? 'bg-human/10 text-human shadow-[inset_0_0_0_1px_rgb(245_196_81/0.18)]' : 'bg-white/[0.03] text-muted-foreground shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]')}>{children}</span>;
+  return <span className={cn('inline-flex h-6 items-center gap-1.5 rounded-[6px] px-2 text-[12.5px] whitespace-nowrap', tone === 'human' ? LIGHTS.yellow.pill : 'bg-shell text-ink-2 hairline')}>{children}</span>;
 }
 
 /**
  * A button that asks first. Removing a rule or forgetting a decision acts on every later review,
- * so one stray click must not do it.
+ * so one stray click must not do it. Its popup ends in an action bar, as the reference's diagnosis.
  */
 export function Confirm({ label, ariaLabel, title, body, confirm, busyLabel, onConfirm }: { label: string; ariaLabel?: string; title: string; body: ReactNode; confirm: string; busyLabel: string; onConfirm: () => Promise<void> }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   return (
     <Popover open={open} onOpenChange={(next) => !busy && setOpen(next)}>
-      <PopoverTrigger render={<Button variant="ghost" size="sm" aria-label={ariaLabel} className="text-muted-foreground hover:text-foreground" disabled={busy} />}>{busy ? busyLabel : label}</PopoverTrigger>
+      <PopoverTrigger render={<Button variant="ghost" size="sm" aria-label={ariaLabel} disabled={busy} />}>{busy ? busyLabel : label}</PopoverTrigger>
       <PopoverContent align="end" className="w-80">
         <div className="grid gap-1.5">
-          <p className="font-medium text-foreground">{title}</p>
-          <p className="text-[13px] leading-relaxed text-muted-foreground">{body}</p>
+          <p className="text-[14px] font-medium text-ink">{title}</p>
+          <p className="text-[13px] leading-relaxed text-ink-3">{body}</p>
         </div>
-        <div className="flex justify-end gap-2">
-          <Button variant="ghost" size="sm" onClick={() => setOpen(false)} disabled={busy}>
+        <div className="-mx-4 -mb-4 flex justify-end gap-2 border-t border-white/[0.06] px-4 py-3">
+          <Button variant="outline" size="sm" onClick={() => setOpen(false)} disabled={busy}>
             Cancel
           </Button>
           <Button
@@ -98,7 +103,10 @@ export function Confirm({ label, ariaLabel, title, body, confirm, busyLabel, onC
   );
 }
 
-/** The button that opens a form, and the form in a glass window. */
+/**
+ * The button that opens a form, and the form in a small window, as the reference's "Invite people":
+ * a header with an icon, a title and one line, the fields, and an action bar with the soft blue button.
+ */
 export function FormDialog({
   open,
   onOpenChange,
@@ -112,11 +120,13 @@ export function FormDialog({
   error,
   onSubmit,
   children,
+  icon,
   wide = false,
   quiet = false,
 }: {
+  icon?: ReactNode;
   wide?: boolean;
-  /** A smaller, quieter button, for a second form on the same view. */
+  /** A quieter button, for a second form on the same view. */
   quiet?: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -133,27 +143,31 @@ export function FormDialog({
 }) {
   return (
     <>
-      <Button onClick={() => onOpenChange(true)} variant={quiet ? 'secondary' : 'default'} className={quiet ? 'h-9 gap-1.5 rounded-full pl-3 pr-4 text-[13px]' : 'h-10 gap-1.5 rounded-full pl-3.5 pr-5 text-[14px] shadow-[0_8px_24px_-10px_rgb(236_234_244/0.35)] hover:bg-white'}>
+      <Button onClick={() => onOpenChange(true)} variant={quiet ? 'outline' : 'default'} className="gap-1.5 pl-3">
         <PlusIcon />
         {trigger}
       </Button>
       <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
-        <DialogContent className={cn('glass-frame rounded-[2rem]! bg-transparent! p-2! ring-0! shadow-none!', wide ? 'sm:max-w-2xl' : 'sm:max-w-lg')} showCloseButton={false}>
+        <DialogContent className={cn('gap-0 rounded-[20px]! bg-transparent! p-0! ring-0! shadow-none!', wide ? 'sm:max-w-2xl' : 'sm:max-w-lg')} showCloseButton={false}>
+          <div className="menu-rim rounded-[20px] p-2">
           <form
-            className="glass-inner grid max-h-[calc(100svh-3rem)] gap-5 overflow-y-auto rounded-[1.6rem] bg-popover p-6"
+            className="flex max-h-[calc(100svh-3rem)] flex-col overflow-hidden rounded-[13px] bg-panel hairline"
             onSubmit={(e: FormEvent) => {
               e.preventDefault();
               if (ready && !busy) onSubmit();
             }}
           >
-            <div className="grid gap-1.5">
-              <DialogTitle className="text-lg font-semibold">{title}</DialogTitle>
-              <DialogDescription className="leading-relaxed">{description}</DialogDescription>
+            <div className="flex items-start gap-3 border-b border-white/[0.06] px-5 py-4">
+              {icon && <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center text-ink-3 [&_svg]:size-[18px]">{icon}</span>}
+              <div className="grid gap-0.5">
+                <DialogTitle className="text-[15px] font-medium text-ink">{title}</DialogTitle>
+                <DialogDescription className="text-[13px] leading-relaxed text-ink-3">{description}</DialogDescription>
+              </div>
             </div>
-            <div className="grid gap-4">{children}</div>
-            {error && <p className="rounded-2xl bg-destructive/10 px-4 py-3 text-[13px] text-destructive">{error}</p>}
-            <div className="flex justify-end gap-2">
-              <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
+            <div className="grid gap-4 overflow-y-auto px-5 py-5">{children}</div>
+            {error && <p className="mx-5 mb-4 rounded-[8px] bg-blocked/[0.1] px-3.5 py-2.5 text-[13px] text-blocked-ink shadow-[inset_0_0_0_1px_rgb(211_134_125/0.25)]">{error}</p>}
+            <div className="flex items-center justify-end gap-2 border-t border-white/[0.06] bg-shell/60 px-5 py-3">
+              <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
                 Cancel
               </Button>
               <Button type="submit" disabled={!ready || busy}>
@@ -161,6 +175,7 @@ export function FormDialog({
               </Button>
             </div>
           </form>
+          </div>
         </DialogContent>
       </Dialog>
     </>
@@ -170,25 +185,25 @@ export function FormDialog({
 /** A label, its control, and a quiet hint under it. */
 export function Field({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
   return (
-    <label className="grid gap-1.5">
-      <span className="text-[13px] font-medium text-foreground">{label}</span>
+    <label className="grid gap-2">
+      <span className="text-[13px] text-ink-3">{label}</span>
       {children}
-      {hint && <span className="text-xs leading-relaxed text-muted-foreground">{hint}</span>}
+      {hint && <span className="text-xs leading-relaxed text-ink-4">{hint}</span>}
     </label>
   );
 }
 
 export function TextInput({ className, ...props }: ComponentProps<typeof Input>) {
-  return <Input className={cn('h-10 rounded-xl bg-white/[0.05] px-3.5', className)} {...props} />;
+  return <Input className={cn('h-10 px-3.5', className)} {...props} />;
 }
 
 export type Choice = { value: string; label: string; disabled?: boolean; note?: string };
 
-/** A choice from a short list, in the glass menu style. */
+/** A choice from a short list, in the small window style of the menus. */
 export function Choose({ label, value, onChange, choices, placeholder }: { label: string; value: string | null; onChange: (v: string) => void; choices: Choice[]; placeholder: string }) {
   return (
     <Select value={value} onValueChange={(v) => v && onChange(String(v))} items={choices.map((c) => ({ value: c.value, label: c.label }))}>
-      <SelectTrigger aria-label={label} className="h-10 w-full rounded-xl bg-white/[0.05] px-3.5">
+      <SelectTrigger aria-label={label} className="h-10 w-full px-3.5">
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>
       <SelectContent alignItemWithTrigger={false}>
@@ -196,7 +211,7 @@ export function Choose({ label, value, onChange, choices, placeholder }: { label
           <SelectItem key={c.value} value={c.value} disabled={c.disabled}>
             <span className="flex flex-col">
               <span>{c.label}</span>
-              {c.note && <span className="text-xs font-normal text-muted-foreground">{c.note}</span>}
+              {c.note && <span className="text-xs text-ink-4">{c.note}</span>}
             </span>
           </SelectItem>
         ))}
@@ -335,13 +350,13 @@ export const patterns = (text: string) =>
     .map((p) => p.trim())
     .filter(Boolean);
 
-/** A list with nothing in it yet, inside a glass frame. */
+/** A list with nothing in it yet: the card, with a quiet line in its panel. */
 export function EmptyList({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div className="glass-frame glass-card relative flex flex-col rounded-[1.75rem] p-1">
-      <div className="glass-inner grid flex-1 place-content-center place-items-center gap-1.5 rounded-3xl bg-panel px-6 py-12 text-center">
-        <p className="font-medium text-foreground">{title}</p>
-        <p className="max-w-md text-sm leading-relaxed text-muted-foreground">{children}</p>
+    <div className="flex flex-col rounded-[14px] bg-strip p-1 hairline">
+      <div className="grid flex-1 place-content-center place-items-center gap-1.5 rounded-[10px] bg-panel px-6 py-12 text-center hairline">
+        <p className="text-[14px] font-medium text-ink">{title}</p>
+        <p className="max-w-md text-[13.5px] leading-relaxed text-ink-3">{children}</p>
       </div>
     </div>
   );

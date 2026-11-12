@@ -267,6 +267,17 @@ async function open(name, { signedOutAfter = Infinity, serverDown = false, forge
     await page.mouse.click(at.x, at.y);
     await wait(500);
   };
+  /** Clicks the menu button that is on screen: the menu's own, or the page's when the menu is small. */
+  const toggleMenu = async () => {
+    const at = await page.evaluate(() => {
+      const el = [...document.querySelectorAll('[data-sidebar=trigger]')].find((e) => e.getClientRects().length > 0);
+      if (!el) return null;
+      const b = el.getBoundingClientRect();
+      return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+    });
+    if (!at) throw new Error('no menu button on screen');
+    await page.mouse.click(at.x, at.y);
+  };
   /** Opens a view from the menu on the left. */
   const view = async (label) => {
     await click('[data-sidebar=menu-button]', label);
@@ -302,7 +313,7 @@ async function open(name, { signedOutAfter = Infinity, serverDown = false, forge
     return { href, state };
   };
   console.log(`\n== ${name}`);
-  return { page, calls, exchanges, renewals, forgotten, added, removed, skillsAdded, skillsRemoved, written, writtenRemoved, checksAdded, checksRemoved, errors, text, click, menu, view, options, choose, dialog, signIn, comeBackFromGitHub, shot: (file) => page.screenshot({ path: `${out}${file}.png`, fullPage: true }).catch(() => {}) };
+  return { page, calls, exchanges, renewals, forgotten, added, removed, skillsAdded, skillsRemoved, written, writtenRemoved, checksAdded, checksRemoved, errors, text, click, toggleMenu, menu, view, options, choose, dialog, signIn, comeBackFromGitHub, shot: (file) => page.screenshot({ path: `${out}${file}.png`, fullPage: true }).catch(() => {}) };
 }
 const done = async (t) => {
   if (t.errors.length) { console.log('  page errors', t.errors.slice(0, 3)); failures++; }
@@ -323,9 +334,10 @@ const done = async (t) => {
   const after = await t.text();
   expect(/acme/.test(after) && /acme\/widgets #42/.test(after), 'the org and its latest reviews show');
   expect(/2 bugs, 1 risk, 3 hardening/.test(after) && /Nothing worth fixing/.test(after), 'each review says what was found');
-  expect(/opus, 6m 52s/.test(after) && /codex, 1m 35s/.test(after), 'and which AI ran it and how long it took');
-  expect(/Latest 3 reviews 3 Since 1 day ago Safe to merge 1 33% of them Needs a human 1 33% of them Blocked 1 33% of them/.test(after), `the counts add up, and say over which time (${after.slice(0, 200)})`);
-  expect(/acme\/widgets Last review 1 hour ago 2/.test(after) && /acme\/api Last review 1 day ago 1/.test(after), 'the repositories are listed, with their number of reviews');
+  expect(/#42 a{7} Needs a human 2 bugs, 1 risk, 3 hardening 6m 52s opus/.test(after) && /#41 a{7} Safe to merge Nothing worth fixing 1m 35s codex/.test(after), `and which AI ran it and how long it took (${after.match(/#42.{0,90}/)?.[0]})`);
+  expect(/Reviews 3 since 1 day ago Safe to merge 1 33% Needs a human 1 33% Blocked 1 33%/i.test(after), `the counts add up, and say over which time (${after.slice(0, 260)})`);
+  expect(/Duration · 3 reviews · since 1 day ago/i.test(after) && (await t.page.$$('svg[role=img] circle')).length > 100, 'the dotted chart shows how long the reviews took');
+  expect(/acme\/widgets last: needs a human 2 1 hour ago/.test(after) && /acme\/api last: blocked 1 1 day ago/.test(after), `the repositories are listed, with their number of reviews (${after.match(/Repositories.{0,160}/)?.[0]})`);
   await t.page.click('[aria-label=More]');
   await wait(350);
   const addLink = await t.page.evaluate(() => { const a = [...document.querySelectorAll('a')].find((x) => x.textContent.includes('Add it on GitHub')); return a && { href: a.href, target: a.target }; });
@@ -335,7 +347,7 @@ const done = async (t) => {
   await wait(300);
   const link = await t.page.evaluate(() => [...document.querySelectorAll('a')].find((a) => a.textContent.includes('#42'))?.href);
   expect(link === 'https://github.com/acme/widgets/pull/42', 'a review links to its pull request on GitHub');
-  const cursors = await t.page.evaluate(() => [...document.querySelectorAll('button:not(:disabled), a[href], tbody tr')].filter((e) => getComputedStyle(e).cursor !== 'pointer').map((e) => e.outerHTML.slice(0, 80)));
+  const cursors = await t.page.evaluate(() => [...document.querySelectorAll('button:not(:disabled), a[href], tbody tr[data-href]')].filter((e) => getComputedStyle(e).cursor !== 'pointer').map((e) => e.outerHTML.slice(0, 80)));
   expect(cursors.length === 0, `everything that can be clicked shows the hand (${cursors.join(' | ')})`);
   await t.shot('2-reviews');
 
@@ -348,8 +360,8 @@ const done = async (t) => {
   // Decisions.
   await t.view('Decisions');
   const decided = await t.text();
-  expect(/Cart total is rounded before tax/.test(decided) && /ada: The payment provider needs whole cents\./.test(decided), 'what the team decided shows, with who said why');
-  expect(/acme\/widgets · src\/cart\.ts:40/.test(decided) && /Left out of 3 reviews since/.test(decided) && /Not needed since/.test(decided), 'and where it is and how often it was used');
+  expect(/ada declined Cart total is rounded before tax in acme\/widgets #37/.test(decided) && /The payment provider needs whole cents\./.test(decided), `what the team decided shows, with who said why (${decided.match(/Who decided what.{0,120}/)?.[0]})`);
+  expect(/src\/cart\.ts:40/.test(decided) && /Left out of 3 reviews since/.test(decided) && /Not needed since/.test(decided), 'and where it is and how often it was used');
   expect(/A decision nobody needed for 90 days is dropped/.test(decided), 'it says when a decision is dropped');
   const forgetButtons = await t.page.evaluate(() => [...document.querySelectorAll('button')].filter((b) => b.textContent.trim() === 'Forget').length);
   expect(forgetButtons === 1, 'only a decision in a repository the person can push to has a Forget button');
@@ -580,18 +592,18 @@ const done = async (t) => {
   await t.menu('Switch org', 'acme');
   expect(/acme\/widgets #42/.test(await t.text()), 'and switching back shows that org again');
 
-  await t.page.click('[data-sidebar=trigger]');
+  await t.toggleMenu();
   await wait(400);
   await t.page.reload({ waitUntil: 'networkidle2' });
   await wait(500);
   expect(await t.page.evaluate(() => document.querySelector('[data-slot=sidebar][data-state]')?.getAttribute('data-state')) === 'collapsed', 'a menu shrunk to icons stays shrunk after a reload');
-  await t.page.click('[data-sidebar=trigger]');
+  await t.toggleMenu();
   await wait(400);
 
   // On a phone the menu is a sheet over the page. Picking a view closes it.
   await t.page.setViewport({ width: 390, height: 844, deviceScaleFactor: 2 });
   await wait(400);
-  await t.page.click('[data-sidebar=trigger]');
+  await t.toggleMenu();
   await wait(500);
   expect(await t.page.evaluate(() => !!document.querySelector('[data-mobile=true]')), 'on a phone, the menu button opens the menu');
   await t.view('Checks');

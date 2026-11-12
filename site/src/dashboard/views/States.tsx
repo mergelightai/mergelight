@@ -19,9 +19,9 @@ const LINK = 'text-foreground underline decoration-foreground/30 underline-offse
 /** A page with no menu: the logo on top and one glass card in the middle. */
 export function Centered({ children }: { children: ReactNode }) {
   return (
-    <div className="flex min-h-svh flex-col bg-background text-foreground">
+    <div className="flex min-h-svh flex-col bg-panel text-ink md:wallpaper">
       <header className="flex items-center px-6 py-5">
-        <a href="/" className="flex items-center gap-2.5 font-heading text-[15px] font-semibold tracking-tight">
+        <a href="/" className="flex items-center gap-2.5 text-[15px] font-semibold tracking-[-0.01em] text-ink md:text-white">
           <img src="/logo.png" alt="" className="size-7 rounded-lg" /> Mergelight
         </a>
       </header>
@@ -40,18 +40,18 @@ export function Spinning({ children }: { children: ReactNode }) {
 
 export function SignIn({ failed, cancelled }: { failed: boolean; cancelled: boolean }) {
   return (
-    <div className="glass-frame relative w-full max-w-[440px] rounded-[2rem] p-2">
-      <div className="glass-inner grid justify-items-center rounded-[1.6rem] bg-popover px-8 pb-8 pt-9 text-center">
+    <div className="window-rim w-full max-w-[440px] rounded-[26px] p-[9px]">
+      <div className="grid justify-items-center rounded-[18px] bg-shell px-8 pb-8 pt-9 text-center hairline">
         <img src="/logo-animated.svg" alt="" width={72} height={72} className="size-[72px] rounded-[18px] shadow-[0_0_0_1px_rgb(255_255_255/0.08),0_14px_40px_-12px_rgb(0_0_0/0.8)]" />
-        <h1 className="mt-5 font-heading text-[28px] font-semibold leading-tight tracking-tight">Your reviews, in one place</h1>
-        <p className="mt-2.5 max-w-[320px] text-[15px] leading-relaxed text-muted-foreground">See what Mergelight found across your repositories. You only see repositories GitHub shows you.</p>
-        {failed && <p className="mt-4 text-[13px] text-human">Sign-in didn't work. Please try again.</p>}
+        <h1 className="mt-5 text-[26px] font-semibold leading-tight tracking-[-0.02em] text-ink">Your reviews, in one place</h1>
+        <p className="mt-2.5 max-w-[320px] text-[15px] leading-relaxed text-ink-3">See what Mergelight found across your repositories. You only see repositories GitHub shows you.</p>
+        {failed && <p className="mt-4 text-[13px] text-human-ink">Sign-in didn't work. Please try again.</p>}
         {cancelled && !failed && <p className="mt-4 text-[13px] text-muted-foreground">Sign-in was cancelled.</p>}
-        <Button size="lg" className="mt-7 h-11 w-full gap-2.5 bg-foreground text-[15px] text-background hover:bg-foreground/90" nativeButton={false} render={<a href={signInUrl()} />}>
+        <Button size="lg" className="mt-7 h-11 w-full gap-2.5 text-[15px]" nativeButton={false} render={<a href={signInUrl()} />}>
           <GitHubMark className="size-[18px]" /> Continue with GitHub
         </Button>
       </div>
-      <p className="flex items-start justify-center gap-2 px-6 pb-2 pt-3.5 text-center text-[13px] leading-relaxed text-muted-foreground">
+      <p className="flex items-start justify-center gap-2 px-6 pb-2 pt-3.5 text-center text-[13px] leading-relaxed text-white/75">
         <LockIcon className="mt-[3px] size-3.5 shrink-0" />
         <span>The dashboard holds numbers about each review, and the findings your team declined, with who declined each one and why. Never your code.</span>
       </p>
@@ -62,8 +62,8 @@ export function SignIn({ failed, cancelled }: { failed: boolean; cancelled: bool
 export function NoOrg({ onSignOut }: { onSignOut: () => void }) {
   return (
     <GlassCard className="w-full max-w-lg">
-      <h2 className="font-heading text-lg font-semibold">No repositories to show</h2>
-      <p className="mt-2 text-[15px] leading-relaxed text-muted-foreground">
+      <h2 className="text-[16px] font-medium text-ink">No repositories to show</h2>
+      <p className="mt-2 text-[14px] leading-relaxed text-ink-3">
         The dashboard shows the repositories you gave Mergelight Setup access to on GitHub, and this sign-in has none.{' '}
         <a href={ADD_REPOS_URL} target="_blank" rel="noreferrer" className={LINK}>
           Add your org or repositories
@@ -86,8 +86,8 @@ export function NotOn({ org }: { org: Org }) {
     <>
       <ViewHeader title={org.login} />
       <GlassCard className="max-w-2xl">
-        <h2 className="font-heading text-lg font-semibold">The dashboard isn't on for {org.login}</h2>
-        <p className="mt-2 text-[15px] leading-relaxed text-muted-foreground">Nothing is stored for {org.login}, so there is nothing to show. Reviews work as always. The dashboard is being built, and turning it on for an org isn't open to everyone yet.</p>
+        <h2 className="text-[16px] font-medium text-ink">The dashboard isn't on for {org.login}</h2>
+        <p className="mt-2 text-[14px] leading-relaxed text-ink-3">Nothing is stored for {org.login}, so there is nothing to show. Reviews work as always. The dashboard is being built, and turning it on for an org isn't open to everyone yet.</p>
       </GlassCard>
     </>
   );
@@ -96,8 +96,8 @@ export function NotOn({ org }: { org: Org }) {
 export function LoadError({ onRetry, what }: { onRetry: () => void; what?: string }) {
   return (
     <GlassCard className="max-w-2xl">
-      <h2 className="font-heading text-lg font-semibold">{what ? `Your ${what} couldn't load` : "The dashboard couldn't load"}</h2>
-      <p className="mt-2 text-[15px] text-muted-foreground">{what ? 'The Mergelight server answered with an error for this list. The other views work, and your reviews are not affected.' : "The Mergelight server didn't answer. Your reviews are not affected."}</p>
+      <h2 className="text-[16px] font-medium text-ink">{what ? `Your ${what} couldn't load` : "The dashboard couldn't load"}</h2>
+      <p className="mt-2 text-[14px] text-ink-3">{what ? 'The Mergelight server answered with an error for this list. The other views work, and your reviews are not affected.' : "The Mergelight server didn't answer. Your reviews are not affected."}</p>
       <Button className="mt-5" onClick={onRetry}>
         Try again
       </Button>
@@ -112,9 +112,9 @@ export function NothingYet({ org }: { org: Org }) {
       <ViewHeader eyebrow="Overview" title="Reviews" lead={`The dashboard is on for ${org.login}. Add one line to the Mergelight step in a repository's workflow, and its next review shows up here.`} />
       <div className="grid max-w-3xl gap-5">
         <GlassCard label="No reviews to show yet">
-          <pre className="overflow-x-auto rounded-2xl bg-black/25 px-5 py-4 font-mono text-[13px] leading-6 text-muted-foreground">
+          <pre className="overflow-x-auto rounded-2xl bg-shell px-5 py-4 font-mono text-[13px] leading-6 text-muted-foreground">
             {`- uses: mergelightai/mergelight@v0\n  with:\n    `}
-            <span className="text-safe">{`server: ${SERVER}`}</span>
+            <span className="text-safe-ink">{`server: ${SERVER}`}</span>
           </pre>
           <p className="mt-4 text-[13px] leading-relaxed text-muted-foreground">A review then sends its numbers: the light, how many findings, which AI ran it and how long it took. It also sends the findings your team declined, with who declined each one and why. It never sends code.</p>
         </GlassCard>
