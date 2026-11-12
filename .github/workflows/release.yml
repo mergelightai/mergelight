@@ -44,6 +44,9 @@ jobs:
           tag="v$version"
           if git rev-parse -q --verify "refs/tags/$tag" > /dev/null; then
             echo "$tag is already released."
+            # A run done again by hand, for example after its canary failed to open, still opens the canary.
+            # A push that changed package.json without a new version doesn't.
+            if [ "$GITHUB_RUN_ATTEMPT" -gt 1 ] || [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then echo "tag=$tag" >> "$GITHUB_OUTPUT"; fi
             exit 0
           fi
           notes="To pin to this release instead of following \`@v0\`, use this line in your workflows:

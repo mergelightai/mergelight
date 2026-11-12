@@ -78,24 +78,46 @@ jobs:
             echo "::error::$TAG ($SHA) isn't on main, so $MAJOR stays where it is."
             exit 1
           fi
+          # And only the commit that released that version, so a made-up release tag on an old commit can't.
+          version="$(git show "$SHA:packages/mergelight/package.json" | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).version')"
+          if [ "v$version" != "$TAG" ]; then
+            echo "::error::$TAG points at a commit whose version is $version, so $MAJOR stays where it is."
+            exit 1
+          fi
           git tag -f "$MAJOR" "$SHA"
           if ! git push -f origin "refs/tags/$MAJOR"; then
             echo "::error::GitHub refused to move $MAJOR to $TAG. Only the release app may move it: check that RELEASE_APP_ID, the environment secret RELEASE_APP_PRIVATE_KEY and the tag ruleset are as the top of this file says."
             exit 1
           fi
           echo "$MAJOR moved to $TAG."
+      # These run even when an earlier one failed, so every problem is reported in the same run.
       - name: Say that v0 is on a release whose canary failed
-        if: steps.pick.outputs.current_failed != ''
+        if: ${{ !cancelled() && steps.pick.outputs.current_failed != '' }}
         env:
           MAJOR: ${{ steps.pick.outputs.major }}
           TAG: ${{ steps.pick.outputs.current_failed }}
         run: |
           echo "::error::$MAJOR is on $TAG, and its canary failed (the reason is above). Pull $TAG (mark it as a pre-release), and the next run moves $MAJOR off it."
           exit 1
+      - name: Say that v0 is on a release no canary checked
+        if: ${{ !cancelled() && steps.pick.outputs.current_missing != '' }}
+        env:
+          MAJOR: ${{ steps.pick.outputs.major }}
+          TAG: ${{ steps.pick.outputs.current_missing }}
+        run: |
+          echo "::error::$MAJOR is on $TAG, which no canary has checked. Run the Canary workflow for $TAG (Actions, Canary, tag $TAG)."
+          exit 1
       - name: Say which canaries didn't pass
-        if: steps.pick.outputs.failed != ''
+        if: ${{ !cancelled() && steps.pick.outputs.failed != '' }}
         env:
           FAILED: ${{ steps.pick.outputs.failed }}
         run: |
-          echo "::error::No canary passed for $FAILED, so @v0 doesn't get it (the reason is above). Look at the canary pull request in mergelightai/action-sandbox, then run the Canary workflow again, or pull the release (mark it as a pre-release) if it is broken."
+          echo "::error::The canary failed for $FAILED, so @v0 doesn't get it (the reason is above). Look at the canary pull request in mergelightai/action-sandbox, then run the Canary workflow again, or pull the release (mark it as a pre-release) if it is broken."
+          exit 1
+      - name: Say which releases have no canary
+        if: ${{ !cancelled() && steps.pick.outputs.missing != '' }}
+        env:
+          MISSING: ${{ steps.pick.outputs.missing }}
+        run: |
+          echo "::error::No canary was opened for $MISSING, so @v0 doesn't get it yet. Run the Canary workflow for it (Actions, Canary, tag $MISSING)."
           exit 1

@@ -40,7 +40,8 @@ export function summaryFlags(summary, file = PLANTED_FILE) {
 }
 
 /**
- * "passed", "failed" or "waiting" for one canary pull request, with the reason.
+ * "passed", "failed" or "waiting" for one canary pull request, with the reason. ("missing" comes from
+ * readCanary, for a newest release whose canary never opened.)
  * Passed: the newest "Mergelight" check finished as a review that holds the merge (🔴 or 🟡, or 🟢
  * only because someone approved it), and the review commented on the planted file. A review that
  * can't run, that calls the bug safe, or that flags only other things means the release is broken.
@@ -48,7 +49,9 @@ export function summaryFlags(summary, file = PLANTED_FILE) {
  */
 export function canaryVerdict({ check, flaggedPlantedFile, openedAt, now = Date.now() }) {
   if (check?.status !== "completed") {
-    if (now - Date.parse(openedAt) > CANARY_TIMEOUT_MS) return { verdict: "failed", why: "no finished review after 3 hours" };
+    // From the start of the running review, so a review someone runs again later gets its own 3 hours.
+    const since = Date.parse(check?.started_at ?? openedAt);
+    if (now - since > CANARY_TIMEOUT_MS) return { verdict: "failed", why: "no finished review after 3 hours" };
     return { verdict: "waiting", why: check ? "the review is running" : "no review yet" };
   }
   const title = check.output?.title ?? "";
@@ -75,14 +78,15 @@ export function byVersion(a, b) {
  */
 export function pickRelease(releases, verdictOf, current, now = false) {
   const failed = [];
+  const missing = [];
   const waiting = [];
   for (const release of releases) {
-    if (current && release.sha === current) return { stay: release.tag, failed, waiting };
+    if (current && release.sha === current) return { stay: release.tag, failed, missing, waiting };
     const verdict = now ? "passed" : verdictOf(release.tag);
-    if (verdict === "passed") return { move: release, failed, waiting };
-    (verdict === "failed" ? failed : waiting).push(release.tag);
+    if (verdict === "passed") return { move: release, failed, missing, waiting };
+    ({ failed, missing }[verdict] ?? waiting).push(release.tag);
   }
-  return { failed, waiting, stuck: Boolean(current) };
+  return { failed, missing, waiting, stuck: Boolean(current) };
 }
 
 async function github(path, token) {
@@ -103,7 +107,7 @@ async function readCanary(tag, sha, publishedAt, isNewest, token) {
   // before canaries existed, and a newer release has its own.
   if (!pull) {
     const late = isNewest && Date.now() - Date.parse(publishedAt) > CANARY_TIMEOUT_MS;
-    return late ? { verdict: "failed", note: "no canary was opened within 3 hours of the release" } : { verdict: "waiting", note: "no canary" };
+    return late ? { verdict: "missing", note: "no canary was opened within 3 hours of the release" } : { verdict: "waiting", note: "no canary" };
   }
   const { check_runs } = await github(`repos/${CANARY_REPO}/commits/${pull.head.sha}/check-runs?check_name=Mergelight&per_page=20`, token);
   // Only Mergelight's own check counts, not another app's check with the same name.
@@ -163,9 +167,11 @@ async function main() {
     const canary = await readCanary(staying.tag, staying.sha, published.get(staying.tag), staying === releases[0], sandboxToken);
     console.log(`${pick.stay}: canary ${canary.verdict} (${canary.note})`);
     if (canary.verdict === "failed") out(`current_failed=${pick.stay}`);
+    if (canary.verdict === "missing") out(`current_missing=${pick.stay}`);
   }
   out(`major=${major}`);
   out(`failed=${pick.failed.join(" ")}`);
+  out(`missing=${pick.missing.join(" ")}`);
   if (pick.move) {
     out(`tag=${pick.move.tag}`);
     out(`sha=${pick.move.sha}`);

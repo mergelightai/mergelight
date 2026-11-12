@@ -104,3 +104,18 @@ test("the summary counts the planted file only in a finding to fix, not in the i
   assert.equal(summaryFlags(`${intro}**Nothing left to fix**\n\n<details><summary>Left alone: 1</summary>\n- x \`${PLANTED_FILE}:5\``), false);
   assert.equal(summaryFlags(undefined), false);
 });
+
+test("a review run again after 3 hours gets its own 3 hours", () => {
+  const openedAt = "2026-11-12T20:00:00Z";
+  const started = Date.parse(openedAt) + CANARY_TIMEOUT_MS + 60_000;
+  const check = { status: "in_progress", started_at: new Date(started).toISOString() };
+  assert.equal(canaryVerdict({ check, openedAt, now: started + 60_000 }).verdict, "waiting");
+  assert.equal(canaryVerdict({ check, openedAt, now: started + CANARY_TIMEOUT_MS + 1 }).verdict, "failed");
+});
+
+test("a release whose canary never opened is listed apart from a failed one", () => {
+  const pick = pickRelease(releases, verdicts({ "v0.1.19": "missing", "v0.1.18": "failed", "v0.1.17": "passed" }), "c04");
+  assert.equal(pick.move.tag, "v0.1.17");
+  assert.deepEqual(pick.missing, ["v0.1.19"]);
+  assert.deepEqual(pick.failed, ["v0.1.18"]);
+});
