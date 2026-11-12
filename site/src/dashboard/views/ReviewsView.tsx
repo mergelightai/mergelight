@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ArrowUpRightIcon, CheckIcon, CopyIcon, PlusIcon } from '@/lib/icons';
+import { ArrowUpRightIcon, CheckIcon, CircleXIcon, CopyIcon, PlusIcon } from '@/lib/icons';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { ADD_REPOS_URL, SERVER, type Light, type Overview, type Review } from '../api';
@@ -46,7 +46,7 @@ function Segmented<T extends string>({ label, value, onChange, options, mono = f
 
 /** The server address a workflow names, in a quiet box with a copy button. */
 function ServerAddress() {
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<'no' | 'yes' | 'failed'>('no');
   const host = SERVER.replace(/^https?:\/\//, '');
   return (
     <div className="flex h-9 items-center gap-2 rounded-[8px] bg-panel pl-3.5 pr-1 hairline">
@@ -56,15 +56,21 @@ function ServerAddress() {
       <button
         type="button"
         aria-label="Copy the server address"
+        title={copied === 'failed' ? "Couldn't copy. Select the address and copy it by hand." : undefined}
         onClick={() => {
-          void navigator.clipboard?.writeText(SERVER).then(() => {
-            setCopied(true);
-            window.setTimeout(() => setCopied(false), 1500);
-          });
+          const done = (state: 'yes' | 'failed') => {
+            setCopied(state);
+            window.setTimeout(() => setCopied('no'), state === 'yes' ? 1500 : 4000);
+          };
+          if (!navigator.clipboard) return done('failed');
+          navigator.clipboard.writeText(SERVER).then(
+            () => done('yes'),
+            () => done('failed'),
+          );
         }}
         className="flex size-7 items-center justify-center rounded-[6px] text-ink-4 transition-colors hover:bg-white/[0.06] hover:text-ink"
       >
-        {copied ? <CheckIcon className="size-3.5 text-safe-ink" /> : <CopyIcon className="size-3.5" />}
+        {copied === 'yes' ? <CheckIcon className="size-3.5 text-safe-ink" /> : copied === 'failed' ? <CircleXIcon className="size-3.5 text-blocked-ink" /> : <CopyIcon className="size-3.5" />}
       </button>
     </div>
   );
@@ -142,7 +148,10 @@ function DurationChart({ reviews, span, from, controls }: { reviews: Review[]; s
     const h = ((now - start) * (1 - t)) / 3_600_000;
     return h >= 48 ? `-${Math.round(h / 24)}D` : h >= 1 ? `-${Math.round(h)}H` : `-${Math.max(1, Math.round(h * 60))}M`;
   };
-  const clock = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+  const clock = (iso: string) =>
+    now - start > 86_400_000
+      ? new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })
+      : new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
   return (
     <div className="border-t border-white/[0.05] px-6 pb-5 pt-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -341,7 +350,7 @@ export function ReviewsView({ overview, login, orgLogin }: { overview: Overview;
         )}
       </DataCard>
 
-      <DataCard className="mt-6" fill title="Repositories" count={overview.repos.length} meta="all time" footer={`${plural(overview.repos.length, 'repository', 'repositories')} you can see sent a review.`}>
+      <DataCard className="mt-6" fill title="Repositories" count={overview.repos.length} meta="all time" footer={`${overview.repos.filter((r) => r.reviews > 0).length} of the ${plural(overview.repos.length, 'repository', 'repositories')} you can see sent a review.`}>
         <DataTable>
           <DataHead>
             <DataHeadCell>Repository</DataHeadCell>
