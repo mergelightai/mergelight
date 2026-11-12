@@ -62,7 +62,9 @@ export function inlineBody(f: Finding): string {
  */
 export function modelLabel(name: string, model: string | null | undefined): string {
   const brand = name === "codex" ? "Codex" : "Claude";
-  const m = model?.trim();
+  // "opus[1m]" asks for the long context, and "claude-opus-5-5@20261101" names a dated build: the
+  // model is the part before them.
+  const m = model?.trim().replace(/\[[^\]]*\]$/, "").replace(/@[\w.-]*$/, "");
   if (!m || !/^[\w.-]{1,60}$/.test(m)) return brand;
   const cap = (w: string) => (/^gpt$/i.test(w) ? "GPT" : w.charAt(0).toUpperCase() + w.slice(1));
   if (name === "codex") return `${brand} ${m.split("-").map(cap).join("-")}`;

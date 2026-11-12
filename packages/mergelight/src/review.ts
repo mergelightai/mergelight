@@ -335,6 +335,21 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
       input.actionSources = await fetchActionSources(uses);
       unread = notRead(input.actionSources);
     }
+    // Who checks is known before the hunt, so the first reviewer that answers can name both models.
+    const verifyWith = opts.verifyWith ?? (provider === "claude" || (await claudeAvailable()) ? "claude" : "codex");
+    const verifyModel = verifyWith === "codex" ? (opts.verifyModel ?? opts.model) : (opts.verifyModel ?? "opus");
+    let named = false;
+    const nameModels = (reviewerModel: string | null) => {
+      if (named) return;
+      named = true;
+      // The same tool with no model of its own, or an alias of the one that answered ("opus" for
+      // "claude-opus-5-5"), is the same model: the comment mustn't say a second one checks.
+      const sameModel = verifyWith === provider && (!verifyModel || (reviewerModel ?? "").includes(verifyModel));
+      opts.onModels?.({
+        reviewer: { name: provider, model: reviewerModel },
+        checker: { name: verifyWith, model: sameModel ? reviewerModel : (verifyModel ?? null) },
+      });
+    };
     let done = 0;
     progress(`Hunting for problems (0 of ${focuses.length} areas done)`);
     const hunts = await Promise.allSettled(
@@ -348,6 +363,7 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
           logFile: log(`hunt-${focus}`),
         });
         done++;
+        nameModels(result.model ?? hunterModel ?? null);
         progress(`Hunting for problems (${done} of ${focuses.length} areas done)`);
         return { focus, candidates: (result.output as { candidates: Candidate[] }).candidates, model: result.model };
       }),
@@ -419,17 +435,6 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
 
     // Step 2: the verifier tries to disprove each candidate and sorts the rest.
     // Opus checks better than Codex: in the eval it posted a third less and kept the same finds.
-    const verifyWith = opts.verifyWith ?? (provider === "claude" || (await claudeAvailable()) ? "claude" : "codex");
-    const verifyModel = verifyWith === "codex" ? (opts.verifyModel ?? opts.model) : (opts.verifyModel ?? "opus");
-    const firstAnswer = hunts.find((h) => h.status === "fulfilled");
-    const reviewerModel = firstAnswer?.status === "fulfilled" ? firstAnswer.value.model : (hunterModel ?? null);
-    // The same tool with no model of its own, or an alias of the one that answered ("opus" for
-    // "claude-opus-5-5"), is the same model: the comment mustn't say a second one checks.
-    const sameModel = verifyWith === provider && (!verifyModel || (reviewerModel ?? "").includes(verifyModel));
-    opts.onModels?.({
-      reviewer: { name: provider, model: reviewerModel },
-      checker: { name: verifyWith, model: sameModel ? reviewerModel : (verifyModel ?? null) },
-    });
     if (!opts.verifyWith && verifyWith === "codex") progress("Claude Code isn't installed, so Codex checks the findings");
     progress(`Checking ${found.length} candidate${found.length === 1 ? "" : "s"}${verifyWith === "codex" ? "" : ` with ${verifyWith}`}`);
     const verified = await verifyCandidates(ws.dir, input, found, {

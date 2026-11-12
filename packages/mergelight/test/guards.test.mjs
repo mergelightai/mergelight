@@ -75,9 +75,12 @@ test("the Reviewing comment gets the models' names, and a comment with a result 
   const { updatePendingSummary } = await import("../dist/publish/publish.js");
   const { pendingSummaryBody } = await import("../dist/publish/markdown.js");
   const writes = [];
-  const api = { write: async (method, path, body) => (writes.push({ method, path, body }), {}) };
+  const bodies = { 5: pendingSummaryBody(), 7: "<!-- mergelight:summary -->\n### 🟢 Mergelight: Safe to merge" };
+  const api = { get: async (path) => ({ id: Number(path.split("/").pop()), body: bodies[path.split("/").pop()] }), write: async (method, path, body) => (writes.push({ method, path, body }), {}) };
   const plan = { reviewer: { name: "codex", model: "gpt-6-astra" }, checker: { name: "claude", model: "claude-opus-5-5" } };
   await updatePendingSummary(api, { id: 5, body: pendingSummaryBody() }, plan);
+  // Another run finished since this one began: its result stays.
+  await updatePendingSummary(api, { id: 7, body: pendingSummaryBody() }, plan);
   assert.equal(writes[0].path, "issues/comments/5");
   assert.match(writes[0].body.body, /Reviewing with Codex GPT-6-Astra, and Claude Opus 5\.5 checks the findings/);
   await updatePendingSummary(api, { id: 6, body: "<!-- mergelight:summary -->\n### 🟢 Mergelight: Safe to merge" }, plan);

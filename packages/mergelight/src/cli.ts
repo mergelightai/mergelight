@@ -221,10 +221,11 @@ async function main(): Promise<number> {
   let headSha = values.at ?? null;
   if (values.post) {
     headSha ??= (await fetchPullRequest(ref)).headSha;
-    checkRunId = await startCheck(api, headSha, provider);
+    checkRunId = await startCheck(api, headSha, provider ?? "codex");
     // Says which AI reviews from the start. The models' exact names follow once the first reviewer answers.
-    const firstGuess = values.model ?? (provider === "claude" ? "opus" : provider === "codex" ? configuredModel() : null);
-    summaryComment = await startSummary(api, ref.number, provider ? { reviewer: { name: provider, model: firstGuess ?? null } } : undefined).catch((e) => {
+    // Without --provider the review runs on Codex, as reviewPullRequest decides.
+    const firstGuess = values.model ?? (provider === "claude" ? "opus" : configuredModel());
+    summaryComment = await startSummary(api, ref.number, { reviewer: { name: provider ?? "codex", model: firstGuess ?? null } }).catch((e) => {
       log(`Couldn't post the summary yet: ${(e as Error).message}`);
       return null;
     });

@@ -266,6 +266,9 @@ export async function startSummary(api: GitHub, number: number, plan?: ReviewPla
 /** Names the models in a "Reviewing" comment once they are known. A comment with a result is left alone. */
 export async function updatePendingSummary(api: GitHub, summary: PrComment | null, plan: ReviewPlan): Promise<void> {
   if (!summary || !isPendingSummary(summary.body)) return;
+  // Read it again: another run may have finished and written its result since this one began.
+  const now = await api.get<PrComment>(`issues/comments/${summary.id}`).catch(() => null);
+  if (!now || !isPendingSummary(now.body)) return;
   await api.write("PATCH", `issues/comments/${summary.id}`, { body: pendingSummaryBody(plan) });
 }
 
