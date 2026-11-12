@@ -12,7 +12,7 @@ import { ruleApplies, type TeamRule } from "./prompt.js";
  * Cursor's `globs`: comma-separated patterns like "src/billing/**,*.sql". Without it, or with "**", the
  * rules apply everywhere.
  */
-export const RULE_FILE = /^(?:\.mergelight\/rules\.md|\.mergelight\/rules\/[^/]+\.md|\.github\/instructions\/[^/]+\.instructions\.md)$/;
+export const RULE_FILE = /^(?:\.mergelight\/rules\.md|\.mergelight\/rules\/[^/]+\.md|\.github\/instructions\/(?:[^/]+\/)*[^/]+\.instructions\.md)$/;
 
 /** Limits, so a long file can't fill every prompt. */
 export const MAX_REPO_RULES = 40;
@@ -74,7 +74,8 @@ function bullets(body: string): string[] {
   let current: string | null = null;
   let fence: string | null = null;
   // HTML comments are what a team turned off: GitHub doesn't show them, so they don't count.
-  const lines = body.replace(/<!--[\s\S]*?(?:-->|$)/g, "").split(/\r?\n/);
+  // Only a closed one: an unclosed "<!--", say inside inline code, mustn't wipe out the rest of the file.
+  const lines = body.replace(/<!--[\s\S]*?-->/g, "").split(/\r?\n/);
   for (const line of lines) {
     const marker = /^[ \t]*(`{3,}|~{3,})/.exec(line)?.[1];
     if (fence) {
@@ -107,11 +108,11 @@ export function parseRuleFile(path: string, text: string): Omit<TeamRule, "id">[
   if (path.startsWith(".github/instructions/")) {
     // As Copilot does: a file without applyTo is attached by hand, and excludeAgent can keep it out of review.
     if (!scoped || !forReview) return [];
-    const whole = body.replace(/<!--[\s\S]*?(?:-->|$)/g, "").trim();
+    const whole = body.replace(/<!--[\s\S]*?-->/g, "").trim();
     const cut = whole.length > MAX_FILE_RULE_CHARS;
     return whole ? [{ kind: "rule", text: cut ? `${whole.slice(0, MAX_FILE_RULE_CHARS)}\n(cut here: the file is longer)` : whole, scope: "repo", source: path, ...only }] : [];
   }
-  return bullets(body).map((b) => ({ kind: "rule" as const, text: b.slice(0, MAX_BULLET_CHARS), scope: "repo" as const, source: path, ...only }));
+  return bullets(body).map((b) => ({ kind: "rule" as const, text: b.length > MAX_BULLET_CHARS ? `${b.slice(0, MAX_BULLET_CHARS)} (cut here: the rule is longer)` : b, scope: "repo" as const, source: path, ...only }));
 }
 
 /**
