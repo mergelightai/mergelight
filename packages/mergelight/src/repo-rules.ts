@@ -100,6 +100,13 @@ function bullets(body: string): string[] {
       fence = marker;
       continue;
     }
+    // A divider ("---", "* * *") ends a bullet and is never one itself.
+    if (/^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/.test(line)) {
+      if (current) out.push(current);
+      current = null;
+      gap = false;
+      continue;
+    }
     const start = /^(?:[-*+]|\d+[.)])[ \t]+(.*)$/.exec(line);
     if (start) {
       if (current) out.push(current);
