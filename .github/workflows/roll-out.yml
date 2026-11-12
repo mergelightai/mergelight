@@ -3,7 +3,8 @@
 #
 # To roll out sooner: run this by hand with "now" ticked.
 # To pull a bad release: mark it as a pre-release, or delete it. The tag goes back to the latest good
-# release on the next run. Run this by hand to do that right away.
+# release on the next run. Run this by hand to do that right away. Pull it even when a fixed release
+# is already out: the tag takes the newest release that is a day old, and that can be the bad one.
 name: Roll out
 
 on:
@@ -44,7 +45,7 @@ jobs:
           # new one comes out every day, the newest is never a day old, and the tag would never move.
           min=86400
           if [ "$NOW" = "true" ]; then min=0; fi
-          read -r tag age < <(jq -r --arg major "$major" --argjson min "$min" '[.[] | select(.tag | startswith($major + ".")) | select(.age >= $min)][0] // empty | "\(.tag) \(.age)"' <<<"$releases")
+          read -r tag age < <(jq -r --arg major "$major" --argjson min "$min" '[.[] | select(.tag | startswith($major + ".")) | select(.age >= $min)][0] // empty | "\(.tag) \(.age)"' <<<"$releases") || true
           if [ -z "$tag" ]; then echo "No $major release is a day old yet. $newest is $(jq -r '.[0].age' <<<"$releases") seconds old."; exit 0; fi
           target="$(git rev-parse "$tag^{commit}")"
           current="$(git rev-parse -q --verify "refs/tags/$major^{commit}" || true)"
