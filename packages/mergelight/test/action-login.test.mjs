@@ -140,3 +140,11 @@ test("the provider input wins, and a wrong one says what's wrong", () => {
   assert.match(typo.out, /provider must be claude or codex/);
 });
 
+
+test("action.yml is valid YAML, so GitHub can load the action at all", (t) => {
+  // GitHub reads action.yml only when a workflow uses the action: a broken one fails in every customer's
+  // run, and in no test of this repository. Ruby's YAML parser is on GitHub's runners and on macOS.
+  const ruby = spawnSync("ruby", ["-ryaml", "-e", "YAML.load_file(ARGV[0])", join(root, "action.yml")], { encoding: "utf8" });
+  if (ruby.error) return t.skip("ruby isn't installed here; the tests on GitHub check this too");
+  assert.equal(ruby.status, 0, ruby.stderr.split("\n")[0]);
+});
