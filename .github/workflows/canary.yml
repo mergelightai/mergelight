@@ -23,8 +23,9 @@ on:
 permissions:
   contents: read
 
+# One queue per release, so canaries for several releases at once don't push each other out of line.
 concurrency:
-  group: canary
+  group: canary-${{ inputs.tag }}
 
 jobs:
   canary:
@@ -41,7 +42,11 @@ jobs:
           # Only a published release that people can get. A pre-release has been pulled.
           state="$(gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json isDraft,isPrerelease --jq 'if .isDraft or .isPrerelease then "pulled" else "out" end')"
           if [ "$state" != "out" ]; then echo "::error::$TAG isn't a published release."; exit 1; fi
-          echo "SHA=$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha)" >> "$GITHUB_ENV"
+          sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha)"
+          # Only a commit on main runs in the sandbox, where the review gets the sandbox's AI login.
+          on_main="$(gh api "repos/$GITHUB_REPOSITORY/compare/$sha...main" --jq '.status')"
+          if [ "$on_main" != "ahead" ] && [ "$on_main" != "identical" ]; then echo "::error::$TAG ($sha) isn't on main."; exit 1; fi
+          echo "SHA=$sha" >> "$GITHUB_ENV"
       - name: Get the release app's token
         id: app
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2, pinned: it gets the release app's key

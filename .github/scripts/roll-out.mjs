@@ -145,7 +145,7 @@ async function main() {
   const releases = all.filter((tag) => tag.startsWith(`${major}.`)).map((tag) => ({ tag, sha: commitOf(tag) })).filter((r) => r.sha);
   const current = commitOf(major);
 
-  if (!sandboxToken && !now) console.log("::warning::The release app isn't set up, so no canary can be read. Only a run with \"now\" moves the tag.");
+  if (!sandboxToken && !now) console.log("::warning::No release app token, so no canary can be read and the tag can't move.");
   const verdicts = new Map();
   for (const release of releases) {
     if ((current && release.sha === current) || now) break;
@@ -156,10 +156,11 @@ async function main() {
 
   const out = (line) => process.env.GITHUB_OUTPUT && appendFileSync(process.env.GITHUB_OUTPUT, `${line}\n`);
   const pick = pickRelease(releases, (tag) => verdicts.get(tag) ?? "waiting", current, now);
-  // After a roll-out by hand with "now", the tag sits on the newest release before its canary ran. Read
-  // that canary too, so a failure still turns the run red.
-  if (pick.stay && pick.stay === releases[0].tag && sandboxToken && !now) {
-    const canary = await readCanary(pick.stay, releases[0].sha, published.get(pick.stay), true, sandboxToken);
+  // After a roll-out by hand with "now", the tag sits on a release before its canary ran. Read that
+  // canary too, also once newer releases are out, so a failure keeps the run red until it is pulled.
+  const staying = pick.stay && releases.find((r) => r.tag === pick.stay);
+  if (staying && sandboxToken && !now) {
+    const canary = await readCanary(staying.tag, staying.sha, published.get(staying.tag), staying === releases[0], sandboxToken);
     console.log(`${pick.stay}: canary ${canary.verdict} (${canary.note})`);
     if (canary.verdict === "failed") out(`current_failed=${pick.stay}`);
   }

@@ -5,7 +5,7 @@
 # and found something. So a release that can't review, or that misses the bug, never reaches @v0, and
 # this run turns red to say so. The logic is in .github/scripts/roll-out.mjs.
 #
-# To roll out without the canary: run this by hand with "now" ticked.
+# To roll out without the canary: run this by hand with "now" ticked. It still needs the release app.
 # To pull a bad release: mark it as a pre-release, or delete it. The tag goes back to the newest
 # release whose canary passed on the next run. Run this by hand to do that right away.
 #
@@ -28,7 +28,7 @@ on:
         default: false
 
 permissions:
-  contents: write # Only used without the release app, by a run with "now".
+  contents: read # The tag moves with the release app's token, the only one the tag lock lets through.
 
 # Its own queue: sharing release.yml's would let an hourly run replace a release waiting in line.
 concurrency:
@@ -43,7 +43,6 @@ jobs:
     steps:
       - name: Get the release app's token
         id: app
-        if: vars.RELEASE_APP_ID != ''
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2, pinned: it gets the release app's key
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
@@ -59,7 +58,7 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
           # The push at the end uses this token.
-          token: ${{ steps.app.outputs.token || github.token }}
+          token: ${{ steps.app.outputs.token }}
       - name: Pick the release
         id: pick
         env:
@@ -81,7 +80,7 @@ jobs:
           fi
           git tag -f "$MAJOR" "$SHA"
           if ! git push -f origin "refs/tags/$MAJOR"; then
-            echo "::error::GitHub refused to move $MAJOR to $TAG. If the error above names a workflow file, the release app is missing: set RELEASE_APP_ID and RELEASE_APP_PRIVATE_KEY (see the top of this file)."
+            echo "::error::GitHub refused to move $MAJOR to $TAG. Only the release app may move it: check that RELEASE_APP_ID, the environment secret RELEASE_APP_PRIVATE_KEY and the tag ruleset are as the top of this file says."
             exit 1
           fi
           echo "$MAJOR moved to $TAG."
