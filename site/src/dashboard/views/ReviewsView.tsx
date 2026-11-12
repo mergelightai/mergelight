@@ -324,6 +324,7 @@ export function ReviewsView({ overview, login, orgLogin }: { overview: Overview;
                           </span>
                           <span className="font-mono text-[12.5px] text-ink-4">{r.sha.slice(0, 7)}</span>
                         </a>
+                        <span className="mt-0.5 block pl-[17px] text-[12.5px] text-ink-4 sm:hidden">{ago(r.created_at)}</span>
                       </DataCell>
                       <DataCell className="hidden sm:table-cell">
                         <LightBadge light={r.light} />
@@ -371,11 +372,19 @@ export function ReviewsView({ overview, login, orgLogin }: { overview: Overview;
                   <DataCell>
                     <span className="inline-flex items-center gap-2.5">
                       <span className={cn('size-[7px] shrink-0 rounded-full', latest ? LIGHTS[latest.light].dot : 'bg-white/20')} />
-                      <TwoLines main={repo.name} sub={latest ? `last: ${LIGHTS[latest.light].label.toLowerCase()}` : 'no review in the list'} />
+                      <TwoLines
+                        main={repo.name}
+                        sub={
+                          <>
+                            {latest ? `last: ${LIGHTS[latest.light].label.toLowerCase()}` : repo.reviews > 0 ? `not in the latest ${RECENT_REVIEWS}` : 'no reviews yet'}
+                            <span className="sm:hidden">, {ago(repo.last_review_at)}</span>
+                          </>
+                        }
+                      />
                     </span>
                   </DataCell>
                   <DataCell className="hidden md:table-cell">
-                    <History reviews={mine} />
+                    {mine.length ? <History reviews={mine} /> : <span className="text-[12.5px] text-ink-4">{repo.reviews > 0 ? `older than the latest ${RECENT_REVIEWS}` : 'none yet'}</span>}
                   </DataCell>
                   <DataCell className="text-right font-mono text-[13px] text-ink tabular-nums">{repo.reviews}</DataCell>
                   <DataCell className="hidden text-right font-mono text-[12.5px] whitespace-nowrap text-ink-3 sm:table-cell">{ago(repo.last_review_at)}</DataCell>
