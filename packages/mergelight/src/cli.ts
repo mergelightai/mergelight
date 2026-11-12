@@ -7,7 +7,7 @@ import { declinesOf, fetchContext, MAX_REASON, reportReview } from "./cloud.js";
 import { GitHub } from "./publish/api.js";
 import { writeAccess } from "./publish/handled.js";
 import { publishTeamChecks } from "./publish/team-checks.js";
-import { answerRemembered, confirmReasons, approveCheck, checkLimitTitle, checkLoginTitle, failCheck, failSummary, previousFindings, publishReview, startCheck, startSummary, syncApproval, UNREVIEWED } from "./publish/publish.js";
+import { answerRemembered, confirmReasons, approveCheck, checkLimitTitle, checkLoginTitle, failCheck, failSummary, previousFindings, publishReview, startCheck, startSummary, syncApproval, UNREVIEWED, APPROVALS_OFF } from "./publish/publish.js";
 import { LimitError, LoginError, loginFailureMessage } from "./providers/codex.js";
 import { limitNotice, loginNotice } from "./publish/markdown.js";
 import { renderRejected, renderTerminal } from "./render.js";
@@ -305,7 +305,8 @@ async function main(): Promise<number> {
       await failCheck(api, checkRunId, headSha, message, log, title).catch((e) => log(`Couldn't update the check: ${(e as Error).message}`));
       await failSummary(api, ref.number, notice).catch((e) => log(`Couldn't update the summary: ${(e as Error).message}`));
       // The newest commit wasn't reviewed. An approval Mergelight gave to an earlier commit must not count for this one.
-      await syncApproval(api, ref.number, "yellow", headSha, log, { why: UNREVIEWED, otherCommitsOnly: true });
+      // With approvals turned off, none of Mergelight's approvals stands, this commit's included.
+      await syncApproval(api, ref.number, "yellow", headSha, log, values["no-approve"] ? { why: APPROVALS_OFF } : { why: UNREVIEWED, otherCommitsOnly: true });
       // Each of the team's checks still gets an answer on GitHub, so a required one says why it holds the merge:
       // the answer it already has, or that it wasn't asked.
       const unasked = cloud.checks.map((c) => ({ id: c.id, name: c.name, text: c.text, outcome: "error" as const, summary: "The review couldn't run, so this check wasn't asked.", problems: [] }));

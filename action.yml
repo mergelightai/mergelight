@@ -325,7 +325,8 @@ runs:
         [ -n "$MODEL" ] && args+=(--model "$MODEL")
         [ -n "$EFFORT" ] && args+=(--effort "$EFFORT")
         [ "$YELLOW_BLOCKS" = "true" ] && args+=(--yellow-blocks)
-        [ "$AUTO_APPROVE" = "false" ] && args+=(--no-approve)
+        # "false", "False", "no", "off" or "0": a spelling that means off must never leave approvals on.
+        case "$(printf '%s' "$AUTO_APPROVE" | tr '[:upper:]' '[:lower:]')" in false|no|off|0) args+=(--no-approve) ;; esac
         node "$GITHUB_ACTION_PATH/packages/mergelight/dist/cli.js" "${args[@]}"
 
     # Codex may have refreshed the login during the run. Save the new one, or the next run

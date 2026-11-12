@@ -321,7 +321,7 @@ const fail = (message) => {
 const answer = (value) => console.log(JSON.stringify(value));
 if (args.some((a) => a.endsWith("/check-runs"))) fail(process.env.FAKE_GH_CHECK_ERROR);
 if (args.some((a) => a.endsWith("/pulls/1"))) fail("gh: Not Found (HTTP 404)");
-if (args.includes("--slurp")) answer([[]]);
+if (args.includes("--slurp")) answer(process.env.FAKE_GH_REVIEWS && args.some((a) => a.includes("/pulls/1/reviews?")) ? [JSON.parse(process.env.FAKE_GH_REVIEWS)] : [[]]);
 else if (args.includes("graphql")) answer({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } });
 else answer({ id: 1, html_url: "https://github.com/o/r/pull/1#issuecomment-1" });
 `;
@@ -329,7 +329,7 @@ else answer({ id: 1, html_url: "https://github.com/o/r/pull/1#issuecomment-1" })
 const APP_ONLY = "gh: You must authenticate via a GitHub App. (HTTP 403)";
 const SKIPPED = "Skipped the Mergelight check";
 
-function runCli(t, args, checkError) {
+function runCli(t, args, checkError, reviews) {
   const dir = mkdtempSync(join(tmpdir(), "mergelight-test-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   writeFileSync(join(dir, "gh"), FAKE_GH);
@@ -349,12 +349,32 @@ function runCli(t, args, checkError) {
   );
   const result = spawnSync(process.execPath, [fileURLToPath(new URL("../dist/cli.js", import.meta.url)), ...args(dir)], {
     encoding: "utf8",
-    env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, FAKE_GH_CALLS: calls, FAKE_GH_CHECK_ERROR: checkError },
+    env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, FAKE_GH_CALLS: calls, FAKE_GH_CHECK_ERROR: checkError, ...(reviews ? { FAKE_GH_REVIEWS: JSON.stringify(reviews) } : {}) },
   });
   return { ...result, calls: readFileSync(calls, "utf8") };
 }
 
 const count = (text, needle) => text.split(needle).length - 1;
+
+test("with --no-approve, Mergelight posts no approval and takes back its own, also when the review couldn't run", (t) => {
+  // Mergelight approved this very commit before.
+  const approved = [{ id: 55, state: "APPROVED", commit_id: "abcdef1234", body: `${APPROVAL_MARKER}\nfine`, user: { login: "mergelight-ai[bot]" } }];
+  const approvals = (calls) => calls.split("\n").filter((c) => / repos\/o\/r\/pulls\/1\/reviews/.test(c) && c.includes("-X"));
+
+  // A green review, posted with the switch on, would approve. Off, it doesn't, and the standing approval goes.
+  const on = runCli(t, (dir) => ["post", join(dir, "review.json")], APP_ONLY, []);
+  assert.deepEqual(approvals(on.calls), ["api -X POST repos/o/r/pulls/1/reviews --input -"]);
+  const off = runCli(t, (dir) => ["post", join(dir, "review.json"), "--no-approve"], APP_ONLY, approved);
+  assert.deepEqual(approvals(off.calls), ["api -X PUT repos/o/r/pulls/1/reviews/55/dismissals --input -"]);
+
+  // A review that couldn't run keeps Mergelight's approval of this same commit, as before. With the switch off it goes too.
+  const failedOn = runCli(t, () => ["review", "o/r#1", "--post", "--at", "abcdef1234"], APP_ONLY, approved);
+  assert.equal(failedOn.status, 1);
+  assert.deepEqual(approvals(failedOn.calls), []);
+  const failedOff = runCli(t, () => ["review", "o/r#1", "--post", "--at", "abcdef1234", "--no-approve"], APP_ONLY, approved);
+  assert.equal(failedOff.status, 1);
+  assert.deepEqual(approvals(failedOff.calls), ["api -X PUT repos/o/r/pulls/1/reviews/55/dismissals --input -"]);
+});
 
 test("post on a personal login leaves the comment, skips the check once and exits 0", (t) => {
   const { status, stderr, calls } = runCli(t, (dir) => ["post", join(dir, "review.json")], APP_ONLY);
