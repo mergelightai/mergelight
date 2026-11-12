@@ -4,7 +4,7 @@ import { join, posix } from "node:path";
 import { run, runOk } from "./run.js";
 import { importSkills, SKILL_GIT_TIMEOUT_MS, SKILL_IMPORT_TIMEOUT_MS, writeSkills, type TeamSkill, type WrittenSkill } from "./skills.js";
 import type { Convention, TeamRule } from "./prompt.js";
-import { repoRules, RULE_FILE } from "./repo-rules.js";
+import { parseRuleFile, repoRules, RULE_FILE } from "./repo-rules.js";
 import type { PullRequest } from "./types.js";
 
 /** Lockfiles and generated files are left out of the diff the model sees. */
@@ -147,7 +147,7 @@ export async function conventionsFor(mirror: string, base: string, changedPaths:
 }
 
 /** How many rule files are read at most. */
-const MAX_RULE_FILES = 30;
+const MAX_RULE_FILES = 100;
 
 /**
  * The team's instruction files and rule files, as the base branch has them, from one listing of it.
@@ -186,7 +186,8 @@ export async function teamFilesFor(mirror: string, base: string, changedPaths: s
     const text = (await blob(file.sha))?.trim();
     return text ? { path, sha: file.sha, text } : null;
   };
-  const rulePaths = [...tree.keys()].filter((p) => RULE_FILE.test(p)).sort((a, b) => Number(!a.startsWith(".mergelight/")) - Number(!b.startsWith(".mergelight/")) || a.localeCompare(b)).slice(0, MAX_RULE_FILES);
+  const allRulePaths = [...tree.keys()].filter((p) => RULE_FILE.test(p)).sort((a, b) => Number(!a.startsWith(".mergelight/")) - Number(!b.startsWith(".mergelight/")) || a.localeCompare(b));
+  const rulePaths = allRulePaths.slice(0, MAX_RULE_FILES);
   // Both kinds at once: one slow read mustn't leave the other no time.
   const [found, ruleFiles] = await Promise.all([
     Promise.all(conventionPaths([...tree.keys()], changedPaths).slice(0, MAX_CONVENTION_FILES * 2).map(read)),
@@ -210,7 +211,9 @@ export async function teamFilesFor(mirror: string, base: string, changedPaths: s
   const stats = { dropped: 0 };
   const rules = repoRules(readRules, changedPaths.length ? changedPaths : undefined, stats);
   // A rule file that couldn't be read is named, never dropped without a word.
-  const unreadRules = rulePaths.filter((_, i) => ruleFiles[i] === null);
+  // Read but with no rules in it (a Copilot file without applyTo, say), or past the limit of files: named too.
+  const noRules = readRules.filter((f) => parseRuleFile(f.path, f.text).length === 0).map((f) => f.path);
+  const unreadRules = [...rulePaths.filter((_, i) => ruleFiles[i] === null), ...noRules, ...allRulePaths.slice(MAX_RULE_FILES)];
   return { conventions, rules, unreadRules, droppedRules: stats.dropped };
 }
 
@@ -282,7 +285,7 @@ export interface Workspace {
   conventions: Convention[];
   /** The rules written in the repository's rule files, from the base branch. */
   rules: TeamRule[];
-  /** Rule files that exist on the base branch but couldn't be read: empty, too large, or a link out. */
+  /** Rule files on the base branch that gave no rules: empty, too large, a link out, a Copilot file without applyTo or kept out of review, or past the limit of files. */
   unreadRules: string[];
   /** Rules for the changed files left out because the repository has more than the limits allow. */
   droppedRules: number;
