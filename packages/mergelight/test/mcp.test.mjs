@@ -72,7 +72,13 @@ if (args[0] === "pr") { if (!s.branchPr) fail("no pull requests found"); process
 if (args[0] === "repo") fail("not a git repository");
 if (args[1] === "graphql") {
   const query = args[args.indexOf("-f") + 1];
-  if (query.includes("mutation")) { log({ graphql: "resolve", args }); out({ data: {} }); process.exit(0); }
+  if (query.includes("mutation")) {
+    const kind = query.includes("unminimizeComment") ? "unfold" : query.includes("minimizeComment") ? "fold" : query.includes("unresolveReviewThread") ? "unresolve" : "resolve";
+    if (kind === "resolve" && s.resolveRefused) fail("Resource not accessible by integration");
+    log({ graphql: kind, args });
+    out({ data: {} });
+    process.exit(0);
+  }
   out({ data: { repository: { pullRequest: { reviewThreads: { nodes: s.threads || [] } } } } });
   process.exit(0);
 }
@@ -855,4 +861,31 @@ test("a Reviewing comment left by an earlier run says this run's plan, and keeps
   const done = useScenario({ issueComments: [summaryComment(stateOf([finding()]))] });
   await withFakeGh(done.env, () => startSummary(new GitHub("o", "r"), 7, { reviewer: { name: "claude", model: "opus" } }));
   assert.deepEqual(done.writes(), []);
+});
+
+test("a fixed finding's comment is folded away as resolved when GitHub won't let Mergelight resolve the thread, and unfolds if the finding comes back", async () => {
+  const state = stateOf([finding({ id: "aaaaaaaaaa" })], new Map([["aaaaaaaaaa", THREAD_URL]]));
+  const findingComment = (body, minimized = false) => ({ id: "C1", isMinimized: minimized, databaseId: 501, body, author: { __typename: "Bot", login: "github-actions" } });
+  const review = (findings) => ({ pr: { owner: "o", repo: "r", number: 7, head_sha: PUSHED }, provider: { name: "codex", model: null }, light: "green", summary: "S", findings, stats: { duration_ms: 1 } });
+
+  const fixed = useScenario({
+    issueComments: [summaryComment(state)],
+    head: PUSHED,
+    resolveRefused: true,
+    threads: [{ id: "T1", isResolved: false, isOutdated: true, comments: { nodes: [findingComment("<!-- mergelight:finding id=aaaaaaaaaa -->\nFinding")] } }],
+  });
+  await withFakeGh(fixed.env, () => publishReview(review([])));
+  const kinds = fixed.writes().filter((w) => w.graphql).map((w) => w.graphql);
+  assert.deepEqual(kinds, ["fold"], "resolving was refused, so the comment is folded instead");
+  assert.ok(fixed.writes().find((w) => w.graphql === "fold").args.includes("id=C1"));
+  assert.match(fixed.writes().find((w) => w.path === "pulls/comments/501").body, /Handled/);
+
+  // The finding comes back: its folded comment shows again.
+  const back = useScenario({
+    issueComments: [summaryComment(state)],
+    head: PUSHED,
+    threads: [{ id: "T1", isResolved: false, isOutdated: true, comments: { nodes: [findingComment("<!-- mergelight:finding id=aaaaaaaaaa -->\n<!-- mergelight:closed how=fixed resolved=0 sha=2222222 -->\n✅ **Handled.** x", true)] } }],
+  });
+  await withFakeGh(back.env, () => publishReview(review([finding({ id: "aaaaaaaaaa", tier: "post" })])));
+  assert.ok(back.writes().some((w) => w.graphql === "unfold" && w.args.includes("id=C1")));
 });

@@ -505,7 +505,7 @@ export async function reviewThreads(api: GitHub, number: number): Promise<Review
       repository(owner: $owner, name: $repo) {
         pullRequest(number: $number) {
           reviewThreads(first: 100) {
-            nodes { id isResolved isOutdated resolvedBy { login } comments(first: 50) { nodes { id databaseId body authorAssociation createdAt lastEditedAt author { __typename login } } } }
+            nodes { id isResolved isOutdated resolvedBy { login } comments(first: 50) { nodes { id isMinimized databaseId body authorAssociation createdAt lastEditedAt author { __typename login } } } }
           }
         }
       }
@@ -516,8 +516,12 @@ export async function reviewThreads(api: GitHub, number: number): Promise<Review
 }
 
 /** Folds a comment away as resolved. Needs only the right to write pull request comments. */
-export const minimizeComment = (api: GitHub, id: string) =>
+const minimizeComment = (api: GitHub, id: string) =>
   api.graphql(`mutation($id: ID!) { minimizeComment(input: { subjectId: $id, classifier: RESOLVED }) { minimizedComment { isMinimized } } }`, { id }, true);
+
+/** Shows a folded comment again. */
+const unminimizeComment = (api: GitHub, id: string) =>
+  api.graphql(`mutation($id: ID!) { unminimizeComment(input: { subjectId: $id }) { unminimizedComment { isMinimized } } }`, { id }, true);
 
 export const resolveThread = (api: GitHub, id: string) =>
   api.graphql(`mutation($id: ID!) { resolveReviewThread(input: { threadId: $id }) { thread { id } } }`, { id }, true);
@@ -586,6 +590,10 @@ async function settleThreads(api: GitHub, review: Review, log: (s: string) => vo
     } else {
       if (action.kind === "regressed" && action.unresolve) {
         await unresolveThread(api, t.id).catch((err) => log(`Couldn't reopen a thread: ${(err as Error).message}`));
+      }
+      // A finding that came back, or a thread someone reopened, shows its comment again if it was folded away.
+      if (t.comments.nodes[0]?.isMinimized && found.nodeId) {
+        await unminimizeComment(api, found.nodeId).catch((err) => log(`Couldn't unfold a comment: ${(err as Error).message}`));
       }
       await edit(found.commentId, reopenedBody(found.body, action.kind === "reopened"));
     }

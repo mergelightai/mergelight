@@ -19,7 +19,7 @@ export interface ReviewThread {
   isResolved: boolean;
   isOutdated: boolean;
   resolvedBy?: { login?: string } | null;
-  comments: { nodes: { id?: string; databaseId: number; body: string; authorAssociation?: string; author?: { __typename?: string; login?: string } | null; createdAt?: string; lastEditedAt?: string | null }[] };
+  comments: { nodes: { id?: string; isMinimized?: boolean; databaseId: number; body: string; authorAssociation?: string; author?: { __typename?: string; login?: string } | null; createdAt?: string; lastEditedAt?: string | null }[] };
 }
 
 /** fixed: the code changed and the finding is gone. resolved: someone resolved the thread. */
