@@ -74,12 +74,12 @@ const SECTIONS: Section[] = [
         <List
           items={[
             'The Mergelight Action runs in your own GitHub Actions runner. There, Codex or Claude Code sends your code to OpenAI or Anthropic under your account and their terms. We are not part of that.',
-            <>So that reviews can post as the Mergelight AI app, each run asks our token server for a GitHub token. To prove where it runs, the run sends a pass that GitHub signs (an OIDC token). The pass names the repository, its owner, the GitHub account that started the run, the branch, the workflow and the run.</>,
+            <>So that reviews can post as the Mergelight AI app, each run asks our token server for a GitHub token. To prove where it runs, the run sends a pass that GitHub signs (an OIDC token). The pass names the repository, its owner, the GitHub account that started the run, the branch, the commit, the event, the workflow and the run, with GitHub's numeric ids for the account, the repository and its owner.</>,
             'The token server checks the pass, asks GitHub for a short-lived token for that one repository, and sends it back to the run. It keeps nothing: it has no database and writes no files, its logs hold only the names of errors, and it does not read IP addresses.',
-            'To keep your AI login fresh, the run saves it to your own repository secrets. The login goes from your runner to GitHub, never to us.',
+            'To keep your AI login fresh, the run saves it to your own repository secrets. For that, it first asks our token server for a short-lived token that can write your repository\'s secrets, with the same signed pass. A scheduled job in your repository does the same every few days. The login itself goes from your runner to GitHub, never to us.',
             'After you connect a ChatGPT login, the Action posts part of the account\'s email address on the pull request, so your team can see whose plan pays for reviews. That comment lives on GitHub, not with us.',
             <>When your organization uses the dashboard, the Action's <code className="font-mono text-[0.92em] text-fg">server</code> input is set. Then each run also sends a pass that GitHub signs to our dashboard server, with the review's numbers and the findings your team declined (see <a href="#dashboard" className="text-fg underline decoration-line underline-offset-4 hover:decoration-fg">The dashboard</a>).</>,
-            <>You can leave us out: set the Action's <code className="font-mono text-[0.92em] text-fg">token-server</code> and <code className="font-mono text-[0.92em] text-fg">server</code> inputs to empty. The run then posts as github-actions[bot], and nothing at all reaches us.</>,
+            <>You can leave us out: set the Action's <code className="font-mono text-[0.92em] text-fg">token-server</code> and <code className="font-mono text-[0.92em] text-fg">server</code> inputs to empty in every Mergelight workflow in your repository, including the ones that refresh the login and approve pull requests. Reviews then post as github-actions[bot], and nothing at all reaches us.</>,
           ]}
         />
       </>
@@ -185,7 +185,8 @@ const SECTIONS: Section[] = [
         </P>
         <P>
           Your GitHub username and account id can be in your organization's decisions, rules, checks, skills and log of changes. If you ask, we
-          delete them or replace them with a placeholder.
+          delete them or replace them with a placeholder in decisions, rules, checks and skills. The log of changes cannot be edited, so they stay
+          there until your organization's data is deleted.
         </P>
         <P>You can also complain to the data protection authority where you live or work.</P>
       </>
