@@ -5,6 +5,13 @@
 # To pull a bad release: mark it as a pre-release, or delete it. The tag goes back to the latest good
 # release on the next run. Run this by hand to do that right away. Pull it also when a fixed release
 # is already out: the tag takes the newest release that is a day old, and that can be the bad one.
+#
+# The tag moves with the "Mergelight Release" GitHub App, not the workflow's own token. GitHub never
+# lets the workflow's token point a tag at a commit whose workflow files differ, by git or by the API,
+# and most releases change one (tested Nov 12 2026: v0 stayed on v0.1.4 for that reason). The app has
+# Contents and Workflows write on this repository only. Its id is the variable RELEASE_APP_ID and its
+# private key the secret RELEASE_APP_PRIVATE_KEY. The app is also the only one the tag ruleset lets
+# move v0, so nobody else can, not even an admin's token.
 name: Roll out
 
 on:
@@ -27,10 +34,21 @@ jobs:
   roll-out:
     runs-on: ubuntu-latest
     steps:
+      - name: Get the release app's token
+        id: app
+        if: vars.RELEASE_APP_ID != ''
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-workflows: write
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
           fetch-tags: true
+          # The push at the end uses this token.
+          token: ${{ steps.app.outputs.token || github.token }}
       - name: Move the major tag
         env:
           GH_TOKEN: ${{ github.token }}
@@ -62,5 +80,8 @@ jobs:
             fi
           done
           git tag -f "$major" "$target"
-          git push -f origin "refs/tags/$major"
+          if ! git push -f origin "refs/tags/$major"; then
+            echo "::error::GitHub refused to move $major to $tag. If the error above names a workflow file, the release app is missing: set RELEASE_APP_ID and RELEASE_APP_PRIVATE_KEY (see the top of this file)."
+            exit 1
+          fi
           echo "$major moved to $tag ($age seconds old)."
