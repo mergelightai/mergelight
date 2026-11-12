@@ -30,6 +30,10 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+      # GitHub reads action.yml only when a workflow uses the action, so a broken one fails in customers'
+      # runs, never in this repository's. A real YAML parser reads it here first, with the workflows.
+      - name: action.yml and the workflows are valid YAML
+        run: ruby -ryaml -e 'ARGV.each { |f| YAML.load_file(f) }' action.yml .github/workflows/*.yml packages/mergelight/templates/*.yml examples/*.yml
       - name: Package tests
         working-directory: packages/mergelight
         run: npm ci --no-audit --no-fund && npm test
