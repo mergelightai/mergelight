@@ -33,10 +33,7 @@ const SECTIONS: Section[] = [
     title: 'Who we are',
     body: (
       <>
-        <P>
-          Mergelight is run by Thomas Egelund in Denmark. He decides how the data on this page is used, which makes him the data controller under the
-          EU's General Data Protection Regulation (GDPR).
-        </P>
+        <P>Mergelight decides how the data on this page is used. Under the EU's General Data Protection Regulation (GDPR), that makes Mergelight the data controller.</P>
         <P>Write to {mail} with any question about this page or your data.</P>
       </>
     ),
@@ -187,10 +184,7 @@ const SECTIONS: Section[] = [
           Your GitHub username can be in your organization's decisions, rules and log of changes. If you ask, we delete it or replace it with a
           placeholder.
         </P>
-        <P>
-          You can also complain to a data protection authority. In Denmark that is Datatilsynet,{' '}
-          <a href="https://www.datatilsynet.dk" className="text-fg underline decoration-line underline-offset-4 hover:decoration-fg">datatilsynet.dk</a>.
-        </P>
+        <P>You can also complain to the data protection authority where you live or work.</P>
       </>
     ),
   },
