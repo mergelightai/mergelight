@@ -13,8 +13,8 @@ function day(iso: string): string {
   const days = Math.round((start(today) - start(then)) / 86_400_000);
   if (days <= 0) return 'Today';
   if (days === 1) return 'Yesterday';
-  if (days < 7) return 'This week';
-  if (days < 31) return 'This month';
+  if (days < 7) return 'Last 7 days';
+  if (days < 31) return 'Last 30 days';
   return 'Earlier';
 }
 

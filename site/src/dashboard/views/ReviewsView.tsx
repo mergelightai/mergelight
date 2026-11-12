@@ -44,7 +44,7 @@ function Segmented<T extends string>({ label, value, onChange, options, mono = f
   );
 }
 
-/** The server address a workflow names, in a quiet box with a copy button, as the reference's "acme.serveros.com". */
+/** The server address a workflow names, in a quiet box with a copy button. */
 function ServerAddress() {
   const [copied, setCopied] = useState(false);
   const host = SERVER.replace(/^https?:\/\//, '');
@@ -199,6 +199,9 @@ function DurationChart({ reviews, span, from, controls }: { reviews: Review[]; s
   );
 }
 
+/** The most reviews the server sends for this page: the newest ones (RECENT_REVIEWS in packages/server/src/people.ts). */
+const RECENT_REVIEWS = 50;
+
 type Range = 'all' | '24h' | '7d' | '30d';
 const RANGES: { id: Range; label: string; ms: number }[] = [
   { id: '24h', label: '24h', ms: 86_400_000 },
@@ -228,12 +231,14 @@ export function ReviewsView({ overview, login, orgLogin }: { overview: Overview;
   const [show, setShow] = useState<'all' | Light>('all');
   const cutoff = Date.now() - (RANGES.find((r) => r.id === range)?.ms ?? Infinity);
   const inRange = overview.reviews.filter((r) => Date.parse(r.created_at) >= cutoff);
+  const oldestSent = overview.reviews.reduce<string | null>((o, r) => (!o || r.created_at < o ? r.created_at : o), null);
+  const capped = overview.reviews.length >= RECENT_REVIEWS && !!oldestSent && Date.parse(oldestSent) > cutoff;
   const by = (light: Light) => inRange.filter((r) => r.light === light).length;
   const oldest = inRange.reduce<string | null>((o, r) => (!o || r.created_at < o ? r.created_at : o), null);
   const pct = (n: number) => (inRange.length ? `${Math.round((n / inRange.length) * 100)}%` : '0%');
   const shown = show === 'all' ? inRange : inRange.filter((r) => r.light === show);
   const maxTook = Math.max(1, ...inRange.map((r) => r.duration_ms));
-  const span = range === 'all' ? `since ${ago(oldest)}` : `last ${RANGES.find((r) => r.id === range)?.label}`;
+  const span = capped ? `latest ${inRange.length}, since ${ago(oldest)}` : range === 'all' ? `since ${ago(oldest)}` : `last ${RANGES.find((r) => r.id === range)?.label}`;
 
   // The reviews, grouped by repository, the newest first in each, and the busiest repository first.
   const groups = useMemo(() => {
@@ -264,7 +269,7 @@ export function ReviewsView({ overview, login, orgLogin }: { overview: Overview;
 
       <section className="overflow-hidden rounded-[14px] bg-panel hairline">
         <div className="grid grid-cols-2 lg:grid-cols-4">
-          <Stat label="Reviews" value={inRange.length} unit={range === 'all' ? `since ${ago(oldest)}` : `last ${range}`} />
+          <Stat label={capped ? 'Latest reviews' : 'Reviews'} value={inRange.length} unit={capped || range === 'all' ? `since ${ago(oldest)}` : `last ${range}`} />
           {ORDER.map((l, i) => (
             // Hairlines between the cells: in one row of four on a wide screen, in two rows of two on a narrow one.
             <Stat key={l} label={LIGHTS[l].label} value={by(l)} unit={pct(by(l))} light={l} className={cn('lg:border-l lg:border-t-0', i === 0 && 'border-l', i >= 1 && 'border-t', i === 2 && 'border-l')} />
@@ -280,7 +285,7 @@ export function ReviewsView({ overview, login, orgLogin }: { overview: Overview;
         meta={ORDER.map((l) => `${by(l)} ${l === 'green' ? 'safe' : l === 'yellow' ? (by(l) === 1 ? 'needs a human' : 'need a human') : 'blocked'}`).join(' · ')}
       >
         {shown.length === 0 ? (
-          <p className="px-5 py-10 text-center text-[13.5px] text-ink-3">No reviews with this light {range === 'all' ? 'yet' : `in the last ${range}`}.</p>
+          <p className="px-5 py-10 text-center text-[13.5px] text-ink-3">No reviews{show === 'all' ? '' : ' with this light'} {range === 'all' ? 'yet' : `in the last ${range}`}.</p>
         ) : (
           <DataTable>
             <DataHead>
@@ -336,7 +341,7 @@ export function ReviewsView({ overview, login, orgLogin }: { overview: Overview;
         )}
       </DataCard>
 
-      <DataCard className="mt-6" fill title="Repositories" count={overview.repos.length} footer={`${plural(overview.repos.length, 'repository', 'repositories')} you can see sent a review.`}>
+      <DataCard className="mt-6" fill title="Repositories" count={overview.repos.length} meta="all time" footer={`${plural(overview.repos.length, 'repository', 'repositories')} you can see sent a review.`}>
         <DataTable>
           <DataHead>
             <DataHeadCell>Repository</DataHeadCell>

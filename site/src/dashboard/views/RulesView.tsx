@@ -98,7 +98,7 @@ export function RulesView({ orgId, rules, onAdd, onRemove, resume }: { orgId: nu
         {rules.rules.length === 0 ? (
           <EmptyList title="No rules yet">Reviews follow Mergelight's own judgement until your team adds a rule.</EmptyList>
         ) : (
-          <DataCard fill title="Rules" count={rules.rules.length} meta={`${rules.rules.filter((r) => r.kind === 'needs_human').length} always need a human`}>
+          <DataCard fill title="Rules" count={rules.rules.length} meta={(() => { const n = rules.rules.filter((r) => r.kind === 'needs_human').length; return `${n} always ${n === 1 ? 'needs' : 'need'} a human`; })()}>
             <DataTable>
             <DataHead>
               <DataHeadCell>Rule</DataHeadCell>

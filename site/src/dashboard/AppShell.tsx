@@ -68,6 +68,7 @@ function NavButton({ active, label, icon: Icon, onClick }: { active: boolean; la
 /** A group of views under a small title with a caret, which folds the group away. */
 function NavGroup({ title, children }: { title: string; children: ReactNode }) {
   const [open, setOpen] = useState(true);
+  const { state } = useSidebar();
   return (
     <SidebarGroup className="py-1">
       <button
@@ -79,7 +80,7 @@ function NavGroup({ title, children }: { title: string; children: ReactNode }) {
         {title}
         <ChevronDownIcon className={cn('size-3 transition-transform duration-150', !open && '-rotate-90')} />
       </button>
-      {open && <SidebarGroupContent>{children}</SidebarGroupContent>}
+      {(open || state === 'collapsed') && <SidebarGroupContent>{children}</SidebarGroupContent>}
     </SidebarGroup>
   );
 }
