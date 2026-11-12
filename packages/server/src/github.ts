@@ -11,7 +11,12 @@ const API = "https://api.github.com";
 /** A GitHub App's token for a person, like the one "Sign in with GitHub" on mergelight.dev hands out. Personal tokens and OAuth app tokens start differently. */
 const PERSON_TOKEN = /^ghu_[A-Za-z0-9_]{20,255}$/;
 /** The GitHub App people sign in to the dashboard with. A server someone else hosts names its own. */
-export const DEFAULT_SIGN_IN_APP = "mergelight-setup";
+/**
+ * The GitHub Apps people sign in to the dashboard with, by the name in their address. The dashboard
+ * signs in to Mergelight AI, the app that posts reviews, so it shows the repositories that have
+ * reviews. Mergelight Setup was the sign-in app before, and a session started with it still works.
+ */
+export const DEFAULT_SIGN_IN_APP = "mergelight-ai,mergelight-setup";
 /** Everything asked about one sign-in must fit in this. */
 const DEADLINE_MS = 20_000;
 const MAX_ORGS = 30;
@@ -92,7 +97,8 @@ export async function lookUp(token: string, fetchImpl: typeof fetch = fetch, app
     // GitHub lists the installs of the app that made the token. A token made for any other app is not
     // a sign-in here: otherwise every app a person ever authorized could read their dashboard.
     const all = (Array.isArray(installations) ? installations : []) as { app_slug?: unknown }[];
-    const ours = all.filter((i) => i.app_slug === app);
+    const apps = app.split(",").map((a) => a.trim()).filter(Boolean);
+    const ours = all.filter((i) => typeof i.app_slug === "string" && apps.includes(i.app_slug));
     if (all.length && !ours.length) throw new HttpError(401, "sign_in_failed", "That sign-in isn't Mergelight's.");
     const reach: Reach[] = [];
     for (const installation of ours.slice(0, MAX_ORGS)) {

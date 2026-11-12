@@ -5,6 +5,8 @@
 //   GITHUB_APP_PRIVATE_KEY   The app's private key, in PEM. Keep it in the host's secret settings.
 //   GITHUB_SETUP_APP_CLIENT_SECRET The Mergelight Setup app's client secret, for "Sign in with GitHub"
 //                            on the setup page. Optional: without it, only sign-in is off.
+//   GITHUB_APP_CLIENT_SECRET The Mergelight AI app's client secret, for signing in to the dashboard.
+//                            Optional: without it, only the dashboard's sign-in is off.
 //   PORT                     Port to listen on. Render sets it.
 
 import { createServer, type IncomingMessage, type Server } from "node:http";
