@@ -133,7 +133,8 @@ export async function previousFindings(api: GitHub, number: number, headSha?: st
       // reviews, so one failed report doesn't lose it and a silent server doesn't get it forever.
       const wait = waiting.get(id);
       const open = Boolean(last) && !reply!.answered;
-      const pending = open && wait?.at === last?.at && (wait?.tries ?? 1) < MAX_TRIES && (await unchanged(f));
+      // A later reply, such as a "thanks", doesn't cancel it: the verifier reads all of them again.
+      const pending = open && Boolean(wait) && Date.parse(wait!.at) <= Date.parse(last!.at) && (wait?.tries ?? 1) < MAX_TRIES && (await unchanged(f));
       const remember = pending || (open && fresh.length > 0 && f.status === "open" && (await unchanged(f)));
       const handled = mark
         ? { as: mark.as, note: mark.note, by: mark.by, sha: mark.sha, from: "mark" as const, at: mark.at }
@@ -150,10 +151,13 @@ export async function previousFindings(api: GitHub, number: number, headSha?: st
 /** How many reviews send a waiting reason before it is given up on. */
 const MAX_TRIES = 3;
 
-/** A person's reply as the verifier reads it: one line, nothing hidden, not too long. cut: it was longer. */
+/**
+ * A person's replies as the verifier reads them: one line, nothing hidden, not too long. A long one keeps
+ * its end, where the newest reply is: that is the one that counts. cut: it was longer.
+ */
 function oneLine(text: string): { note: string; cut?: true } {
   const line = withoutHidden(text).replace(/\s+/g, " ").trim();
-  return { note: line.slice(0, MAX_NOTE), ...(line.length > MAX_NOTE ? { cut: true as const } : {}) };
+  return line.length > MAX_NOTE ? { note: `… ${Array.from(line).slice(-(MAX_NOTE - 2)).join("")}`.slice(-MAX_NOTE), cut: true } : { note: line };
 }
 
 /** The reason the verifier gives when it drops an earlier finding because the team declined it. */
@@ -467,7 +471,7 @@ export async function reviewThreads(api: GitHub, number: number): Promise<Review
       repository(owner: $owner, name: $repo) {
         pullRequest(number: $number) {
           reviewThreads(first: 100) {
-            nodes { id isResolved isOutdated resolvedBy { login } comments(first: 50) { nodes { databaseId body authorAssociation createdAt author { __typename login } } } }
+            nodes { id isResolved isOutdated resolvedBy { login } comments(first: 50) { nodes { databaseId body authorAssociation createdAt lastEditedAt author { __typename login } } } }
           }
         }
       }

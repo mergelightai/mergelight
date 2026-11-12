@@ -19,7 +19,7 @@ export interface ReviewThread {
   isResolved: boolean;
   isOutdated: boolean;
   resolvedBy?: { login?: string } | null;
-  comments: { nodes: { databaseId: number; body: string; authorAssociation?: string; author?: { __typename?: string; login?: string } | null; createdAt?: string }[] };
+  comments: { nodes: { databaseId: number; body: string; authorAssociation?: string; author?: { __typename?: string; login?: string } | null; createdAt?: string; lastEditedAt?: string | null }[] };
 }
 
 /** fixed: the code changed and the finding is gone. resolved: someone resolved the thread. */
@@ -151,7 +151,8 @@ export function resolverReplies(threads: ReviewThread[], resolved: Map<string, s
       .filter((c) => c.author?.__typename === "User" && c.author.login === by && c.createdAt && c.body.trim() && !c.body.includes("<!-- mergelight:"));
     // All of their replies, in order: a later "thanks" mustn't replace the reason.
     const answered = answeredRemembered(t);
-    if (own.length) out.set(found.id, { replies: own.map((c) => ({ text: c.body.trim(), at: c.createdAt! })), commentId: found.commentId, answered });
+    // An edited reply counts from its edit: a reason added later is new.
+    if (own.length) out.set(found.id, { replies: own.map((c) => ({ text: c.body.trim(), at: c.lastEditedAt ?? c.createdAt! })), commentId: found.commentId, answered });
   }
   return out;
 }

@@ -458,5 +458,5 @@ test("the verifier is told to keep its candidate ids out of what people read", (
 test("the verifier is told how to weigh what someone wrote when they resolved a comment", () => {
   const prompt = buildVerifierPrompt({ ...input, previous: [{ id: "aaaaaaaaaa", title: "T", file: "src/a.ts", line: 1, handled: { as: "wont_fix", note: "Moved it to the router.", by: "ada", sha: null, from: "thread" } }] }, []);
   assert.ok(prompt.includes("team: resolved the comment, by ada, saying: Moved it to the router."));
-  assert.match(prompt, /Resolved by the team, saying something: .* If it says the problem was or will be fixed, check the code/);
+  assert.match(prompt, /Resolved by the team, saying something: .* If it says the problem was fixed, check the code/);
 });

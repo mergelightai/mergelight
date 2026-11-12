@@ -717,9 +717,13 @@ test("what the resolver wrote reaches the verifier, and is a candidate to keep o
 
   // The resolver's replies count together, so a later "thanks" doesn't hide the reason. A long one says it was cut.
   const joined = await read(scenario([findingThread("aaaaaaaaaa", 501, [reply("teammate", "Known, ships next release."), reply("teammate", "Thanks!"), reply("teammate", "x".repeat(1200))])]));
-  assert.ok(joined.note.startsWith("Known, ships next release. Thanks! xxx"));
+  assert.ok(joined.note.startsWith("… xxx"), "too long: the newest reply is the part kept");
   assert.equal(joined.note.length, 1000);
   assert.equal(joined.cut, true);
+  assert.equal((await read(scenario([findingThread("aaaaaaaaaa", 501, [reply("teammate", "Known, ships next release."), reply("teammate", "Thanks!")])]))).note, "Known, ships next release. Thanks!");
+  // An edited reply counts from its edit.
+  const edited = await read(scenario([findingThread("aaaaaaaaaa", 501, [{ ...reply("teammate", "Known, the gateway blocks it.", "2001-01-01T00:00:00Z"), lastEditedAt: "2030-01-02T00:00:00Z" }])]));
+  assert.equal(edited.remember, true);
 
   // The verifier reads it as what was said, with a rule for reasons, fix notes and anything else.
   const said = await read(scenario([findingThread("aaaaaaaaaa", 501, [reply("teammate", "Thanks, moved the validation into the router.")])]));
@@ -727,6 +731,7 @@ test("what the resolver wrote reaches the verifier, and is a candidate to keep o
   assert.ok(prompt.includes("team: resolved the comment, by teammate, saying: Thanks, moved the validation into the router."));
   assert.ok(!prompt.includes("decided not to fix, by teammate"));
   assert.match(prompt, /with the reason "the team resolved it"/);
+  assert.match(prompt, /will be fixed later, in another pull request, don't keep it in this one.*"the team will fix it later"/);
 });
 
 test("a remembered reason gets one answer in its thread", async () => {
@@ -775,8 +780,10 @@ test("a reason the server hasn't confirmed is sent again in later reviews, until
   // Someone else's reply after Mergelight's answer doesn't undo it.
   const otherReply = [thread([{ databaseId: 10, body: "<!-- mergelight:remembered -->\nRemembered.", createdAt: "2001-01-02T00:00:00Z", author: { __typename: "Bot", login: "github-actions" } }, reply("pr-author", "Thanks all.", "2001-01-03T00:00:00Z")])];
   assert.equal((await read(pending, otherReply)).remember, undefined);
-  const changed = { ...base, remember: [{ id: "aaaaaaaaaa", at: "2000-01-01T00:00:00Z" }] };
-  assert.equal((await read(changed, [thread()])).remember, undefined, "the pending reason is an older one");
+  const later = await read(pending, [thread([reply("teammate", "Thanks!", "2001-01-05T00:00:00Z")])]);
+  assert.equal(later.remember, true, "a later thanks doesn't cancel it");
+  const newer = { ...base, remember: [{ id: "aaaaaaaaaa", at: "2002-01-01T00:00:00Z" }] };
+  assert.equal((await read(newer, [thread()])).remember, undefined, "the waiting reason is newer than any reply here");
 });
 
 test("publishing a review without a new list keeps the reasons still waiting for the server", async () => {
