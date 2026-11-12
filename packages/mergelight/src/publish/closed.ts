@@ -152,7 +152,10 @@ export function resolverReplies(threads: ReviewThread[], resolved: Map<string, s
     // All of their replies, in order: a later "thanks" mustn't replace the reason.
     const answered = answeredRemembered(t);
     // An edited reply counts from its edit: a reason added later is new.
-    if (own.length) out.set(found.id, { replies: own.map((c) => ({ text: c.body.trim(), at: c.lastEditedAt ?? c.createdAt! })), commentId: found.commentId, answered });
+    // Quoted lines (a "Quote reply" of the finding, say) are left out: they aren't what the person said.
+    const said = (body: string) => body.split("\n").filter((l) => !/^\s*>/.test(l)).join("\n").trim();
+    const replies = own.map((c) => ({ text: said(c.body), at: c.lastEditedAt ?? c.createdAt! })).filter((r) => r.text);
+    if (replies.length) out.set(found.id, { replies, commentId: found.commentId, answered });
   }
   return out;
 }

@@ -185,12 +185,16 @@ export async function answerRemembered(api: GitHub, number: number, ids: string[
   if (!ids.length) return 0;
   const wanted = new Set(ids);
   let answered = 0;
+  // Only in a thread Mergelight started, by the login its summary comment carries, as when it was read.
+  const own = (await readPrReviewState(api, number).catch(() => null))?.summary?.user?.login;
+  const bare = (login: string | undefined | null) => login?.replace(/\[bot\]$/, "");
   for (const t of await reviewThreads(api, number).catch(() => [])) {
     const found = threadFinding(t);
-    if (!found || t.comments.nodes[0]?.author?.__typename !== "Bot" || !wanted.has(found.id) || answeredRemembered(t)) continue;
+    const starter = t.comments.nodes[0]?.author;
+    if (!found || starter?.__typename !== "Bot" || (own && bare(starter.login) !== bare(own)) || !wanted.has(found.id) || answeredRemembered(t)) continue;
     const body = [
       REMEMBERED_MARKER,
-      `🧠 **Remembered.** Later reviews of this repository read this reason before they report this problem again.${cut.has(found.id) ? " The reason was long, so only its start is kept." : ""} If it stops being true, forget it on your Mergelight dashboard.`,
+      `🧠 **Remembered.** Later reviews of this repository read this reason before they report this problem again.${cut.has(found.id) ? " The reason was long, so only its end, the newest part, is kept." : ""} If it stops being true, forget it on your Mergelight dashboard.`,
     ].join("\n");
     const posted = await api.write("POST", `pulls/${number}/comments/${found.commentId}/replies`, { body }).catch((err) => (log(`Couldn't answer a thread: ${(err as Error).message}`), null));
     if (posted !== null) answered++;

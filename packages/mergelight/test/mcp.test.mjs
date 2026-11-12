@@ -721,6 +721,8 @@ test("what the resolver wrote reaches the verifier, and is a candidate to keep o
   assert.equal(joined.note.length, 1000);
   assert.equal(joined.cut, true);
   assert.equal((await read(scenario([findingThread("aaaaaaaaaa", 501, [reply("teammate", "Known, ships next release."), reply("teammate", "Thanks!")])]))).note, "Known, ships next release. Thanks!");
+  // Quoted lines aren't what the person said.
+  assert.equal((await read(scenario([findingThread("aaaaaaaaaa", 501, [reply("teammate", "> Project lookup exposes other teams' private notes\n> long quote\n\nKnown, the gateway blocks it.")])]))).note, "Known, the gateway blocks it.");
   // An edited reply counts from its edit.
   const edited = await read(scenario([findingThread("aaaaaaaaaa", 501, [{ ...reply("teammate", "Known, the gateway blocks it.", "2001-01-01T00:00:00Z"), lastEditedAt: "2030-01-02T00:00:00Z" }])]));
   assert.equal(edited.remember, true);
@@ -750,7 +752,7 @@ test("a remembered reason gets one answer in its thread", async () => {
   assert.equal(answered, 2, "a thread is answered once, even after a newer reply");
   assert.deepEqual(writes().map((w) => [w.method, w.path]), [["POST", "pulls/7/comments/501/replies"], ["POST", "pulls/7/comments/504/replies"]]);
   assert.match(writes()[0].body, /^<!-- mergelight:remembered -->\n🧠 \*\*Remembered\.\*\*/);
-  assert.match(writes()[0].body, /only its start is kept/);
+  assert.match(writes()[0].body, /only its end, the newest part, is kept/);
   assert.equal(await withFakeGh(env, () => answerRemembered(new GitHub("o", "r"), 7, [], new Set())), 0);
 });
 
