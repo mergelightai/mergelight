@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { buildHunterPrompt, ruleApplies } from "../dist/prompt.js";
-import { frontMatter, MAX_REPO_RULES, parseRuleFile, repoRules, RULE_FILE } from "../dist/repo-rules.js";
+import { expandBraces, frontMatter, MAX_REPO_RULES, parseRuleFile, repoRules, RULE_FILE } from "../dist/repo-rules.js";
 import { teamFilesFor } from "../dist/workspace.js";
 
 test("only Mergelight's rule files and Copilot's instruction files are rule files", () => {
@@ -59,9 +59,11 @@ test("rules are read from the base branch, never from the pull request", async (
   git("commit", "-q", "-m", "pr");
   const { rules, conventions } = await teamFilesFor(dir, "main");
   assert.deepEqual(rules.map((r) => [r.id, r.source, r.text]), [
-    ["F1", ".github/instructions/db.instructions.md", "Nested populate sets SELECT_IN."],
-    ["F2", ".mergelight/rules.md", "Money is in whole cents."],
+    ["F1", ".mergelight/rules.md", "Money is in whole cents."],
+    ["F2", ".github/instructions/db.instructions.md", "Nested populate sets SELECT_IN."],
   ]);
+  // Only the rules for the changed files count.
+  assert.deepEqual((await teamFilesFor(dir, "main", ["docs/readme.md"])).rules.map((r) => r.source), [".mergelight/rules.md"]);
   assert.deepEqual(conventions, []);
 });
 
@@ -70,4 +72,21 @@ test("the reviewers get a repository rule with the file it came from", () => {
   const prompt = buildHunterPrompt({ ...input, rules: [{ id: "F1", kind: "rule", text: "Money is in whole cents.", scope: "repo", source: ".mergelight/rules.md" }] }, "data");
   assert.ok(prompt.includes('{"id":"F1","rule":"Money is in whole cents.","from":".mergelight/rules.md"}'));
   assert.match(prompt, /or in a rule file in the repository \(from names it\), as the base branch has it/);
+});
+
+test("brace patterns are spread out, and commas inside braces don't split a pattern", () => {
+  assert.deepEqual(frontMatter('---\napplyTo: "src/**/*.{ts,tsx},*.sql"\n---\nx').paths, ["src/**/*.ts", "src/**/*.tsx", "*.sql"]);
+  assert.deepEqual(expandBraces("{a,b}/*.{x,y}"), ["a/*.x", "a/*.y", "b/*.x", "b/*.y"]);
+  assert.deepEqual(frontMatter('---\napplyTo: "docs/**,**"\n---\nx').paths, [], "** anywhere means every file");
+});
+
+test("code examples are never rules, and a bullet's wrapped lines stay with it", () => {
+  const md = "- Use the shared client\nfor every outbound call.\n\n```ts\n- not a rule\n```\n\n~~~\n* nor this\n~~~\n- Second rule.\n";
+  assert.deepEqual(parseRuleFile(".mergelight/rules.md", md).map((r) => r.text), ["Use the shared client for every outbound call.", "Second rule."]);
+});
+
+test("Mergelight's own rule files come first, so others can't crowd them out", () => {
+  const big = { path: ".github/instructions/a.instructions.md", text: "x".repeat(8000) };
+  const rules = repoRules([big, big, big, big, { path: ".mergelight/rules.md", text: "- Mine." }]);
+  assert.equal(rules[0].text, "Mine.");
 });

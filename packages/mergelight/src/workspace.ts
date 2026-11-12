@@ -186,7 +186,11 @@ export async function teamFilesFor(mirror: string, base: string, changedPaths: s
     const text = (await blob(file.sha))?.trim();
     return text ? { path, sha: file.sha, text } : null;
   };
-  const found = await Promise.all(conventionPaths([...tree.keys()], changedPaths).slice(0, MAX_CONVENTION_FILES * 2).map(read));
+  // Both kinds at once: one slow read mustn't leave the other no time.
+  const [found, ruleFiles] = await Promise.all([
+    Promise.all(conventionPaths([...tree.keys()], changedPaths).slice(0, MAX_CONVENTION_FILES * 2).map(read)),
+    Promise.all([...tree.keys()].filter((p) => RULE_FILE.test(p)).sort((a, b) => Number(!a.startsWith(".mergelight/")) - Number(!b.startsWith(".mergelight/")) || a.localeCompare(b)).slice(0, MAX_RULE_FILES).map(read)),
+  ]);
   const conventions: Convention[] = [];
   const seen = new Set<string>();
   let total = 0;
@@ -199,8 +203,7 @@ export async function teamFilesFor(mirror: string, base: string, changedPaths: s
     conventions.push({ path: f.path, text: f.text.slice(0, room), truncated: f.text.length > room });
     total += Math.min(f.text.length, room);
   }
-  const ruleFiles = await Promise.all([...tree.keys()].filter((p) => RULE_FILE.test(p)).sort().slice(0, MAX_RULE_FILES).map(read));
-  const rules = repoRules(ruleFiles.filter((f): f is { path: string; sha: string; text: string } => f !== null));
+  const rules = repoRules(ruleFiles.filter((f): f is { path: string; sha: string; text: string } => f !== null), changedPaths.length ? changedPaths : undefined);
   return { conventions, rules };
 }
 
