@@ -102,6 +102,20 @@ gh secret set CODEX_AUTH_JSON --repo owner/repo < ~/.codex-ci/auth.json && rm -r
 
 They're separate files so a PR's merge box only shows the review, not skipped jobs.
 
+## Rules in your repository
+
+Write what every review should check in `.mergelight/rules.md`, or in more files in `.mergelight/rules/`. Each bullet is one rule. Front matter at the top limits a file to some paths, in the format GitHub Copilot uses:
+
+```markdown
+---
+applyTo: "src/billing/**,*.sql"
+---
+- Money is in whole cents, never floats.
+- Every refund checks the invoice status first.
+```
+
+Mergelight also checks each `.github/instructions/*.instructions.md` file as a rule, for the files its `applyTo` names. As in Copilot, a file without `applyTo` is left out, and so is one whose `excludeAgent` is `"code-review"`. Bullets inside code blocks or HTML comments are not rules. Rules are read from the base branch, so they count from the review after they are merged, and a pull request can't add or drop a rule for itself. They work next to the rules set on the dashboard, and the review log says which rule files it used. A rule from the repository can add to what the review reports or sharpen it, but it can't hide a major bug or rate one down: only a rule on the dashboard can. A review reads at most 40 rules from the repository.
+
 ## Inputs
 
 | Input | Default | What it does |

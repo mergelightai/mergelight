@@ -61,6 +61,20 @@ Once a fix is pushed, call `mark_finding_handled` with `as: "fixed"` and the ids
 
 If the user decides not to fix a finding, call it with `as: "wont_fix"` and a `note` with their reason. The reason goes on the pull request and into the next review, which won't raise it again unless it's a major bug that still stands, the reason is wrong, or the code got worse. Only do this when the user said so. Don't decide it for them, and never use it to get a green check. Hardening needs no mark.
 
+## Adding a review rule
+
+When the user wants Mergelight to always check something in this repository ("make the review check that money is in cents"), add it as a rule in `.mergelight/rules.md`. One bullet is one rule: a short, plain sentence about what to check, not how to fix it. To keep rules to some files, put front matter at the top, as GitHub Copilot's instruction files do:
+
+```markdown
+---
+applyTo: "src/billing/**,*.sql"
+---
+- Money is in whole cents, never floats.
+- Every refund checks the invoice status first.
+```
+
+Mergelight also checks each `.github/instructions/*.instructions.md` file as a rule for the files its `applyTo` names, unless its `excludeAgent` is `"code-review"`. A rule counts from the review after it is merged into the base branch, so a pull request can't add or drop rules for itself. Commit the rule in its own change, and say so in your report.
+
 ## 6. Report back
 
 Keep it short: what you fixed, what the tests said, what you left alone and how many, and what you still need from the user. Then stop. A new review takes 2 to 15 minutes, so don't sit and poll for it. Call `list_findings` again when the user asks, or when you're already waiting on the pull request's checks.
