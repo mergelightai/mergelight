@@ -26,15 +26,18 @@ export const MAX_REPO_RULE_CHARS = 30_000;
  * out of code review.
  */
 export function frontMatter(text: string): { paths: string[]; body: string; scoped: boolean; forReview: boolean } {
-  const m = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(text);
+  // The block between the first two "---" lines, which may be empty: an empty one must not reach on to a
+  // later "---" divider and take the rules before it.
+  const m = /^---[ \t]*\r?\n(?:([\s\S]*?)\r?\n)??---[ \t]*(?:\r?\n|$)/.exec(text);
   if (!m) return { paths: [], body: text, scoped: false, forReview: true };
-  const forReview = !/^excludeAgent[ \t]*:.*\bcode-review\b/m.test(m[1]!);
-  const line = /^(?:applyTo|globs)[ \t]*:[ \t]*(.*)$/m.exec(m[1]!);
+  const fm = m[1] ?? "";
+  const forReview = !/^excludeAgent[ \t]*:.*\bcode-review\b/m.test(fm);
+  const line = /^(?:applyTo|globs)[ \t]*:[ \t]*(.*)$/m.exec(fm);
   // A YAML comment after the value isn't part of it: applyTo: "src/billing/**" # billing only.
   let value = (line?.[1] ?? "").replace(/(?:^|[ \t])#.*$/, "").trim();
   if (line && !value) {
     // A YAML list on the lines below the key: "applyTo:" then "  - src/billing/**".
-    const after = m[1]!.slice(line.index + line[0].length).split(/\r?\n/).slice(1);
+    const after = fm.slice(line.index + line[0].length).split(/\r?\n/).slice(1);
     const items: string[] = [];
     for (const l of after) {
       const item = /^[ \t]*-[ \t]*(.+)$/.exec(l);
@@ -78,6 +81,19 @@ export function expandBraces(pattern: string): string[] {
 }
 
 /**
+ * Takes out HTML comments, which are what a team turned off. A "<!--" or "-->" inside inline code or a
+ * code block is an example, not a comment, so it can't take out the rules between two of them.
+ */
+export function withoutComments(text: string): string {
+  const kept: string[] = [];
+  const hold = (code: string) => `\u0000${kept.push(code) - 1}\u0000`;
+  const shielded = text
+    .replace(/^([ \t]*)(`{3,}|~{3,})[^\n]*\n[\s\S]*?^[ \t]*\2[ \t]*$/gm, hold)
+    .replace(/`[^`\n]+`/g, hold);
+  return shielded.replace(/<!--[\s\S]*?-->/g, "").replace(/\u0000(\d+)\u0000/g, (_, i: string) => kept[Number(i)]!);
+}
+
+/**
  * Every top-level bullet, with the lines under it joined on: indented ones, and plain text that wraps on
  * without a blank line. Code blocks are examples, never rules.
  */
@@ -90,11 +106,15 @@ function bullets(body: string): string[] {
   let fence: string | null = null;
   // HTML comments are what a team turned off: GitHub doesn't show them, so they don't count.
   // Only a closed one: an unclosed "<!--", say inside inline code, mustn't wipe out the rest of the file.
-  const lines = body.replace(/<!--[\s\S]*?-->/g, "").split(/\r?\n/);
+  const lines = withoutComments(body).split(/\r?\n/);
   for (const line of lines) {
     const marker = /^[ \t]*(`{3,}|~{3,})/.exec(line)?.[1];
     if (fence) {
-      if (marker && marker[0] === fence[0] && marker.length >= fence.length) fence = null;
+      // After a code block, only indented text still belongs to the bullet above it.
+      if (marker && marker[0] === fence[0] && marker.length >= fence.length) {
+        fence = null;
+        gap = true;
+      }
       continue;
     }
     if (marker) {
@@ -139,7 +159,7 @@ export function parseRuleFile(path: string, text: string): Omit<TeamRule, "id">[
   if (path.startsWith(".github/instructions/")) {
     // As Copilot does: a file without applyTo is attached by hand, and excludeAgent can keep it out of review.
     if (!scoped || !forReview) return [];
-    const whole = body.replace(/<!--[\s\S]*?-->/g, "").trim();
+    const whole = withoutComments(body).trim();
     const cut = whole.length > MAX_FILE_RULE_CHARS;
     return whole ? [{ kind: "rule", text: cut ? `${whole.slice(0, MAX_FILE_RULE_CHARS)}\n(cut here: the file is longer)` : whole, scope: "repo", source: path, ...only }] : [];
   }
