@@ -632,7 +632,7 @@ Third-party code that can reach secrets or write access through a reference that
 - confidence: high only if you read every code path involved.
 - same_as: the id of the problem from an earlier review that this finding is, or null if there is none.
 
-People read every field but same_as. The ids in this prompt, the candidate ids C1, C2 and so on, rule ids like R12 or F1, decision ids like M12 and the ids of earlier problems, exist only here, so never write them in a finding or the summary. Name the problem instead, and name a rule or a decision by what it says, quoting a short part of it if that helps.
+People read every field but same_as. The ids in this prompt, the candidate ids C1, C2 and so on, rule ids like R12 or F1, decision ids like M12 and the ids of earlier problems, exist only here, so never write them in a finding's text or the summary. same_as still takes the earlier problem's id, as above. Name the problem instead, and name a rule or a decision by what it says, quoting a short part of it if that helps.
 
 A major bug must have recommendation fix. A hardening finding should almost always have recommendation leave.
 
