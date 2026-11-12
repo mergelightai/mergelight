@@ -58,7 +58,7 @@ Options
   -h, --help            Show this help
 
 Reviews run on your own logged-in Codex CLI, and Claude Code if you check with it.
-Nothing is sent to Mergelight.
+Your code and your AI login are never sent to Mergelight.
 `;
 
 function progressPrinter() {
