@@ -16,12 +16,12 @@ function GitHubMark({ className = 'size-4' }: { className?: string }) {
 
 const LINK = 'text-foreground underline decoration-foreground/30 underline-offset-4 hover:decoration-foreground';
 
-/** A page with no menu: the logo on top and one glass card in the middle. */
+/** A page with no menu: the logo on top and one card in the middle. */
 export function Centered({ children }: { children: ReactNode }) {
   return (
-    <div className="flex min-h-svh flex-col bg-panel text-ink md:wallpaper">
+    <div className="flex min-h-svh flex-col bg-panel text-ink">
       <header className="flex items-center px-6 py-5">
-        <a href="/" className="flex items-center gap-2.5 text-[15px] font-semibold tracking-[-0.01em] text-ink md:text-white">
+        <a href="/" className="flex items-center gap-2.5 text-[15px] font-semibold tracking-[-0.01em] text-ink">
           <img src="/logo.png" alt="" className="size-7 rounded-lg" /> Mergelight
         </a>
       </header>
@@ -40,8 +40,8 @@ export function Spinning({ children }: { children: ReactNode }) {
 
 export function SignIn({ failed, cancelled }: { failed: boolean; cancelled: boolean }) {
   return (
-    <div className="window-rim w-full max-w-[440px] rounded-[26px] p-[9px]">
-      <div className="grid justify-items-center rounded-[18px] bg-shell px-8 pb-8 pt-9 text-center hairline">
+    <div className="w-full max-w-[420px]">
+      <div className="grid justify-items-center rounded-[16px] bg-shell px-8 pb-8 pt-9 text-center hairline">
         <img src="/logo-animated.svg" alt="" width={72} height={72} className="size-[72px] rounded-[18px] shadow-[0_0_0_1px_rgb(255_255_255/0.08),0_14px_40px_-12px_rgb(0_0_0/0.8)]" />
         <h1 className="mt-5 text-[26px] font-semibold leading-tight tracking-[-0.02em] text-ink">Your reviews, in one place</h1>
         <p className="mt-2.5 max-w-[320px] text-[15px] leading-relaxed text-ink-3">See what Mergelight found across your repositories. You only see repositories GitHub shows you.</p>
@@ -51,7 +51,7 @@ export function SignIn({ failed, cancelled }: { failed: boolean; cancelled: bool
           <GitHubMark className="size-[18px]" /> Continue with GitHub
         </Button>
       </div>
-      <p className="flex items-start justify-center gap-2 px-6 pb-2 pt-3.5 text-center text-[13px] leading-relaxed text-white/75">
+      <p className="flex items-start justify-center gap-2 px-6 pb-2 pt-3.5 text-center text-[13px] leading-relaxed text-ink-4">
         <LockIcon className="mt-[3px] size-3.5 shrink-0" />
         <span>The dashboard holds numbers about each review, and the findings your team declined, with who declined each one and why. Never your code.</span>
       </p>

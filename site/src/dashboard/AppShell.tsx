@@ -210,11 +210,10 @@ export function AppShell({ user, orgs, org, onPickOrg, view, onView, onSignOut, 
   const here = { label: group.items.find((i) => i.id === view)?.label ?? '' };
   return (
     <TooltipProvider>
-      {/* On a wide screen the app is a window on a wall: a glass rim around a dark shell, as in the reference. */}
-      <div className="min-h-svh bg-panel md:wallpaper md:h-svh md:p-3.5">
-        <div className="md:window-rim md:h-full md:rounded-[30px] md:p-[9px]">
-          {/* The transform makes the menu's fixed position count from this shell, not from the screen. */}
-          <div className="relative md:h-full md:overflow-hidden md:rounded-[22px] md:bg-shell md:hairline md:[transform:translateZ(0)]">
+      {/* The app fills the screen: the grey shell holds the menu, and the content sits in a darker panel inside it. */}
+      <div className="min-h-svh bg-panel md:h-svh md:bg-shell">
+        <div>
+          <div className="relative md:h-svh">
             <SidebarProvider className="md:h-full md:min-h-0" defaultOpen={!document.cookie.split('; ').includes('sidebar_state=false')}>
               <Sidebar variant="inset" collapsible="icon" className="md:h-full">
                 <SidebarHeader className="px-2 pt-3">

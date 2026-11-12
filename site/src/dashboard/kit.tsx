@@ -79,7 +79,7 @@ export function Confirm({ label, ariaLabel, title, body, confirm, busyLabel, onC
           <p className="text-[14px] font-medium text-ink">{title}</p>
           <p className="text-[13px] leading-relaxed text-ink-3">{body}</p>
         </div>
-        <div className="-mx-4 -mb-4 flex justify-end gap-2 border-t border-white/[0.06] px-4 py-3">
+        <div className="-mx-3 -mb-3 flex justify-end gap-2 border-t border-white/[0.06] px-3 py-2.5">
           <Button variant="outline" size="sm" onClick={() => setOpen(false)} disabled={busy}>
             Cancel
           </Button>
@@ -148,10 +148,10 @@ export function FormDialog({
         {trigger}
       </Button>
       <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
-        <DialogContent className={cn('gap-0 rounded-[20px]! bg-transparent! p-0! ring-0! shadow-none!', wide ? 'sm:max-w-2xl' : 'sm:max-w-lg')} showCloseButton={false}>
-          <div className="menu-rim rounded-[20px] p-2">
+        <DialogContent className={cn('gap-0 rounded-[14px]! bg-transparent! p-0! ring-0! shadow-none!', wide ? 'sm:max-w-2xl' : 'sm:max-w-lg')} showCloseButton={false}>
+          <div className="rounded-[14px] shadow-[0_24px_60px_-18px_rgb(0_0_0/0.75)]">
           <form
-            className="flex max-h-[calc(100svh-3rem)] flex-col overflow-hidden rounded-[13px] bg-panel hairline"
+            className="flex max-h-[calc(100svh-3rem)] flex-col overflow-hidden rounded-[14px] bg-panel shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]"
             onSubmit={(e: FormEvent) => {
               e.preventDefault();
               if (ready && !busy) onSubmit();
