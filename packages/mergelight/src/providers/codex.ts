@@ -200,7 +200,7 @@ export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
         const event = JSON.parse(line) as {
           type?: string;
           item?: { type?: string; command?: string; exit_code?: number | null; aggregated_output?: string };
-          usage?: { input_tokens?: number; output_tokens?: number };
+          usage?: { input_tokens?: number; output_tokens?: number; cached_input_tokens?: number };
           message?: string;
           error?: { message?: string };
         };
@@ -221,6 +221,7 @@ export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
           usage = {
             input_tokens: event.usage.input_tokens ?? 0,
             output_tokens: event.usage.output_tokens ?? 0,
+            cached_input_tokens: event.usage.cached_input_tokens ?? 0,
           };
         }
       } catch {
@@ -265,6 +266,8 @@ export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
     }
     return {
       output: JSON.parse(scrubSecrets(raw)),
+      // Codex doesn't say which default model it used, and --ephemeral keeps it from saving a session
+      // file that would: only a model someone named is known.
       model: opts.model ?? configuredModel(config),
       commands,
       usage,

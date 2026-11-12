@@ -111,6 +111,8 @@ export interface Review {
     files_changed: number;
     additions: number;
     deletions: number;
+    /** Tokens every model call of the review used. input includes cached; older reviews don't have it. */
+    tokens?: { input: number; cached: number; output: number };
   };
   /** What the hunters reported and what the verifier threw out, for tuning. */
   trace: {

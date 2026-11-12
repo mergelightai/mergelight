@@ -109,6 +109,7 @@ export async function runClaude(opts: ModelOptions): Promise<ModelResult> {
     usage: {
       input_tokens: sum("inputTokens") + sum("cacheReadInputTokens") + sum("cacheCreationInputTokens"),
       output_tokens: sum("outputTokens"),
+      cached_input_tokens: sum("cacheReadInputTokens"),
     },
     cost_usd: parsed.total_cost_usd ?? null,
   };

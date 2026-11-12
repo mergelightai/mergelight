@@ -4,10 +4,10 @@ import { GitHub, type ApiOptions } from "./api.js";
 import { commentableLines, place } from "./diff-lines.js";
 import { answeredRemembered, closedBody, patchTouches, readClosed, REMEMBERED_MARKER, reopenedBody, resolvedByPeople, resolverReplies, threadAction, threadFinding, type Handled, type ReviewThread } from "./closed.js";
 import type { FailureNotice } from "./markdown.js";
-import { failedSummaryBody, FINDING_MARKER_RE, headline, inlineBody, isFailedSummary, isPendingSummary, LIGHT, pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "./markdown.js";
+import { failedSummaryBody, FINDING_MARKER_RE, headline, inlineBody, isFailedSummary, isPendingSummary, isReviewingSummary, LIGHT, pendingSummaryBody, SUMMARY_MARKER, summaryBody, type ReviewPlan } from "./markdown.js";
 import { askWriteAccess, MAX_NOTE, readMarks, trustedComment, writeAccess, type Mark, type PrComment } from "./handled.js";
 import { withoutHidden } from "../skills.js";
-import { decodeState, nextState, type ReviewState, type StateFinding } from "./state.js";
+import { decodeState, nextState, stateBlock, type ReviewState, type StateFinding } from "./state.js";
 import { newerVersion } from "../update.js";
 
 export { trustedComment } from "./handled.js";
@@ -244,22 +244,42 @@ export async function writeCheck(api: GitHub, id: number | null | undefined, hea
  * Shows a live "Reviewing" check right away, so people and agents can see work is
  * happening. A login that can't write checks hears about it once, from the last write.
  */
-export async function startCheck(api: GitHub, headSha: string): Promise<number | null> {
+export async function startCheck(api: GitHub, headSha: string, provider?: string): Promise<number | null> {
+  const tool = provider === "claude" ? "Claude" : provider === "codex" ? "Codex" : null;
   const run = await writeCheck(api, null, headSha, {
     status: "in_progress",
     started_at: new Date().toISOString(),
     output: {
       title: "Reviewing",
-      summary: "Mergelight is reviewing this pull request with Codex on your own plan. This usually takes 2 to 15 minutes.",
+      summary: `Mergelight is reviewing this pull request${tool ? ` with ${tool}` : ""} on your own plan. This usually takes 2 to 15 minutes.`,
     },
   });
   return run?.id ?? null;
 }
 
 /** Puts the summary comment on the PR before anything else, so it comes first. Later rounds edit it in place. */
-export async function startSummary(api: GitHub, number: number): Promise<PrComment | null> {
+export async function startSummary(api: GitHub, number: number, plan?: ReviewPlan): Promise<PrComment | null> {
   const { summary } = await readPrReviewState(api, number);
-  return summary ?? (await api.write<PrComment>("POST", `issues/${number}/comments`, { body: pendingSummaryBody() }));
+  // A "Reviewing" comment left by an earlier run, or by a reconnect, says this run's plan now, keeping its state.
+  if (summary && plan && isReviewingSummary(summary.body)) {
+    const state = stateBlock(summary.body);
+    const body = state ? `${pendingSummaryBody(plan)}\n${state}` : pendingSummaryBody(plan);
+    if (body !== summary.body) await api.write("PATCH", `issues/comments/${summary.id}`, { body }).catch(() => null);
+    return { ...summary, body };
+  }
+  return summary ?? (await api.write<PrComment>("POST", `issues/${number}/comments`, { body: pendingSummaryBody(plan) }));
+}
+
+/** Names the models in a "Reviewing" comment once they are known. A comment with a result is left alone. */
+export async function updatePendingSummary(api: GitHub, summary: PrComment | null, plan: ReviewPlan): Promise<void> {
+  if (!summary || !isReviewingSummary(summary.body)) return;
+  // Read it again: another run may have finished and written its result since this one began.
+  const now = await api.get<PrComment>(`issues/comments/${summary.id}`).catch(() => null);
+  if (!now || !isReviewingSummary(now.body)) return;
+  // A "Reviewing" comment can carry earlier rounds' state, after a reconnect: it must stay, or the next
+  // result starts again from round 1.
+  const state = stateBlock(now.body);
+  await api.write("PATCH", `issues/comments/${summary.id}`, { body: state ? `${pendingSummaryBody(plan)}\n${state}` : pendingSummaryBody(plan) });
 }
 
 /** A first review that couldn't run shouldn't say "Reviewing" forever, and an older failure shouldn't outlive a newer reason. Real results stay. */

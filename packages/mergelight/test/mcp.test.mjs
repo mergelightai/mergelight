@@ -9,8 +9,8 @@ import { fileURLToPath } from "node:url";
 import { nextStep, reviewStatus } from "../dist/mcp/findings.js";
 import { GitHub } from "../dist/publish/api.js";
 import { decodeMark, encodeMark, findingState, readMarks } from "../dist/publish/handled.js";
-import { SUMMARY_MARKER, summaryBody } from "../dist/publish/markdown.js";
-import { answerRemembered, APPROVAL_MARKER, APPROVALS_OFF, confirmReasons, previousFindings, publishReview } from "../dist/publish/publish.js";
+import { pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "../dist/publish/markdown.js";
+import { answerRemembered, APPROVAL_MARKER, APPROVALS_OFF, confirmReasons, previousFindings, publishReview, startSummary } from "../dist/publish/publish.js";
 import { decodeState, encodeState, nextState } from "../dist/publish/state.js";
 import { buildVerifierPrompt } from "../dist/prompt.js";
 
@@ -836,4 +836,23 @@ test("a candidate reason is kept only when the verifier dropped its finding beca
   assert.equal("tries" in kept[2].handled, false);
   assert.equal(kept[2].handled.note, "said", "what was said stays for this pull request");
   assert.equal(confirmReasons(undefined, []), undefined);
+});
+
+test("a Reviewing comment left by an earlier run says this run's plan, and keeps its state", async () => {
+  const state = encodeState(stateOf([finding()]));
+  const left = { id: 1, html_url: "https://x/1", created_at: "2020-01-01T00:00:00Z", body: `${pendingSummaryBody({ reviewer: { name: "codex", model: "gpt-6-luna" } })}\n${state}`, ...BOT };
+  const { env, writes } = useScenario({ issueComments: [left] });
+  await withFakeGh(env, () => startSummary(new GitHub("o", "r"), 7, { reviewer: { name: "claude", model: "opus" } }));
+  const edit = writes().find((w) => w.path === "issues/comments/1");
+  assert.match(edit.body, /Reviewing with Claude Opus\./);
+  assert.ok(edit.body.endsWith(state));
+  // A "Connect your AI" comment still waiting for someone is left alone.
+  const { connectBody } = await import("../dist/connect.js");
+  const waiting = useScenario({ issueComments: [{ ...left, body: `${connectBody({ url: "https://auth.openai.com/codex/device", code: "ABCD-1234" })}\n${state}` }] });
+  await withFakeGh(waiting.env, () => startSummary(new GitHub("o", "r"), 7, { reviewer: { name: "claude", model: "opus" } }));
+  assert.deepEqual(waiting.writes(), []);
+  // A comment with a result is left alone.
+  const done = useScenario({ issueComments: [summaryComment(stateOf([finding()]))] });
+  await withFakeGh(done.env, () => startSummary(new GitHub("o", "r"), 7, { reviewer: { name: "claude", model: "opus" } }));
+  assert.deepEqual(done.writes(), []);
 });
