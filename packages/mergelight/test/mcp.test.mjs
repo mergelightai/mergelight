@@ -9,8 +9,8 @@ import { fileURLToPath } from "node:url";
 import { nextStep, reviewStatus } from "../dist/mcp/findings.js";
 import { GitHub } from "../dist/publish/api.js";
 import { decodeMark, encodeMark, findingState, readMarks } from "../dist/publish/handled.js";
-import { SUMMARY_MARKER, summaryBody } from "../dist/publish/markdown.js";
-import { answerRemembered, confirmReasons, previousFindings, publishReview } from "../dist/publish/publish.js";
+import { pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "../dist/publish/markdown.js";
+import { answerRemembered, APPROVAL_MARKER, APPROVALS_OFF, confirmReasons, previousFindings, publishReview, startSummary } from "../dist/publish/publish.js";
 import { decodeState, encodeState, nextState } from "../dist/publish/state.js";
 import { buildVerifierPrompt } from "../dist/prompt.js";
 
@@ -81,7 +81,7 @@ if (x > -1) {
   const method = args[x + 1];
   const path = args[x + 2].replace("repos/o/r/", "");
   const body = JSON.parse(readFileSync(0, "utf8"));
-  log({ method, path, body: body.body });
+  log({ method, path, body: body.body, ...(body.message ? { message: body.message } : {}) });
   if (s.failReplies && path.endsWith("/replies")) fail("HTTP 404");
   out({ id: 900, html_url: "https://github.com/o/r/pull/7#posted", ...body });
   process.exit(0);
@@ -91,6 +91,7 @@ if (args.includes("--paginate")) {
   if (path === "issues/7/comments") out([s.issueComments || []]);
   else if (path === "pulls/7/comments") out([s.reviewComments || []]);
   else if (path === "pulls/7/files") out([[]]);
+  else if (path === "pulls/7/reviews") out([s.prReviews || []]);
   else fail("unexpected list " + path);
   process.exit(0);
 }
@@ -635,6 +636,29 @@ test("a review round reads marks: the verifier gets them, and the summary shows 
   });
 });
 
+test("a green review approves the pull request, unless the team turned approvals off", async () => {
+  const review = { pr: { owner: "o", repo: "r", number: 7, head_sha: PUSHED }, provider: { name: "codex", model: null }, light: "green", summary: "S", findings: [], stats: { duration_ms: 1 } };
+  // Mergelight approved an earlier commit of this pull request.
+  const prReviews = [{ id: 55, state: "APPROVED", commit_id: REVIEWED, body: `${APPROVAL_MARKER}\nfine`, user: { login: "mergelight-ai[bot]" } }];
+  const approvals = (writes) => writes().filter((w) => w.path.startsWith("pulls/7/reviews")).map((w) => [w.method, w.path, w.message ?? (w.body ?? "").split("\n").pop()]);
+
+  // On, as by default: the new commit is approved.
+  const on = useScenario({ issueComments: [summaryComment(stateOf([]))], prReviews, head: PUSHED });
+  await withFakeGh(on.env, () => publishReview(review));
+  assert.deepEqual(approvals(on.writes), [["POST", "pulls/7/reviews", "🟢 Mergelight found nothing that needs fixing in this commit."]]);
+
+  // Off: no approval, and the one Mergelight gave before is taken back, with the reason.
+  const off = useScenario({ issueComments: [summaryComment(stateOf([]))], prReviews, head: PUSHED });
+  await withFakeGh(off.env, () => publishReview(review, { approve: false }));
+  assert.deepEqual(approvals(off.writes), [["PUT", "pulls/7/reviews/55/dismissals", APPROVALS_OFF]]);
+  assert.match(APPROVALS_OFF, /auto-approve: false/);
+
+  // A person's approval is never touched, on or off.
+  const person = useScenario({ issueComments: [summaryComment(stateOf([]))], prReviews: [{ ...prReviews[0], user: { login: "teammate" } }], head: PUSHED });
+  await withFakeGh(person.env, () => publishReview(review, { approve: false }));
+  assert.deepEqual(approvals(person.writes), []);
+});
+
 test("review status and next step cover the cases an agent has to act on", () => {
   const check = (status, title, conclusion = null) => ({ status, conclusion, output: { title } });
   assert.equal(reviewStatus(undefined, false, false), "none");
@@ -812,4 +836,23 @@ test("a candidate reason is kept only when the verifier dropped its finding beca
   assert.equal("tries" in kept[2].handled, false);
   assert.equal(kept[2].handled.note, "said", "what was said stays for this pull request");
   assert.equal(confirmReasons(undefined, []), undefined);
+});
+
+test("a Reviewing comment left by an earlier run says this run's plan, and keeps its state", async () => {
+  const state = encodeState(stateOf([finding()]));
+  const left = { id: 1, html_url: "https://x/1", created_at: "2020-01-01T00:00:00Z", body: `${pendingSummaryBody({ reviewer: { name: "codex", model: "gpt-6-luna" } })}\n${state}`, ...BOT };
+  const { env, writes } = useScenario({ issueComments: [left] });
+  await withFakeGh(env, () => startSummary(new GitHub("o", "r"), 7, { reviewer: { name: "claude", model: "opus" } }));
+  const edit = writes().find((w) => w.path === "issues/comments/1");
+  assert.match(edit.body, /Reviewing with Claude Opus\./);
+  assert.ok(edit.body.endsWith(state));
+  // A "Connect your AI" comment still waiting for someone is left alone.
+  const { connectBody } = await import("../dist/connect.js");
+  const waiting = useScenario({ issueComments: [{ ...left, body: `${connectBody({ url: "https://auth.openai.com/codex/device", code: "ABCD-1234" })}\n${state}` }] });
+  await withFakeGh(waiting.env, () => startSummary(new GitHub("o", "r"), 7, { reviewer: { name: "claude", model: "opus" } }));
+  assert.deepEqual(waiting.writes(), []);
+  // A comment with a result is left alone.
+  const done = useScenario({ issueComments: [summaryComment(stateOf([finding()]))] });
+  await withFakeGh(done.env, () => startSummary(new GitHub("o", "r"), 7, { reviewer: { name: "claude", model: "opus" } }));
+  assert.deepEqual(done.writes(), []);
 });

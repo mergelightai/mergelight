@@ -68,6 +68,8 @@ updates:
       - dependency-name: mergelightai/mergelight
 ```
 
+**Approvals.** A 🟢 review approves the PR, like a reviewer would, when every one of your team's own checks passed. A later review that isn't 🟢 takes the approval back. Where a branch rule asks for one approval, a 🟢 PR can then be merged with no person approving it. Set `auto-approve: false` if a person must always approve. Mergelight then takes back its approval on each PR's next review, so dismiss its approval on PRs that are already open by hand.
+
 **Optional: let it hold merges.** Set `yellow-blocks: true` and require the **Mergelight** check in branch protection or a ruleset. 🔴 then fails until the code changes, and 🟡 waits for an approval. Without `yellow-blocks`, both end neutral, which GitHub counts as passing.
 
 ## Set it up by hand
@@ -100,6 +102,20 @@ gh secret set CODEX_AUTH_JSON --repo owner/repo < ~/.codex-ci/auth.json && rm -r
 
 They're separate files so a PR's merge box only shows the review, not skipped jobs.
 
+## Rules in your repository
+
+Write what every review should check in `.mergelight/rules.md`, or in more files in `.mergelight/rules/`. Each bullet is one rule. Front matter at the top limits a file to some paths, in the format GitHub Copilot uses:
+
+```markdown
+---
+applyTo: "src/billing/**,*.sql"
+---
+- Money is in whole cents, never floats.
+- Every refund checks the invoice status first.
+```
+
+Mergelight also checks each `.github/instructions/*.instructions.md` file as a rule, for the files its `applyTo` names. As in Copilot, a file without `applyTo` is left out, and so is one whose `excludeAgent` is `"code-review"`. Bullets inside code blocks or HTML comments are not rules. Rules are read from the base branch, so they count from the review after they are merged, and a pull request can't add or drop a rule for itself. They work next to the rules set on the dashboard, and the review log says which rule files it used. A rule from the repository can add to what the review reports or sharpen it, but it can't hide a major bug or rate one down: only a rule on the dashboard can. A review reads at most 40 rules from the repository.
+
 ## Inputs
 
 | Input | Default | What it does |
@@ -111,6 +127,7 @@ They're separate files so a PR's merge box only shows the review, not skipped jo
 | `model` | Codex default | Model to review with |
 | `effort` | `high` | Reasoning effort: `low`, `medium` or `high` |
 | `verify-with` | `codex` | Who checks the findings: `codex`, or `claude` on a runner with Claude Code logged in |
+| `auto-approve` | `true` | When a review is 🟢 and every one of your team's own checks passed, Mergelight approves the PR like a reviewer would, and takes the approval back when a later review isn't 🟢. `false` turns that off: it never approves, and takes back an approval it gave before on each PR's next review. For PRs that are already open, dismiss Mergelight's approval by hand |
 | `yellow-blocks` | `false` | Let the check hold merges: 🟡 waits for an approval and 🔴 fails until the code changes. Your team's own checks from the dashboard follow it too: on, one that failed, couldn't tell or couldn't run holds the merge, and off, it ends neutral. A check that was skipped, because none of its files changed, never holds a merge. For teams: GitHub doesn't let you approve your own PR |
 | `codex-version` | `0.166.0` | Codex CLI version |
 | `token-server` | Mergelight's | Where to get an app token. Empty means always post as `github-actions[bot]` |

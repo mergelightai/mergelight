@@ -301,20 +301,28 @@ async function signIn(request: Request, env: Env, fetchImpl: typeof fetch): Prom
     });
   }
   if (request.method !== "POST") return respond(405, { error: "method_not_allowed" }, cors);
-  if (!env.GITHUB_SETUP_APP_CLIENT_SECRET) return respond(503, { error: "sign_in_not_set_up" }, cors);
 
   let code: unknown;
+  let app: unknown;
   try {
-    ({ code } = (await request.json()) as { code?: unknown });
+    ({ code, app = "setup" } = (await request.json()) as { code?: unknown; app?: unknown });
   } catch {
     return respond(400, { error: "bad_request" }, cors);
   }
   if (typeof code !== "string" || !/^[\w-]{1,200}$/.test(code)) return respond(400, { error: "bad_request" }, cors);
+  // Which app the person signed in to: the setup page uses Mergelight Setup, the dashboard Mergelight AI.
+  // A code only works with the app it was made for, so this picks the client id and secret, nothing more.
+  const client =
+    app === "setup" ? { id: SETUP_CLIENT_ID, secret: env.GITHUB_SETUP_APP_CLIENT_SECRET }
+    : app === "review" ? { id: env.GITHUB_APP_CLIENT_ID, secret: env.GITHUB_APP_CLIENT_SECRET }
+    : null;
+  if (!client) return respond(400, { error: "bad_request" }, cors);
+  if (!client.id || !client.secret) return respond(503, { error: "sign_in_not_set_up" }, cors);
 
   const res = await fetchImpl("https://github.com/login/oauth/access_token", {
     method: "POST",
     headers: { accept: "application/json", "content-type": "application/json", "user-agent": "mergelight-token-server" },
-    body: JSON.stringify({ client_id: SETUP_CLIENT_ID, client_secret: env.GITHUB_SETUP_APP_CLIENT_SECRET, code }),
+    body: JSON.stringify({ client_id: client.id, client_secret: client.secret, code }),
   });
   if (!res.ok) return respond(502, { error: "github_error" }, cors);
   const body = (await res.json()) as { access_token?: string; expires_in?: number };

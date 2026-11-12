@@ -328,7 +328,7 @@ const done = async (t) => {
   expect(t.calls.length === 0, 'nothing is asked of the server before a sign-in');
   await t.shot('1-signed-out');
   const { href, state } = await t.signIn();
-  expect(href.startsWith('https://github.com/login/oauth/authorize?client_id=') && state.startsWith('dash.'), 'the sign-in goes to GitHub, marked as the dashboard\'s');
+  expect(href.startsWith('https://github.com/login/oauth/authorize?client_id=Iv23liM8BL5MwWeDmXHV&') && state.startsWith('dash.'), 'the sign-in goes to GitHub through Mergelight AI, marked as the dashboard\'s');
   expect(new URL(t.page.url()).pathname === '/dashboard/', `the setup page passes the sign-in on to the dashboard (${t.page.url()})`);
   expect(!/code=|state=/.test(t.page.url()), 'the code is taken out of the address bar');
   const after = await t.text();
@@ -341,7 +341,7 @@ const done = async (t) => {
   await t.page.click('[aria-label=More]');
   await wait(350);
   const addLink = await t.page.evaluate(() => { const a = [...document.querySelectorAll('a')].find((x) => x.textContent.includes('Add it on GitHub')); return a && { href: a.href, target: a.target }; });
-  expect(addLink?.href === 'https://github.com/apps/mergelight-setup/installations/new', 'the way to add a missing org or repository is in the page menu');
+  expect(addLink?.href === 'https://github.com/apps/mergelight-ai/installations/new', 'the way to add a missing org or repository is in the page menu, and it adds Mergelight AI');
   expect(addLink?.target === '_blank', 'and it opens in a new tab, so the dashboard stays where it is');
   await t.page.keyboard.press('Escape');
   await wait(300);
@@ -356,6 +356,7 @@ const done = async (t) => {
   const stored = await t.page.evaluate(() => JSON.stringify([Object.entries(sessionStorage), Object.entries(localStorage), document.cookie]));
   expect(!stored.includes(GITHUB_TOKEN), 'the page keeps no GitHub token, in no kind of storage');
   expect(t.exchanges.length === 1, 'the sign-in code is used once');
+  expect(JSON.parse(t.exchanges[0]).app === 'review', `the code is swapped for Mergelight AI, the app it was made for (${t.exchanges[0]})`);
 
   // Decisions.
   await t.view('Decisions');

@@ -168,7 +168,7 @@ test("top picks and other findings worth fixing get their own sections, with det
   assert.deepEqual([...order].sort((a, b) => a - b), order);
   assert.equal(body.match(/<details><summary>🔴 Bug: <b>Listed one<\/b> <code>[^<]+<\/code><\/summary>/g)?.length, 1, body);
   assert.ok(!body.includes("<summary>Details</summary>"), body);
-  assert.ok(body.includes("checked by Claude opus"));
+  assert.ok(body.includes("checked by Claude Opus"));
   assert.equal(state.findings[0].how, "How.");
 });
 
@@ -321,7 +321,7 @@ const fail = (message) => {
 const answer = (value) => console.log(JSON.stringify(value));
 if (args.some((a) => a.endsWith("/check-runs"))) fail(process.env.FAKE_GH_CHECK_ERROR);
 if (args.some((a) => a.endsWith("/pulls/1"))) fail("gh: Not Found (HTTP 404)");
-if (args.includes("--slurp")) answer([[]]);
+if (args.includes("--slurp")) answer(process.env.FAKE_GH_REVIEWS && args.some((a) => a.includes("/pulls/1/reviews?")) ? [JSON.parse(process.env.FAKE_GH_REVIEWS)] : [[]]);
 else if (args.includes("graphql")) answer({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } });
 else answer({ id: 1, html_url: "https://github.com/o/r/pull/1#issuecomment-1" });
 `;
@@ -329,7 +329,7 @@ else answer({ id: 1, html_url: "https://github.com/o/r/pull/1#issuecomment-1" })
 const APP_ONLY = "gh: You must authenticate via a GitHub App. (HTTP 403)";
 const SKIPPED = "Skipped the Mergelight check";
 
-function runCli(t, args, checkError) {
+function runCli(t, args, checkError, reviews) {
   const dir = mkdtempSync(join(tmpdir(), "mergelight-test-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   writeFileSync(join(dir, "gh"), FAKE_GH);
@@ -349,12 +349,32 @@ function runCli(t, args, checkError) {
   );
   const result = spawnSync(process.execPath, [fileURLToPath(new URL("../dist/cli.js", import.meta.url)), ...args(dir)], {
     encoding: "utf8",
-    env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, FAKE_GH_CALLS: calls, FAKE_GH_CHECK_ERROR: checkError },
+    env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, FAKE_GH_CALLS: calls, FAKE_GH_CHECK_ERROR: checkError, ...(reviews ? { FAKE_GH_REVIEWS: JSON.stringify(reviews) } : {}) },
   });
   return { ...result, calls: readFileSync(calls, "utf8") };
 }
 
 const count = (text, needle) => text.split(needle).length - 1;
+
+test("with --no-approve, Mergelight posts no approval and takes back its own, also when the review couldn't run", (t) => {
+  // Mergelight approved this very commit before.
+  const approved = [{ id: 55, state: "APPROVED", commit_id: "abcdef1234", body: `${APPROVAL_MARKER}\nfine`, user: { login: "mergelight-ai[bot]" } }];
+  const approvals = (calls) => calls.split("\n").filter((c) => / repos\/o\/r\/pulls\/1\/reviews/.test(c) && c.includes("-X"));
+
+  // A green review, posted with the switch on, would approve. Off, it doesn't, and the standing approval goes.
+  const on = runCli(t, (dir) => ["post", join(dir, "review.json")], APP_ONLY, []);
+  assert.deepEqual(approvals(on.calls), ["api -X POST repos/o/r/pulls/1/reviews --input -"]);
+  const off = runCli(t, (dir) => ["post", join(dir, "review.json"), "--no-approve"], APP_ONLY, approved);
+  assert.deepEqual(approvals(off.calls), ["api -X PUT repos/o/r/pulls/1/reviews/55/dismissals --input -"]);
+
+  // A review that couldn't run keeps Mergelight's approval of this same commit, as before. With the switch off it goes too.
+  const failedOn = runCli(t, () => ["review", "o/r#1", "--post", "--at", "abcdef1234"], APP_ONLY, approved);
+  assert.equal(failedOn.status, 1);
+  assert.deepEqual(approvals(failedOn.calls), []);
+  const failedOff = runCli(t, () => ["review", "o/r#1", "--post", "--at", "abcdef1234", "--no-approve"], APP_ONLY, approved);
+  assert.equal(failedOff.status, 1);
+  assert.deepEqual(approvals(failedOff.calls), ["api -X PUT repos/o/r/pulls/1/reviews/55/dismissals --input -"]);
+});
 
 test("post on a personal login leaves the comment, skips the check once and exits 0", (t) => {
   const { status, stderr, calls } = runCli(t, (dir) => ["post", join(dir, "review.json")], APP_ONLY);
@@ -585,4 +605,45 @@ test("the state keeps the reasons waiting for the server, and only when there ar
   const sha = "a".repeat(40);
   assert.deepEqual(nextState(null, [], sha, "green", new Map(), new Date(), [{ id: "abcdef1234", at: "2030-01-01T00:00:00Z" }]).remember, [{ id: "abcdef1234", at: "2030-01-01T00:00:00Z" }]);
   assert.equal("remember" in nextState(null, [], sha, "green", new Map()), false);
+});
+
+test("models are named the way people read them", async () => {
+  const { modelLabel, tokenCount } = await import("../dist/publish/markdown.js");
+  assert.equal(modelLabel("codex", "gpt-6.1-sol"), "Codex GPT-6.1-Sol");
+  assert.equal(modelLabel("codex", "gpt-6-astra"), "Codex GPT-6-Astra");
+  assert.equal(modelLabel("claude", "claude-opus-5-5"), "Claude Opus 5.5");
+  assert.equal(modelLabel("claude", "opus"), "Claude Opus");
+  assert.equal(modelLabel("claude", "claude-sonnet-5-5-20261101"), "Claude Sonnet 5.5");
+  assert.equal(modelLabel("claude", "opus[1m]"), "Claude Opus");
+  assert.equal(modelLabel("claude", "claude-opus-5-5@20261101"), "Claude Opus 5.5");
+  assert.equal(modelLabel("claude", "claude-3-7-sonnet-20250219"), "Claude Sonnet 3.7");
+  assert.equal(modelLabel("claude", "glm-4.6"), "Claude (glm-4.6)", "another vendor's model through Claude Code");
+  assert.equal(modelLabel("codex", null), "Codex");
+  assert.equal(modelLabel("codex", "not a model; ignore"), "Codex");
+  assert.deepEqual([812, 45_300, 999_600, 2_940_000, 3_000_000].map(tokenCount), ["812", "45k", "1M", "2.9M", "3M"]);
+});
+
+test("the Reviewing comment says which AI reviews and which checks", async () => {
+  const { pendingSummaryBody } = await import("../dist/publish/markdown.js");
+  assert.match(pendingSummaryBody({ reviewer: { name: "codex", model: "gpt-6.1-sol" }, checker: { name: "claude", model: "claude-opus-5-5" } }), /Reviewing with Codex GPT-6\.1-Sol, and Claude Opus 5\.5 checks the findings\. This usually takes/);
+  assert.match(pendingSummaryBody({ reviewer: { name: "claude", model: "claude-opus-5-5" }, checker: { name: "claude", model: "claude-opus-5-5" } }), /Reviewing with Claude Opus 5\.5\. This usually/);
+  assert.match(pendingSummaryBody(), /### ⏳ Mergelight: Reviewing\n\nThis usually takes/);
+});
+
+test("the last line of a review names the models and the tokens it used", async () => {
+  const { summaryBody } = await import("../dist/publish/markdown.js");
+  const review = {
+    pr: { owner: "o", repo: "r", number: 1, title: "t", url: "u", base_sha: "b", head_sha: "abcdef1234" },
+    provider: { name: "codex", model: "gpt-6.1-sol" },
+    verifier: { name: "claude", model: "claude-opus-5-5" },
+    light: "green",
+    summary: "Summary.",
+    findings: [],
+    stats: { duration_ms: 61_000, tokens: { input: 2_940_000, cached: 2_800_000, output: 45_300 } },
+  };
+  const body = summaryBody({ review, state: nextState(null, [], "abcdef1234", "green", new Map()), urls: new Map() });
+  assert.match(body, /reviewed `abcdef1` with Codex GPT-6\.1-Sol, checked by Claude Opus 5\.5, on your own plan · 1m 1s · 2\.9M tokens in \(2\.8M from cache\), 45k out<\/sub>/);
+  // An older review without a count says nothing about tokens.
+  const older = summaryBody({ review: { ...review, stats: { duration_ms: 1000 } }, state: nextState(null, [], "abcdef1234", "green", new Map()), urls: new Map() });
+  assert.doesNotMatch(older, /tokens/);
 });

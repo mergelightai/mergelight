@@ -7,8 +7,8 @@ import { declinesOf, fetchContext, MAX_REASON, reportReview } from "./cloud.js";
 import { GitHub } from "./publish/api.js";
 import { writeAccess } from "./publish/handled.js";
 import { publishTeamChecks } from "./publish/team-checks.js";
-import { answerRemembered, confirmReasons, approveCheck, checkLimitTitle, checkLoginTitle, failCheck, failSummary, previousFindings, publishReview, startCheck, startSummary, syncApproval, UNREVIEWED } from "./publish/publish.js";
-import { LimitError, LoginError, loginFailureMessage } from "./providers/codex.js";
+import { answerRemembered, confirmReasons, approveCheck, checkLimitTitle, checkLoginTitle, failCheck, failSummary, previousFindings, publishReview, startCheck, startSummary, syncApproval, UNREVIEWED, APPROVALS_OFF, updatePendingSummary } from "./publish/publish.js";
+import { configuredModel, LimitError, LoginError, loginFailureMessage } from "./providers/codex.js";
 import { limitNotice, loginNotice } from "./publish/markdown.js";
 import { renderRejected, renderTerminal } from "./render.js";
 import { reviewPullRequest } from "./review.js";
@@ -37,6 +37,7 @@ Options
                         (the check needs a GitHub App, a personal gh login skips it)
   --dry-run             With --post, post or approve: print what would be posted, change nothing
   --yellow-blocks       With --post or post: a "needs a human" check waits for an approval and a "blocked" one fails
+  --no-approve          With --post or post: never approve the pull request, and take back an approval Mergelight gave
   --json                Print the review as JSON
   --out <file>          Also write the JSON review to a file
   --provider <name>     Who hunts for problems: codex or claude (default: codex)
@@ -98,6 +99,7 @@ async function main(): Promise<number> {
       post: { type: "boolean" },
       "dry-run": { type: "boolean" },
       "yellow-blocks": { type: "boolean" },
+      "no-approve": { type: "boolean" },
       json: { type: "boolean" },
       out: { type: "string" },
       model: { type: "string" },
@@ -178,7 +180,7 @@ async function main(): Promise<number> {
 
   if (command === "post") {
     const review = JSON.parse(readFileSync(target, "utf8")) as Review;
-    const result = await publishReview(review, { dryRun, log, yellowBlocks: values["yellow-blocks"] });
+    const result = await publishReview(review, { dryRun, log, yellowBlocks: values["yellow-blocks"], approve: !values["no-approve"] });
     log(`Posted: ${result.inline} inline, ${result.outside} in the summary only, ${result.resolved} resolved. ${result.summaryUrl ?? ""}`);
     return 0;
   }
@@ -213,11 +215,20 @@ async function main(): Promise<number> {
   // review
   const api = new GitHub(ref.owner, ref.repo, { dryRun, log });
   let checkRunId: number | null = null;
+  let summaryComment: Awaited<ReturnType<typeof startSummary>> = null;
+  /** The edit that names the models, so a result or a failure notice is always written after it. */
+  let naming: Promise<void> = Promise.resolve();
   let headSha = values.at ?? null;
   if (values.post) {
     headSha ??= (await fetchPullRequest(ref)).headSha;
-    checkRunId = await startCheck(api, headSha);
-    await startSummary(api, ref.number).catch((e) => log(`Couldn't post the summary yet: ${(e as Error).message}`));
+    checkRunId = await startCheck(api, headSha, provider ?? "codex");
+    // Says which AI reviews from the start. The models' exact names follow once the first reviewer answers.
+    // Without --provider the review runs on Codex, as reviewPullRequest decides.
+    const firstGuess = values.model ?? (provider === "claude" ? "opus" : configuredModel());
+    summaryComment = await startSummary(api, ref.number, { reviewer: { name: provider ?? "codex", model: firstGuess ?? null } }).catch((e) => {
+      log(`Couldn't post the summary yet: ${(e as Error).message}`);
+      return null;
+    });
   }
 
   // Teams that use the dashboard: ask the server first, so nothing is sent for anyone else.
@@ -242,6 +253,11 @@ async function main(): Promise<number> {
       writtenSkills: cloud.writtenSkills,
       checks: cloud.checks,
       onTeamChecks: (results) => (answered = results),
+      onModels: (models) => {
+        naming = updatePendingSummary(api, summaryComment, models).catch((e) => {
+          log(`Couldn't name the models yet: ${(e as Error).message}`);
+        });
+      },
       // The commit the check and the earlier findings were read for, so a push in between doesn't mix two.
       at: values.at ?? headSha ?? undefined,
       provider,
@@ -265,7 +281,8 @@ async function main(): Promise<number> {
       // Reasons given in threads that this review sends to keep: the state holds them until the server confirms.
       // Also when the server couldn't be asked this time, so a waiting reason isn't dropped from the state.
       const remember = cloud.connected || cloud.failed ? (previous ?? []).filter((p) => p.handled?.from === "reply" && p.handled.remember && p.handled.at).map((p) => ({ id: p.id, at: p.handled!.at!, tries: (p.handled!.tries ?? 0) + (cloud.connected ? 1 : 0) })) : [];
-      const result = await publishReview(review, { dryRun, log, checkRunId, yellowBlocks: values["yellow-blocks"], teamUnread: cloud.failed === true, startedAt, remember });
+      await naming;
+      const result = await publishReview(review, { dryRun, log, checkRunId, yellowBlocks: values["yellow-blocks"], approve: !values["no-approve"], teamUnread: cloud.failed === true, startedAt, remember });
       log(`Posted: ${result.inline} inline, ${result.outside} in the summary only, ${result.resolved} resolved. ${result.summaryUrl ?? ""}`);
       if (review.team_checks?.length) {
         checksPosted = true;
@@ -301,9 +318,11 @@ async function main(): Promise<number> {
       const title = limit ? checkLimitTitle(limit.plan) : login ? checkLoginTitle(login.plan) : undefined;
       const notice = limit ? limitNotice(limit.plan, limit.resets) : login ? loginNotice(login.plan, message) : undefined;
       await failCheck(api, checkRunId, headSha, message, log, title).catch((e) => log(`Couldn't update the check: ${(e as Error).message}`));
+      await naming;
       await failSummary(api, ref.number, notice).catch((e) => log(`Couldn't update the summary: ${(e as Error).message}`));
       // The newest commit wasn't reviewed. An approval Mergelight gave to an earlier commit must not count for this one.
-      await syncApproval(api, ref.number, "yellow", headSha, log, { why: UNREVIEWED, otherCommitsOnly: true });
+      // With approvals turned off, none of Mergelight's approvals stands, this commit's included.
+      await syncApproval(api, ref.number, "yellow", headSha, log, values["no-approve"] ? { why: APPROVALS_OFF } : { why: UNREVIEWED, otherCommitsOnly: true });
       // Each of the team's checks still gets an answer on GitHub, so a required one says why it holds the merge:
       // the answer it already has, or that it wasn't asked.
       const unasked = cloud.checks.map((c) => ({ id: c.id, name: c.name, text: c.text, outcome: "error" as const, summary: "The review couldn't run, so this check wasn't asked.", problems: [] }));

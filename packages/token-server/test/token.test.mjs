@@ -315,6 +315,34 @@ test("sign-in swaps a code for the person's token, and only tells the setup page
   assert.deepEqual(JSON.parse(calls[0].init.body), { client_id: "Iv23liSVH2xajWoG53R0", client_secret: "client-secret", code: "abc123" });
 });
 
+test("the dashboard signs in to Mergelight AI, with that app's own client id and secret", async () => {
+  const reviewEnv = { ...signInEnv(), GITHUB_APP_CLIENT_SECRET: "review-secret" };
+  const { calls, fetchImpl } = fakeSignIn(json(200, { access_token: "ghu_person", expires_in: 28800 }));
+  const res = await handle(signInRequest({ code: "abc123", app: "review" }), reviewEnv, fetchImpl, NOW);
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { token: "ghu_person", expires_in: 28800 });
+  assert.deepEqual(JSON.parse(calls[0].init.body), { client_id: reviewEnv.GITHUB_APP_CLIENT_ID, client_secret: "review-secret", code: "abc123" });
+  // The setup page is unchanged: no app, or "setup", is Mergelight Setup.
+  const setup = fakeSignIn(json(200, { access_token: "ghu_person" }));
+  assert.equal((await handle(signInRequest({ code: "abc", app: "setup" }), reviewEnv, setup.fetchImpl, NOW)).status, 200);
+  assert.equal(JSON.parse(setup.calls[0].init.body).client_id, "Iv23liSVH2xajWoG53R0");
+});
+
+test("a sign-in to an app this server has no secret for is off, and an unknown app is refused", async () => {
+  // Without Mergelight AI's secret, the dashboard's sign-in is off and the setup page's still works.
+  const off = fakeSignIn(json(200, { access_token: "x" }));
+  const res = await handle(signInRequest({ code: "abc", app: "review" }), signInEnv(), off.fetchImpl, NOW);
+  assert.equal(res.status, 503);
+  assert.deepEqual(await res.json(), { error: "sign_in_not_set_up" });
+  assert.equal(off.calls.length, 0);
+  assert.equal((await handle(signInRequest({ code: "abc" }), signInEnv(), off.fetchImpl, NOW)).status, 200);
+  for (const app of ["other", "", 7, null, ["review"]]) {
+    const { calls, fetchImpl } = fakeSignIn(json(200, { access_token: "x" }));
+    assert.equal((await handle(signInRequest({ code: "abc", app }), { ...signInEnv(), GITHUB_APP_CLIENT_SECRET: "s" }, fetchImpl, NOW)).status, 400, JSON.stringify(app));
+    assert.equal(calls.length, 0);
+  }
+});
+
 test("sign-in refuses other sites, and requests with no origin", async () => {
   for (const origin of ["https://evil.example", "https://mergelight.dev.evil.example", null]) {
     const { calls, fetchImpl } = fakeSignIn(json(200, { access_token: "x" }));

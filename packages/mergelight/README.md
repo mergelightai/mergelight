@@ -62,6 +62,7 @@ Other ways to name the pull request: `owner/repo#123`, or just `123` inside a cl
 | `--keep` | Keep the temporary checkout |
 | `--post` | Post the review to the PR: inline findings, one summary comment and a **Mergelight** check. GitHub only lets Apps write checks, so a personal `gh` login gets the comments and no check. The [GitHub Action](https://github.com/mergelightai/mergelight/blob/main/docs/github-action.md) gets all three |
 | `--dry-run` | With `--post`, `post` or `approve`: print what would be posted and change nothing |
+| `--no-approve` | With `--post` or `post`: never approve the PR, and take back an approval Mergelight gave. Without it, a 🟢 review approves |
 | `--yellow-blocks` | With `--post` or `post`: a 🟡 check waits for an approval and a 🔴 one fails, instead of both being neutral |
 
 Two more commands, used by the GitHub Action:

@@ -178,7 +178,10 @@ await scenario('started-on-github', {}, async ({ page, world, text, sawButton, s
   expect(world.authorizes === 1, 'signs in by itself in a new tab with nothing stored');
   expect(onList(await text(), 'api'), 'lands on the list');
   expect(!(await sawButton()), 'never showed the sign-in button');
-  expect(!world.urls.some((u) => u.includes('999') && !u.includes('installation_id=999')), 'never uses the id from the address, which anyone can make up');
+  // 999 as a whole part of an address, like /installations/999 or id=999. Not inside a random sign-in
+  // state or a timestamp, which can hold those digits by chance and made this check fail now and then.
+  const usesId = (u) => /(^|[/=])999($|[/&?#])/.test(u.replace('installation_id=999', ''));
+  expect(!world.urls.some(usesId), 'never uses the id from the address, which anyone can make up');
 });
 
 // With "Request user authorization during installation" on, someone new comes back with a code and no state.

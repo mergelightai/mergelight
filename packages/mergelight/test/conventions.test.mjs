@@ -42,7 +42,7 @@ test("instruction files are read from the base branch, never from the pull reque
   git("add", "-A");
   git("commit", "-q", "-m", "more");
   const more = await conventionsFor(dir, "main", ["packages/api/src/money.ts"]);
-  assert.deepEqual(more.map((c) => c.path), ["AGENTS.md", ".github/copilot-instructions.md", "packages/api/AGENTS.md", ".github/instructions/tests.instructions.md"], "the link to AGENTS.md goes in once, and a link out of the repository not at all");
+  assert.deepEqual(more.map((c) => c.path), ["AGENTS.md", ".github/copilot-instructions.md", "packages/api/AGENTS.md"], "the link to AGENTS.md goes in once, a link out of the repository not at all, and .github/instructions files are rules now");
   assert.equal(more[2].text, "API money is in cents.");
   // A base that can't be read gives none, and doesn't stop the review.
   assert.deepEqual(await conventionsFor(dir, "no-such-branch"), []);
@@ -72,16 +72,19 @@ test("a team's own check doesn't get the conventions: there the instruction file
 test("which instruction files apply to the changed files", () => {
   assert.deepEqual(conventionPaths([".github/CONTRIBUTING.md", "docs/CONTRIBUTING.md", "src/CONTRIBUTING.md"], []), [".github/CONTRIBUTING.md", "docs/CONTRIBUTING.md"]);
   const all = ["AGENTS.md", "README.md", "a/AGENTS.md", "a/b/CLAUDE.md", "a/b/c/AGENTS.md", "z/AGENTS.md", ".github/instructions/x.instructions.md", ".github/instructions/notes.md"];
-  assert.deepEqual(conventionPaths(all, ["a/b/file.ts"]), ["AGENTS.md", "a/AGENTS.md", "a/b/CLAUDE.md", ".github/instructions/x.instructions.md"]);
-  assert.deepEqual(conventionPaths(all, []), ["AGENTS.md", ".github/instructions/x.instructions.md"]);
+  assert.deepEqual(conventionPaths(all, ["a/b/file.ts"]), ["AGENTS.md", "a/AGENTS.md", "a/b/CLAUDE.md"]);
+  assert.deepEqual(conventionPaths(all, []), ["AGENTS.md"]);
 });
 
 test("all instruction files together stay under the total limit", async () => {
   const dir = mkdtempSync(join(tmpdir(), "mergelight-conventions-"));
   const git = (...args) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t.test", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
   git("init", "-q", "-b", "main");
-  mkdirSync(join(dir, ".github/instructions"), { recursive: true });
-  for (let i = 0; i < 6; i++) writeFileSync(join(dir, `.github/instructions/${i}.instructions.md`), String(i).repeat(MAX_CONVENTION_CHARS));
+  const roots = ["AGENTS.md", "CLAUDE.md", "CONTRIBUTING.md", ".github/CONTRIBUTING.md", "docs/CONTRIBUTING.md", ".github/copilot-instructions.md"];
+  roots.forEach((path, i) => {
+    mkdirSync(join(dir, path, ".."), { recursive: true });
+    writeFileSync(join(dir, path), String(i).repeat(MAX_CONVENTION_CHARS));
+  });
   git("add", "-A");
   git("commit", "-q", "-m", "base");
   const conventions = await conventionsFor(dir, "main");

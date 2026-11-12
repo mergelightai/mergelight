@@ -3,7 +3,8 @@ import { homedir, tmpdir } from "node:os";
 import { join, posix } from "node:path";
 import { run, runOk } from "./run.js";
 import { importSkills, SKILL_GIT_TIMEOUT_MS, SKILL_IMPORT_TIMEOUT_MS, writeSkills, type TeamSkill, type WrittenSkill } from "./skills.js";
-import type { Convention } from "./prompt.js";
+import type { Convention, TeamRule } from "./prompt.js";
+import { parseRuleFile, repoRules, RULE_FILE } from "./repo-rules.js";
 import type { PullRequest } from "./types.js";
 
 /** Lockfiles and generated files are left out of the diff the model sees. */
@@ -115,8 +116,9 @@ export const MAX_CONVENTION_FILES = 12;
 /** A file larger than this isn't read at all. */
 const MAX_CONVENTION_BYTES = 256_000;
 
-/** Which instruction files apply: the root ones, AGENTS.md or CLAUDE.md in a folder above a changed file, and .github/instructions. */
+/** Which instruction files apply: the root ones, and AGENTS.md or CLAUDE.md in a folder above a changed file. */
 export function conventionPaths(all: string[], changedPaths: string[]): string[] {
+  // .github/instructions files are rules now (repo-rules.ts), not background.
   const folders = new Set<string>();
   for (const changed of changedPaths) {
     const parts = changed.split("/").slice(0, -1);
@@ -124,7 +126,6 @@ export function conventionPaths(all: string[], changedPaths: string[]): string[]
   }
   const present = new Set(all);
   const root = CONVENTION_FILES.filter((p) => present.has(p));
-  const github = all.filter((p) => p.startsWith(".github/instructions/") && p.endsWith(".instructions.md")).sort();
   const nested = all
     .filter((p) => {
       const at = p.lastIndexOf("/");
@@ -132,8 +133,7 @@ export function conventionPaths(all: string[], changedPaths: string[]): string[]
     })
     // Closest to the root first: a folder's file comes before the ones in its subfolders.
     .sort((a, b) => a.split("/").length - b.split("/").length || a.localeCompare(b));
-  // The rules closest to the changed code come before .github/instructions, so they aren't the ones crowded out.
-  return [...root, ...nested, ...github];
+  return [...root, ...nested];
 }
 
 /**
@@ -143,13 +143,25 @@ export function conventionPaths(all: string[], changedPaths: string[]): string[]
  * read in time is left out: it never stops a review.
  */
 export async function conventionsFor(mirror: string, base: string, changedPaths: string[] = []): Promise<Convention[]> {
+  return (await teamFilesFor(mirror, base, changedPaths)).conventions;
+}
+
+/** How many rule files are read at most. */
+const MAX_RULE_FILES = 100;
+
+/**
+ * The team's instruction files and rule files, as the base branch has them, from one listing of it.
+ * Conventions are background for the reviewers; rules are what they check (repo-rules.ts).
+ */
+export async function teamFilesFor(mirror: string, base: string, changedPaths: string[] = []): Promise<{ conventions: Convention[]; rules: TeamRule[]; unreadRules: string[]; droppedRules: number }> {
+  const none = { conventions: [], rules: [], unreadRules: [], droppedRules: 0 };
   const git = (args: string[]) =>
     run("git", ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential", "-C", mirror, ...args], {
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
       timeoutMs: SKILL_GIT_TIMEOUT_MS,
     }).catch(() => null);
   const listed = await git(["ls-tree", "-r", "-z", "--full-tree", base]);
-  if (listed?.code !== 0) return [];
+  if (listed?.code !== 0) return none;
   const tree = new Map<string, { mode: string; sha: string }>();
   for (const entry of listed.stdout.split("\0")) {
     const m = /^(\d{6}) blob ([0-9a-f]{40,64})\t([\s\S]+)$/.exec(entry);
@@ -174,7 +186,13 @@ export async function conventionsFor(mirror: string, base: string, changedPaths:
     const text = (await blob(file.sha))?.trim();
     return text ? { path, sha: file.sha, text } : null;
   };
-  const found = await Promise.all(conventionPaths([...tree.keys()], changedPaths).slice(0, MAX_CONVENTION_FILES * 2).map(read));
+  const allRulePaths = [...tree.keys()].filter((p) => RULE_FILE.test(p)).sort((a, b) => Number(!a.startsWith(".mergelight/")) - Number(!b.startsWith(".mergelight/")) || a.localeCompare(b));
+  const rulePaths = allRulePaths.slice(0, MAX_RULE_FILES);
+  // Both kinds at once: one slow read mustn't leave the other no time.
+  const [found, ruleFiles] = await Promise.all([
+    Promise.all(conventionPaths([...tree.keys()], changedPaths).slice(0, MAX_CONVENTION_FILES * 2).map(read)),
+    Promise.all(rulePaths.map(read)),
+  ]);
   const conventions: Convention[] = [];
   const seen = new Set<string>();
   let total = 0;
@@ -187,7 +205,16 @@ export async function conventionsFor(mirror: string, base: string, changedPaths:
     conventions.push({ path: f.path, text: f.text.slice(0, room), truncated: f.text.length > room });
     total += Math.min(f.text.length, room);
   }
-  return conventions;
+  // A rule file and a link to it are one file: its rules count once.
+  const seenRules = new Set<string>();
+  const readRules = ruleFiles.filter((f): f is { path: string; sha: string; text: string } => f !== null && !seenRules.has(f.sha) && Boolean(seenRules.add(f.sha)));
+  const stats = { dropped: 0 };
+  const rules = repoRules(readRules, changedPaths.length ? changedPaths : undefined, stats);
+  // A rule file that couldn't be read is named, never dropped without a word.
+  // Read but with no rules in it (a Copilot file without applyTo, say), or past the limit of files: named too.
+  const noRules = readRules.filter((f) => parseRuleFile(f.path, f.text).length === 0).map((f) => f.path);
+  const unreadRules = [...rulePaths.filter((_, i) => ruleFiles[i] === null), ...noRules, ...allRulePaths.slice(MAX_RULE_FILES)];
+  return { conventions, rules, unreadRules, droppedRules: stats.dropped };
 }
 
 /** The answer, or the fallback once the time is up, for work that must never hold up a review. */
@@ -256,6 +283,14 @@ export interface Workspace {
   writtenSkills: TeamSkill[];
   /** AGENTS.md and the other instruction files, from the base branch. */
   conventions: Convention[];
+  /** The rules written in the repository's rule files, from the base branch. */
+  rules: TeamRule[];
+  /** Rule files on the base branch that gave no rules: empty, too large, a link out, a Copilot file without applyTo or kept out of review, or past the limit of files. */
+  unreadRules: string[];
+  /** Rules for the changed files left out because the repository has more than the limits allow. */
+  droppedRules: number;
+  /** The instruction and rule files couldn't be read in time, so none are used. */
+  teamFilesLate: boolean;
   cleanup: () => Promise<void>;
 }
 
@@ -339,7 +374,7 @@ export async function prepareWorkspace(pr: PullRequest, at?: string, skillFolder
     } catch {
       written = [];
     }
-    const conventions = await withDeadline(conventionsFor(mirror, teamBase, touchedPaths), SKILL_IMPORT_TIMEOUT_MS + 2 * SKILL_GIT_TIMEOUT_MS, []);
+    const { conventions, rules: repoRuleList, unreadRules, droppedRules, timedOut } = await withDeadline<Awaited<ReturnType<typeof teamFilesFor>> & { timedOut?: boolean }>(teamFilesFor(mirror, teamBase, touchedPaths), SKILL_IMPORT_TIMEOUT_MS + 2 * SKILL_GIT_TIMEOUT_MS, { conventions: [], rules: [], unreadRules: [], droppedRules: 0, timedOut: true });
 
     return {
       dir,
@@ -353,6 +388,10 @@ export async function prepareWorkspace(pr: PullRequest, at?: string, skillFolder
       skills,
       writtenSkills: written,
       conventions,
+      rules: repoRuleList,
+      unreadRules,
+      droppedRules,
+      teamFilesLate: timedOut === true,
       cleanup: async () => {
         await run("git", ["-C", mirror, "worktree", "remove", "--force", dir]);
         rmSync(dir, { recursive: true, force: true });

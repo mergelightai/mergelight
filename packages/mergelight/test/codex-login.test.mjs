@@ -187,3 +187,4 @@ test("Codex never reads AGENTS.md from the checkout unless a run asks for it", a
   assert.match(plain, /^project_doc_max_bytes=0$/m);
   assert.doesNotMatch(allowed, /project_doc_max_bytes/);
 });
+

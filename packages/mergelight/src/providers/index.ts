@@ -29,7 +29,8 @@ export interface ModelResult {
   output: unknown;
   model: string | null;
   commands: number;
-  usage: { input_tokens: number; output_tokens: number } | null;
+  /** input_tokens counts every token read, cached ones included; cached_input_tokens is the part read from cache. */
+  usage: { input_tokens: number; output_tokens: number; cached_input_tokens?: number } | null;
   /** List-price cost the CLI reports, if it does. On a subscription nothing is billed per run. */
   cost_usd?: number | null;
 }

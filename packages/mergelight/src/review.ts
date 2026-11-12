@@ -19,7 +19,8 @@ import {
   usedMemories,
 } from "./prompt.js";
 import { LimitError, LoginError } from "./providers/codex.js";
-import { claudeAvailable, runModel, TOOLING, type ProviderName } from "./providers/index.js";
+import { MAX_REPO_RULES } from "./repo-rules.js";
+import { claudeAvailable, runModel as runOneModel, TOOLING, type ModelOptions, type ModelResult, type ProviderName } from "./providers/index.js";
 import { candidateSchema, checkSchema, reviewSchema, reviewSchemaWithDecisions } from "./schema.js";
 import { CHECK_TIMEOUT_MS, startTeamChecks, type ChecksRun } from "./checks.js";
 import { run } from "./run.js";
@@ -62,6 +63,8 @@ export interface ReviewOptions {
   keep?: boolean;
   /** Progress messages. transient ones (the command the agent is running) are only worth showing live. */
   onProgress?: (message: string, transient?: boolean) => void;
+  /** Called once the models are known: after the first reviewer answers, and before the checker starts. */
+  onModels?: (models: { reviewer: { name: ProviderName; model: string | null }; checker: { name: ProviderName; model: string | null } }) => void;
 }
 
 /**
@@ -162,7 +165,25 @@ export interface VerifyOptions {
   onCommand?: (command: string) => void;
 }
 
+/** Every token a review's model calls used: hunters, sweeps, the team's checks and the verifier. */
+export interface TokenTally {
+  input: number;
+  cached: number;
+  output: number;
+}
+
+function counting(tally: TokenTally) {
+  return (provider: ProviderName, opts: ModelOptions): Promise<ModelResult> =>
+    runOneModel(provider, opts).then((r) => {
+      tally.input += r.usage?.input_tokens ?? 0;
+      tally.cached += r.usage?.cached_input_tokens ?? 0;
+      tally.output += r.usage?.output_tokens ?? 0;
+      return r;
+    });
+}
+
 export interface Verified {
+  usage: ModelResult["usage"];
   summary: string;
   findings: Finding[];
   rejected: ModelReview["rejected"];
@@ -200,7 +221,7 @@ async function checkDiff(dir: string, base: string, head: string, files: string[
  * same candidates through another model.
  */
 export async function verifyCandidates(dir: string, input: PromptInput, found: Candidate[], opts: VerifyOptions): Promise<Verified> {
-  const result = await runModel(opts.provider, {
+  const result = await runOneModel(opts.provider, {
     cwd: dir,
     prompt: buildVerifierPrompt(forProvider(dir, input, opts.provider), found),
     // Only a verifier that was given the team's earlier decisions is asked which one it used.
@@ -218,11 +239,11 @@ export async function verifyCandidates(dir: string, input: PromptInput, found: C
       return { ...f, tier: tierOf({ ...f, rank }), rank };
     })
     .sort((a, b) => ORDER[a.class] - ORDER[b.class] || a.file.localeCompare(b.file) || a.line - b.line);
-  return { summary: review.summary, findings, rejected: review.rejected, model: result.model, cost_usd: result.cost_usd ?? null };
+  return { summary: review.summary, findings, rejected: review.rejected, model: result.model, cost_usd: result.cost_usd ?? null, usage: result.usage };
 }
 
-/** Every rule a team can have for one repository: 50 for the org and 50 of its own. None is dropped. */
-const MAX_RULES = 100;
+/** Every rule a team can have for one repository: 50 for the org and 50 of its own on the dashboard, and those in its rule files. None is dropped. */
+const MAX_RULES = 100 + MAX_REPO_RULES;
 
 /** The summary, with what the reader must know about the team's rules: a guarded file was changed, or the rules couldn't be read. */
 export function summaryWith(summary: string, needsHuman: string[], rulesUnread: boolean): string {
@@ -269,6 +290,8 @@ export function memoriesFor(memories: TeamMemory[] | undefined, changedFiles: st
 export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): Promise<Review> {
   const started = Date.now();
   const progress = opts.onProgress ?? (() => {});
+  const tokens: TokenTally = { input: 0, cached: 0, output: 0 };
+  const runModel = counting(tokens);
   const effort = opts.effort ?? DEFAULT_EFFORT;
   const provider = opts.provider ?? "codex";
   const hunterModel = provider === "claude" ? (opts.model ?? "opus") : opts.model;
@@ -283,6 +306,11 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
   const teamSkills = [...ws.skills, ...ws.writtenSkills];
   if (teamSkills.length) progress(`Using your team's skill${teamSkills.length === 1 ? "" : "s"}: ${teamSkills.map((s) => s.name).join(", ")}`);
   if (ws.conventions.length) progress(`Using ${ws.conventions.map((c) => c.path).join(", ")} from ${pr.baseRef}`);
+  const ruleFiles = [...new Set(ws.rules.filter((r) => ruleApplies(r, ws.touchedPaths)).map((r) => r.source))];
+  if (ruleFiles.length) progress(`Using the rules in ${ruleFiles.join(", ")} from ${pr.baseRef}`);
+  if (ws.teamFilesLate) progress(`Couldn't read the repository's instruction and rule files from ${pr.baseRef} in time, so this review runs without them`);
+  if (ws.droppedRules) progress(`Left out ${ws.droppedRules} of the repository's rules for this change: over the limit of ${MAX_REPO_RULES} rules or 30,000 characters`);
+  if (ws.unreadRules.length) progress(`Found no rules to use in ${ws.unreadRules.slice(0, 10).join(", ")}${ws.unreadRules.length > 10 ? ` and ${ws.unreadRules.length - 10} more` : ""}: empty, too large, a link out of the repository, a Copilot file without applyTo or kept out of code review, past the limit of 100 rule files, or unreadable`);
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const log = (step: string) => join(cacheDir(), "logs", `${pr.owner}-${pr.repo}-${pr.number}-${stamp}-${step}.log`);
   let checksRun: ChecksRun | null = null;
@@ -300,7 +328,8 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
       // Matched against every path the pull request touches, exactly as git has it.
       skills: teamSkills,
       conventions: ws.conventions,
-      rules: (opts.rules ?? []).filter((r) => r.kind === "rule" && ruleApplies(r, ws.touchedPaths)).slice(0, MAX_RULES),
+      // The dashboard's rules, then the ones written in the repository.
+      rules: [...(opts.rules ?? []), ...ws.rules].filter((r) => r.kind === "rule" && ruleApplies(r, ws.touchedPaths)).slice(0, MAX_RULES),
     };
 
     // Step 1: hunters, one per area, in parallel. One failing doesn't sink the review.
@@ -313,6 +342,22 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
       input.actionSources = await fetchActionSources(uses);
       unread = notRead(input.actionSources);
     }
+    // Who checks is known before the hunt, so the first reviewer that answers can name both models.
+    const verifyWith = opts.verifyWith ?? (provider === "claude" || (await claudeAvailable()) ? "claude" : "codex");
+    const verifyModel = verifyWith === "codex" ? (opts.verifyModel ?? opts.model) : (opts.verifyModel ?? "opus");
+    let named = false;
+    const nameModels = (reviewerModel: string | null) => {
+      if (named) return;
+      named = true;
+      // The same tool with no model of its own, or an alias of the one that answered ("opus" for
+      // "claude-opus-5-5"), is the same model: the comment mustn't say a second one checks.
+      const sameModel =
+        verifyWith === provider && (!verifyModel || verifyModel === reviewerModel || (!/\d/.test(verifyModel) && (reviewerModel ?? "").includes(verifyModel)));
+      opts.onModels?.({
+        reviewer: { name: provider, model: reviewerModel },
+        checker: { name: verifyWith, model: sameModel ? reviewerModel : (verifyModel ?? null) },
+      });
+    };
     let done = 0;
     progress(`Hunting for problems (0 of ${focuses.length} areas done)`);
     const hunts = await Promise.allSettled(
@@ -326,6 +371,7 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
           logFile: log(`hunt-${focus}`),
         });
         done++;
+        nameModels(result.model ?? hunterModel ?? null);
         progress(`Hunting for problems (${done} of ${focuses.length} areas done)`);
         return { focus, candidates: (result.output as { candidates: Candidate[] }).candidates, model: result.model };
       }),
@@ -397,12 +443,11 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
 
     // Step 2: the verifier tries to disprove each candidate and sorts the rest.
     // Opus checks better than Codex: in the eval it posted a third less and kept the same finds.
-    const verifyWith = opts.verifyWith ?? (provider === "claude" || (await claudeAvailable()) ? "claude" : "codex");
     if (!opts.verifyWith && verifyWith === "codex") progress("Claude Code isn't installed, so Codex checks the findings");
     progress(`Checking ${found.length} candidate${found.length === 1 ? "" : "s"}${verifyWith === "codex" ? "" : ` with ${verifyWith}`}`);
     const verified = await verifyCandidates(ws.dir, input, found, {
       provider: verifyWith,
-      model: verifyWith === "codex" ? (opts.verifyModel ?? opts.model) : (opts.verifyModel ?? "opus"),
+      model: verifyModel,
       effort,
       logFile: log("verify"),
       onCommand: (cmd) => progress(`Checking ${found.length} candidates: ${cmd.replace(/\s+/g, " ").slice(0, 80)}`, true),
@@ -410,6 +455,9 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
     // Every path the pull request touches counts here, the lockfiles and generated files the reviewers skip included.
     const needsHuman = filesNeedingHuman(opts.rules, ws.touchedPaths);
     const team_checks = teamChecks ? await teamChecks.done : null;
+    tokens.input += verified.usage?.input_tokens ?? 0;
+    tokens.cached += verified.usage?.cached_input_tokens ?? 0;
+    tokens.output += verified.usage?.output_tokens ?? 0;
     const firstHunt = hunts.find((h) => h.status === "fulfilled");
     const servedModel = firstHunt?.status === "fulfilled" ? firstHunt.value.model : null;
 
@@ -439,6 +487,7 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
         files_changed: pr.changedFiles,
         additions: pr.additions,
         deletions: pr.deletions,
+        tokens: { ...tokens },
       },
       trace: {
         candidates: found,

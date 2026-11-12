@@ -4,10 +4,10 @@ import { GitHub, type ApiOptions } from "./api.js";
 import { commentableLines, place } from "./diff-lines.js";
 import { answeredRemembered, closedBody, patchTouches, readClosed, REMEMBERED_MARKER, reopenedBody, resolvedByPeople, resolverReplies, threadAction, threadFinding, type Handled, type ReviewThread } from "./closed.js";
 import type { FailureNotice } from "./markdown.js";
-import { failedSummaryBody, FINDING_MARKER_RE, headline, inlineBody, isFailedSummary, isPendingSummary, LIGHT, pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "./markdown.js";
+import { failedSummaryBody, FINDING_MARKER_RE, headline, inlineBody, isFailedSummary, isPendingSummary, isReviewingSummary, LIGHT, pendingSummaryBody, SUMMARY_MARKER, summaryBody, type ReviewPlan } from "./markdown.js";
 import { askWriteAccess, MAX_NOTE, readMarks, trustedComment, writeAccess, type Mark, type PrComment } from "./handled.js";
 import { withoutHidden } from "../skills.js";
-import { decodeState, nextState, type ReviewState, type StateFinding } from "./state.js";
+import { decodeState, nextState, stateBlock, type ReviewState, type StateFinding } from "./state.js";
 import { newerVersion } from "../update.js";
 
 export { trustedComment } from "./handled.js";
@@ -244,22 +244,42 @@ export async function writeCheck(api: GitHub, id: number | null | undefined, hea
  * Shows a live "Reviewing" check right away, so people and agents can see work is
  * happening. A login that can't write checks hears about it once, from the last write.
  */
-export async function startCheck(api: GitHub, headSha: string): Promise<number | null> {
+export async function startCheck(api: GitHub, headSha: string, provider?: string): Promise<number | null> {
+  const tool = provider === "claude" ? "Claude" : provider === "codex" ? "Codex" : null;
   const run = await writeCheck(api, null, headSha, {
     status: "in_progress",
     started_at: new Date().toISOString(),
     output: {
       title: "Reviewing",
-      summary: "Mergelight is reviewing this pull request with Codex on your own plan. This usually takes 2 to 15 minutes.",
+      summary: `Mergelight is reviewing this pull request${tool ? ` with ${tool}` : ""} on your own plan. This usually takes 2 to 15 minutes.`,
     },
   });
   return run?.id ?? null;
 }
 
 /** Puts the summary comment on the PR before anything else, so it comes first. Later rounds edit it in place. */
-export async function startSummary(api: GitHub, number: number): Promise<PrComment | null> {
+export async function startSummary(api: GitHub, number: number, plan?: ReviewPlan): Promise<PrComment | null> {
   const { summary } = await readPrReviewState(api, number);
-  return summary ?? (await api.write<PrComment>("POST", `issues/${number}/comments`, { body: pendingSummaryBody() }));
+  // A "Reviewing" comment left by an earlier run, or by a reconnect, says this run's plan now, keeping its state.
+  if (summary && plan && isReviewingSummary(summary.body)) {
+    const state = stateBlock(summary.body);
+    const body = state ? `${pendingSummaryBody(plan)}\n${state}` : pendingSummaryBody(plan);
+    if (body !== summary.body) await api.write("PATCH", `issues/comments/${summary.id}`, { body }).catch(() => null);
+    return { ...summary, body };
+  }
+  return summary ?? (await api.write<PrComment>("POST", `issues/${number}/comments`, { body: pendingSummaryBody(plan) }));
+}
+
+/** Names the models in a "Reviewing" comment once they are known. A comment with a result is left alone. */
+export async function updatePendingSummary(api: GitHub, summary: PrComment | null, plan: ReviewPlan): Promise<void> {
+  if (!summary || !isReviewingSummary(summary.body)) return;
+  // Read it again: another run may have finished and written its result since this one began.
+  const now = await api.get<PrComment>(`issues/comments/${summary.id}`).catch(() => null);
+  if (!now || !isReviewingSummary(now.body)) return;
+  // A "Reviewing" comment can carry earlier rounds' state, after a reconnect: it must stay, or the next
+  // result starts again from round 1.
+  const state = stateBlock(now.body);
+  await api.write("PATCH", `issues/comments/${summary.id}`, { body: state ? `${pendingSummaryBody(plan)}\n${state}` : pendingSummaryBody(plan) });
 }
 
 /** A first review that couldn't run shouldn't say "Reviewing" forever, and an older failure shouldn't outlive a newer reason. Real results stay. */
@@ -289,6 +309,8 @@ export async function publishReview(
   opts: ApiOptions & {
     checkRunId?: number | null;
     yellowBlocks?: boolean;
+    /** False when the team turned Mergelight's approvals off. It then never approves, and takes back an approval it gave before. */
+    approve?: boolean;
     /** True when the team's server couldn't be asked, so its rules and checks weren't used in this review. */
     teamUnread?: boolean;
     /** When this review read the pull request's threads. A reply written after it is newer than this round. */
@@ -387,9 +409,14 @@ export async function publishReview(
     },
   };
   await writeCheck(api, opts.checkRunId, review.pr.head_sha, check, log);
-  // A review that isn't green takes the approval back for what it found. Only a green one is held by something else.
-  const hold = review.light === "green" ? approvalHold(review, opts.teamUnread) : null;
-  await syncApproval(api, n, approvalLight(review, opts.teamUnread), review.pr.head_sha, log, hold ? { why: hold } : {});
+  if (opts.approve === false) {
+    // Turned off: no approval, and none of Mergelight's earlier ones stands next to a review that doesn't give one.
+    await syncApproval(api, n, "yellow", review.pr.head_sha, log, { why: APPROVALS_OFF });
+  } else {
+    // A review that isn't green takes the approval back for what it found. Only a green one is held by something else.
+    const hold = review.light === "green" ? approvalHold(review, opts.teamUnread) : null;
+    await syncApproval(api, n, approvalLight(review, opts.teamUnread), review.pr.head_sha, log, hold ? { why: hold } : {});
+  }
 
   return { summaryUrl, inline: inline.length, outside: outside.length, resolved, light: review.light };
 }
@@ -411,6 +438,9 @@ export function approvalHold(review: Pick<Review, "team_checks">, teamUnread = f
 export function approvalLight(review: Pick<Review, "light" | "team_checks">, teamUnread = false): Light {
   return review.light === "green" && approvalHold(review, teamUnread) ? "yellow" : review.light;
 }
+
+/** What a dismissal says when a team turned Mergelight's approvals off. */
+export const APPROVALS_OFF = "Approvals by Mergelight are turned off for this repository (auto-approve: false).";
 
 /** What a dismissal says when a review that couldn't run takes Mergelight's earlier approval back. */
 export const UNREVIEWED = "Mergelight couldn't review the newest commit, so its approval of an earlier one no longer stands.";
