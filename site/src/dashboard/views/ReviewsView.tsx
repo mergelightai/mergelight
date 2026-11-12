@@ -284,7 +284,7 @@ export function ReviewsView({ overview, login, orgLogin }: { overview: Overview;
             <Stat key={l} label={LIGHTS[l].label} value={by(l)} unit={pct(by(l))} light={l} className={cn('lg:border-l lg:border-t-0', i === 0 && 'border-l', i >= 1 && 'border-t', i === 2 && 'border-l')} />
           ))}
         </div>
-        <DurationChart reviews={inRange} span={span} from={range === 'all' ? (oldest ? Date.parse(oldest) - (Date.now() - Date.parse(oldest)) * 0.04 : Date.now() - 86_400_000) : cutoff} controls={<Segmented label="Time" mono value={range} onChange={setRange} options={RANGES.map((r) => ({ id: r.id, label: r.label }))} />} />
+        <DurationChart reviews={inRange} span={span} from={range === 'all' || capped ? (oldest ? Date.parse(oldest) - (Date.now() - Date.parse(oldest)) * 0.04 : Date.now() - 86_400_000) : cutoff} controls={<Segmented label="Time" mono value={range} onChange={setRange} options={RANGES.map((r) => ({ id: r.id, label: r.label }))} />} />
       </section>
 
       <DataCard

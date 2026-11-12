@@ -269,7 +269,7 @@ export function AppShell({ user, orgs, org, onPickOrg, view, onView, onSignOut, 
                   </SidebarMenu>
                 </SidebarFooter>
               </Sidebar>
-              <SidebarInset className="min-w-0 bg-panel md:min-h-0 md:overflow-y-auto md:hairline md:peer-data-[variant=inset]:rounded-[16px] md:peer-data-[variant=inset]:shadow-none">
+              <SidebarInset className="min-w-0 bg-panel md:min-h-0 md:overflow-y-auto md:hairline md:peer-data-[variant=inset]:rounded-[16px] md:peer-data-[variant=inset]:shadow-[inset_0_0_0_1px_rgb(255_255_255/0.055)]">
                 <header className="flex h-14 shrink-0 items-center gap-2 px-5 md:px-6">
                   <PanelTrigger />
                   <h1 className="truncate text-[15px] font-medium text-ink">{here.label}</h1>
