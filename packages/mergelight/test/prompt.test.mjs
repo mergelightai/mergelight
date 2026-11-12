@@ -452,7 +452,8 @@ test("the summary says which guarded file was changed, and says when the team's 
 
 test("the verifier is told to keep its candidate ids out of what people read", () => {
   const prompt = buildVerifierPrompt(input, []);
-  assert.match(prompt, /candidate ids C1, C2 and so on exist only in this prompt, so never write them in a finding or the summary/);
+  assert.match(prompt, /the candidate ids C1, C2 and so on, rule ids like R12 or F1, decision ids like M12 and the ids of earlier problems, exist only here, so never write them in a finding's text or the summary\. same_as still takes the earlier problem's id/);
+  assert.match(prompt, /name a rule or a decision by what it says/);
 });
 
 test("the verifier is told how to weigh what someone wrote when they resolved a comment", () => {
