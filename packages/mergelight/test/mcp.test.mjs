@@ -901,6 +901,14 @@ test("a fixed finding's comment is folded away as resolved when GitHub won't let
   });
   await withFakeGh(back.env, () => publishReview(review([finding({ id: "aaaaaaaaaa", tier: "post" })])));
   assert.ok(back.writes().some((w) => w.graphql === "unfold" && w.args.includes("id=C1")));
+  // A comment on a thread a person resolved and then reopened was hidden by them: it stays hidden.
+  const person = useScenario({
+    issueComments: [summaryComment(state)],
+    head: PUSHED,
+    threads: [{ id: "T1", isResolved: false, isOutdated: true, comments: { nodes: [findingComment("<!-- mergelight:finding id=aaaaaaaaaa -->\n<!-- mergelight:closed how=resolved resolved=1 -->\n✅ **Handled.** x", true)] } }],
+  });
+  await withFakeGh(person.env, () => publishReview(review([finding({ id: "aaaaaaaaaa", tier: "post" })])));
+  assert.ok(!person.writes().some((w) => w.graphql === "unfold"));
   // A comment a person hid as off-topic stays hidden.
   const hidden = useScenario({
     issueComments: [summaryComment(state)],

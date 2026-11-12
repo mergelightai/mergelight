@@ -603,11 +603,21 @@ async function settleThreads(api: GitHub, review: Review, log: (s: string) => vo
       if (action.kind === "regressed" && action.unresolve) {
         await unresolveThread(api, t.id).catch((err) => log(`Couldn't reopen a thread: ${(err as Error).message}`));
       }
-      // A finding that came back, or a thread someone reopened, shows its comment again if Mergelight folded
-      // it away as resolved. A comment a person hid for another reason stays hidden.
+      // A finding that came back shows its comment again if Mergelight folded it: Mergelight only folds a
+      // comment marked fixed and not resolved, so one a person hid, or folded on a thread they resolved,
+      // stays hidden. If unfolding fails, the marker stays, so the next review tries again.
       const first = t.comments.nodes[0];
-      if (first?.isMinimized && /^resolved$/i.test(first.minimizedReason ?? "") && found.nodeId) {
-        await unminimizeComment(api, found.nodeId).catch((err) => log(`Couldn't unfold a comment: ${(err as Error).message}`));
+      const closed = readClosed(found.body);
+      const folded = closed?.how === "fixed" && !closed.resolved && first?.isMinimized && /^resolved$/i.test(first.minimizedReason ?? "");
+      if (folded && found.nodeId) {
+        const shown = await unminimizeComment(api, found.nodeId).then(
+          () => true,
+          (err) => {
+            log(`Couldn't unfold a comment: ${(err as Error).message}`);
+            return false;
+          },
+        );
+        if (!shown) continue;
       }
       await edit(found.commentId, reopenedBody(found.body, action.kind === "reopened"));
     }
