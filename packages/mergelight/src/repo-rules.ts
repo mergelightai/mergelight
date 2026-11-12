@@ -30,15 +30,16 @@ export function frontMatter(text: string): { paths: string[]; body: string; scop
   if (!m) return { paths: [], body: text, scoped: false, forReview: true };
   const forReview = !/^excludeAgent[ \t]*:.*\bcode-review\b/m.test(m[1]!);
   const line = /^(?:applyTo|globs)[ \t]*:[ \t]*(.*)$/m.exec(m[1]!);
-  let value = line?.[1]?.trim() ?? "";
+  // A YAML comment after the value isn't part of it: applyTo: "src/billing/**" # billing only.
+  let value = (line?.[1] ?? "").replace(/(?:^|[ \t])#.*$/, "").trim();
   if (line && !value) {
     // A YAML list on the lines below the key: "applyTo:" then "  - src/billing/**".
     const after = m[1]!.slice(line.index + line[0].length).split(/\r?\n/).slice(1);
     const items: string[] = [];
     for (const l of after) {
-      const item = /^[ \t]+-[ \t]*(.+)$/.exec(l);
+      const item = /^[ \t]*-[ \t]*(.+)$/.exec(l);
       if (!item) break;
-      items.push(item[1]!.trim());
+      items.push(item[1]!.replace(/(?:^|[ \t])#.*$/, "").trim());
     }
     value = items.join(",");
   }

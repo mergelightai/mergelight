@@ -136,3 +136,8 @@ test("applyTo as a YAML list, a loose list's indented detail, and a count of the
   assert.equal(rules.length, MAX_REPO_RULES);
   assert.equal(stats.dropped, 5);
 });
+
+test("a YAML list without indent and a comment after the value are read right", () => {
+  assert.deepEqual(frontMatter('---\napplyTo:\n- "src/billing/**"\n- "*.sql" # schema too\n---\nx').paths, ["src/billing/**", "*.sql"]);
+  assert.deepEqual(frontMatter('---\napplyTo: "src/billing/**" # billing only\n---\nx').paths, ["src/billing/**"]);
+});
