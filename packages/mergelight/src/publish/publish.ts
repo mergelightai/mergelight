@@ -505,7 +505,7 @@ export async function reviewThreads(api: GitHub, number: number): Promise<Review
       repository(owner: $owner, name: $repo) {
         pullRequest(number: $number) {
           reviewThreads(first: 100) {
-            nodes { id isResolved isOutdated resolvedBy { login } comments(first: 50) { nodes { id isMinimized databaseId body authorAssociation createdAt lastEditedAt author { __typename login } } } }
+            nodes { id isResolved isOutdated resolvedBy { login } comments(first: 50) { nodes { id isMinimized minimizedReason databaseId body authorAssociation createdAt lastEditedAt author { __typename login } } } }
           }
         }
       }
@@ -591,8 +591,10 @@ async function settleThreads(api: GitHub, review: Review, log: (s: string) => vo
       if (action.kind === "regressed" && action.unresolve) {
         await unresolveThread(api, t.id).catch((err) => log(`Couldn't reopen a thread: ${(err as Error).message}`));
       }
-      // A finding that came back, or a thread someone reopened, shows its comment again if it was folded away.
-      if (t.comments.nodes[0]?.isMinimized && found.nodeId) {
+      // A finding that came back, or a thread someone reopened, shows its comment again if Mergelight folded
+      // it away as resolved. A comment a person hid for another reason stays hidden.
+      const first = t.comments.nodes[0];
+      if (first?.isMinimized && /^resolved$/i.test(first.minimizedReason ?? "") && found.nodeId) {
         await unminimizeComment(api, found.nodeId).catch((err) => log(`Couldn't unfold a comment: ${(err as Error).message}`));
       }
       await edit(found.commentId, reopenedBody(found.body, action.kind === "reopened"));

@@ -865,7 +865,7 @@ test("a Reviewing comment left by an earlier run says this run's plan, and keeps
 
 test("a fixed finding's comment is folded away as resolved when GitHub won't let Mergelight resolve the thread, and unfolds if the finding comes back", async () => {
   const state = stateOf([finding({ id: "aaaaaaaaaa" })], new Map([["aaaaaaaaaa", THREAD_URL]]));
-  const findingComment = (body, minimized = false) => ({ id: "C1", isMinimized: minimized, databaseId: 501, body, author: { __typename: "Bot", login: "github-actions" } });
+  const findingComment = (body, minimized = false, reason = "resolved") => ({ id: "C1", isMinimized: minimized, minimizedReason: minimized ? reason : null, databaseId: 501, body, author: { __typename: "Bot", login: "github-actions" } });
   const review = (findings) => ({ pr: { owner: "o", repo: "r", number: 7, head_sha: PUSHED }, provider: { name: "codex", model: null }, light: "green", summary: "S", findings, stats: { duration_ms: 1 } });
 
   const fixed = useScenario({
@@ -888,4 +888,12 @@ test("a fixed finding's comment is folded away as resolved when GitHub won't let
   });
   await withFakeGh(back.env, () => publishReview(review([finding({ id: "aaaaaaaaaa", tier: "post" })])));
   assert.ok(back.writes().some((w) => w.graphql === "unfold" && w.args.includes("id=C1")));
+  // A comment a person hid as off-topic stays hidden.
+  const hidden = useScenario({
+    issueComments: [summaryComment(state)],
+    head: PUSHED,
+    threads: [{ id: "T1", isResolved: false, isOutdated: true, comments: { nodes: [findingComment("<!-- mergelight:finding id=aaaaaaaaaa -->\n<!-- mergelight:closed how=fixed resolved=0 sha=2222222 -->\n✅ **Handled.** x", true, "off_topic")] } }],
+  });
+  await withFakeGh(hidden.env, () => publishReview(review([finding({ id: "aaaaaaaaaa", tier: "post" })])));
+  assert.ok(!hidden.writes().some((w) => w.graphql === "unfold"));
 });
