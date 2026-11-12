@@ -125,17 +125,14 @@ export const REMEMBERED_MARKER = "<!-- mergelight:remembered -->";
  * resolved: who resolved each finding's thread, from resolvedByPeople.
  */
 /**
- * Whether Mergelight already said in this thread that the server kept its reason, after the resolver's
- * latest reply: a newer reply is a new reason, still to be answered. Only Mergelight's own answer counts,
- * by the login that posted the finding.
+ * Whether Mergelight already said in this thread that the server kept its reason. A thread is answered
+ * once: a later reply doesn't replace the kept reason. Only Mergelight's own answer counts, by the login
+ * that posted the finding.
  */
 export function answeredRemembered(t: ReviewThread): boolean {
   const nodes = t.comments.nodes;
   const own = nodes[0]?.author?.login;
-  // The person whose reason it is: whoever resolved the thread. Anyone else's later reply changes nothing.
-  const resolver = t.resolvedBy?.login;
-  const lastPerson = nodes.map((c, i) => (c.author?.login === resolver && c.author?.login !== own ? i : -1)).reduce((a, b) => Math.max(a, b), -1);
-  return Boolean(own) && nodes.some((c, i) => i > lastPerson && c.author?.login === own && c.body.includes(REMEMBERED_MARKER));
+  return Boolean(own) && nodes.some((c, i) => i > 0 && c.author?.login === own && c.body.includes(REMEMBERED_MARKER));
 }
 
 export function resolverReplies(threads: ReviewThread[], resolved: Map<string, string>, mergelight?: string): Map<string, { replies: { text: string; at: string }[]; commentId: number; answered: boolean }> {

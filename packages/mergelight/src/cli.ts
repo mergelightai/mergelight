@@ -7,7 +7,7 @@ import { declinesOf, fetchContext, MAX_REASON, reportReview } from "./cloud.js";
 import { GitHub } from "./publish/api.js";
 import { writeAccess } from "./publish/handled.js";
 import { publishTeamChecks } from "./publish/team-checks.js";
-import { answerRemembered, approveCheck, checkLimitTitle, checkLoginTitle, failCheck, failSummary, previousFindings, publishReview, startCheck, startSummary, syncApproval, UNREVIEWED } from "./publish/publish.js";
+import { answerRemembered, confirmReasons, approveCheck, checkLimitTitle, checkLoginTitle, failCheck, failSummary, previousFindings, publishReview, startCheck, startSummary, syncApproval, UNREVIEWED } from "./publish/publish.js";
 import { LimitError, LoginError, loginFailureMessage } from "./providers/codex.js";
 import { limitNotice, loginNotice } from "./publish/markdown.js";
 import { renderRejected, renderTerminal } from "./render.js";
@@ -232,7 +232,7 @@ async function main(): Promise<number> {
     if (process.env.MERGELIGHT_LOGIN_LOST === "1") throw new LoginError(loginFailureMessage(process.env.SECRET_NAME || undefined));
     // Before the threads are read: a reply written after this counts as newer than this review.
     const startedAt = new Date();
-    const previous = values.post ? await previousFindings(api, ref.number, headSha ?? undefined) : undefined;
+    let previous = values.post ? await previousFindings(api, ref.number, headSha ?? undefined) : undefined;
     const review = await reviewPullRequest(ref, {
       previous,
       memories: cloud.memories,
@@ -261,6 +261,7 @@ async function main(): Promise<number> {
     if (process.env.RUNNER_DEBUG === "1" || process.env.MERGELIGHT_DEBUG === "1") for (const line of renderRejected(review)) log(line);
 
     if (values.post) {
+      previous = confirmReasons(previous, review.trace.rejected);
       // Reasons given in threads that this review sends to keep: the state holds them until the server confirms.
       // Also when the server couldn't be asked this time, so a waiting reason isn't dropped from the state.
       const remember = cloud.connected || cloud.failed ? (previous ?? []).filter((p) => p.handled?.from === "reply" && p.handled.remember && p.handled.at).map((p) => ({ id: p.id, at: p.handled!.at!, tries: (p.handled!.tries ?? 0) + (cloud.connected ? 1 : 0) })) : [];

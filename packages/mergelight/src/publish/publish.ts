@@ -120,31 +120,25 @@ export async function previousFindings(api: GitHub, number: number, headSha?: st
       const mark = marks.get(id);
       const by = resolved.get(id);
       const reply = replies.get(id);
-      // A resolve gives the team's reason, in every review that reads it, when a reply clearly declines
-      // ("won't fix", "known", "by design") and none says it was fixed. All of the resolver's replies make
-      // the reason, so a later "thanks" doesn't replace it. Any other reply reaches the verifier as what
-      // was said, for it to weigh: words can't tell every fix note from a reason.
+      // What the resolver wrote reaches the verifier, which reads it against the code: a reason, a fix
+      // note or neither. All of their replies, so a later "thanks" doesn't hide the reason.
       const all = reply?.replies ?? [];
       const last = all.at(-1);
-      const reasons = all;
-      const isReason = all.some((r) => DECLINE.test(r.text)) && !all.some((r) => FIX_CLAIM.test(r.text));
-      // It is remembered for later pull requests only in the review right after it was written, and only
-      // if the code there didn't change since the review it answers: then the reply may say how it was
-      // fixed. A reply from before the latest review may answer an older round, such as a fix it checked.
+      // A candidate to keep for later pull requests: written since the latest review (one from before may
+      // answer an older round), on code that didn't change since then (the reply may describe the fix),
+      // in a thread Mergelight hasn't answered yet (a later reply mustn't overwrite a kept reason, or bring
+      // back one forgotten on the dashboard). Whether it is kept is the verifier's call, after the review.
       const fresh = all.filter((r) => latest && Date.parse(r.at) > Date.parse(latest.at));
-      // A reason an earlier review judged worth keeping, and the server hasn't confirmed yet (no answer in
-      // the thread): sent again, so one failed report doesn't lose it. A newer reply is a new reason.
-      // At most MAX_TRIES reviews: a server that kept it but never says so (an older one, or a lost answer)
-      // mustn't get it on every review.
+      // One an earlier review kept, that the server hasn't confirmed: sent again, by at most MAX_TRIES
+      // reviews, so one failed report doesn't lose it and a silent server doesn't get it forever.
       const wait = waiting.get(id);
-      const pending = isReason && !reply!.answered && wait?.at === reasons.at(-1)?.at && (wait?.tries ?? 1) < MAX_TRIES && (await unchanged(f));
-      const remember = pending || (isReason && fresh.length > 0 && !fresh.some((r) => FIX_CLAIM.test(r.text)) && f.status === "open" && (await unchanged(f)));
+      const open = Boolean(last) && !reply!.answered;
+      const pending = open && wait?.at === last?.at && (wait?.tries ?? 1) < MAX_TRIES && (await unchanged(f));
+      const remember = pending || (open && fresh.length > 0 && f.status === "open" && (await unchanged(f)));
       const handled = mark
         ? { as: mark.as, note: mark.note, by: mark.by, sha: mark.sha, from: "mark" as const, at: mark.at }
-        : by && isReason
-          ? { as: "wont_fix" as const, ...oneLine(reasons.map((r) => r.text).join("\n\n")), by, sha: null, from: "reply" as const, at: reasons.at(-1)!.at, ...(remember ? { remember: true as const, ...(pending ? { tries: wait?.tries ?? 1 } : {}) } : {}) }
-          : by && last
-            ? { as: "wont_fix" as const, ...oneLine(all.map((r) => r.text).join("\n\n")), by, sha: null, from: "thread" as const, at: last.at }
+        : by && last
+          ? { as: "wont_fix" as const, ...oneLine(all.map((r) => r.text).join("\n\n")), by, sha: null, from: "reply" as const, at: last.at, ...(remember ? { remember: true as const, ...(pending ? { tries: wait?.tries ?? 1 } : {}) } : {}) }
           : by
             ? { as: "wont_fix" as const, note: RESOLVED_ONLY, by, sha: null, from: "thread" as const }
             : undefined;
@@ -153,19 +147,6 @@ export async function previousFindings(api: GitHub, number: number, headSha?: st
   );
 }
 
-/**
- * A reply that says the problem was fixed: fix, fixing, fixed, fixes or addressed anywhere, unless a no,
- * not, never, nothing or an n't word comes up to 3 words before it in the same phrase ("won't fix", "no
- * need to fix", but not "not sure, but I fixed it");
- * done at the start; or a commit. A commit is 7 to 40 hex characters with both a letter and a digit, so a
- * plain number isn't one. Reading too much as a fix only means a reason isn't kept, the safe side.
- */
-const FIX_CLAIM = /(?<!\b(?:\w*n[’']t|not|no|never|nothing)(?:\s+[^\s.,;:!?]+){0,3}\s+)\b(fix|fixing|fixed|fixes|addressed)\b|^\W*done\b|\b(?=[0-9a-f]*[a-f])(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b/i;
-
-/** A reply that clearly declines to fix: a reason, not a note about a fix. "Accepted" alone isn't one: "Accepted, good catch" agrees. */
-const DECLINE =
-  /\b(?:won[’']?t|will not|do not|don[’']?t|not|no need to|can[’']?t|cannot)\s+(?:be\s+)?fix(?:ing|ed)?\b|\bno need\b|\bdoesn[’']?t need\b|\bnot needed\b|\bby design\b|\bintentional(?:ly)?\b|\bon purpose\b|\bexpected\b|\bknown\b|\b(?:accepted|acceptable) risk\b|\brisk accepted\b|\b(?:keep|leave) (?:it|this|that)\b|\bnot an? (?:problem|bug|issue|risk|concern)\b|\bfalse positive\b|\bout of scope\b/i;
-
 /** How many reviews send a waiting reason before it is given up on. */
 const MAX_TRIES = 3;
 
@@ -173,6 +154,23 @@ const MAX_TRIES = 3;
 function oneLine(text: string): { note: string; cut?: true } {
   const line = withoutHidden(text).replace(/\s+/g, " ").trim();
   return { note: line.slice(0, MAX_NOTE), ...(line.length > MAX_NOTE ? { cut: true as const } : {}) };
+}
+
+/** The reason the verifier gives when it drops an earlier finding because the team declined it. */
+const TEAM_DECIDED = /\bthe team decided not to fix\b/i;
+
+/**
+ * A reason given in a thread is kept only when the verifier dropped its finding because of it: it read the
+ * reply against the code, so a fix note or a plain "ok" isn't kept as a reason not to fix. The others stay
+ * what the team said on this pull request, and nothing more.
+ */
+export function confirmReasons(previous: PriorFinding[] | undefined, rejected: { candidate: string; reason: string }[]): PriorFinding[] | undefined {
+  const declined = new Set(rejected.filter((r) => TEAM_DECIDED.test(r.reason)).map((r) => r.candidate));
+  return previous?.map((p) => {
+    if (p.handled?.from !== "reply" || !p.handled.remember || declined.has(p.id)) return p;
+    const { remember: _remember, tries: _tries, ...handled } = p.handled;
+    return { ...p, handled };
+  });
 }
 
 /**
