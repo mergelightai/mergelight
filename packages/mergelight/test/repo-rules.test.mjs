@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { buildHunterPrompt, ruleApplies } from "../dist/prompt.js";
-import { expandBraces, frontMatter, MAX_REPO_RULES, parseRuleFile, repoRules, RULE_FILE } from "../dist/repo-rules.js";
+import { expandBraces, frontMatter, MAX_REPO_RULES, parseRuleFile, repoRules, RULE_FILE, withoutComments } from "../dist/repo-rules.js";
 import { teamFilesFor } from "../dist/workspace.js";
 
 test("only Mergelight's rule files and Copilot's instruction files are rule files", () => {
@@ -152,4 +152,26 @@ test("a divider is never a rule, and ends the bullet before it", () => {
 test("a bullet up to 3 spaces in is a rule, and a sub-bullet joins its parent", () => {
   assert.deepEqual(parseRuleFile(".mergelight/rules.md", "  - Money is in whole cents.\n - Refunds check the status.\n   - in the same transaction.\n").map((r) => r.text), ["Money is in whole cents.", "Refunds check the status. in the same transaction."]);
   assert.deepEqual(parseRuleFile(".mergelight/rules.md", "  - First.\n  - Second.\n    - its detail.\n").map((r) => r.text), ["First.", "Second. its detail."], "a whole list indented the same is still one rule per bullet");
+});
+
+test("an empty front matter block ends at its own second line, not at a later divider", () => {
+  assert.deepEqual(parseRuleFile(".mergelight/rules.md", "---\n---\n- First.\n- Second.\n\n---\n\n- Third.\n").map((r) => r.text), ["First.", "Second.", "Third."]);
+  assert.deepEqual(frontMatter("---\n---\nbody").paths, []);
+  assert.equal(frontMatter("---\n---\nbody").body, "body");
+});
+
+test("comment markers in code are examples, so they take out no rules", () => {
+  const md = "- Write `<!--` as an entity.\n- Keep this rule.\n- Arrows are written `-->`.\n<!-- - Turned off. -->\n";
+  assert.deepEqual(parseRuleFile(".mergelight/rules.md", md).map((r) => r.text), ["Write `<!--` as an entity.", "Keep this rule.", "Arrows are written `-->`."]);
+  assert.equal(withoutComments("```\n<!--\n```\n- kept\n```\n-->\n```"), "```\n<!--\n```\n- kept\n```\n-->\n```");
+});
+
+test("text after a code block doesn't join the bullet above it", () => {
+  const md = "- Use the shared client.\n```ts\nclient.get(url);\n```\nThis paragraph is about something else.\n- Second.\n";
+  assert.deepEqual(parseRuleFile(".mergelight/rules.md", md).map((r) => r.text), ["Use the shared client.", "Second."]);
+});
+
+test("a code block that closes with a longer fence still shields its comment markers", () => {
+  const md = "```\n<!--\n````\n- Kept.\n<!-- - Turned off. -->\n";
+  assert.deepEqual(parseRuleFile(".mergelight/rules.md", md).map((r) => r.text), ["Kept."]);
 });
