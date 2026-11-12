@@ -86,6 +86,7 @@ function bullets(body: string): string[] {
   let current: string | null = null;
   // A blank line after a bullet: an indented paragraph after it still belongs to it (a loose list).
   let gap = false;
+  let openIndent = 0;
   let fence: string | null = null;
   // HTML comments are what a team turned off: GitHub doesn't show them, so they don't count.
   // Only a closed one: an unclosed "<!--", say inside inline code, mustn't wipe out the rest of the file.
@@ -107,10 +108,14 @@ function bullets(body: string): string[] {
       gap = false;
       continue;
     }
-    const start = /^(?:[-*+]|\d+[.)])[ \t]+(.*)$/.exec(line);
-    if (start) {
+    // A bullet may sit up to 3 spaces in and still be top level. With a bullet open, one 2 or more
+    // spaces further in than it is a sub-bullet of it, which joins it.
+    const start = /^( {0,3})(?:[-*+]|\d+[.)])[ \t]+(.*)$/.exec(line);
+    const topLevel = start && (current === null || start[1]!.length < openIndent + 2);
+    if (start && topLevel) {
       if (current) out.push(current);
-      current = start[1]!.trim();
+      current = start[2]!.trim();
+      openIndent = start[1]!.length;
       gap = false;
     } else if (current !== null && !line.trim()) {
       gap = true;

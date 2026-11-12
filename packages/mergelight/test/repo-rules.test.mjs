@@ -148,3 +148,8 @@ test("a YAML list without indent and a comment after the value are read right", 
 test("a divider is never a rule, and ends the bullet before it", () => {
   assert.deepEqual(parseRuleFile(".mergelight/rules.md", "- Money is in whole cents.\n---\n- Second.\n\n* * *\n\n- Third.\n___\n").map((r) => r.text), ["Money is in whole cents.", "Second.", "Third."]);
 });
+
+test("a bullet up to 3 spaces in is a rule, and a sub-bullet joins its parent", () => {
+  assert.deepEqual(parseRuleFile(".mergelight/rules.md", "  - Money is in whole cents.\n - Refunds check the status.\n   - in the same transaction.\n").map((r) => r.text), ["Money is in whole cents.", "Refunds check the status. in the same transaction."]);
+  assert.deepEqual(parseRuleFile(".mergelight/rules.md", "  - First.\n  - Second.\n    - its detail.\n").map((r) => r.text), ["First.", "Second. its detail."], "a whole list indented the same is still one rule per bullet");
+});

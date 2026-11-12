@@ -308,6 +308,7 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
   if (ws.conventions.length) progress(`Using ${ws.conventions.map((c) => c.path).join(", ")} from ${pr.baseRef}`);
   const ruleFiles = [...new Set(ws.rules.filter((r) => ruleApplies(r, ws.touchedPaths)).map((r) => r.source))];
   if (ruleFiles.length) progress(`Using the rules in ${ruleFiles.join(", ")} from ${pr.baseRef}`);
+  if (ws.teamFilesLate) progress(`Couldn't read the repository's instruction and rule files from ${pr.baseRef} in time, so this review runs without them`);
   if (ws.droppedRules) progress(`Left out ${ws.droppedRules} of the repository's rules for this change: over the limit of ${MAX_REPO_RULES} rules or 30,000 characters`);
   if (ws.unreadRules.length) progress(`Found no rules to use in ${ws.unreadRules.slice(0, 10).join(", ")}${ws.unreadRules.length > 10 ? ` and ${ws.unreadRules.length - 10} more` : ""}: empty, too large, a link out of the repository, a Copilot file without applyTo or kept out of code review, past the limit of 100 rule files, or unreadable`);
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");

@@ -289,6 +289,8 @@ export interface Workspace {
   unreadRules: string[];
   /** Rules for the changed files left out because the repository has more than the limits allow. */
   droppedRules: number;
+  /** The instruction and rule files couldn't be read in time, so none are used. */
+  teamFilesLate: boolean;
   cleanup: () => Promise<void>;
 }
 
@@ -372,7 +374,7 @@ export async function prepareWorkspace(pr: PullRequest, at?: string, skillFolder
     } catch {
       written = [];
     }
-    const { conventions, rules: repoRuleList, unreadRules, droppedRules } = await withDeadline(teamFilesFor(mirror, teamBase, touchedPaths), SKILL_IMPORT_TIMEOUT_MS + 2 * SKILL_GIT_TIMEOUT_MS, { conventions: [], rules: [], unreadRules: [], droppedRules: 0 });
+    const { conventions, rules: repoRuleList, unreadRules, droppedRules, timedOut } = await withDeadline<Awaited<ReturnType<typeof teamFilesFor>> & { timedOut?: boolean }>(teamFilesFor(mirror, teamBase, touchedPaths), SKILL_IMPORT_TIMEOUT_MS + 2 * SKILL_GIT_TIMEOUT_MS, { conventions: [], rules: [], unreadRules: [], droppedRules: 0, timedOut: true });
 
     return {
       dir,
@@ -389,6 +391,7 @@ export async function prepareWorkspace(pr: PullRequest, at?: string, skillFolder
       rules: repoRuleList,
       unreadRules,
       droppedRules,
+      teamFilesLate: timedOut === true,
       cleanup: async () => {
         await run("git", ["-C", mirror, "worktree", "remove", "--force", dir]);
         rmSync(dir, { recursive: true, force: true });
