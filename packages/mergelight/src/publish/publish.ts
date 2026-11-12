@@ -260,6 +260,13 @@ export async function startCheck(api: GitHub, headSha: string, provider?: string
 /** Puts the summary comment on the PR before anything else, so it comes first. Later rounds edit it in place. */
 export async function startSummary(api: GitHub, number: number, plan?: ReviewPlan): Promise<PrComment | null> {
   const { summary } = await readPrReviewState(api, number);
+  // A "Reviewing" comment left by an earlier run, or by a reconnect, says this run's plan now, keeping its state.
+  if (summary && plan && isPendingSummary(summary.body)) {
+    const state = stateBlock(summary.body);
+    const body = state ? `${pendingSummaryBody(plan)}\n${state}` : pendingSummaryBody(plan);
+    if (body !== summary.body) await api.write("PATCH", `issues/comments/${summary.id}`, { body }).catch(() => null);
+    return { ...summary, body };
+  }
   return summary ?? (await api.write<PrComment>("POST", `issues/${number}/comments`, { body: pendingSummaryBody(plan) }));
 }
 
