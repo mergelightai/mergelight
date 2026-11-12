@@ -578,9 +578,11 @@ async function settleThreads(api: GitHub, review: Review, log: (s: string) => vo
         } catch (err) {
           const message = (err as Error).message;
           // GitHub only lets a token resolve a thread when it may also write code, which Mergelight's may
-          // not. Then the fixed comment is folded away as resolved instead, if Mergelight wrote it. Any
-          // other error is logged as it is, and the next review tries again.
-          if (/not accessible by integration/i.test(message)) fold = Boolean(found.nodeId) && t.comments.nodes[0]?.author?.__typename === "Bot";
+          // not, and says so in different words for an app and for a personal token. Then the fixed comment
+          // is folded away as resolved instead, if Mergelight wrote it. Only a passing error (GitHub down, a
+          // timeout, a rate limit) leaves the thread for the next review to try again.
+          const passing = /\b5\d\d\b|timed? ?out|ETIMEDOUT|ECONNRESET|EAI_AGAIN|rate limit/i.test(message);
+          if (!passing) fold = Boolean(found.nodeId) && t.comments.nodes[0]?.author?.__typename === "Bot";
           else {
             // Left as it was, not marked Handled: a marked thread isn't tried again, and this one should be.
             log(`Couldn't mark a fixed thread resolved: ${message}. The next review tries again.`);

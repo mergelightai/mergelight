@@ -893,6 +893,15 @@ test("a fixed finding's comment is folded away as resolved when GitHub won't let
   await withFakeGh(outage.env, () => publishReview(review([])));
   assert.ok(!outage.writes().some((w) => w.graphql === "fold"));
   assert.ok(!outage.writes().some((w) => w.path === "pulls/comments/501"), "not marked Handled, so the next review tries again");
+  // A personal token is refused in other words: it still folds.
+  const pat = useScenario({
+    issueComments: [summaryComment(state)],
+    head: PUSHED,
+    resolveError: "Resource not accessible by personal access token",
+    threads: [{ id: "T1", isResolved: false, isOutdated: true, comments: { nodes: [findingComment("<!-- mergelight:finding id=aaaaaaaaaa -->\nFinding")] } }],
+  });
+  await withFakeGh(pat.env, () => publishReview(review([])));
+  assert.ok(pat.writes().some((w) => w.graphql === "fold"));
 
   // The finding comes back: its folded comment shows again.
   const back = useScenario({
