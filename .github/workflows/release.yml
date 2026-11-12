@@ -4,7 +4,7 @@
 #
 # A bad release: mark it as a pre-release on GitHub, also when a fixed release is already out.
 # roll-out.yml takes the newest release that is a day old, so a bad one can still reach @v0 after
-# its fix is out. Only a fix within 6 hours skips it without that step.
+# its fix is out. Only a person knows a release is bad, so this step is not automatic.
 name: Release
 
 on:
