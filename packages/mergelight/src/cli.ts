@@ -216,10 +216,12 @@ async function main(): Promise<number> {
   const api = new GitHub(ref.owner, ref.repo, { dryRun, log });
   let checkRunId: number | null = null;
   let summaryComment: Awaited<ReturnType<typeof startSummary>> = null;
+  /** The edit that names the models, so a result or a failure notice is always written after it. */
+  let naming: Promise<void> = Promise.resolve();
   let headSha = values.at ?? null;
   if (values.post) {
     headSha ??= (await fetchPullRequest(ref)).headSha;
-    checkRunId = await startCheck(api, headSha);
+    checkRunId = await startCheck(api, headSha, provider);
     // Says which AI reviews from the start. The models' exact names follow once the first reviewer answers.
     const firstGuess = values.model ?? (provider === "claude" ? "opus" : provider === "codex" ? configuredModel() : null);
     summaryComment = await startSummary(api, ref.number, provider ? { reviewer: { name: provider, model: firstGuess ?? null } } : undefined).catch((e) => {
@@ -250,7 +252,11 @@ async function main(): Promise<number> {
       writtenSkills: cloud.writtenSkills,
       checks: cloud.checks,
       onTeamChecks: (results) => (answered = results),
-      onModels: (models) => void updatePendingSummary(api, summaryComment, models).catch((e) => log(`Couldn't name the models yet: ${(e as Error).message}`)),
+      onModels: (models) => {
+        naming = updatePendingSummary(api, summaryComment, models).catch((e) => {
+          log(`Couldn't name the models yet: ${(e as Error).message}`);
+        });
+      },
       // The commit the check and the earlier findings were read for, so a push in between doesn't mix two.
       at: values.at ?? headSha ?? undefined,
       provider,
@@ -274,6 +280,7 @@ async function main(): Promise<number> {
       // Reasons given in threads that this review sends to keep: the state holds them until the server confirms.
       // Also when the server couldn't be asked this time, so a waiting reason isn't dropped from the state.
       const remember = cloud.connected || cloud.failed ? (previous ?? []).filter((p) => p.handled?.from === "reply" && p.handled.remember && p.handled.at).map((p) => ({ id: p.id, at: p.handled!.at!, tries: (p.handled!.tries ?? 0) + (cloud.connected ? 1 : 0) })) : [];
+      await naming;
       const result = await publishReview(review, { dryRun, log, checkRunId, yellowBlocks: values["yellow-blocks"], approve: !values["no-approve"], teamUnread: cloud.failed === true, startedAt, remember });
       log(`Posted: ${result.inline} inline, ${result.outside} in the summary only, ${result.resolved} resolved. ${result.summaryUrl ?? ""}`);
       if (review.team_checks?.length) {
@@ -310,6 +317,7 @@ async function main(): Promise<number> {
       const title = limit ? checkLimitTitle(limit.plan) : login ? checkLoginTitle(login.plan) : undefined;
       const notice = limit ? limitNotice(limit.plan, limit.resets) : login ? loginNotice(login.plan, message) : undefined;
       await failCheck(api, checkRunId, headSha, message, log, title).catch((e) => log(`Couldn't update the check: ${(e as Error).message}`));
+      await naming;
       await failSummary(api, ref.number, notice).catch((e) => log(`Couldn't update the summary: ${(e as Error).message}`));
       // The newest commit wasn't reviewed. An approval Mergelight gave to an earlier commit must not count for this one.
       // With approvals turned off, none of Mergelight's approvals stands, this commit's included.

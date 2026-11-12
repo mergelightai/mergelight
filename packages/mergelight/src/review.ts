@@ -422,9 +422,13 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
     const verifyWith = opts.verifyWith ?? (provider === "claude" || (await claudeAvailable()) ? "claude" : "codex");
     const verifyModel = verifyWith === "codex" ? (opts.verifyModel ?? opts.model) : (opts.verifyModel ?? "opus");
     const firstAnswer = hunts.find((h) => h.status === "fulfilled");
+    const reviewerModel = firstAnswer?.status === "fulfilled" ? firstAnswer.value.model : (hunterModel ?? null);
+    // The same tool with no model of its own, or an alias of the one that answered ("opus" for
+    // "claude-opus-5-5"), is the same model: the comment mustn't say a second one checks.
+    const sameModel = verifyWith === provider && (!verifyModel || (reviewerModel ?? "").includes(verifyModel));
     opts.onModels?.({
-      reviewer: { name: provider, model: firstAnswer?.status === "fulfilled" ? firstAnswer.value.model : (hunterModel ?? null) },
-      checker: { name: verifyWith, model: verifyModel ?? null },
+      reviewer: { name: provider, model: reviewerModel },
+      checker: { name: verifyWith, model: sameModel ? reviewerModel : (verifyModel ?? null) },
     });
     if (!opts.verifyWith && verifyWith === "codex") progress("Claude Code isn't installed, so Codex checks the findings");
     progress(`Checking ${found.length} candidate${found.length === 1 ? "" : "s"}${verifyWith === "codex" ? "" : ` with ${verifyWith}`}`);

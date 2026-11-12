@@ -84,3 +84,17 @@ test("the Reviewing comment gets the models' names, and a comment with a result 
   await updatePendingSummary(api, null, plan);
   assert.equal(writes.length, 1);
 });
+
+test("the Reviewing check names the tool that reviews", async () => {
+  const { startCheck } = await import("../dist/publish/publish.js");
+  const writes = [];
+  const api = { write: async (method, path, body) => (writes.push(body), { id: 1 }) };
+  await startCheck(api, "a".repeat(40), "claude");
+  await startCheck(api, "a".repeat(40), "codex");
+  await startCheck(api, "a".repeat(40));
+  assert.deepEqual(writes.map((w) => w.output.summary.split(" on your own plan")[0]), [
+    "Mergelight is reviewing this pull request with Claude",
+    "Mergelight is reviewing this pull request with Codex",
+    "Mergelight is reviewing this pull request",
+  ]);
+});

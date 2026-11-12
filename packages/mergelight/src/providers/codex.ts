@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { run } from "../run.js";
@@ -67,31 +67,6 @@ function readUserConfig(): string {
   } catch {
     return "";
   }
-}
-
-/**
- * The model Codex really used for one run, for display only. Its events don't say, but the session file
- * it keeps, named after the run's thread, does. It sits in a folder per day, so the last two days are
- * enough. Null when it can't be found.
- */
-export function sessionModel(threadId: string | null, home = codexHome()): string | null {
-  if (!threadId || !/^[\w-]{8,80}$/.test(threadId)) return null;
-  try {
-    const newest = (dir: string) => readdirSync(dir).filter((n) => /^\d+$/.test(n)).sort().reverse();
-    const sessions = join(home, "sessions");
-    const days: string[] = [];
-    for (const y of newest(sessions).slice(0, 2))
-      for (const m of newest(join(sessions, y)).slice(0, 2)) for (const d of newest(join(sessions, y, m)).slice(0, 2)) days.push(join(sessions, y, m, d));
-    for (const day of days.sort().reverse().slice(0, 2)) {
-      const file = readdirSync(day).find((n) => n.endsWith(`${threadId}.jsonl`));
-      if (!file) continue;
-      const model = /"model":"([\w.-]{1,60})"/.exec(readFileSync(join(day, file), "utf8"))?.[1];
-      return model ?? null;
-    }
-  } catch {
-    /* no sessions folder, or one that can't be read */
-  }
-  return null;
 }
 
 /** The model from the user's Codex config, for display only. */
@@ -213,7 +188,6 @@ export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
   /** Codex's own errors, kept apart from its stdout, which also carries the code it reads. */
   const failures: string[] = [];
   let usage: CodexResult["usage"] = null;
-  let threadId: string | null = null;
   let buffer = "";
   const onStdout = (chunk: string) => {
     buffer += chunk;
@@ -227,11 +201,9 @@ export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
           type?: string;
           item?: { type?: string; command?: string; exit_code?: number | null; aggregated_output?: string };
           usage?: { input_tokens?: number; output_tokens?: number; cached_input_tokens?: number };
-          thread_id?: string;
           message?: string;
           error?: { message?: string };
         };
-        if (event.type === "thread.started" && typeof event.thread_id === "string") threadId = event.thread_id;
         if (event.type === "error" || event.type === "turn.failed") failures.push(event.message ?? event.error?.message ?? "");
         if (event.type === "item.started" && event.item?.type === "command_execution") {
           commands++;
@@ -294,7 +266,9 @@ export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
     }
     return {
       output: JSON.parse(scrubSecrets(raw)),
-      model: opts.model ?? sessionModel(threadId) ?? configuredModel(config),
+      // Codex doesn't say which default model it used, and --ephemeral keeps it from saving a session
+      // file that would: only a model someone named is known.
+      model: opts.model ?? configuredModel(config),
       commands,
       usage,
     };
