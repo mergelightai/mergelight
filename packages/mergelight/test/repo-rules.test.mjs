@@ -170,3 +170,8 @@ test("text after a code block doesn't join the bullet above it", () => {
   const md = "- Use the shared client.\n```ts\nclient.get(url);\n```\nThis paragraph is about something else.\n- Second.\n";
   assert.deepEqual(parseRuleFile(".mergelight/rules.md", md).map((r) => r.text), ["Use the shared client.", "Second."]);
 });
+
+test("a code block that closes with a longer fence still shields its comment markers", () => {
+  const md = "```\n<!--\n````\n- Kept.\n<!-- - Turned off. -->\n";
+  assert.deepEqual(parseRuleFile(".mergelight/rules.md", md).map((r) => r.text), ["Kept."]);
+});

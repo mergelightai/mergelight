@@ -88,7 +88,8 @@ export function withoutComments(text: string): string {
   const kept: string[] = [];
   const hold = (code: string) => `\u0000${kept.push(code) - 1}\u0000`;
   const shielded = text
-    .replace(/^([ \t]*)(`{3,}|~{3,})[^\n]*\n[\s\S]*?^[ \t]*\2[ \t]*$/gm, hold)
+    // A code block closes with the same character, at least as many times as it opened with.
+    .replace(/^([ \t]*)((`){3,}|(~){3,})[^\n]*\n[\s\S]*?^[ \t]*\2(?:\3|\4)*[ \t]*$/gm, hold)
     .replace(/`[^`\n]+`/g, hold);
   return shielded.replace(/<!--[\s\S]*?-->/g, "").replace(/\u0000(\d+)\u0000/g, (_, i: string) => kept[Number(i)]!);
 }
