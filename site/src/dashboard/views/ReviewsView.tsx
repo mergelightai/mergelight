@@ -152,7 +152,7 @@ function DurationChart({ reviews, span, from, controls }: { reviews: Review[]; s
     return h >= 48 ? `-${Math.round(h / 24)}D` : h >= 1 ? `-${Math.round(h)}H` : `-${Math.max(1, Math.round(h * 60))}M`;
   };
   const clock = (iso: string) =>
-    now - start > 86_400_000
+    now - start > 86_400_000 + 60_000
       ? new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })
       : new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
   return (
@@ -243,9 +243,14 @@ function History({ reviews, slots = 24 }: { reviews: Review[]; slots?: number })
   );
 }
 
-export function ReviewsView({ overview, login, orgLogin }: { overview: Overview; login: string; orgLogin: string }) {
-  const [range, setRange] = useState<Range>('all');
-  const [show, setShow] = useState<'all' | Light>('all');
+/** The Reviews view's filters: which time, and which light. Kept by the page, so they outlive the view. */
+export type ReviewFilters = { range: Range; show: 'all' | Light };
+export const NO_FILTERS: ReviewFilters = { range: 'all', show: 'all' };
+
+export function ReviewsView({ overview, login, orgLogin, filters, onFilters }: { overview: Overview; login: string; orgLogin: string; filters: ReviewFilters; onFilters: (f: ReviewFilters) => void }) {
+  const { range, show } = filters;
+  const setRange = (r: Range) => onFilters({ ...filters, range: r });
+  const setShow = (s: 'all' | Light) => onFilters({ ...filters, show: s });
   const cutoff = Date.now() - (RANGES.find((r) => r.id === range)?.ms ?? Infinity);
   const inRange = overview.reviews.filter((r) => Date.parse(r.created_at) >= cutoff);
   const oldestSent = overview.reviews.reduce<string | null>((o, r) => (!o || r.created_at < o ? r.created_at : o), null);

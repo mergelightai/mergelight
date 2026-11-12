@@ -351,6 +351,16 @@ const done = async (t) => {
   expect(cursors.length === 0, `everything that can be clicked shows the hand (${cursors.join(' | ')})`);
   await t.shot('2-reviews');
 
+  // The filters stay set when the view is left and opened again.
+  await t.click('[role=group][aria-label=Show] button', 'Blocked1');
+  await wait(300);
+  expect(/Latest reviews 1/.test(await t.text()) && !/#42/.test(await t.text()), 'the Blocked tab shows only blocked reviews');
+  await t.view('Rules');
+  await t.view('Reviews');
+  expect((await t.page.evaluate(() => document.querySelector('[role=group][aria-label=Show] [aria-pressed=true]')?.textContent)) === 'Blocked1', 'and it stays picked after visiting another view');
+  await t.click('[role=group][aria-label=Show] button', 'All3');
+  await wait(300);
+
   expect(t.calls[0].m === 'POST' && t.calls[0].path === '/v1/session' && t.calls[0].auth === `Bearer ${GITHUB_TOKEN}`, 'the GitHub token goes to the server once, to sign in');
   expect(t.calls.slice(1).every((c) => c.auth === `Bearer ${SESSION_TOKEN}`), 'every later call carries only the server\'s own session');
   const stored = await t.page.evaluate(() => JSON.stringify([Object.entries(sessionStorage), Object.entries(localStorage), document.cookie]));

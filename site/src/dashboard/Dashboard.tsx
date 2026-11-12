@@ -5,7 +5,7 @@ import { AppShell, VIEWS, type ViewId } from './AppShell';
 import { claimTab, forgetTab, keepOrg, keptOrg, keepView, keptView, takeResume } from './kit';
 import { ChecksView } from './views/ChecksView';
 import { DecisionsView } from './views/DecisionsView';
-import { ReviewsView } from './views/ReviewsView';
+import { NO_FILTERS, ReviewsView, type ReviewFilters } from './views/ReviewsView';
 import { RulesView } from './views/RulesView';
 import { SkillsView } from './views/SkillsView';
 import { Centered, LoadError, NoOrg, NothingYet, NotOn, SignIn, Spinning } from './views/States';
@@ -32,10 +32,14 @@ export default function Dashboard() {
   // GitHub sends a cancelled sign-in back with an error and no code.
   const [cancelled] = useState(() => params.has('error') && !params.has('code'));
   const [resume, setResume] = useState<string | null>(null);
+  // The Reviews view's time and light filters, kept here so they stay set across views and refreshes.
+  const [filters, setFilters] = useState<ReviewFilters>(NO_FILTERS);
   const [orgId, setOrgId] = useState<number | null>(() => keptOrg());
   const pickOrg = (id: number) => {
     keepOrg(id);
     setResume(null);
+    // Another org has other counts, so its Reviews view starts on all reviews.
+    setFilters(NO_FILTERS);
     setOrgId(id);
   };
   const [view, setView] = useState<View>({ kind: 'loading' });
@@ -222,7 +226,7 @@ export default function Dashboard() {
       {view.kind === 'loading' && <Spinning>Loading reviews</Spinning>}
       {view.kind === 'off' && <NotOn org={org} />}
       {view.kind === 'error' && <LoadError onRetry={reload} />}
-      {ready && tab === 'reviews' && (ready.overview.reviews.length ? <ReviewsView overview={ready.overview} login={session.user.login} orgLogin={org.login} /> : <NothingYet org={org} />)}
+      {ready && tab === 'reviews' && (ready.overview.reviews.length ? <ReviewsView overview={ready.overview} login={session.user.login} orgLogin={org.login} filters={filters} onFilters={setFilters} /> : <NothingYet org={org} />)}
       {ready && tab === 'rules' && (ready.rules ? (
         <RulesView
           key={org.id}
