@@ -735,6 +735,13 @@ test("a reason given when resolving a thread is the team's decision, and is kept
   for (const said of ["We won't fix this: only admins reach it.", "Not fixing, by design.", "Don’t fix, the gateway blocks it.", "No need to fix this.", "Doesn't need fixing.", "Valid, and known. The repair ships next release, so no code here."]) {
     assert.equal((await read(scenario([findingThread("aaaaaaaaaa", 501, [reply("teammate", said)])]))).remember, true, said);
   }
+  // A reply that neither declines nor claims a fix goes to the verifier as what was said, and isn't kept.
+  for (const said of ["Thanks, moved the validation into the router.", "Good catch, changed the caller.", "ok"]) {
+    const h = await read(scenario([findingThread("aaaaaaaaaa", 501, [reply("teammate", said)])]));
+    assert.equal(h.from, "thread", said);
+    assert.equal(h.remember, undefined, said);
+  }
+  assert.equal((await read(scenario([findingThread("aaaaaaaaaa", 501, [reply("teammate", "No worries, fixed upstream.")])]))).from, "thread");
   // A fix mentioned anywhere is a fix claim; "won't fix" is a reason.
   assert.equal((await read(scenario([findingThread("aaaaaaaaaa", 501, [reply("teammate", "Good catch, fixed by validating in the caller.")])]))).from, "thread");
   assert.equal((await read(scenario([findingThread("aaaaaaaaaa", 501, [reply("teammate", "Won't fix: only admins reach this route.")])]))).remember, true);
@@ -772,12 +779,13 @@ test("a reason the server hasn't confirmed is sent again in later reviews, until
   const base = stateOf([finding({ id: "aaaaaaaaaa", file: "src/a.ts", line: 12, end_line: 12 })]);
   const pending = { ...base, remember: [{ id: "aaaaaaaaaa", at: "2001-01-01T00:00:00Z" }] };
   const thread = (extra = []) => findingThread("aaaaaaaaaa", 501, [reply("teammate", "Known, leave it.", "2001-01-01T00:00:00Z"), ...extra]);
-  const read = async (state, threads) => {
-    const { env } = useScenario({ issueComments: [summaryComment(state)], threads, compare: { status: "diverged", files: [] } });
+  const read = async (state, threads, compare = { status: "ahead", files: [] }) => {
+    const { env } = useScenario({ issueComments: [summaryComment(state)], threads, compare });
     return (await withFakeGh(env, () => previousFindings(new GitHub("o", "r"), 7, PUSHED)))[0].handled;
   };
-  // Old, and the code can't be compared: only the pending list keeps it.
+  // An old reply: only the pending list keeps it, and only while the code there is unchanged.
   assert.equal((await read(pending, [thread()])).remember, true);
+  assert.equal((await read(pending, [thread()], { status: "diverged", files: [] })).remember, undefined, "can't tell if the code changed: not sent again");
   assert.equal((await read(base, [thread()])).remember, undefined, "nothing pending: an old reply isn't kept");
   const answered = [thread([{ databaseId: 10, body: "<!-- mergelight:remembered -->\nRemembered.", createdAt: "2001-01-02T00:00:00Z", author: { __typename: "Bot", login: "mergelight-ai" } }])];
   assert.equal((await read(pending, answered)).remember, undefined, "answered in the thread: the server has it");

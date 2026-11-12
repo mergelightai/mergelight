@@ -119,13 +119,14 @@ export async function previousFindings(api: GitHub, number: number, headSha?: st
       const mark = marks.get(id);
       const by = resolved.get(id);
       const reply = replies.get(id);
-      // A resolve gives the team's reason, in every review that reads it: all of the resolver's replies, so
-      // a later "thanks" doesn't replace it. Unless any of them says it was fixed: then a later "ok thanks"
-      // is no reason to leave a problem alone.
+      // A resolve gives the team's reason, in every review that reads it, when a reply clearly declines
+      // ("won't fix", "known", "by design") and none says it was fixed. All of the resolver's replies make
+      // the reason, so a later "thanks" doesn't replace it. Any other reply reaches the verifier as what
+      // was said, for it to weigh: words can't tell every fix note from a reason.
       const all = reply?.replies ?? [];
       const last = all.at(-1);
       const reasons = all;
-      const isReason = all.length > 0 && !all.some((r) => FIX_CLAIM.test(r.text));
+      const isReason = all.some((r) => DECLINE.test(r.text)) && !all.some((r) => FIX_CLAIM.test(r.text));
       // It is remembered for later pull requests only in the review right after it was written, and only
       // if the code there didn't change since the review it answers: then the reply may say how it was
       // fixed. A reply from before the latest review may answer an older round, such as a fix it checked.
@@ -135,7 +136,7 @@ export async function previousFindings(api: GitHub, number: number, headSha?: st
       // At most MAX_TRIES reviews: a server that kept it but never says so (an older one, or a lost answer)
       // mustn't get it on every review.
       const wait = waiting.get(id);
-      const pending = isReason && !reply!.answered && wait?.at === reasons.at(-1)?.at && (wait?.tries ?? 1) < MAX_TRIES;
+      const pending = isReason && !reply!.answered && wait?.at === reasons.at(-1)?.at && (wait?.tries ?? 1) < MAX_TRIES && (await unchanged(f));
       const remember = pending || (isReason && fresh.length > 0 && !fresh.some((r) => FIX_CLAIM.test(r.text)) && f.status === "open" && (await unchanged(f)));
       const handled = mark
         ? { as: mark.as, note: mark.note, by: mark.by, sha: mark.sha, from: "mark" as const, at: mark.at }
@@ -160,6 +161,10 @@ export async function previousFindings(api: GitHub, number: number, headSha?: st
  */
 const FIX_CLAIM = /(?<!\b(?:\w*n[’']t|not|no|never|nothing)(?:\s+[^\s.,;:!?]+){0,3}\s+)\b(fix|fixing|fixed|fixes|addressed)\b|^\W*done\b|\b(?=[0-9a-f]*[a-f])(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b/i;
 
+/** A reply that clearly declines to fix: a reason, not a note about a fix. */
+const DECLINE =
+  /\b(?:won[’']?t|will not|do not|don[’']?t|not|no need to|can[’']?t|cannot)\s+(?:be\s+)?fix(?:ing|ed)?\b|\bno need\b|\bdoesn[’']?t need\b|\bnot needed\b|\bby design\b|\bintentional(?:ly)?\b|\bon purpose\b|\bexpected\b|\bknown\b|\baccept(?:ed|able)?\b|\b(?:keep|leave) (?:it|this|that)\b|\bnot an? (?:problem|bug|issue|risk|concern)\b|\bfalse positive\b|\bout of scope\b/i;
+
 /** How many reviews send a waiting reason before it is given up on. */
 const MAX_TRIES = 3;
 
@@ -179,7 +184,7 @@ export async function answerRemembered(api: GitHub, number: number, ids: string[
   let answered = 0;
   for (const t of await reviewThreads(api, number).catch(() => [])) {
     const found = threadFinding(t);
-    if (!found || !wanted.has(found.id) || answeredRemembered(t)) continue;
+    if (!found || t.comments.nodes[0]?.author?.__typename !== "Bot" || !wanted.has(found.id) || answeredRemembered(t)) continue;
     const body = [
       REMEMBERED_MARKER,
       `🧠 **Remembered.** Later reviews of this repository read this reason before they report this problem again.${cut.has(found.id) ? " The reason was long, so only its start is kept." : ""} If it stops being true, forget it on your Mergelight dashboard.`,
@@ -350,7 +355,8 @@ export async function publishReview(
 
   const { handled, resolved } = await settleThreads(api, review, log);
 
-  const started = opts.startedAt ?? new Date(Date.parse(review.created_at) - (review.stats?.duration_ms ?? 0));
+  // A saved review posted later is dated now: replies written since it ran are older than this round.
+  const started = opts.startedAt ?? new Date();
   const state = nextState(prev, review.findings, review.pr.head_sha, review.light, urls, Number.isFinite(started.getTime()) ? started : new Date(), opts.remember ?? prev?.remember);
   const summaryInput = { review, state, urls, marks, handled, update: await newerVersion(api) };
   const commentBody = summaryBody(summaryInput);

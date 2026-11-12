@@ -142,7 +142,8 @@ export function resolverReplies(threads: ReviewThread[], resolved: Map<string, s
   const out = new Map<string, { replies: { text: string; at: string }[]; commentId: number; answered: boolean }>();
   for (const t of threads) {
     const found = threadFinding(t);
-    if (!found) continue;
+    // Only a thread Mergelight started: a member who can't push could start one with a copied marker.
+    if (!found || t.comments.nodes[0]?.author?.__typename !== "Bot") continue;
     const by = resolved.get(found.id);
     if (!by || t.resolvedBy?.login !== by) continue;
     const own = t.comments.nodes
