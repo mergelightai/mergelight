@@ -581,7 +581,11 @@ async function settleThreads(api: GitHub, review: Review, log: (s: string) => vo
           // not. Then the fixed comment is folded away as resolved instead, if Mergelight wrote it. Any
           // other error is logged as it is, and the next review tries again.
           if (/not accessible by integration/i.test(message)) fold = Boolean(found.nodeId) && t.comments.nodes[0]?.author?.__typename === "Bot";
-          else log(`Couldn't mark a fixed thread resolved: ${message}`);
+          else {
+            // Left as it was, not marked Handled: a marked thread isn't tried again, and this one should be.
+            log(`Couldn't mark a fixed thread resolved: ${message}. The next review tries again.`);
+            continue;
+          }
         }
       }
       handled.set(found.id, { how: "fixed", sha });

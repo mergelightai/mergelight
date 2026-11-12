@@ -892,6 +892,7 @@ test("a fixed finding's comment is folded away as resolved when GitHub won't let
   });
   await withFakeGh(outage.env, () => publishReview(review([])));
   assert.ok(!outage.writes().some((w) => w.graphql === "fold"));
+  assert.ok(!outage.writes().some((w) => w.path === "pulls/comments/501"), "not marked Handled, so the next review tries again");
 
   // The finding comes back: its folded comment shows again.
   const back = useScenario({
