@@ -15,6 +15,20 @@ export const canaryBranch = (tag) => `canary/${tag}`;
 
 export const PLANTED_FILE = "canary/delete-project.js";
 export const CANARY_TIMEOUT_MS = 3 * 60 * 60 * 1000;
+/** The apps that post Mergelight's review: the Mergelight AI app, or the workflow's own token. */
+export const REVIEW_APPS = ["mergelight-ai", "github-actions"];
+
+/**
+ * Whether a review summary lists a finding on the planted file. Only the findings to fix count: the
+ * summary's opening text, the "Left alone" list and "Your call" can name the file without flagging
+ * the bug, so the text from either of those on is cut off, and a finding shows as `file:line`.
+ */
+export function summaryFlags(summary, file = PLANTED_FILE) {
+  const text = summary ?? "";
+  const ends = ["<details><summary>Left alone", "#### Your call"].map((m) => text.indexOf(m)).filter((i) => i >= 0);
+  const findings = ends.length ? text.slice(0, Math.min(...ends)) : text;
+  return new RegExp(`${file.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}:\\d`).test(findings);
+}
 
 /**
  * "passed", "failed" or "waiting" for one canary pull request, with the reason.
@@ -82,13 +96,14 @@ async function readCanary(tag, publishedAt, isNewest, token) {
     return late ? { verdict: "failed", note: "no canary was opened within 3 hours of the release" } : { verdict: "waiting", note: "no canary" };
   }
   const { check_runs } = await github(`repos/${CANARY_REPO}/commits/${pull.head.sha}/check-runs?check_name=Mergelight&per_page=20`, token);
-  const check = check_runs.sort((a, b) => b.id - a.id)[0];
-  // The planted bug counts as flagged when the review put a comment on its file, or named the file in the
-  // check's summary, where a finding without an inline comment is listed.
-  let flaggedPlantedFile = (check?.output?.summary ?? "").includes(PLANTED_FILE);
+  // Only Mergelight's own check counts, not another app's check with the same name.
+  const check = check_runs.filter((c) => REVIEW_APPS.includes(c.app?.slug)).sort((a, b) => b.id - a.id)[0];
+  // The planted bug counts as flagged when the review put a comment on its file, or listed a finding on
+  // it in the check's summary, where a finding without an inline comment shows.
+  let flaggedPlantedFile = summaryFlags(check?.output?.summary);
   if (check?.status === "completed" && !flaggedPlantedFile) {
     const comments = await github(`repos/${CANARY_REPO}/pulls/${pull.number}/comments?per_page=100`, token);
-    flaggedPlantedFile = comments.some((c) => c.path === PLANTED_FILE && c.user?.type === "Bot");
+    flaggedPlantedFile = comments.some((c) => c.path === PLANTED_FILE && REVIEW_APPS.some((app) => c.user?.login === `${app}[bot]`));
   }
   const { verdict, why } = canaryVerdict({ check, flaggedPlantedFile, openedAt: pull.created_at });
   return { verdict, note: `${pull.html_url}: ${why}` };
@@ -130,6 +145,13 @@ async function main() {
   }
 
   const pick = pickRelease(releases, (tag) => verdicts.get(tag) ?? "waiting", current, now);
+  // After a roll-out by hand with "now", the tag sits on the newest release before its canary ran. Read
+  // that canary too, so a failure still turns the run red.
+  if (pick.stay && pick.stay === releases[0].tag && sandboxToken && !now) {
+    const canary = await readCanary(pick.stay, published.get(pick.stay), true, sandboxToken);
+    console.log(`${pick.stay}: canary ${canary.verdict} (${canary.note})`);
+    if (canary.verdict === "failed") pick.failed.push(pick.stay);
+  }
   const out = (line) => process.env.GITHUB_OUTPUT && appendFileSync(process.env.GITHUB_OUTPUT, `${line}\n`);
   out(`major=${major}`);
   out(`failed=${pick.failed.join(" ")}`);

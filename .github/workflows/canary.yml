@@ -29,6 +29,8 @@ concurrency:
 jobs:
   canary:
     runs-on: ubuntu-latest
+    # The release app's key is a secret of this environment, which only main can use (see roll-out.yml).
+    environment: release
     steps:
       - name: Check the release
         env:

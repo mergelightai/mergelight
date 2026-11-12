@@ -13,8 +13,8 @@
 # lets the workflow's token point a tag at a commit whose workflow files differ, by git or by the API,
 # and most releases change one (tested Nov 12 2026: v0 stayed on v0.1.4 for that reason). The app is
 # installed on this repository and the sandbox only. Its id is the variable RELEASE_APP_ID and its
-# private key the secret RELEASE_APP_PRIVATE_KEY. It is also the only one the tag ruleset lets move
-# v0, so nobody else can, not even an admin's token.
+# private key the secret RELEASE_APP_PRIVATE_KEY of the environment "release", which only main can
+# use. It is also the only one the tag ruleset lets move v0, so nobody else can, not even an admin.
 name: Roll out
 
 on:
@@ -37,6 +37,9 @@ concurrency:
 jobs:
   roll-out:
     runs-on: ubuntu-latest
+    # The release app's key is a secret of this environment, which only main can use. So a workflow on
+    # any other branch can't read the key and move v0 past the tag lock.
+    environment: release
     steps:
       - name: Get the release app's token
         id: app
@@ -77,10 +80,10 @@ jobs:
             exit 1
           fi
           echo "$MAJOR moved to $TAG."
-      - name: Say which canaries failed
+      - name: Say which canaries didn't pass
         if: steps.pick.outputs.failed != ''
         env:
           FAILED: ${{ steps.pick.outputs.failed }}
         run: |
-          echo "::error::The canary failed for $FAILED, so @v0 doesn't get it. Look at the canary pull request in mergelightai/action-sandbox, then pull the release (mark it as a pre-release) or run the canary again."
+          echo "::error::No canary passed for $FAILED, so @v0 doesn't get it (the reason is above). Look at the canary pull request in mergelightai/action-sandbox, then run the Canary workflow again, or pull the release (mark it as a pre-release) if it is broken."
           exit 1

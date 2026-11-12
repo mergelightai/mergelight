@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { byVersion, CANARY_TIMEOUT_MS, canaryBranch, canaryVerdict, pickRelease, PLANTED_FILE } from "../../../.github/scripts/roll-out.mjs";
+import { byVersion, CANARY_TIMEOUT_MS, canaryBranch, canaryVerdict, pickRelease, PLANTED_FILE, summaryFlags } from "../../../.github/scripts/roll-out.mjs";
 
 const releases = [
   { tag: "v0.1.19", sha: "c19" },
@@ -89,4 +89,14 @@ test("a run by hand with now takes the newest release without its canary", () =>
 
 test("a major tag that doesn't exist yet is created on the newest release that passed", () => {
   assert.equal(pickRelease(releases, verdicts({ "v0.1.18": "passed" }), "").move.tag, "v0.1.18");
+});
+
+test("the summary counts the planted file only in a finding to fix, not in the intro or the left-alone list", () => {
+  const intro = `This pull request adds ${PLANTED_FILE} and pins the workflow.\n\n`;
+  assert.equal(summaryFlags(`${intro}#### To fix\n- 🔴 Major bug: [Anyone can delete any project](u) \`${PLANTED_FILE}:5\``), true);
+  assert.equal(summaryFlags(`${intro}#### Also worth fixing\n<details><summary>🟠 Minor bug: <b>t</b> <code>${PLANTED_FILE}:5</code></summary>`), true);
+  assert.equal(summaryFlags(`${intro}#### To fix\n- 🟡 Risk: [Pin](u) \`.github/workflows/mergelight.yml:35\``), false, "only the intro names it");
+  assert.equal(summaryFlags(`${intro}<details><summary>Left alone: 1</summary>\n- x \`${PLANTED_FILE}:5\``), false);
+  assert.equal(summaryFlags(`${intro}#### Your call\n- x \`${PLANTED_FILE}:5\``), false);
+  assert.equal(summaryFlags(undefined), false);
 });
