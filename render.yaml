@@ -23,3 +23,6 @@ services:
       # For "Sign in with GitHub" on the setup page. It belongs to the Mergelight Setup app, which has no private key.
       - key: GITHUB_SETUP_APP_CLIENT_SECRET
         sync: false
+      # For signing in to the dashboard. It belongs to the Mergelight AI app, the one that posts reviews.
+      - key: GITHUB_APP_CLIENT_SECRET
+        sync: false

@@ -8,8 +8,8 @@
 // Optional:
 //   DASHBOARD_ORIGINS  Sites whose pages may show the dashboard, with commas between them.
 //                  Default: https://mergelight.dev
-//   SIGN_IN_APP    The GitHub App people sign in to the dashboard with, by its name in its address.
-//                  Default: mergelight-setup
+//   SIGN_IN_APP    The GitHub Apps people sign in to the dashboard with, by the name in their address,
+//                  split by commas. Default: mergelight-ai,mergelight-setup
 //   CONNECT_ORGS   Orgs to turn the dashboard on for at start, as "id:login,id:login" with GitHub's
 //                  number for each account. It stands in until sign-in exists.
 //

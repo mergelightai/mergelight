@@ -26,10 +26,13 @@ const BO = "ghu_" + "b".repeat(36);
 const CY = "ghu_" + "c".repeat(36);
 /** Dee has no installs at all. */
 const DEE = "ghu_" + "d".repeat(36);
+/** Eve signed in to Mergelight AI, the app that posts reviews, which is how the dashboard signs in now. */
+const EVE = "ghu_" + "e".repeat(36);
 const people = {
   [ADA]: { user: { id: 11, login: "ada" }, owns: ["acme"], installations: [{ id: 501, account: ACME, repos: [{ id: 501, full_name: "acme/widgets", permissions: { push: true, admin: true } }, { id: 502, full_name: "acme/api", permissions: { push: false, admin: false } }] }, { id: 503, account: QUIET, repos: [{ id: 901, full_name: "quiet/site" }] }] },
   [BO]: { user: { id: 22, login: "bo" }, installations: [{ id: 601, account: OTHER, repos: [{ id: 777, full_name: "other/vault", permissions: { push: true, admin: true } }] }] },
   [DEE]: { user: { id: 44, login: "dee" }, installations: [] },
+  [EVE]: { user: { id: 55, login: "eve" }, installations: [{ id: 801, app: "mergelight-ai", account: ACME, repos: [{ id: 501, full_name: "acme/widgets", permissions: { push: true, admin: false } }] }] },
   [CY]: { user: { id: 33, login: "cy" }, installations: [{ id: 701, app: "some-other-app", account: ACME, repos: [{ id: 501, full_name: "acme/widgets" }] }] },
 };
 
@@ -218,11 +221,26 @@ test("a token another GitHub App got for the same person is not a sign-in", asyn
   assert.deepEqual(githubCalls, ["/user", "/user/installations"]);
 });
 
+test("a sign-in to Mergelight AI counts, and so does one to Mergelight Setup from before", async () => {
+  const eve = await signIn(EVE);
+  assert.deepEqual(eve.orgs.map((o) => [o.login, o.repos]), [["acme", 1]]);
+  assert.equal((await call(`/v1/orgs/${ACME.id}/overview`, { token: eve.token })).status, 200);
+  // Ada signed in to Mergelight Setup, the sign-in app before. Her session works as it did.
+  assert.equal((await call(`/v1/orgs/${ACME.id}/overview`, { token: (await signIn(ADA)).token })).status, 200);
+});
+
 test("a server someone else hosts signs people in with its own app", async () => {
   const own = createApi({ pool, publicUrl: PUBLIC_URL, origins: [SITE], signInApp: "some-other-app", fetchImpl, now: () => clock });
   const ask = (token) => own(new Request("https://server.test/v1/session", { method: "POST", headers: { authorization: `Bearer ${token}`, origin: SITE } }));
   assert.equal((await ask(CY)).status, 201);
   assert.equal((await ask(ADA)).status, 401);
+  assert.equal((await ask(EVE)).status, 401);
+  // A list, split by commas, takes a sign-in to any app in it.
+  const both = createApi({ pool, publicUrl: PUBLIC_URL, origins: [SITE], signInApp: " some-other-app , mergelight-ai ", fetchImpl, now: () => clock });
+  const askBoth = (token) => both(new Request("https://server.test/v1/session", { method: "POST", headers: { authorization: `Bearer ${token}`, origin: SITE } }));
+  assert.equal((await askBoth(CY)).status, 201);
+  assert.equal((await askBoth(EVE)).status, 201);
+  assert.equal((await askBoth(ADA)).status, 401);
 });
 
 test("signing out ends the session", async () => {
