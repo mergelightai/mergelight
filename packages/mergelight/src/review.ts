@@ -19,6 +19,7 @@ import {
   usedMemories,
 } from "./prompt.js";
 import { LimitError, LoginError } from "./providers/codex.js";
+import { MAX_REPO_RULES } from "./repo-rules.js";
 import { claudeAvailable, runModel as runOneModel, TOOLING, type ModelOptions, type ModelResult, type ProviderName } from "./providers/index.js";
 import { candidateSchema, checkSchema, reviewSchema, reviewSchemaWithDecisions } from "./schema.js";
 import { CHECK_TIMEOUT_MS, startTeamChecks, type ChecksRun } from "./checks.js";
@@ -241,8 +242,8 @@ export async function verifyCandidates(dir: string, input: PromptInput, found: C
   return { summary: review.summary, findings, rejected: review.rejected, model: result.model, cost_usd: result.cost_usd ?? null, usage: result.usage };
 }
 
-/** Every rule a team can have for one repository: 50 for the org and 50 of its own. None is dropped. */
-const MAX_RULES = 100;
+/** Every rule a team can have for one repository: 50 for the org and 50 of its own on the dashboard, and those in its rule files. None is dropped. */
+const MAX_RULES = 100 + MAX_REPO_RULES;
 
 /** The summary, with what the reader must know about the team's rules: a guarded file was changed, or the rules couldn't be read. */
 export function summaryWith(summary: string, needsHuman: string[], rulesUnread: boolean): string {
@@ -305,6 +306,8 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
   const teamSkills = [...ws.skills, ...ws.writtenSkills];
   if (teamSkills.length) progress(`Using your team's skill${teamSkills.length === 1 ? "" : "s"}: ${teamSkills.map((s) => s.name).join(", ")}`);
   if (ws.conventions.length) progress(`Using ${ws.conventions.map((c) => c.path).join(", ")} from ${pr.baseRef}`);
+  const ruleFiles = [...new Set(ws.rules.filter((r) => ruleApplies(r, ws.touchedPaths)).map((r) => r.source))];
+  if (ruleFiles.length) progress(`Using the rules in ${ruleFiles.join(", ")} from ${pr.baseRef}`);
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const log = (step: string) => join(cacheDir(), "logs", `${pr.owner}-${pr.repo}-${pr.number}-${stamp}-${step}.log`);
   let checksRun: ChecksRun | null = null;
@@ -322,7 +325,8 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
       // Matched against every path the pull request touches, exactly as git has it.
       skills: teamSkills,
       conventions: ws.conventions,
-      rules: (opts.rules ?? []).filter((r) => r.kind === "rule" && ruleApplies(r, ws.touchedPaths)).slice(0, MAX_RULES),
+      // The dashboard's rules, then the ones written in the repository.
+      rules: [...(opts.rules ?? []), ...ws.rules].filter((r) => r.kind === "rule" && ruleApplies(r, ws.touchedPaths)).slice(0, MAX_RULES),
     };
 
     // Step 1: hunters, one per area, in parallel. One failing doesn't sink the review.
