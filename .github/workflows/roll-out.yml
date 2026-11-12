@@ -43,24 +43,27 @@ jobs:
           newest="$(jq -r '.[0].tag // empty' <<<"$releases")"
           if [ -z "$newest" ]; then echo "There is no release yet."; exit 0; fi
           major="${newest%%.*}"
-          # The newest release of this major that is a day old. Not only the newest release: when a
+          # This major's releases, each marked when a newer one replaced it within 6 hours: that is how
+          # a fix for a bad release looks, and the bad one must not reach people, nor stay on the tag.
+          list="$(jq --arg major "$major" --argjson gap 21600 '
+            [.[] | select(.tag | startswith($major + "."))] as $l
+            | [range(0; $l | length) as $i | $l[$i] + {replaced: ($i > 0 and ((($l[$i - 1].at | fromdate) - ($l[$i].at | fromdate)) < $gap))}]' <<<"$releases")"
+          # The newest of them that is a day old and not replaced. Not only the newest release: when a
           # new one comes out every day, the newest is never a day old, and the tag would never move.
-          # A release that a newer one replaced within 6 hours is skipped: that is how a fix for a bad
-          # release looks, and the bad one must not reach people only because it turned a day old first.
           min=86400
           if [ "$NOW" = "true" ]; then min=0; fi
-          read -r tag age < <(jq -r --arg major "$major" --argjson min "$min" --argjson gap 21600 '
-            [.[] | select(.tag | startswith($major + "."))] as $list
-            | [range(0; $list | length) as $i | $list[$i] + {replaced: ($i > 0 and ((($list[$i - 1].at | fromdate) - ($list[$i].at | fromdate)) < $gap))}]
-            | [.[] | select(.age >= $min and (.replaced | not))][0] // empty
-            | "\(.tag) \(.age)"' <<<"$releases") || true
-          if [ -z "$tag" ]; then echo "No $major release is a day old yet. $newest is $(jq -r '.[0].age' <<<"$releases") seconds old."; exit 0; fi
+          read -r tag age < <(jq -r --argjson min "$min" '[.[] | select(.age >= $min and (.replaced | not))][0] // empty | "\(.tag) \(.age)"' <<<"$list") || true
+          if [ -z "$tag" ]; then
+            echo "No $major release is a day old yet, leaving out any that a quick fix replaced. $newest is $(jq -r '.[0].age' <<<"$list") seconds old."
+            exit 0
+          fi
           target="$(git rev-parse "$tag^{commit}")"
           current="$(git rev-parse -q --verify "refs/tags/$major^{commit}" || true)"
           if [ "$current" = "$target" ]; then echo "$major is already on $tag."; exit 0; fi
           # Never back: a release someone rolled out by hand ("now") stays until a newer one is a day old.
-          # Only a release that was pulled (made a pre-release, or deleted) is left, because it isn't in the list.
-          for newer in $(jq -r --arg major "$major" '.[] | select(.tag | startswith($major + ".")) | .tag' <<<"$releases"); do
+          # Not a release that was pulled (a pre-release, or deleted), and not one a quick fix replaced:
+          # neither is in this loop, so the tag moves off it.
+          for newer in $(jq -r '.[] | select(.replaced | not) | .tag' <<<"$list"); do
             [ "$newer" = "$tag" ] && break
             if [ "$(git rev-parse -q --verify "refs/tags/$newer^{commit}" || true)" = "$current" ]; then
               echo "$major is on $newer, which is newer than $tag and still a release. It stays."
