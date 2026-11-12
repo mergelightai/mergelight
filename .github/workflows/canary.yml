@@ -3,7 +3,7 @@
 # finished and found something. Runs after each release (release.yml calls it), or by hand for one
 # that came out before the canary existed.
 #
-# Only one canary is open at a time: a new one closes the older ones and removes their branches.
+# A new canary closes the canaries of older releases and removes their branches.
 # It needs the "Mergelight Release" GitHub App installed on the sandbox, see roll-out.yml.
 name: Canary
 
@@ -65,9 +65,14 @@ jobs:
           TAG: ${{ inputs.tag }}
         run: |
           branch="canary/$TAG"
-          for n in $(gh pr list --state open --limit 100 --json number,headRefName --jq '.[] | select(.headRefName | startswith("canary/")) | .number'); do
-            gh pr close "$n" --delete-branch --comment "A newer canary replaces this one."
-          done
+          # Close the canaries of older releases, and of this one when it runs again. A newer release's canary
+          # stays: its review may still be running.
+          gh pr list --state open --limit 100 --json number,headRefName --jq '.[] | select(.headRefName | startswith("canary/")) | "\(.number) \(.headRefName | ltrimstr("canary/"))"' |
+            while read -r n old; do
+              if [ "$old" = "$TAG" ] || [ "$(printf '%s\n%s\n' "$old" "$TAG" | sort -V | head -n 1)" = "$old" ]; then
+                gh pr close "$n" --delete-branch --comment "A newer canary replaces this one."
+              fi
+            done
           # A canary run again for the same release starts over.
           git push origin --delete "$branch" 2> /dev/null || true
 

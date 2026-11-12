@@ -12,9 +12,9 @@
 # The tag moves with the "Mergelight Release" GitHub App, not the workflow's own token. GitHub never
 # lets the workflow's token point a tag at a commit whose workflow files differ, by git or by the API,
 # and most releases change one (tested Nov 12 2026: v0 stayed on v0.1.4 for that reason). The app is
-# installed on this repository and the sandbox only. Its id is the variable RELEASE_APP_ID and its
-# private key the secret RELEASE_APP_PRIVATE_KEY of the environment "release", which only main can
-# use. It is also the only one the tag ruleset lets move v0, so nobody else can, not even an admin.
+# installed on this repository and the sandbox only. Its id is the repository variable RELEASE_APP_ID,
+# and its private key the secret RELEASE_APP_PRIVATE_KEY of the environment "release", which only main
+# can use. It is also the only one the tag ruleset lets move v0, so nobody else can, not even an admin.
 name: Roll out
 
 on:

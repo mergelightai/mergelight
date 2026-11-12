@@ -21,12 +21,16 @@ export const REVIEW_APPS = ["mergelight-ai", "github-actions"];
 /**
  * Whether a review summary lists a finding on the planted file. Only the findings to fix count: the
  * summary's opening text, the "Left alone" list and "Your call" can name the file without flagging
- * the bug, so the text from either of those on is cut off, and a finding shows as `file:line`.
+ * the bug. So the search starts at "#### To fix" or "#### Also worth fixing", stops at either of the
+ * others, and a finding shows as `file:line`.
  */
 export function summaryFlags(summary, file = PLANTED_FILE) {
   const text = summary ?? "";
-  const ends = ["<details><summary>Left alone", "#### Your call"].map((m) => text.indexOf(m)).filter((i) => i >= 0);
-  const findings = ends.length ? text.slice(0, Math.min(...ends)) : text;
+  const starts = ["#### To fix", "#### Also worth fixing"].map((m) => text.indexOf(m)).filter((i) => i >= 0);
+  if (starts.length === 0) return false;
+  const from = Math.min(...starts);
+  const ends = ["<details><summary>Left alone", "#### Your call"].map((m) => text.indexOf(m, from)).filter((i) => i >= 0);
+  const findings = text.slice(from, ends.length ? Math.min(...ends) : undefined);
   return new RegExp(`${file.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}:\\d`).test(findings);
 }
 
@@ -87,7 +91,8 @@ async function github(path, token) {
 async function readCanary(tag, publishedAt, isNewest, token) {
   const [owner] = CANARY_REPO.split("/");
   const pulls = await github(`repos/${CANARY_REPO}/pulls?state=all&per_page=10&head=${owner}:${encodeURIComponent(canaryBranch(tag))}`, token);
-  const pull = pulls.sort((a, b) => b.number - a.number)[0];
+  // A canary opened before the release was published tested an earlier commit under the same tag.
+  const pull = pulls.filter((p) => !publishedAt || Date.parse(p.created_at) >= Date.parse(publishedAt)).sort((a, b) => b.number - a.number)[0];
   // The newest release's canary opens right after it. If it never did, it would wait forever without a
   // word, so it gets the same 3 hours. An older release without one is just passed over: it may be from
   // before canaries existed, and a newer release has its own.

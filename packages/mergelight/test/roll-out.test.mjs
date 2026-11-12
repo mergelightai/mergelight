@@ -98,5 +98,7 @@ test("the summary counts the planted file only in a finding to fix, not in the i
   assert.equal(summaryFlags(`${intro}#### To fix\n- 🟡 Risk: [Pin](u) \`.github/workflows/mergelight.yml:35\``), false, "only the intro names it");
   assert.equal(summaryFlags(`${intro}<details><summary>Left alone: 1</summary>\n- x \`${PLANTED_FILE}:5\``), false);
   assert.equal(summaryFlags(`${intro}#### Your call\n- x \`${PLANTED_FILE}:5\``), false);
+  assert.equal(summaryFlags(`The bug at \`${PLANTED_FILE}:5\` is left as hardening.\n\n#### To fix\n- 🟡 Risk: [Pin](u) \`.github/workflows/mergelight.yml:35\``), false, "the intro is skipped");
+  assert.equal(summaryFlags(`No findings at \`${PLANTED_FILE}:5\`.`), false, "no findings section at all");
   assert.equal(summaryFlags(undefined), false);
 });

@@ -58,7 +58,8 @@ jobs:
   # Tests the new release with a real review in the sandbox, before it can reach @v0.
   canary:
     needs: release
-    if: needs.release.outputs.tag != '' && vars.RELEASE_APP_ID != ''
+    # Without the release app, canary.yml fails loudly, which is what should happen.
+    if: needs.release.outputs.tag != ''
     uses: ./.github/workflows/canary.yml
     with:
       tag: ${{ needs.release.outputs.tag }}
