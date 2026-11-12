@@ -51,7 +51,9 @@ inputs:
       When a review is green and every one of your team's own checks passed, Mergelight approves the
       pull request, like a reviewer would, and takes the approval back when a later review isn't
       green. Set to "false" to turn that off: Mergelight then never approves, and takes back an
-      approval it gave before. Where a branch rule asks for an approval, a person then has to give it.
+      approval it gave before on each pull request's next review. For pull requests that are already
+      open, dismiss Mergelight's approval by hand or push to them. Where a branch rule asks for an
+      approval, a person then has to give it. Any other value than true or false, empty aside, counts as false.
     default: "true"
   codex-version:
     description: Version of the Codex CLI to install.
@@ -325,8 +327,13 @@ runs:
         [ -n "$MODEL" ] && args+=(--model "$MODEL")
         [ -n "$EFFORT" ] && args+=(--effort "$EFFORT")
         [ "$YELLOW_BLOCKS" = "true" ] && args+=(--yellow-blocks)
-        # "false", "False", "no", "off" or "0": a spelling that means off must never leave approvals on.
-        case "$(printf '%s' "$AUTO_APPROVE" | tr '[:upper:]' '[:lower:]')" in false|no|off|0) args+=(--no-approve) ;; esac
+        # Only a value that clearly means on keeps approvals on. A typo turns them off and says so:
+        # an approval nobody wanted is worse than one a person has to give.
+        case "$(printf '%s' "$AUTO_APPROVE" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')" in
+          true|yes|on|1|"") ;;
+          false|no|off|0) args+=(--no-approve) ;;
+          *) echo "::warning::auto-approve is \"$AUTO_APPROVE\", which isn't true or false, so Mergelight won't approve." ; args+=(--no-approve) ;;
+        esac
         node "$GITHUB_ACTION_PATH/packages/mergelight/dist/cli.js" "${args[@]}"
 
     # Codex may have refreshed the login during the run. Save the new one, or the next run
