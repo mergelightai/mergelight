@@ -51,7 +51,7 @@ jobs:
           permission-contents: write
           permission-workflows: write
           permission-pull-requests: write
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5, pinned: it gets the release app's token
         with:
           repository: mergelightai/action-sandbox
           token: ${{ steps.app.outputs.token }}

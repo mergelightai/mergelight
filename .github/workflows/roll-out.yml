@@ -30,8 +30,9 @@ on:
 permissions:
   contents: write # Only used without the release app, by a run with "now".
 
+# Its own queue: sharing release.yml's would let an hourly run replace a release waiting in line.
 concurrency:
-  group: release
+  group: roll-out
 
 jobs:
   roll-out:
@@ -50,7 +51,7 @@ jobs:
           permission-workflows: write
           permission-pull-requests: read
           permission-checks: read
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5, pinned: it gets the release app's token
         with:
           fetch-depth: 0
           fetch-tags: true

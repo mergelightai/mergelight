@@ -70,15 +70,23 @@ async function github(path, token) {
   return res.json();
 }
 
-async function readCanary(tag, token) {
+async function readCanary(tag, publishedAt, isNewest, token) {
   const [owner] = CANARY_REPO.split("/");
   const pulls = await github(`repos/${CANARY_REPO}/pulls?state=all&per_page=10&head=${owner}:${encodeURIComponent(canaryBranch(tag))}`, token);
   const pull = pulls.sort((a, b) => b.number - a.number)[0];
-  if (!pull) return { verdict: "waiting", note: "no canary yet" };
+  // The newest release's canary opens right after it. If it never did, it would wait forever without a
+  // word, so it gets the same 3 hours. An older release without one is just passed over: it may be from
+  // before canaries existed, and a newer release has its own.
+  if (!pull) {
+    const late = isNewest && Date.now() - Date.parse(publishedAt) > CANARY_TIMEOUT_MS;
+    return late ? { verdict: "failed", note: "no canary was opened within 3 hours of the release" } : { verdict: "waiting", note: "no canary" };
+  }
   const { check_runs } = await github(`repos/${CANARY_REPO}/commits/${pull.head.sha}/check-runs?check_name=Mergelight&per_page=20`, token);
   const check = check_runs.sort((a, b) => b.id - a.id)[0];
-  let flaggedPlantedFile = false;
-  if (check?.status === "completed") {
+  // The planted bug counts as flagged when the review put a comment on its file, or named the file in the
+  // check's summary, where a finding without an inline comment is listed.
+  let flaggedPlantedFile = (check?.output?.summary ?? "").includes(PLANTED_FILE);
+  if (check?.status === "completed" && !flaggedPlantedFile) {
     const comments = await github(`repos/${CANARY_REPO}/pulls/${pull.number}/comments?per_page=100`, token);
     flaggedPlantedFile = comments.some((c) => c.path === PLANTED_FILE && c.user?.type === "Bot");
   }
@@ -100,10 +108,12 @@ async function main() {
   };
 
   // Every release people can get: not a draft, not a pre-release.
-  const all = (await github(`repos/${repo}/releases?per_page=100`, process.env.GH_TOKEN))
-    .filter((r) => !r.draft && !r.prerelease && /^v\d+\.\d+\.\d+$/.test(r.tag_name))
-    .map((r) => r.tag_name)
-    .sort(byVersion);
+  const published = new Map(
+    (await github(`repos/${repo}/releases?per_page=100`, process.env.GH_TOKEN))
+      .filter((r) => !r.draft && !r.prerelease && /^v\d+\.\d+\.\d+$/.test(r.tag_name))
+      .map((r) => [r.tag_name, r.published_at]),
+  );
+  const all = [...published.keys()].sort(byVersion);
   if (all.length === 0) return console.log("There is no release yet.");
   const major = all[0].split(".")[0];
   // A release whose tag isn't in this checkout can't be moved to, so it is left out.
@@ -114,7 +124,7 @@ async function main() {
   const verdicts = new Map();
   for (const release of releases) {
     if ((current && release.sha === current) || now) break;
-    const canary = sandboxToken ? await readCanary(release.tag, sandboxToken) : { verdict: "waiting", note: "no release app" };
+    const canary = sandboxToken ? await readCanary(release.tag, published.get(release.tag), release === releases[0], sandboxToken) : { verdict: "waiting", note: "no release app" };
     verdicts.set(release.tag, canary.verdict);
     console.log(`${release.tag}: canary ${canary.verdict} (${canary.note})`);
   }
