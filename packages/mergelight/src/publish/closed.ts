@@ -19,7 +19,7 @@ export interface ReviewThread {
   isResolved: boolean;
   isOutdated: boolean;
   resolvedBy?: { login?: string } | null;
-  comments: { nodes: { databaseId: number; body: string; authorAssociation?: string; author?: { __typename?: string; login?: string } | null; createdAt?: string; lastEditedAt?: string | null }[] };
+  comments: { nodes: { id?: string; databaseId: number; body: string; authorAssociation?: string; author?: { __typename?: string; login?: string } | null; createdAt?: string; lastEditedAt?: string | null }[] };
 }
 
 /** fixed: the code changed and the finding is gone. resolved: someone resolved the thread. */
@@ -74,12 +74,12 @@ export function reopenedBody(body: string, keepOpen: boolean): string {
 }
 
 /** The finding a thread is about, if it's one of Mergelight's own. */
-export function threadFinding(t: ReviewThread): { id: string; commentId: number; body: string } | null {
+export function threadFinding(t: ReviewThread): { id: string; commentId: number; nodeId?: string; body: string } | null {
   const first = t.comments.nodes[0];
   if (!first) return null;
   if (!trustedComment({ user: { type: first.author?.__typename }, author_association: first.authorAssociation })) return null;
   const id = first.body.match(FINDING_MARKER_RE)?.[1];
-  return id ? { id, commentId: first.databaseId, body: first.body } : null;
+  return id ? { id, commentId: first.databaseId, nodeId: first.id, body: first.body } : null;
 }
 
 export type ThreadAction =

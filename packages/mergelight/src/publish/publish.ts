@@ -505,7 +505,7 @@ export async function reviewThreads(api: GitHub, number: number): Promise<Review
       repository(owner: $owner, name: $repo) {
         pullRequest(number: $number) {
           reviewThreads(first: 100) {
-            nodes { id isResolved isOutdated resolvedBy { login } comments(first: 50) { nodes { databaseId body authorAssociation createdAt lastEditedAt author { __typename login } } } }
+            nodes { id isResolved isOutdated resolvedBy { login } comments(first: 50) { nodes { id databaseId body authorAssociation createdAt lastEditedAt author { __typename login } } } }
           }
         }
       }
@@ -514,6 +514,10 @@ export async function reviewThreads(api: GitHub, number: number): Promise<Review
   );
   return data?.repository.pullRequest.reviewThreads.nodes ?? [];
 }
+
+/** Folds a comment away as resolved. Needs only the right to write pull request comments. */
+export const minimizeComment = (api: GitHub, id: string) =>
+  api.graphql(`mutation($id: ID!) { minimizeComment(input: { subjectId: $id, classifier: RESOLVED }) { minimizedComment { isMinimized } } }`, { id }, true);
 
 export const resolveThread = (api: GitHub, id: string) =>
   api.graphql(`mutation($id: ID!) { resolveReviewThread(input: { threadId: $id }) { thread { id } } }`, { id }, true);
@@ -560,9 +564,16 @@ async function settleThreads(api: GitHub, review: Review, log: (s: string) => vo
           isResolved = true;
           resolved++;
         } catch (err) {
-          // GitHub only lets a workflow token resolve threads with contents: write. The comment still says it's handled.
-          const hint = /not accessible by integration/i.test((err as Error).message) ? "the workflow needs contents: write for that" : (err as Error).message;
-          log(`Couldn't mark a fixed thread resolved: ${hint}`);
+          // GitHub only lets a token resolve a thread when it may also write code, which Mergelight's may
+          // not. So the fixed comment is folded away as resolved instead: GitHub hides it behind "Show".
+          if (found.nodeId) {
+            await minimizeComment(api, found.nodeId).then(
+              () => log("Folded a fixed finding's comment away as resolved."),
+              (e) => log(`Couldn't fold a fixed finding's comment away: ${(e as Error).message}`),
+            );
+          } else {
+            log(`Couldn't mark a fixed thread resolved: ${/not accessible by integration/i.test((err as Error).message) ? "the workflow needs contents: write for that" : (err as Error).message}`);
+          }
         }
       }
       handled.set(found.id, { how: "fixed", sha });
