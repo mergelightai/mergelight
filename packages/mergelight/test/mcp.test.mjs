@@ -75,6 +75,7 @@ if (args[1] === "graphql") {
   if (query.includes("mutation")) {
     const kind = query.includes("unminimizeComment") ? "unfold" : query.includes("minimizeComment") ? "fold" : query.includes("unresolveReviewThread") ? "unresolve" : "resolve";
     if (kind === "resolve" && s.resolveRefused) fail("Resource not accessible by integration");
+    if (kind === "resolve" && s.resolveError) fail(s.resolveError);
     log({ graphql: kind, args });
     out({ data: {} });
     process.exit(0);
@@ -879,6 +880,18 @@ test("a fixed finding's comment is folded away as resolved when GitHub won't let
   assert.deepEqual(kinds, ["fold"], "resolving was refused, so the comment is folded instead");
   assert.ok(fixed.writes().find((w) => w.graphql === "fold").args.includes("id=C1"));
   assert.match(fixed.writes().find((w) => w.path === "pulls/comments/501").body, /Handled/);
+  const order = fixed.writes().map((w) => w.graphql ?? w.path);
+  assert.ok(order.indexOf("pulls/comments/501") < order.indexOf("fold"), "folded only after it says Handled");
+
+  // Any other error isn't a missing permission: nothing is folded, and the next review tries again.
+  const outage = useScenario({
+    issueComments: [summaryComment(state)],
+    head: PUSHED,
+    resolveError: "HTTP 502: Bad Gateway",
+    threads: [{ id: "T1", isResolved: false, isOutdated: true, comments: { nodes: [findingComment("<!-- mergelight:finding id=aaaaaaaaaa -->\nFinding")] } }],
+  });
+  await withFakeGh(outage.env, () => publishReview(review([])));
+  assert.ok(!outage.writes().some((w) => w.graphql === "fold"));
 
   // The finding comes back: its folded comment shows again.
   const back = useScenario({

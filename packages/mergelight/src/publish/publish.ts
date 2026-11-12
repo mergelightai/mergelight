@@ -547,8 +547,15 @@ async function settleThreads(api: GitHub, review: Review, log: (s: string) => vo
   const open = new Set(review.findings.map((f) => f.id));
   const sha = review.pr.head_sha.slice(0, 7);
   const canWrite = writeAccess(api);
-  const edit = (commentId: number, body: string) =>
-    api.write("PATCH", `pulls/comments/${commentId}`, { body }).catch((err) => log(`Couldn't update a comment: ${(err as Error).message}`));
+  /** True when the comment was changed. */
+  const edit = (commentId: number, body: string): Promise<boolean> =>
+    api.write("PATCH", `pulls/comments/${commentId}`, { body }).then(
+      () => true,
+      (err) => {
+        log(`Couldn't update a comment: ${(err as Error).message}`);
+        return false;
+      },
+    );
 
   for (const t of threads) {
     const found = threadFinding(t);
@@ -562,26 +569,31 @@ async function settleThreads(api: GitHub, review: Review, log: (s: string) => vo
     }
     if (action.kind === "fixed") {
       let isResolved = !action.resolve;
+      let fold = false;
       if (action.resolve) {
         try {
           await resolveThread(api, t.id);
           isResolved = true;
           resolved++;
         } catch (err) {
+          const message = (err as Error).message;
           // GitHub only lets a token resolve a thread when it may also write code, which Mergelight's may
-          // not. So the fixed comment is folded away as resolved instead: GitHub hides it behind "Show".
-          if (found.nodeId) {
-            await minimizeComment(api, found.nodeId).then(
-              () => log("Folded a fixed finding's comment away as resolved."),
-              (e) => log(`Couldn't fold a fixed finding's comment away: ${(e as Error).message}`),
-            );
-          } else {
-            log(`Couldn't mark a fixed thread resolved: ${/not accessible by integration/i.test((err as Error).message) ? "the workflow needs contents: write for that" : (err as Error).message}`);
-          }
+          // not. Then the fixed comment is folded away as resolved instead, if Mergelight wrote it. Any
+          // other error is logged as it is, and the next review tries again.
+          if (/not accessible by integration/i.test(message)) fold = Boolean(found.nodeId) && t.comments.nodes[0]?.author?.__typename === "Bot";
+          else log(`Couldn't mark a fixed thread resolved: ${message}`);
         }
       }
       handled.set(found.id, { how: "fixed", sha });
-      await edit(found.commentId, closedBody(found.body, { how: "fixed", resolved: isResolved, sha }));
+      const edited = await edit(found.commentId, closedBody(found.body, { how: "fixed", resolved: isResolved, sha }));
+      // Only once it says Handled: a finding that comes back unfolds by that mark, so without it the
+      // comment would stay hidden.
+      if (fold && edited) {
+        await minimizeComment(api, found.nodeId!).then(
+          () => log("Folded a fixed finding's comment away as resolved."),
+          (e) => log(`Couldn't fold a fixed finding's comment away: ${(e as Error).message}`),
+        );
+      }
     } else if (action.kind === "resolved") {
       // A workflow token sees a private org member as CONTRIBUTOR, so ask who can write instead of trusting the association.
       if (!by || !(await canWrite(by))) continue;
