@@ -1,9 +1,10 @@
-# Moves the major tag people follow, like v0, to the latest release once that's a day old. The wait
+# Moves the major tag people follow, like v0, to the newest release that is a day old. The wait
 # is there so a bad release can be pulled before it reaches anyone on @v0.
 #
 # To roll out sooner: run this by hand with "now" ticked.
 # To pull a bad release: mark it as a pre-release, or delete it. The tag goes back to the latest good
-# release on the next run. Run this by hand to do that right away.
+# release on the next run. Run this by hand to do that right away. Pull it also when a fixed release
+# is already out: the tag takes the newest release that is a day old, and that can be the bad one.
 name: Roll out
 
 on:
@@ -35,16 +36,31 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           NOW: ${{ inputs.now }}
         run: |
-          read -r tag age < <(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq '"\(.tag_name) \(now - (.published_at | fromdate) | floor)"')
-          major="${tag%%.*}"
+          # Every release people can get: not a draft, not a pre-release. Newest version first, by its
+          # number and not by when it was published, so a release made again later doesn't count as new.
+          releases="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '[.[] | select((.draft or .prerelease) | not) | {tag: .tag_name, at: .published_at, age: (now - (.published_at | fromdate) | floor)}] | sort_by(.tag | ltrimstr("v") | split(".") | map(tonumber? // 0)) | reverse')"
+          newest="$(jq -r '.[0].tag // empty' <<<"$releases")"
+          if [ -z "$newest" ]; then echo "There is no release yet."; exit 0; fi
+          major="${newest%%.*}"
+          list="$(jq --arg major "$major" '[.[] | select(.tag | startswith($major + "."))]' <<<"$releases")"
+          # The newest of them that is a day old. Not only the newest release: when a new one comes out
+          # every day, the newest is never a day old, and the tag would never move.
+          min=86400
+          if [ "$NOW" = "true" ]; then min=0; fi
+          read -r tag age < <(jq -r --argjson min "$min" '[.[] | select(.age >= $min)][0] // empty | "\(.tag) \(.age)"' <<<"$list") || true
+          if [ -z "$tag" ]; then echo "No $major release is a day old yet. $newest is $(jq -r '.[0].age' <<<"$list") seconds old."; exit 0; fi
           target="$(git rev-parse "$tag^{commit}")"
           current="$(git rev-parse -q --verify "refs/tags/$major^{commit}" || true)"
-          if [ "$current" = "$target" ]; then
-            echo "$major is already on $tag."
-          elif [ "$NOW" != "true" ] && [ "$age" -lt 86400 ]; then
-            echo "$tag is $age seconds old. $major moves once it's a day old."
-          else
-            git tag -f "$major" "$target"
-            git push -f origin "refs/tags/$major"
-            echo "$major moved to $tag."
-          fi
+          if [ "$current" = "$target" ]; then echo "$major is already on $tag."; exit 0; fi
+          # Never back: a release someone rolled out by hand ("now") stays until a newer one is a day old.
+          # A pulled release (a pre-release, or deleted) isn't in the list, so the tag moves off it.
+          for newer in $(jq -r '.[].tag' <<<"$list"); do
+            [ "$newer" = "$tag" ] && break
+            if [ "$(git rev-parse -q --verify "refs/tags/$newer^{commit}" || true)" = "$current" ]; then
+              echo "$major is on $newer, which is newer than $tag and still a release. It stays."
+              exit 0
+            fi
+          done
+          git tag -f "$major" "$target"
+          git push -f origin "refs/tags/$major"
+          echo "$major moved to $tag ($age seconds old)."
