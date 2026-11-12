@@ -673,7 +673,7 @@ const findingThread = (id, commentId, replies, over = {}) => ({
   isResolved: true,
   isOutdated: false,
   resolvedBy: { login: "teammate" },
-  comments: { nodes: [{ databaseId: commentId, body: `<!-- mergelight:finding id=${id} -->\nFinding`, author: { __typename: "Bot", login: "mergelight-ai" } }, ...replies] },
+  comments: { nodes: [{ databaseId: commentId, body: `<!-- mergelight:finding id=${id} -->\nFinding`, author: { __typename: "Bot", login: "github-actions" } }, ...replies] },
   ...over,
 });
 const reply = (login, body, at = "2030-01-02T00:00:00Z") => ({ databaseId: 9, body, createdAt: at, author: { __typename: "User", login } });
@@ -691,7 +691,7 @@ test("a reason given when resolving a thread is the team's decision, and is kept
 
   const main = scenario(
     [
-      findingThread("aaaaaaaaaa", 501, [reply("teammate", "Valid, and known.\n\nThe repair ships\u200b next release."), reply("mergelight-ai", "<!-- mergelight:remembered -->\nRemembered.")]),
+      findingThread("aaaaaaaaaa", 501, [reply("teammate", "Valid, and known.\n\nThe repair ships\u200b next release."), reply("github-actions", "<!-- mergelight:remembered -->\nRemembered.")]),
       findingThread("bbbbbbbbbb", 502, [reply("teammate", "Fixed in abc.")]),
       findingThread("cccccccccc", 503, [reply("stranger", "Not a problem.")]),
       findingThread("dddddddddd", 504, []),
@@ -759,12 +759,12 @@ test("a remembered reason gets one answer in its thread", async () => {
   const { env, writes } = useScenario({
     threads: [
       findingThread("aaaaaaaaaa", 501, [reply("teammate", "Known.")]),
-      findingThread("bbbbbbbbbb", 502, [reply("teammate", "Known."), { ...reply("mergelight-ai", "<!-- mergelight:remembered -->\nRemembered."), author: { __typename: "Bot", login: "mergelight-ai" } }]),
+      findingThread("bbbbbbbbbb", 502, [reply("teammate", "Known."), { ...reply("github-actions", "<!-- mergelight:remembered -->\nRemembered."), author: { __typename: "Bot", login: "github-actions" } }]),
       findingThread("cccccccccc", 503, [reply("teammate", "Known.")]),
       // A person's copy of the marker doesn't count as the answer.
       findingThread("dddddddddd", 504, [reply("teammate", "Known."), reply("teammate", "<!-- mergelight:remembered -->")]),
       // A newer reason after Mergelight's answer is answered again.
-      findingThread("eeeeeeeeee", 505, [reply("teammate", "Known."), { ...reply("mergelight-ai", "<!-- mergelight:remembered -->\nRemembered."), author: { __typename: "Bot", login: "mergelight-ai" } }, reply("teammate", "Also, the gateway blocks it.")]),
+      findingThread("eeeeeeeeee", 505, [reply("teammate", "Known."), { ...reply("github-actions", "<!-- mergelight:remembered -->\nRemembered."), author: { __typename: "Bot", login: "github-actions" } }, reply("teammate", "Also, the gateway blocks it.")]),
     ],
   });
   const answered = await withFakeGh(env, () => answerRemembered(new GitHub("o", "r"), 7, ["aaaaaaaaaa", "bbbbbbbbbb", "dddddddddd", "eeeeeeeeee"], new Set(["aaaaaaaaaa"])));
@@ -787,7 +787,7 @@ test("a reason the server hasn't confirmed is sent again in later reviews, until
   assert.equal((await read(pending, [thread()])).remember, true);
   assert.equal((await read(pending, [thread()], { status: "diverged", files: [] })).remember, undefined, "can't tell if the code changed: not sent again");
   assert.equal((await read(base, [thread()])).remember, undefined, "nothing pending: an old reply isn't kept");
-  const answered = [thread([{ databaseId: 10, body: "<!-- mergelight:remembered -->\nRemembered.", createdAt: "2001-01-02T00:00:00Z", author: { __typename: "Bot", login: "mergelight-ai" } }])];
+  const answered = [thread([{ databaseId: 10, body: "<!-- mergelight:remembered -->\nRemembered.", createdAt: "2001-01-02T00:00:00Z", author: { __typename: "Bot", login: "github-actions" } }])];
   assert.equal((await read(pending, answered)).remember, undefined, "answered in the thread: the server has it");
   const otherBot = [thread([{ databaseId: 10, body: "<!-- mergelight:remembered -->", createdAt: "2001-01-02T00:00:00Z", author: { __typename: "Bot", login: "echo-bot" } }])];
   assert.equal((await read(pending, otherBot)).remember, true, "another bot's copy isn't Mergelight's answer");
@@ -799,7 +799,7 @@ test("a reason the server hasn't confirmed is sent again in later reviews, until
   assert.equal(twice.remember, true);
   assert.equal(twice.tries, 2);
   // Someone else's reply after Mergelight's answer doesn't undo it.
-  const otherReply = [thread([{ databaseId: 10, body: "<!-- mergelight:remembered -->\nRemembered.", createdAt: "2001-01-02T00:00:00Z", author: { __typename: "Bot", login: "mergelight-ai" } }, reply("pr-author", "Thanks all.", "2001-01-03T00:00:00Z")])];
+  const otherReply = [thread([{ databaseId: 10, body: "<!-- mergelight:remembered -->\nRemembered.", createdAt: "2001-01-02T00:00:00Z", author: { __typename: "Bot", login: "github-actions" } }, reply("pr-author", "Thanks all.", "2001-01-03T00:00:00Z")])];
   assert.equal((await read(pending, otherReply)).remember, undefined);
   const changed = { ...base, remember: [{ id: "aaaaaaaaaa", at: "2000-01-01T00:00:00Z" }] };
   assert.equal((await read(changed, [thread()])).remember, undefined, "the pending reason is an older one");

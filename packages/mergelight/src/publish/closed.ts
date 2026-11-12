@@ -138,12 +138,15 @@ export function answeredRemembered(t: ReviewThread): boolean {
   return Boolean(own) && nodes.some((c, i) => i > lastPerson && c.author?.login === own && c.body.includes(REMEMBERED_MARKER));
 }
 
-export function resolverReplies(threads: ReviewThread[], resolved: Map<string, string>): Map<string, { replies: { text: string; at: string }[]; commentId: number; answered: boolean }> {
+export function resolverReplies(threads: ReviewThread[], resolved: Map<string, string>, mergelight?: string): Map<string, { replies: { text: string; at: string }[]; commentId: number; answered: boolean }> {
   const out = new Map<string, { replies: { text: string; at: string }[]; commentId: number; answered: boolean }>();
   for (const t of threads) {
     const found = threadFinding(t);
-    // Only a thread Mergelight started: a member who can't push could start one with a copied marker.
-    if (!found || t.comments.nodes[0]?.author?.__typename !== "Bot") continue;
+    // Only a thread Mergelight started: a member who can't push could start one with a copied marker, and
+    // so could another app. GitHub names a bot without "[bot]" in one API and with it in the other.
+    const starter = t.comments.nodes[0]?.author;
+    const bare = (login: string | undefined) => login?.replace(/\[bot\]$/, "");
+    if (!found || starter?.__typename !== "Bot" || (mergelight && bare(starter.login) !== bare(mergelight))) continue;
     const by = resolved.get(found.id);
     if (!by || t.resolvedBy?.login !== by) continue;
     const own = t.comments.nodes

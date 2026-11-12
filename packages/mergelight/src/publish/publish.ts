@@ -103,10 +103,11 @@ function unchangedSince(api: GitHub, since: string | undefined, headSha: string 
  * headSha: the commit this review is about, to tell a reason from a fix.
  */
 export async function previousFindings(api: GitHub, number: number, headSha?: string): Promise<PriorFinding[]> {
-  const { state, marks } = await readPrReviewState(api, number);
+  const { summary, state, marks } = await readPrReviewState(api, number);
   const threads = await reviewThreads(api, number).catch(() => []);
   const resolved = await resolvedByPeople(threads, writeAccess(api));
-  const replies = resolverReplies(threads, resolved);
+  // Mergelight's own login is the one its summary comment carries.
+  const replies = resolverReplies(threads, resolved, summary?.user?.login ?? undefined);
   const latest = state?.rounds.at(-1);
   const waiting = new Map((state?.remember ?? []).map((r) => [r.id, r]));
   const unchanged = unchangedSince(api, latest?.sha, headSha);
@@ -161,9 +162,9 @@ export async function previousFindings(api: GitHub, number: number, headSha?: st
  */
 const FIX_CLAIM = /(?<!\b(?:\w*n[’']t|not|no|never|nothing)(?:\s+[^\s.,;:!?]+){0,3}\s+)\b(fix|fixing|fixed|fixes|addressed)\b|^\W*done\b|\b(?=[0-9a-f]*[a-f])(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b/i;
 
-/** A reply that clearly declines to fix: a reason, not a note about a fix. */
+/** A reply that clearly declines to fix: a reason, not a note about a fix. "Accepted" alone isn't one: "Accepted, good catch" agrees. */
 const DECLINE =
-  /\b(?:won[’']?t|will not|do not|don[’']?t|not|no need to|can[’']?t|cannot)\s+(?:be\s+)?fix(?:ing|ed)?\b|\bno need\b|\bdoesn[’']?t need\b|\bnot needed\b|\bby design\b|\bintentional(?:ly)?\b|\bon purpose\b|\bexpected\b|\bknown\b|\baccept(?:ed|able)?\b|\b(?:keep|leave) (?:it|this|that)\b|\bnot an? (?:problem|bug|issue|risk|concern)\b|\bfalse positive\b|\bout of scope\b/i;
+  /\b(?:won[’']?t|will not|do not|don[’']?t|not|no need to|can[’']?t|cannot)\s+(?:be\s+)?fix(?:ing|ed)?\b|\bno need\b|\bdoesn[’']?t need\b|\bnot needed\b|\bby design\b|\bintentional(?:ly)?\b|\bon purpose\b|\bexpected\b|\bknown\b|\b(?:accepted|acceptable) risk\b|\brisk accepted\b|\b(?:keep|leave) (?:it|this|that)\b|\bnot an? (?:problem|bug|issue|risk|concern)\b|\bfalse positive\b|\bout of scope\b/i;
 
 /** How many reviews send a waiting reason before it is given up on. */
 const MAX_TRIES = 3;

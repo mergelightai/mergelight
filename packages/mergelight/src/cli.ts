@@ -242,7 +242,8 @@ async function main(): Promise<number> {
       writtenSkills: cloud.writtenSkills,
       checks: cloud.checks,
       onTeamChecks: (results) => (answered = results),
-      at: values.at,
+      // The commit the check and the earlier findings were read for, so a push in between doesn't mix two.
+      at: values.at ?? headSha ?? undefined,
       provider,
       model: values.model,
       effort: values.effort,
