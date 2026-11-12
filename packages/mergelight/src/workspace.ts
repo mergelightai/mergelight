@@ -153,8 +153,8 @@ const MAX_RULE_FILES = 30;
  * The team's instruction files and rule files, as the base branch has them, from one listing of it.
  * Conventions are background for the reviewers; rules are what they check (repo-rules.ts).
  */
-export async function teamFilesFor(mirror: string, base: string, changedPaths: string[] = []): Promise<{ conventions: Convention[]; rules: TeamRule[]; unreadRules: string[] }> {
-  const none = { conventions: [], rules: [], unreadRules: [] };
+export async function teamFilesFor(mirror: string, base: string, changedPaths: string[] = []): Promise<{ conventions: Convention[]; rules: TeamRule[]; unreadRules: string[]; droppedRules: number }> {
+  const none = { conventions: [], rules: [], unreadRules: [], droppedRules: 0 };
   const git = (args: string[]) =>
     run("git", ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential", "-C", mirror, ...args], {
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
@@ -207,10 +207,11 @@ export async function teamFilesFor(mirror: string, base: string, changedPaths: s
   // A rule file and a link to it are one file: its rules count once.
   const seenRules = new Set<string>();
   const readRules = ruleFiles.filter((f): f is { path: string; sha: string; text: string } => f !== null && !seenRules.has(f.sha) && Boolean(seenRules.add(f.sha)));
-  const rules = repoRules(readRules, changedPaths.length ? changedPaths : undefined);
+  const stats = { dropped: 0 };
+  const rules = repoRules(readRules, changedPaths.length ? changedPaths : undefined, stats);
   // A rule file that couldn't be read is named, never dropped without a word.
   const unreadRules = rulePaths.filter((_, i) => ruleFiles[i] === null);
-  return { conventions, rules, unreadRules };
+  return { conventions, rules, unreadRules, droppedRules: stats.dropped };
 }
 
 /** The answer, or the fallback once the time is up, for work that must never hold up a review. */
@@ -283,6 +284,8 @@ export interface Workspace {
   rules: TeamRule[];
   /** Rule files that exist on the base branch but couldn't be read: empty, too large, or a link out. */
   unreadRules: string[];
+  /** Rules for the changed files left out because the repository has more than the limits allow. */
+  droppedRules: number;
   cleanup: () => Promise<void>;
 }
 
@@ -366,7 +369,7 @@ export async function prepareWorkspace(pr: PullRequest, at?: string, skillFolder
     } catch {
       written = [];
     }
-    const { conventions, rules: repoRuleList, unreadRules } = await withDeadline(teamFilesFor(mirror, teamBase, touchedPaths), SKILL_IMPORT_TIMEOUT_MS + 2 * SKILL_GIT_TIMEOUT_MS, { conventions: [], rules: [], unreadRules: [] });
+    const { conventions, rules: repoRuleList, unreadRules, droppedRules } = await withDeadline(teamFilesFor(mirror, teamBase, touchedPaths), SKILL_IMPORT_TIMEOUT_MS + 2 * SKILL_GIT_TIMEOUT_MS, { conventions: [], rules: [], unreadRules: [], droppedRules: 0 });
 
     return {
       dir,
@@ -382,6 +385,7 @@ export async function prepareWorkspace(pr: PullRequest, at?: string, skillFolder
       conventions,
       rules: repoRuleList,
       unreadRules,
+      droppedRules,
       cleanup: async () => {
         await run("git", ["-C", mirror, "worktree", "remove", "--force", dir]);
         rmSync(dir, { recursive: true, force: true });

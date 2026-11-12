@@ -30,7 +30,18 @@ export function frontMatter(text: string): { paths: string[]; body: string; scop
   if (!m) return { paths: [], body: text, scoped: false, forReview: true };
   const forReview = !/^excludeAgent[ \t]*:.*\bcode-review\b/m.test(m[1]!);
   const line = /^(?:applyTo|globs)[ \t]*:[ \t]*(.*)$/m.exec(m[1]!);
-  const value = line?.[1]?.trim() ?? "";
+  let value = line?.[1]?.trim() ?? "";
+  if (line && !value) {
+    // A YAML list on the lines below the key: "applyTo:" then "  - src/billing/**".
+    const after = m[1]!.slice(line.index + line[0].length).split(/\r?\n/).slice(1);
+    const items: string[] = [];
+    for (const l of after) {
+      const item = /^[ \t]+-[ \t]*(.+)$/.exec(l);
+      if (!item) break;
+      items.push(item[1]!.trim());
+    }
+    value = items.join(",");
+  }
   const patterns = splitOutsideBraces(value.trim().replace(/^\[([\s\S]*)\]$/, "$1").replace(/^["']|["']$/g, ""))
     .map((p) => p.trim().replace(/^["']|["']$/g, "").trim())
     .flatMap(expandBraces)
@@ -72,6 +83,8 @@ export function expandBraces(pattern: string): string[] {
 function bullets(body: string): string[] {
   const out: string[] = [];
   let current: string | null = null;
+  // A blank line after a bullet: an indented paragraph after it still belongs to it (a loose list).
+  let gap = false;
   let fence: string | null = null;
   // HTML comments are what a team turned off: GitHub doesn't show them, so they don't count.
   // Only a closed one: an unclosed "<!--", say inside inline code, mustn't wipe out the rest of the file.
@@ -90,11 +103,16 @@ function bullets(body: string): string[] {
     if (start) {
       if (current) out.push(current);
       current = start[1]!.trim();
-    } else if (current !== null && (/^[ \t]+\S/.test(line) || (/^\S/.test(line) && !/^(?:#|>|\||<)/.test(line)))) {
-      current += ` ${line.trim()}`;
+      gap = false;
+    } else if (current !== null && !line.trim()) {
+      gap = true;
+    } else if (current !== null && (/^[ \t]+\S/.test(line) || (!gap && /^\S/.test(line) && !/^(?:#|>|\||<)/.test(line)))) {
+      current += ` ${line.trim().replace(/^(?:[-*+]|\d+[.)])[ \t]+/, "")}`;
+      gap = false;
     } else {
       if (current) out.push(current);
       current = null;
+      gap = false;
     }
   }
   if (current) out.push(current);
@@ -119,16 +137,19 @@ export function parseRuleFile(path: string, text: string): Omit<TeamRule, "id">[
  * All the repository's rules that apply to the changed files, numbered F1, F2 and on, within the
  * limits. Mergelight's own rule files come first, so Copilot's files can't crowd them out.
  */
-export function repoRules(files: { path: string; text: string }[], changedPaths?: string[]): TeamRule[] {
+export function repoRules(files: { path: string; text: string }[], changedPaths?: string[], stats?: { dropped: number }): TeamRule[] {
   const rules: TeamRule[] = [];
   let total = 0;
   const own = (p: string) => (p.startsWith(".mergelight/") ? 0 : 1);
   for (const f of [...files].sort((a, b) => own(a.path) - own(b.path) || a.path.localeCompare(b.path))) {
     for (const r of parseRuleFile(f.path, f.text)) {
       if (changedPaths && !ruleApplies({ ...r, id: "" }, changedPaths)) continue;
-      if (rules.length >= MAX_REPO_RULES) return rules;
-      // One long rule over the budget is left out; shorter ones after it can still fit.
-      if (total + r.text.length > MAX_REPO_RULE_CHARS) continue;
+      // Over the limits a rule is left out, and counted, so the log can say so. A long one over the
+      // character budget doesn't stop shorter ones after it.
+      if (rules.length >= MAX_REPO_RULES || total + r.text.length > MAX_REPO_RULE_CHARS) {
+        if (stats) stats.dropped++;
+        continue;
+      }
       total += r.text.length;
       rules.push({ id: `F${rules.length + 1}`, ...r });
     }

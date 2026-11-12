@@ -126,3 +126,13 @@ test("an unclosed comment wipes nothing, and an over-long bullet says where it w
   const [long] = parseRuleFile(".mergelight/rules.md", `- ${"y".repeat(1200)}`);
   assert.match(long.text, /^y{1000} \(cut here: the rule is longer\)$/);
 });
+
+test("applyTo as a YAML list, a loose list's indented detail, and a count of the rules left out", () => {
+  assert.deepEqual(frontMatter('---\napplyTo:\n  - "src/billing/**"\n  - "*.sql"\nother: x\n---\nx').paths, ["src/billing/**", "*.sql"]);
+  const md = "- Refunds check the invoice status.\n\n  This covers the invoices and refunds tables.\n\n- Second rule.\n\nA closing paragraph, not a rule.\n";
+  assert.deepEqual(parseRuleFile(".mergelight/rules.md", md).map((r) => r.text), ["Refunds check the invoice status. This covers the invoices and refunds tables.", "Second rule."]);
+  const stats = { dropped: 0 };
+  const rules = repoRules([{ path: ".mergelight/rules.md", text: Array.from({ length: 45 }, (_, i) => `- Rule ${i}.`).join("\n") }], undefined, stats);
+  assert.equal(rules.length, MAX_REPO_RULES);
+  assert.equal(stats.dropped, 5);
+});
