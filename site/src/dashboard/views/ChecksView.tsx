@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
+import { ListChecksIcon } from '@/lib/icons';
 import { SignedOut, type Check, type Checks, type NewCheck } from '../api';
 import { ViewHeader } from '../AppShell';
-import { DataBody, DataCell, DataHead, DataHeadCell, DataRow, DataTable, TwoLines } from '../DataTable';
+import { DataBody, DataCard, DataCell, Filler, DataHead, DataHeadCell, DataRow, DataTable, TwoLines } from '../DataTable';
 import { ago } from '../format';
 import { Choose, Code, Confirm, EmptyList, Facts, Field, FormDialog, lastRepo, markResume, patterns, ReadOnly, rememberRepo, Tag, TextInput, useDraft } from '../kit';
 
@@ -77,7 +78,6 @@ export function ChecksView({ orgId, checks, onAdd, onRemove, resume }: { orgId: 
   return (
     <>
       <ViewHeader
-        eyebrow="Reviewer"
         title="Checks"
         lead={
           <>
@@ -90,7 +90,8 @@ export function ChecksView({ orgId, checks, onAdd, onRemove, resume }: { orgId: 
         {checks.checks.length === 0 ? (
           <EmptyList title="No checks yet">Add a check, and each review of its files answers it on the pull request.</EmptyList>
         ) : (
-          <DataTable fill>
+          <DataCard fill title="Checks" count={checks.checks.length} meta="each posts its own check on the pull request">
+            <DataTable>
             <DataHead>
               <DataHeadCell>Check</DataHeadCell>
               <DataHeadCell className="hidden md:table-cell">Repository</DataHeadCell>
@@ -101,12 +102,20 @@ export function ChecksView({ orgId, checks, onAdd, onRemove, resume }: { orgId: 
               {checks.checks.map((c) => (
                 <DataRow key={c.id}>
                   <DataCell className="whitespace-normal">
-                    <TwoLines main={c.name} sub={c.text} />
-                    <p className="mt-1 text-xs text-muted-foreground/70">
-                      set by {c.by}, {ago(c.created_at)}
-                      <span className="md:hidden">, {c.repo}</span>
-                      <span className="block font-mono lg:hidden">{c.paths.join(', ')}</span>
-                    </p>
+                    <TwoLines
+                      icon={<ListChecksIcon />}
+                      main={c.name}
+                      sub={
+                        <>
+                          <span className="block text-ink-3">{c.text}</span>
+                          <span className="mt-0.5 block text-xs">
+                            set by {c.by}, {ago(c.created_at)}
+                            <span className="md:hidden">, {c.repo}</span>
+                            <span className="block font-mono lg:hidden">{c.paths.join(', ')}</span>
+                          </span>
+                        </>
+                      }
+                    />
                   </DataCell>
                   <DataCell className="hidden md:table-cell">
                     <Tag>{c.repo}</Tag>
@@ -141,6 +150,8 @@ export function ChecksView({ orgId, checks, onAdd, onRemove, resume }: { orgId: 
               ))}
             </DataBody>
           </DataTable>
+            <Filler />
+          </DataCard>
         )}
         <Facts
           items={[

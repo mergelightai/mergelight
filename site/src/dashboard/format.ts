@@ -1,10 +1,14 @@
 import type { Light, Review } from './api';
 
-/** The three lights, with the words the pull request uses for them. */
-export const LIGHTS: Record<Light, { label: string; dot: string; text: string; soft: string }> = {
-  green: { label: 'Safe to merge', dot: 'bg-safe shadow-[0_0_8px_1px_rgb(63_232_184/0.5)]', text: 'text-safe', soft: 'bg-safe/10' },
-  yellow: { label: 'Needs a human', dot: 'bg-human shadow-[0_0_8px_1px_rgb(245_196_81/0.45)]', text: 'text-human', soft: 'bg-human/10' },
-  red: { label: 'Blocked', dot: 'bg-blocked shadow-[0_0_8px_1px_rgb(255_107_122/0.5)]', text: 'text-blocked', soft: 'bg-blocked/10' },
+/**
+ * The three lights, with the words the pull request uses for them. dot: a plain dot. text: the
+ * light's own text colour. pill: a tinted pill with a hairline edge, as the reference's "Production".
+ * bar: a bar in a history strip.
+ */
+export const LIGHTS: Record<Light, { label: string; short: string; dot: string; text: string; pill: string; bar: string }> = {
+  green: { label: 'Safe to merge', short: 'Safe', dot: 'bg-safe', text: 'text-safe-ink', pill: 'bg-safe/[0.12] text-safe-ink shadow-[inset_0_0_0_1px_rgb(112_160_124/0.32)]', bar: 'bg-safe' },
+  yellow: { label: 'Needs a human', short: 'Needs a human', dot: 'bg-human', text: 'text-human-ink', pill: 'bg-human/[0.12] text-human-ink shadow-[inset_0_0_0_1px_rgb(212_162_83/0.32)]', bar: 'bg-human' },
+  red: { label: 'Blocked', short: 'Blocked', dot: 'bg-blocked', text: 'text-blocked-ink', pill: 'bg-blocked/[0.12] text-blocked-ink shadow-[inset_0_0_0_1px_rgb(211_134_125/0.32)]', bar: 'bg-blocked' },
 };
 
 /** "3 minutes ago", from the reader's own clock. */
@@ -38,4 +42,4 @@ export function findings(r: Review): string {
   return parts.length ? parts.join(', ') : 'Nothing worth fixing';
 }
 
-export const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+export const plural = (n: number, word: string, many = `${word}s`) => `${n} ${n === 1 ? word : many}`;

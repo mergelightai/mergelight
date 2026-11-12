@@ -3,6 +3,11 @@
 import { HugeiconsIcon, type IconSvgElement } from '@hugeicons/react';
 import {
   Add01Icon,
+  AlertCircleIcon,
+  ArrowRight02Icon,
+  Copy01Icon,
+  Folder01Icon,
+  PencilEdit02Icon,
   Alert02Icon,
   ArrowDown01Icon,
   ArrowRight01Icon,
@@ -64,3 +69,8 @@ export const PanelLeftIcon = make(SidebarLeftIcon);
 export const LockIcon = make(SquareLock02Icon);
 export const CheckIcon = make(Tick02Icon);
 export const ChevronsUpDownIcon = make(UnfoldMoreIcon);
+export const CopyIcon = make(Copy01Icon);
+export const CircleAlertIcon = make(AlertCircleIcon);
+export const FolderIcon = make(Folder01Icon);
+export const PencilIcon = make(PencilEdit02Icon);
+export const ArrowRightIcon = make(ArrowRight02Icon);

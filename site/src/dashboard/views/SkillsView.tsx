@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
+import { FolderIcon } from '@/lib/icons';
 import { SignedOut, type Session, type Skill, type Skills } from '../api';
 import { WrittenSkillsSection } from '../WrittenSkills';
 import { ViewHeader } from '../AppShell';
-import { DataBody, DataCell, DataHead, DataHeadCell, DataRow, DataTable, TwoLines } from '../DataTable';
+import { DataBody, DataCard, DataCell, Filler, DataHead, DataHeadCell, DataRow, DataTable, TwoLines } from '../DataTable';
 import { ago } from '../format';
 import { Choose, Code, Confirm, EmptyList, Facts, Field, FormDialog, lastRepo, markResume, ReadOnly, rememberRepo, Tag, TextInput, useDraft } from '../kit';
 
@@ -73,7 +74,6 @@ export function SkillsView({ session, signedIn, orgId, skills, onRetry, onAdd, o
   return (
     <>
       <ViewHeader
-        eyebrow="Reviewer"
         title="Skills"
         lead="A skill tells each review what your team knows about one area. Pick a skill folder your team already wrote for Claude Code or Codex, or write one here."
       />
@@ -81,8 +81,8 @@ export function SkillsView({ session, signedIn, orgId, skills, onRetry, onAdd, o
         <div className="flex min-w-0 flex-col">
         <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
           <div>
-            <h2 className="font-heading text-base font-semibold">Skill folders</h2>
-            <p className="mt-1 text-sm text-muted-foreground">Read from your repository.</p>
+            <h2 className="text-[15px] font-medium text-ink">Skill folders</h2>
+            <p className="mt-1 text-[13px] text-ink-4">Read from your repository.</p>
           </div>
           {skills && mayAdd ? <NewSkillForm orgId={orgId} skills={skills} onAdd={onAdd} startOpen={resume === 'skills'} /> : skills ? <ReadOnly>Only an admin of a repository can pick its skills.</ReadOnly> : null}
         </div>
@@ -96,7 +96,8 @@ export function SkillsView({ session, signedIn, orgId, skills, onRetry, onAdd, o
         ) : skills.skills.length === 0 ? (
           <EmptyList title="No skill folders yet">Add a skill folder, and every review of its repository reads it.</EmptyList>
         ) : (
-          <DataTable>
+          <DataCard>
+            <DataTable>
             <DataHead>
               <DataHeadCell>Skill folder</DataHeadCell>
               <DataHeadCell className="hidden md:table-cell">Repository</DataHeadCell>
@@ -106,7 +107,7 @@ export function SkillsView({ session, signedIn, orgId, skills, onRetry, onAdd, o
               {skills.skills.map((s) => (
                 <DataRow key={s.id}>
                   <DataCell className="whitespace-normal">
-                    <TwoLines main={<span className="break-all font-mono text-[13px]">{s.path}</span>} sub={
+                    <TwoLines icon={<FolderIcon />} main={<span className="break-all font-mono text-[13px]">{s.path}</span>} sub={
                         <>
                           picked by {s.by}, {ago(s.created_at)}
                           <span className="md:hidden">, {s.repo}</span>
@@ -141,6 +142,7 @@ export function SkillsView({ session, signedIn, orgId, skills, onRetry, onAdd, o
               ))}
             </DataBody>
           </DataTable>
+            </DataCard>
         )}
         <WrittenSkillsSection session={session} orgId={orgId} signedIn={signedIn} resume={resume === 'skills#write'} />
         </div>

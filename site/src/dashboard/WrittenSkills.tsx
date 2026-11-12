@@ -4,9 +4,10 @@
 
 import { Fragment, useEffect, useState } from 'react';
 import { toast } from 'sonner';
+import { PencilIcon } from '@/lib/icons';
 import { Textarea } from '@/components/ui/textarea';
 import { call, NotConnected, SignedOut, type Session } from './api';
-import { DataBody, DataCell, DataHead, DataHeadCell, DataRow, DataTable, TwoLines } from './DataTable';
+import { DataBody, DataCard, DataCell, Filler, DataHead, DataHeadCell, DataRow, DataTable, TwoLines } from './DataTable';
 import { ago } from './format';
 import { Choose, Confirm, EmptyList, Field, FormDialog, lastRepo, markResume, ReadOnly, rememberRepo, Tag, TextInput, useDraft } from './kit';
 
@@ -176,8 +177,8 @@ export function WrittenSkillsSection({ session, orgId, signedIn, resume }: { ses
     <section className="flex flex-col xl:flex-1">
       <div className="mb-3 mt-8 flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h2 className="font-heading text-base font-semibold">Written here</h2>
-          <p className="mt-1 text-sm text-muted-foreground">For an area that has no skill folder in the repository.</p>
+          <h2 className="text-[15px] font-medium text-ink">Written here</h2>
+          <p className="mt-1 text-[13px] text-ink-4">For an area that has no skill folder in the repository.</p>
         </div>
         {mayWrite ? (
           <WriteSkillForm
@@ -198,7 +199,8 @@ export function WrittenSkillsSection({ session, orgId, signedIn, resume }: { ses
       {data.skills.length === 0 ? (
         <EmptyList title="Nothing written yet">Skills written here are for an area that has no skill folder in the repository.</EmptyList>
       ) : (
-        <DataTable fill>
+        <DataCard fill>
+          <DataTable>
           <DataHead>
             <DataHeadCell>Skill</DataHeadCell>
             <DataHeadCell className="hidden md:table-cell">Repository</DataHeadCell>
@@ -209,11 +211,19 @@ export function WrittenSkillsSection({ session, orgId, signedIn, resume }: { ses
               <Fragment key={s.id}>
                 <DataRow>
                   <DataCell className="whitespace-normal">
-                    <TwoLines main={s.name} sub={s.description} />
-                    <p className="mt-1 text-xs text-muted-foreground/70">
-                      written by {s.by}, {ago(s.created_at)}
-                      <span className="md:hidden">, {s.repo}</span>
-                    </p>
+                    <TwoLines
+                      icon={<PencilIcon />}
+                      main={s.name}
+                      sub={
+                        <>
+                          <span className="block text-ink-3">{s.description}</span>
+                          <span className="mt-0.5 block text-xs">
+                            written by {s.by}, {ago(s.created_at)}
+                            <span className="md:hidden">, {s.repo}</span>
+                          </span>
+                        </>
+                      }
+                    />
                   </DataCell>
                   <DataCell className="hidden md:table-cell">
                     <Tag>{s.repo}</Tag>
@@ -257,6 +267,8 @@ export function WrittenSkillsSection({ session, orgId, signedIn, resume }: { ses
             ))}
           </DataBody>
         </DataTable>
+          <Filler />
+        </DataCard>
       )}
     </section>
   );

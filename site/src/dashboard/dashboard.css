@@ -1,33 +1,43 @@
-/* The dashboard's own styles: the shadcn preset (base-luma, preset b3SRdTsTy).
-   Kept apart from ../index.css, so the landing page and the setup page keep their look. */
+/* The dashboard's own styles. shadcn's base (copied in as shadcn-tailwind.css), with the look of the
+   reference Tommy picked on Nov 12 2026: quiet neutral greys with a faint warm tint, hairline borders
+   and one soft blue for actions. Kept apart from ../index.css,
+   so the landing page and the setup page keep their own look. */
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "./shadcn-tailwind.css";
+@import "@fontsource-variable/inter";
 
 @custom-variant dark (&:is(.dark *));
 
-@font-face {
-  font-family: "Geist";
-  src: url("/fonts/Geist-Variable.woff2") format("woff2");
-  font-weight: 100 900;
-  font-display: swap;
-}
-
-/* The three lights of a review. They mean the same on the pull request, the landing page and here. */
+/* Measured from the reference screenshots. */
 @theme {
   --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
-  --color-safe: #3fe8b8;
-  --color-human: #f5c451;
-  --color-blocked: #ff6b7a;
-  /* The inner panel of a glass card: darker than the frame around it, set into it. */
-  --color-panel: #171623;
-  --color-mint: #3fe8b8;
-  --color-lilac: #b89cff;
+  /* Surfaces, from the deepest to the most raised. */
+  --color-panel: #1a1a1a;   /* the content panel, table rows, inputs */
+  --color-shell: #222321;   /* the window, the menu, group rows */
+  --color-strip: #252523;   /* a card's header strip, chips, small pills */
+  --color-well: #282827;    /* the track of a segmented control */
+  /* Text, from the brightest to the quietest. */
+  --color-ink: #d8d8d8;
+  --color-ink-2: #b0b1b0;
+  --color-ink-3: #959593;
+  --color-ink-4: #737372;
+  /* The one action colour, and the text on it. */
+  --color-action: #8fabf6;
+  --color-action-ink: #141e1e;
+  --color-action-dim: #6d89f3;
+  /* The three lights of a review, in the reference's soft tones. */
+  --color-safe: #70a07c;
+  --color-safe-ink: #8fbe9a;
+  --color-human: #d4a253;
+  --color-human-ink: #e2b877;
+  --color-blocked: #d3867d;
+  --color-blocked-ink: #e59f95;
 }
 
 @theme inline {
   --font-heading: var(--font-sans);
-  --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -103,39 +113,38 @@
   --sidebar-ring: oklch(0.708 0 0);
 }
 
-/* The landing page's colours (src/index.css), so the dashboard is the same product. */
 .dark {
-  --background: #1b1a27;
-  --foreground: #eceaf4;
-  --card: #252433;
-  --card-foreground: #eceaf4;
-  --popover: #2c2b3a;
-  --popover-foreground: #eceaf4;
-  --primary: #eceaf4;
-  --primary-foreground: #1b1a27;
-  --secondary: #2c2b3a;
-  --secondary-foreground: #eceaf4;
-  --muted: #2c2b3a;
-  --muted-foreground: #b0adc3;
-  --accent: #2c2b3a;
-  --accent-foreground: #eceaf4;
-  --destructive: #ff6b7a;
-  --border: rgb(255 255 255 / 0.08);
-  --input: rgb(255 255 255 / 0.1);
-  --ring: #b89cff;
-  --chart-1: #3fe8b8;
-  --chart-2: #b89cff;
-  --chart-3: #f59ee6;
-  --chart-4: #f9a28c;
-  --chart-5: #f5c451;
-  --sidebar: #1b1a27;
-  --sidebar-foreground: #eceaf4;
-  --sidebar-primary: #3fe8b8;
-  --sidebar-primary-foreground: #1b1a27;
-  --sidebar-accent: rgb(255 255 255 / 0.045);
-  --sidebar-accent-foreground: #eceaf4;
-  --sidebar-border: rgb(255 255 255 / 0.07);
-  --sidebar-ring: #b89cff;
+  --background: #1a1a1a;
+  --foreground: #d8d8d8;
+  --card: #1a1a1a;
+  --card-foreground: #d8d8d8;
+  --popover: #222321;
+  --popover-foreground: #d8d8d8;
+  --primary: #8fabf6;
+  --primary-foreground: #141e1e;
+  --secondary: #252523;
+  --secondary-foreground: #d8d8d8;
+  --muted: #252523;
+  --muted-foreground: #959593;
+  --accent: #252523;
+  --accent-foreground: #d8d8d8;
+  --destructive: #d3867d;
+  --border: rgb(255 255 255 / 0.06);
+  --input: rgb(255 255 255 / 0.09);
+  --ring: #8fabf6;
+  --chart-1: #8fabf6;
+  --chart-2: #70a07c;
+  --chart-3: #d4a253;
+  --chart-4: #d3867d;
+  --chart-5: #959593;
+  --sidebar: #222321;
+  --sidebar-foreground: #b0b1b0;
+  --sidebar-primary: #8fabf6;
+  --sidebar-primary-foreground: #141e1e;
+  --sidebar-accent: #1a1a1a;
+  --sidebar-accent-foreground: #d8d8d8;
+  --sidebar-border: rgb(255 255 255 / 0.06);
+  --sidebar-ring: #8fabf6;
 }
 
 @layer base {
@@ -143,7 +152,9 @@
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-panel text-ink;
+    -webkit-font-smoothing: antialiased;
+    font-feature-settings: "cv11", "ss03";
   }
   html {
     @apply font-sans;
@@ -154,76 +165,15 @@
   }
 }
 
-/* Menus, select lists and popovers: a pane of glass around a solid panel.
-   The pane blurs the page behind it, and its rim catches light at the top like a real glass edge. */
-@layer components {
-  .glass-frame {
-    background: rgb(37 36 51 / 0.78);
-    -webkit-backdrop-filter: blur(22px) saturate(180%) brightness(1.08);
-    backdrop-filter: blur(22px) saturate(180%) brightness(1.08);
-    box-shadow:
-      inset 0 1px 0 rgb(255 255 255 / 0.32),
-      inset 0 -1px 0 rgb(255 255 255 / 0.06),
-      inset 0 0 18px rgb(255 255 255 / 0.05),
-      0 0 0 1px rgb(0 0 0 / 0.45),
-      0 32px 64px -24px rgb(0 0 0 / 0.85);
-  }
-  .glass-frame::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    border-radius: inherit;
-    padding: 1px;
-    pointer-events: none;
-    background: var(--glass-rim, linear-gradient(165deg, rgb(255 255 255 / 0.6), rgb(255 255 255 / 0.12) 30%, rgb(255 255 255 / 0.03) 60%, rgb(255 255 255 / 0.22)));
-    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-    -webkit-mask-composite: xor;
-    mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
-  }
-  /* Cards sit on the page, not above it, so their shadow is smaller than a menu's. */
-  .glass-card {
-    --glass-rim: linear-gradient(170deg, rgb(255 255 255 / 0.13), rgb(255 255 255 / 0.05) 35%, rgb(255 255 255 / 0.03) 65%, rgb(255 255 255 / 0.05));
-    background: var(--card);
-    box-shadow:
-      inset 0 1px 0 rgb(255 255 255 / 0.09),
-      inset 0 0 18px rgb(255 255 255 / 0.025),
-      0 0 0 1px rgb(0 0 0 / 0.2),
-      0 10px 28px -20px rgb(0 0 0 / 0.6);
-  }
-  .glass-card .glass-inner {
-    box-shadow: 0 0 0 1px rgb(0 0 0 / 0.25), inset 0 1px 0 rgb(255 255 255 / 0.06);
-  }
-  .glass-inner {
-    box-shadow: 0 0 0 1px rgb(0 0 0 / 0.5), 0 1px 3px rgb(0 0 0 / 0.45), inset 0 1px 0 rgb(255 255 255 / 0.05);
-  }
+/* Menus, lists, popovers and form windows: one step up from the page, with a hairline edge and a soft shadow. */
+@utility menu-rim {
+  background: #222321;
+  box-shadow:
+    inset 0 0 0 1px rgb(255 255 255 / 0.08),
+    0 18px 48px -16px rgb(0 0 0 / 0.7);
 }
 
-@layer components {
-  .page-light {
-    position: absolute;
-    inset: 0 0 auto 0;
-    height: 560px;
-    pointer-events: none;
-    background:
-      radial-gradient(55% 60% at 30% 0%, rgb(91 71 184 / 0.1), transparent 70%),
-      radial-gradient(35% 45% at 85% 0%, rgb(63 232 184 / 0.035), transparent 70%);
-  }
-  .page-light::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background: radial-gradient(rgb(255 255 255 / 0.05) 1px, transparent 1.2px) 0 0 / 26px 26px;
-    -webkit-mask-image: radial-gradient(ellipse 70% 80% at 40% 0%, black 10%, transparent 75%);
-    mask-image: radial-gradient(ellipse 70% 80% at 40% 0%, black 10%, transparent 75%);
-  }
-}
-
-/* A table that fills the page: its rows' panel runs on below the last row, so that row keeps square
-   bottom corners and the filler under it carries the round ones. Outside any layer, so it wins over
-   the rounding utilities on the cells. */
-@media (min-width: 80rem) {
-  [data-fill] > table > tbody > tr:last-child > td {
-    border-bottom-left-radius: 0;
-    border-bottom-right-radius: 0;
-  }
+/* A hairline edge, as on every card and panel of the reference. */
+@utility hairline {
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.055);
 }

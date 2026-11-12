@@ -2,11 +2,11 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { RotateCwIcon, ExternalLinkIcon, EllipsisIcon, PuzzleIcon, BrainIcon, LifeBuoyIcon, SendIcon, ChevronDownIcon, ChevronsUpDownIcon, CheckIcon, GitPullRequestIcon, ListChecksIcon, ScrollTextIcon, LogOutIcon } from '@/lib/icons';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
-import { Separator } from '@/components/ui/separator';
 import { Toaster } from '@/components/ui/sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarHeader, SidebarInset, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider, SidebarTrigger, useSidebar } from '@/components/ui/sidebar';
+import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarHeader, SidebarInset, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider, SidebarTrigger, useSidebar } from '@/components/ui/sidebar';
+import { cn } from '@/lib/utils';
 import { ADD_REPOS_URL, signInUrl, type Org, type Session } from './api';
 import { ago } from './format';
 import { EMAIL, GITHUB } from '../links';
@@ -28,23 +28,22 @@ export const VIEWS: { group: string; items: { id: ViewId; label: string; icon: t
 ];
 
 /** The org's picture from GitHub, or its first letter while that loads or if it fails. */
-function OrgIcon({ org }: { org: Org }) {
+function OrgIcon({ org, className = 'size-6' }: { org: Org; className?: string }) {
   return (
-    <Avatar className="size-6 rounded-[7px]! after:rounded-[7px]!">
+    <Avatar className={cn('rounded-[7px]! after:rounded-[7px]!', className)}>
       <AvatarImage src={`https://github.com/${encodeURIComponent(org.login)}.png?size=48`} alt="" className="rounded-[7px]!" />
-      <AvatarFallback className="rounded-[7px]! bg-primary text-xs font-semibold uppercase text-primary-foreground">{org.login.slice(0, 1)}</AvatarFallback>
+      <AvatarFallback className="rounded-[7px]! bg-action text-xs font-semibold uppercase text-action-ink">{org.login.slice(0, 1)}</AvatarFallback>
     </Avatar>
   );
 }
 
-/** A menu item. The one you are on is a raised tile with a small lit bar on its left and a lit icon. */
+/**
+ * A view in the menu, as in the reference: quiet grey text with a grey icon, and the view you are on
+ * set into a dark tile with a hairline edge, the same dark as the content panel.
+ */
 const NAV_ITEM = [
-  'relative text-sidebar-foreground/65 hover:bg-white/[0.04] hover:text-sidebar-foreground',
-  'data-active:bg-white/[0.06] data-active:font-medium data-active:text-sidebar-foreground',
-  'data-active:shadow-[inset_0_1px_0_rgb(255_255_255/0.06),0_0_0_1px_rgb(255_255_255/0.05)]',
-  // The light that is on: a small mint dot with a glow, as on the landing page and on a passing review.
-  'data-active:after:absolute data-active:after:right-3 data-active:after:top-1/2 data-active:after:size-1.5 data-active:after:-translate-y-1/2 data-active:after:rounded-full data-active:after:bg-mint data-active:after:shadow-[0_0_10px_2px_rgb(63_232_184/0.55)]',
-  'group-data-[collapsible=icon]:after:hidden',
+  'h-9 gap-2.5 rounded-[10px]! px-2.5 text-[14.5px] text-ink-2 [&_svg]:text-[#82827f] hover:bg-white/[0.04] hover:text-ink',
+  'data-active:bg-panel data-active:font-normal data-active:text-ink data-active:[&_svg]:text-ink data-active:shadow-[inset_0_0_0_1px_rgb(255_255_255/0.055)]',
 ].join(' ');
 
 /** A view in the menu. On a phone the menu is a sheet over the page, so picking a view closes it. */
@@ -60,36 +59,56 @@ function NavButton({ active, label, icon: Icon, onClick }: { active: boolean; la
       className={NAV_ITEM}
       tooltip={label}
     >
-      <Icon />
+      <Icon className="size-[18px]" />
       <span>{label}</span>
     </SidebarMenuButton>
+  );
+}
+
+/** A group of views under a small title with a caret, which folds the group away. */
+function NavGroup({ title, children }: { title: string; children: ReactNode }) {
+  const [open, setOpen] = useState(true);
+  const { state, isMobile } = useSidebar();
+  return (
+    <SidebarGroup className="py-1">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+        className="mb-1 flex h-7 w-fit items-center gap-1 rounded-md px-2.5 text-[13px] text-[#71716f] transition-colors hover:text-ink-3 group-data-[collapsible=icon]:hidden"
+      >
+        {title}
+        <ChevronDownIcon className={cn('size-3 transition-transform duration-150', !open && '-rotate-90')} />
+      </button>
+      {(open || (state === 'collapsed' && !isMobile)) && <SidebarGroupContent>{children}</SidebarGroupContent>}
+    </SidebarGroup>
   );
 }
 
 function OrgPicker({ orgs, org, onPick }: { orgs: Org[]; org: Org; onPick: (id: number) => void }) {
   if (orgs.length < 2) {
     return (
-      <div className="flex h-8 items-center gap-2 px-1.5">
+      <div className="flex h-9 items-center gap-2.5 px-1.5">
         <OrgIcon org={org} />
-        <span className="truncate font-medium">{org.login}</span>
+        <span className="truncate text-[15px] font-semibold tracking-[-0.01em] text-ink group-data-[collapsible=icon]:hidden">{org.login}</span>
       </div>
     );
   }
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger render={<SidebarMenuButton className="w-fit px-1.5 group-data-[collapsible=icon]:p-1!" aria-label="Switch org" />}>
+      <DropdownMenuTrigger render={<SidebarMenuButton className="h-9 w-fit gap-2.5 rounded-[10px]! px-1.5 group-data-[collapsible=icon]:p-1!" aria-label="Switch org" />}>
         <OrgIcon org={org} />
-        <span className="truncate font-medium">{org.login}</span>
-        <ChevronDownIcon className="size-3.5 opacity-50" />
+        <span className="truncate text-[15px] font-semibold tracking-[-0.01em] text-ink">{org.login}</span>
+        <ChevronDownIcon className="size-3.5 text-ink-4" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="min-w-56">
         <DropdownMenuGroup>
           <DropdownMenuLabel>Orgs</DropdownMenuLabel>
           {orgs.map((o) => (
             <DropdownMenuItem key={o.id} onClick={() => onPick(o.id)}>
-              <OrgIcon org={o} />
+              <OrgIcon org={o} className="size-5" />
               <span className="flex-1 truncate">{o.login}</span>
-              {o.id === org.id && <CheckIcon className="size-4" />}
+              {o.id === org.id && <CheckIcon className="size-4 text-ink" />}
             </DropdownMenuItem>
           ))}
         </DropdownMenuGroup>
@@ -102,13 +121,13 @@ function OrgPicker({ orgs, org, onPick }: { orgs: Org[]; org: Org; onPick: (id: 
 function Who({ user }: { user: Session['user'] }) {
   return (
     <>
-      <Avatar className="size-8 rounded-[10px]! after:rounded-[10px]!">
-        <AvatarImage src={`https://avatars.githubusercontent.com/u/${user.id}?s=80`} alt="" className="rounded-[10px]!" />
-        <AvatarFallback className="rounded-[10px]! uppercase">{user.login.slice(0, 1)}</AvatarFallback>
+      <Avatar className="size-8">
+        <AvatarImage src={`https://avatars.githubusercontent.com/u/${user.id}?s=80`} alt="" />
+        <AvatarFallback className="bg-strip text-xs uppercase text-ink-3">{user.login.slice(0, 2)}</AvatarFallback>
       </Avatar>
       <span className="grid flex-1 text-left leading-tight">
-        <span className="truncate font-medium">{user.login}</span>
-        <span className="truncate text-xs text-muted-foreground">Signed in with GitHub</span>
+        <span className="truncate text-[14px] font-medium text-ink">{user.login}</span>
+        <span className="truncate text-xs text-ink-4">Signed in with GitHub</span>
       </span>
     </>
   );
@@ -117,13 +136,13 @@ function Who({ user }: { user: Session['user'] }) {
 function NavUser({ user, onSignOut }: { user: Session['user']; onSignOut: () => void }) {
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger render={<SidebarMenuButton size="lg" aria-label="Your account" />}>
+      <DropdownMenuTrigger render={<SidebarMenuButton size="lg" className="h-12 rounded-[10px]! px-2 hover:bg-white/[0.04]" aria-label="Your account" />}>
         <Who user={user} />
-        <ChevronsUpDownIcon className="ml-auto size-4 text-muted-foreground" />
+        <ChevronsUpDownIcon className="ml-auto size-4 text-ink-4" />
       </DropdownMenuTrigger>
       <DropdownMenuContent side="top" align="start" className="min-w-56">
         <DropdownMenuGroup>
-          <DropdownMenuLabel className="flex items-center gap-2 py-1.5 font-normal text-foreground">
+          <DropdownMenuLabel className="flex items-center gap-2 py-1.5 font-normal">
             <Who user={user} />
           </DropdownMenuLabel>
         </DropdownMenuGroup>
@@ -144,12 +163,12 @@ function Updated({ at }: { at: number }) {
     const id = window.setInterval(() => tick((n) => n + 1), 30_000);
     return () => window.clearInterval(id);
   }, []);
-  return <span className="hidden text-sm text-muted-foreground sm:inline">Updated {ago(new Date(at).toISOString())}</span>;
+  return <span className="hidden text-[13px] text-ink-4 sm:inline">Updated {ago(new Date(at).toISOString())}</span>;
 }
 
 /** The page's own actions, out of the way until someone needs them. */
 function PageMenu({ orgLogin, onRefresh }: { orgLogin: string; onRefresh: () => void }) {
-  const link = 'h-8 gap-1.5 rounded-full px-2.5 text-[13px] text-muted-foreground data-highlighted:text-foreground';
+  const link = 'h-7 gap-1.5 rounded-[7px] px-2 text-[13px] text-ink-3 data-highlighted:text-ink';
   return (
     <DropdownMenu>
       <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label="More" />}>
@@ -160,7 +179,7 @@ function PageMenu({ orgLogin, onRefresh }: { orgLogin: string; onRefresh: () => 
         className="min-w-[23rem] whitespace-nowrap"
         footer={
           <>
-            <span className="mr-auto pl-1 text-[13px] text-muted-foreground">Missing an org?</span>
+            <span className="mr-auto pl-1 text-[13px] text-ink-4">Missing an org?</span>
             <DropdownMenuItem className={link} render={<a href={ADD_REPOS_URL} target="_blank" rel="noreferrer" />}>
               Add it on GitHub
               <ExternalLinkIcon className="size-3.5" />
@@ -180,85 +199,104 @@ function PageMenu({ orgLogin, onRefresh }: { orgLogin: string; onRefresh: () => 
   );
 }
 
+/** The menu button in the content panel: on a phone, and when the menu is shrunk to icons. */
+function PanelTrigger() {
+  const { isMobile, state } = useSidebar();
+  if (!isMobile && state === 'expanded') return null;
+  return <SidebarTrigger className="-ml-1.5 size-8 rounded-[8px] text-ink-3 hover:bg-white/[0.05] hover:text-ink" />;
+}
+
 export function AppShell({ user, orgs, org, onPickOrg, view, onView, onSignOut, loadedAt, onRefresh, children }: { user: Session['user']; orgs: Org[]; org: Org; onPickOrg: (id: number) => void; view: ViewId; onView: (v: ViewId) => void; onSignOut: () => void; loadedAt: number | null; onRefresh: () => void; children: ReactNode }) {
   const group = VIEWS.find((g) => g.items.some((i) => i.id === view)) ?? VIEWS[0];
   const here = { label: group.items.find((i) => i.id === view)?.label ?? '' };
   return (
     <TooltipProvider>
-    <SidebarProvider defaultOpen={!document.cookie.split('; ').includes('sidebar_state=false')}>
-      <Sidebar collapsible="icon">
-        <SidebarHeader>
-          <SidebarMenu>
-            <SidebarMenuItem>
-              <OrgPicker orgs={orgs} org={org} onPick={onPickOrg} />
-            </SidebarMenuItem>
-          </SidebarMenu>
-        </SidebarHeader>
-        <SidebarContent>
-          {VIEWS.map((g) => (
-            <SidebarGroup key={g.group}>
-              {g.group !== 'Overview' && <SidebarGroupLabel className="h-7 text-[11px] font-medium uppercase tracking-[0.08em] text-sidebar-foreground/40">{g.group}</SidebarGroupLabel>}
-              <SidebarGroupContent>
-                <SidebarMenu>
-                  {g.items.map((item) => (
-                    <SidebarMenuItem key={item.id}>
-                      <NavButton active={view === item.id} label={item.label} icon={item.icon} onClick={() => onView(item.id)} />
+      {/* The app fills the screen: the grey shell holds the menu, and the content sits in a darker panel inside it. */}
+      <div className="min-h-svh bg-panel md:h-svh md:bg-shell">
+        <div>
+          <div className="relative md:h-svh">
+            <SidebarProvider className="md:h-full md:min-h-0" defaultOpen={!document.cookie.split('; ').includes('sidebar_state=false')}>
+              <Sidebar variant="inset" collapsible="icon" className="md:h-full">
+                <SidebarHeader className="px-2 pt-3">
+                  <SidebarMenu>
+                    <SidebarMenuItem className="flex items-center justify-between gap-2">
+                      <OrgPicker orgs={orgs} org={org} onPick={onPickOrg} />
+                      <SidebarTrigger className="size-8 rounded-[8px] text-ink-3 hover:bg-white/[0.05] hover:text-ink group-data-[collapsible=icon]:hidden max-md:hidden" />
                     </SidebarMenuItem>
-                  ))}
-                </SidebarMenu>
-              </SidebarGroupContent>
-            </SidebarGroup>
-          ))}
-        </SidebarContent>
-        <SidebarFooter>
-          <SidebarMenu>
-            <SidebarMenuItem>
-              <SidebarMenuButton size="sm" tooltip="Support" render={<a href={`mailto:${EMAIL}?subject=Mergelight%20support`} />}>
-                <LifeBuoyIcon />
-                <span>Support</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-            <SidebarMenuItem>
-              <SidebarMenuButton size="sm" tooltip="Feedback" render={<a href={`${GITHUB}/issues/new`} target="_blank" rel="noreferrer" />}>
-                <SendIcon />
-                <span>Feedback</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          </SidebarMenu>
-          <SidebarMenu className="mt-2">
-            <SidebarMenuItem>
-              <NavUser user={user} onSignOut={onSignOut} />
-            </SidebarMenuItem>
-          </SidebarMenu>
-        </SidebarFooter>
-      </Sidebar>
-      <SidebarInset className="relative isolate overflow-hidden">
-        <div aria-hidden="true" className="page-light -z-10" />
-        <header className="flex h-16 shrink-0 items-center gap-2 px-4">
-          <SidebarTrigger className="-ml-1" />
-          <Separator orientation="vertical" className="mr-2 data-vertical:h-4 data-vertical:self-center" />
-          <h1 className="truncate text-sm font-medium">{here.label}</h1>
-          <div className="ml-auto flex items-center gap-2">
-            {loadedAt && <Updated at={loadedAt} />}
-            <PageMenu orgLogin={org.login} onRefresh={onRefresh} />
+                  </SidebarMenu>
+                </SidebarHeader>
+                <SidebarContent className="gap-3 px-1 pt-3">
+                  {VIEWS.map((g) => {
+                    const items = (
+                      <SidebarMenu className="gap-1">
+                        {g.items.map((item) => (
+                          <SidebarMenuItem key={item.id}>
+                            <NavButton active={view === item.id} label={item.label} icon={item.icon} onClick={() => onView(item.id)} />
+                          </SidebarMenuItem>
+                        ))}
+                      </SidebarMenu>
+                    );
+                    return g.group === 'Overview' ? (
+                      <SidebarGroup key={g.group} className="py-1">
+                        <SidebarGroupContent>{items}</SidebarGroupContent>
+                      </SidebarGroup>
+                    ) : (
+                      <NavGroup key={g.group} title={g.group}>
+                        {items}
+                      </NavGroup>
+                    );
+                  })}
+                </SidebarContent>
+                <SidebarFooter className="px-2 pb-3">
+                  <SidebarMenu className="gap-0.5">
+                    <SidebarMenuItem>
+                      <SidebarMenuButton size="sm" tooltip="Support" className="h-8 gap-2.5 rounded-[8px]! px-2.5 text-[13.5px] text-ink-3 [&_svg]:text-[#82827f] hover:bg-white/[0.04] hover:text-ink" render={<a href={`mailto:${EMAIL}?subject=Mergelight%20support`} />}>
+                        <LifeBuoyIcon />
+                        <span>Support</span>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                    <SidebarMenuItem>
+                      <SidebarMenuButton size="sm" tooltip="Feedback" className="h-8 gap-2.5 rounded-[8px]! px-2.5 text-[13.5px] text-ink-3 [&_svg]:text-[#82827f] hover:bg-white/[0.04] hover:text-ink" render={<a href={`${GITHUB}/issues/new`} target="_blank" rel="noreferrer" />}>
+                        <SendIcon />
+                        <span>Feedback</span>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  </SidebarMenu>
+                  <SidebarMenu className="mt-2">
+                    <SidebarMenuItem>
+                      <NavUser user={user} onSignOut={onSignOut} />
+                    </SidebarMenuItem>
+                  </SidebarMenu>
+                </SidebarFooter>
+              </Sidebar>
+              <SidebarInset className="min-w-0 bg-panel md:min-h-0 md:overflow-y-auto md:hairline md:peer-data-[variant=inset]:rounded-[16px] md:peer-data-[variant=inset]:shadow-[inset_0_0_0_1px_rgb(255_255_255/0.055)]">
+                <header className="flex h-14 shrink-0 items-center gap-2 px-5 md:px-6">
+                  <PanelTrigger />
+                  <h1 className="truncate text-[15px] font-medium text-ink">{here.label}</h1>
+                  <div className="ml-auto flex items-center gap-2">
+                    {loadedAt && <Updated at={loadedAt} />}
+                    <PageMenu orgLogin={org.login} onRefresh={onRefresh} />
+                  </div>
+                </header>
+                <div className="flex w-full flex-1 flex-col px-5 pb-8 pt-6 md:px-10 md:pt-10">{children}</div>
+              </SidebarInset>
+            </SidebarProvider>
           </div>
-        </header>
-        <div className="flex w-full flex-1 flex-col px-4 pb-6 pt-2">{children}</div>
-      </SidebarInset>
+        </div>
+      </div>
       {/* Outside the page region, so a message shows above an open form window. Sonner announces it to screen readers. */}
       <Toaster position="bottom-right" />
-    </SidebarProvider>
     </TooltipProvider>
   );
 }
 
-export function ViewHeader({ eyebrow, title, lead, action }: { eyebrow?: string; title: string; lead?: ReactNode; action?: ReactNode }) {
+/** A view's title and the line under it, as the reference's "Hey Sam" and "Here's how Acme is running right now." */
+export function ViewHeader({ title, lead, action }: { eyebrow?: string; title: ReactNode; lead?: ReactNode; action?: ReactNode }) {
   return (
-    <div className="mb-8 flex flex-wrap items-end justify-between gap-x-6 gap-y-4 pt-2">
+    <div className="mb-8 flex flex-wrap items-end justify-between gap-x-6 gap-y-4">
       <div className="max-w-2xl">
-        {eyebrow && <p className="text-sm font-medium text-mint">{eyebrow}</p>}
-        <h1 className="mt-1.5 font-heading text-[32px] font-semibold leading-[1.1] tracking-[-0.035em] [text-wrap:balance]">{title}</h1>
-        {lead && <p className="mt-3 text-[15px] leading-relaxed text-muted-foreground [text-wrap:pretty]">{lead}</p>}
+        <h2 className="text-[26px] font-semibold leading-[1.15] tracking-[-0.02em] text-ink [text-wrap:balance]">{title}</h2>
+        {lead && <p className="mt-2 text-[15px] leading-relaxed text-ink-3 [text-wrap:pretty]">{lead}</p>}
       </div>
       {action}
     </div>
