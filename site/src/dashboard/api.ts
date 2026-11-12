@@ -1,16 +1,17 @@
 // The dashboard's sign-in and its calls to the Mergelight server.
 //
-// Sign-in is GitHub's, the same as on the setup page. The page shows the Mergelight server the GitHub
-// token once, gets a session of the server's own back, and forgets the GitHub token. Nothing here
-// can change anything on GitHub.
+// Sign-in is GitHub's, through Mergelight AI, the app that posts the reviews, so a person sees the
+// repositories that have reviews. The page shows the Mergelight server the GitHub token once, gets a
+// session of the server's own back, and forgets the GitHub token. Nothing here can change anything on GitHub.
 
-const CLIENT_ID = 'Iv23liSVH2xajWoG53R0';
+/** Mergelight AI's client id. The setup page signs in through Mergelight Setup instead. */
+const CLIENT_ID = 'Iv23liM8BL5MwWeDmXHV';
 const TOKEN_SERVER = 'https://api.mergelight.dev';
 /** Where the numbers live. A build for a server you host yourself sets VITE_MERGELIGHT_SERVER. */
 export const SERVER: string = (import.meta.env.VITE_MERGELIGHT_SERVER as string | undefined) ?? 'https://mergelight-server.onrender.com';
 
 /** Where a person adds an org or a repository to what the dashboard can show them. */
-export const ADD_REPOS_URL = 'https://github.com/apps/mergelight-setup/installations/new';
+export const ADD_REPOS_URL = 'https://github.com/apps/mergelight-ai/installations/new';
 
 const STATE_KEY = 'mergelight.dashboard.state';
 const SESSION_KEY = 'mergelight.dashboard.session';
@@ -199,7 +200,8 @@ export async function finishSignIn(params: URLSearchParams): Promise<Session | n
   const res = await fetch(`${TOKEN_SERVER}/sign-in`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ code }),
+    // The code was made for Mergelight AI, so the token server swaps it with that app's secret.
+    body: JSON.stringify({ code, app: 'review' }),
     signal: AbortSignal.timeout(TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`Sign-in failed (${res.status}).`);

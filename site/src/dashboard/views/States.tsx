@@ -64,7 +64,7 @@ export function NoOrg({ onSignOut }: { onSignOut: () => void }) {
     <GlassCard className="w-full max-w-lg">
       <h2 className="font-heading text-lg font-semibold">No repositories to show</h2>
       <p className="mt-2 text-[15px] leading-relaxed text-muted-foreground">
-        The dashboard shows the repositories you gave Mergelight Setup access to on GitHub, and this sign-in has none.{' '}
+        The dashboard shows the repositories Mergelight AI, the app that posts the reviews, is installed on, and this sign-in has none.{' '}
         <a href={ADD_REPOS_URL} target="_blank" rel="noreferrer" className={LINK}>
           Add your org or repositories
         </a>
