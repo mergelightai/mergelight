@@ -88,7 +88,7 @@ async function replay({ number }) {
   const ws = await prepareWorkspace(pr, old.pr.head_sha);
   const started = Date.now();
   try {
-    const input = { pr, mergeBase: ws.mergeBase, headSha: ws.headSha, diffStat: ws.diffStat, diff: ws.diff, diffTruncated: ws.diffTruncated, conventions: ws.conventions };
+    const input = { pr, mergeBase: ws.mergeBase, headSha: ws.headSha, diffStat: ws.diffStat, diff: ws.diff, diffTruncated: ws.diffTruncated, conventions: ws.conventions, rules: ws.rules };
     const v = await verifyCandidates(ws.dir, input, found, {
       provider: values.with,
       model: values.model,

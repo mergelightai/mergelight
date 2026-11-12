@@ -204,7 +204,10 @@ export async function teamFilesFor(mirror: string, base: string, changedPaths: s
     conventions.push({ path: f.path, text: f.text.slice(0, room), truncated: f.text.length > room });
     total += Math.min(f.text.length, room);
   }
-  const rules = repoRules(ruleFiles.filter((f): f is { path: string; sha: string; text: string } => f !== null), changedPaths.length ? changedPaths : undefined);
+  // A rule file and a link to it are one file: its rules count once.
+  const seenRules = new Set<string>();
+  const readRules = ruleFiles.filter((f): f is { path: string; sha: string; text: string } => f !== null && !seenRules.has(f.sha) && Boolean(seenRules.add(f.sha)));
+  const rules = repoRules(readRules, changedPaths.length ? changedPaths : undefined);
   // A rule file that couldn't be read is named, never dropped without a word.
   const unreadRules = rulePaths.filter((_, i) => ruleFiles[i] === null);
   return { conventions, rules, unreadRules };
