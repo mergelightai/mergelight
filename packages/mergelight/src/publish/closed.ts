@@ -19,7 +19,7 @@ export interface ReviewThread {
   isResolved: boolean;
   isOutdated: boolean;
   resolvedBy?: { login?: string } | null;
-  comments: { nodes: { databaseId: number; body: string; authorAssociation?: string; author?: { __typename?: string } | null }[] };
+  comments: { nodes: { databaseId: number; body: string; authorAssociation?: string; author?: { __typename?: string; login?: string } | null; createdAt?: string; lastEditedAt?: string | null }[] };
 }
 
 /** fixed: the code changed and the finding is gone. resolved: someone resolved the thread. */
@@ -116,6 +116,64 @@ export function threadAction(t: ReviewThread, open: Set<string>): ThreadAction |
  * verifier hears about these as a team decision, so a pull request's own author
  * can't talk it out of a finding: GitHub lets them resolve threads too.
  */
+/** Mergelight's reply in a thread, once a person's reason there is remembered. */
+export const REMEMBERED_MARKER = "<!-- mergelight:remembered -->";
+
+/**
+ * The reason a person gave when they resolved a thread: their own replies in it. Only a reply by
+ * the person who resolved it counts, so a reason can't come from someone who couldn't have decided.
+ * resolved: who resolved each finding's thread, from resolvedByPeople.
+ */
+/**
+ * Whether Mergelight already said in this thread that the server kept its reason. A thread is answered
+ * once: a later reply doesn't replace the kept reason. Only Mergelight's own answer counts, by the login
+ * that posted the finding.
+ */
+export function answeredRemembered(t: ReviewThread): boolean {
+  const nodes = t.comments.nodes;
+  const own = nodes[0]?.author?.login;
+  return Boolean(own) && nodes.some((c, i) => i > 0 && c.author?.login === own && c.body.includes(REMEMBERED_MARKER));
+}
+
+export function resolverReplies(threads: ReviewThread[], resolved: Map<string, string>, mergelight?: string): Map<string, { replies: { text: string; at: string }[]; commentId: number; answered: boolean }> {
+  const out = new Map<string, { replies: { text: string; at: string }[]; commentId: number; answered: boolean }>();
+  for (const t of threads) {
+    const found = threadFinding(t);
+    // Only a thread Mergelight started: a member who can't push could start one with a copied marker, and
+    // so could another app. GitHub names a bot without "[bot]" in one API and with it in the other.
+    const starter = t.comments.nodes[0]?.author;
+    const bare = (login: string | undefined) => login?.replace(/\[bot\]$/, "");
+    if (!found || starter?.__typename !== "Bot" || (mergelight && bare(starter.login) !== bare(mergelight))) continue;
+    const by = resolved.get(found.id);
+    if (!by || t.resolvedBy?.login !== by) continue;
+    const own = t.comments.nodes
+      .slice(1)
+      .filter((c) => c.author?.__typename === "User" && c.author.login === by && c.createdAt && c.body.trim() && !c.body.includes("<!-- mergelight:"));
+    // All of their replies, in order: a later "thanks" mustn't replace the reason.
+    const answered = answeredRemembered(t);
+    // An edited reply counts from its edit: a reason added later is new.
+    // Quoted lines (a "Quote reply" of the finding, say) are left out: they aren't what the person said.
+    const said = (body: string) => body.split("\n").filter((l) => !/^\s*>/.test(l)).join("\n").trim();
+    const replies = own.map((c) => ({ text: said(c.body), at: c.lastEditedAt ?? c.createdAt! })).filter((r) => r.text);
+    if (replies.length) out.set(found.id, { replies, commentId: found.commentId, answered });
+  }
+  return out;
+}
+
+/**
+ * Whether a diff of one file touches lines start to end of the old side. From a patch's hunk headers,
+ * so context lines count too: a near miss counts as touched, never the other way round.
+ */
+export function patchTouches(patch: string, start: number, end: number): boolean {
+  for (const m of patch.matchAll(/^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@/gm)) {
+    const from = Number(m[1]);
+    const count = m[2] === undefined ? 1 : Number(m[2]);
+    const to = from + Math.max(count, 1) - 1;
+    if (from <= end && to >= start) return true;
+  }
+  return false;
+}
+
 export async function resolvedByPeople(threads: ReviewThread[], canWrite: (login: string) => Promise<boolean>): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   for (const t of threads) {

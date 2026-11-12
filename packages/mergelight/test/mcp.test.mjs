@@ -10,7 +10,7 @@ import { nextStep, reviewStatus } from "../dist/mcp/findings.js";
 import { GitHub } from "../dist/publish/api.js";
 import { decodeMark, encodeMark, findingState, readMarks } from "../dist/publish/handled.js";
 import { SUMMARY_MARKER, summaryBody } from "../dist/publish/markdown.js";
-import { previousFindings, publishReview } from "../dist/publish/publish.js";
+import { answerRemembered, confirmReasons, previousFindings, publishReview } from "../dist/publish/publish.js";
 import { decodeState, encodeState, nextState } from "../dist/publish/state.js";
 import { buildVerifierPrompt } from "../dist/prompt.js";
 
@@ -98,6 +98,7 @@ const path = args[1].replace("repos/o/r/", "");
 if (path === "repos/o/r") out({ permissions: { push: s.push !== false } });
 else if (path === "pulls/7") out({ number: 7, title: "PR title", body: "", html_url: "https://github.com/o/r/pull/7", user: { login: "a" }, base: { ref: "main", sha: "b" }, head: { sha: s.head || "${REVIEWED}" }, additions: 1, deletions: 0, changed_files: 1 });
 else if (path.startsWith("commits/")) out({ check_runs: s.checkRuns || [] });
+else if (path.startsWith("compare/")) { if (!s.compare) fail("HTTP 404"); out(s.compare); }
 else if (path.startsWith("collaborators/")) { const p = ({ teammate: "write", ...s.permissions })[path.split("/")[1]]; if (!p) fail("HTTP 404"); out({ permission: p }); }
 else fail("unexpected get " + path);
 `,
@@ -664,4 +665,151 @@ test("nothing Mergelight writes to people uses long dashes", () => {
   for (const file of ["../skills/mergelight/SKILL.md", "../../../docs/agents.md"]) {
     assert.doesNotMatch(readFileSync(join(here, file), "utf8"), /[–—]/, file);
   }
+});
+
+/** A thread on one of Mergelight's findings, resolved by teammate, with these replies. */
+const findingThread = (id, commentId, replies, over = {}) => ({
+  id: `T${commentId}`,
+  isResolved: true,
+  isOutdated: false,
+  resolvedBy: { login: "teammate" },
+  comments: { nodes: [{ databaseId: commentId, body: `<!-- mergelight:finding id=${id} -->\nFinding`, author: { __typename: "Bot", login: "github-actions" } }, ...replies] },
+  ...over,
+});
+const reply = (login, body, at = "2030-01-02T00:00:00Z") => ({ databaseId: 9, body, createdAt: at, author: { __typename: "User", login } });
+
+test("what the resolver wrote reaches the verifier, and is a candidate to keep only when fresh, on unchanged code and not answered yet", async () => {
+  const state = stateOf([
+    finding({ id: "aaaaaaaaaa", file: "src/a.ts", line: 12, end_line: 12 }),
+    finding({ id: "bbbbbbbbbb", file: "src/b.ts", line: 30, end_line: 30 }),
+    finding({ id: "cccccccccc", file: "src/c.ts", line: 5, end_line: 5 }),
+    finding({ id: "dddddddddd", file: "src/d.ts", line: 5, end_line: 5 }),
+    finding({ id: "ffffffffff", file: "src/f.ts", line: 5, end_line: 5 }),
+  ]);
+  const scenario = (threads, compare = { status: "ahead", files: [] }) => useScenario({ issueComments: [summaryComment(state)], threads, ...(compare ? { compare } : {}) });
+  const read = async (s, id = "aaaaaaaaaa") => (await withFakeGh(s.env, () => previousFindings(new GitHub("o", "r"), 7, PUSHED))).find((p) => p.id === id).handled;
+
+  const main = scenario(
+    [
+      findingThread("aaaaaaaaaa", 501, [reply("teammate", "Valid, and known.\n\nThe repair ships\u200b next release.")]),
+      findingThread("bbbbbbbbbb", 502, [reply("teammate", "Known, leave it.")]),
+      findingThread("cccccccccc", 503, [reply("stranger", "Not a problem.")]),
+      findingThread("dddddddddd", 504, []),
+      findingThread("ffffffffff", 506, [reply("teammate", "Known."), reply("github-actions", "<!-- mergelight:remembered -->\nRemembered."), reply("teammate", "Thanks!")]),
+    ],
+    { status: "ahead", files: [{ filename: "src/b.ts", patch: "@@ -28,5 +28,6 @@\n ctx" }, { filename: "src/a.ts", patch: "@@ -100,2 +100,3 @@\n ctx" }] },
+  );
+  const previous = await withFakeGh(main.env, () => previousFindings(new GitHub("o", "r"), 7, PUSHED));
+  const byId = Object.fromEntries(previous.map((p) => [p.id, p.handled]));
+  assert.deepEqual(byId.aaaaaaaaaa, { as: "wont_fix", note: "Valid, and known. The repair ships next release.", by: "teammate", sha: null, from: "reply", at: "2030-01-02T00:00:00Z", remember: true }, "the file changed, but far from the finding");
+  assert.equal(byId.bbbbbbbbbb.from, "reply", "the lines changed: still what the team said");
+  assert.equal(byId.bbbbbbbbbb.remember, undefined, "but not a candidate: the reply may answer the old code");
+  assert.equal(byId.cccccccccc.note, "Resolved the comment on the pull request.", "only the person who resolved it speaks for it");
+  assert.equal(byId.dddddddddd.from, "thread");
+  assert.equal(byId.ffffffffff.remember, undefined, "already answered: a later reply doesn't overwrite the kept reason");
+
+  // Not a candidate when GitHub can't say what changed, after a force-push, or from before the latest review.
+  assert.equal((await read(scenario([findingThread("aaaaaaaaaa", 501, [reply("teammate", "Known.")])], null))).remember, undefined);
+  assert.equal((await read(scenario([findingThread("aaaaaaaaaa", 501, [reply("teammate", "Known.")])], { status: "diverged", files: [] }))).remember, undefined);
+  const old = await read(scenario([findingThread("aaaaaaaaaa", 501, [reply("teammate", "Known, leave it.", "2001-01-01T00:00:00Z")])]));
+  assert.equal(old.from, "reply", "two reviews later, the verifier still reads it");
+  assert.equal(old.remember, undefined);
+
+  // The resolver's replies count together, so a later "thanks" doesn't hide the reason. A long one says it was cut.
+  const joined = await read(scenario([findingThread("aaaaaaaaaa", 501, [reply("teammate", "Known, ships next release."), reply("teammate", "Thanks!"), reply("teammate", "x".repeat(1200))])]));
+  assert.ok(joined.note.startsWith("… xxx"), "too long: the newest reply is the part kept");
+  assert.equal(joined.note.length, 1000);
+  assert.equal(joined.cut, true);
+  assert.equal((await read(scenario([findingThread("aaaaaaaaaa", 501, [reply("teammate", "Known, ships next release."), reply("teammate", "Thanks!")])]))).note, "Known, ships next release. Thanks!");
+  // Quoted lines aren't what the person said.
+  assert.equal((await read(scenario([findingThread("aaaaaaaaaa", 501, [reply("teammate", "> Project lookup exposes other teams' private notes\n> long quote\n\nKnown, the gateway blocks it.")])]))).note, "Known, the gateway blocks it.");
+  // An edited reply counts from its edit.
+  const edited = await read(scenario([findingThread("aaaaaaaaaa", 501, [{ ...reply("teammate", "Known, the gateway blocks it.", "2001-01-01T00:00:00Z"), lastEditedAt: "2030-01-02T00:00:00Z" }])]));
+  assert.equal(edited.remember, true);
+
+  // The verifier reads it as what was said, with a rule for reasons, fix notes and anything else.
+  const said = await read(scenario([findingThread("aaaaaaaaaa", 501, [reply("teammate", "Thanks, moved the validation into the router.")])]));
+  const prompt = buildVerifierPrompt({ pr: { owner: "o", repo: "r", number: 7, title: "t", author: "a", baseRef: "main", body: "" }, mergeBase: "b", headSha: "h", diffStat: "", diff: "", diffTruncated: false, previous: [{ id: "aaaaaaaaaa", title: "T", file: "src/a.ts", line: 12, handled: said }] }, []);
+  assert.ok(prompt.includes("team: resolved the comment, by teammate, saying: Thanks, moved the validation into the router."));
+  assert.ok(!prompt.includes("decided not to fix, by teammate"));
+  assert.match(prompt, /with the reason "the team resolved it"/);
+  assert.match(prompt, /will be fixed later, in another pull request, don't keep it in this one.*"the team will fix it later"/);
+});
+
+test("a remembered reason gets one answer in its thread", async () => {
+  const { env, writes } = useScenario({
+    threads: [
+      findingThread("aaaaaaaaaa", 501, [reply("teammate", "Known.")]),
+      findingThread("bbbbbbbbbb", 502, [reply("teammate", "Known."), { ...reply("github-actions", "<!-- mergelight:remembered -->\nRemembered."), author: { __typename: "Bot", login: "github-actions" } }]),
+      findingThread("cccccccccc", 503, [reply("teammate", "Known.")]),
+      // A person's copy of the marker doesn't count as the answer.
+      findingThread("dddddddddd", 504, [reply("teammate", "Known."), reply("teammate", "<!-- mergelight:remembered -->")]),
+      // A newer reply after Mergelight's answer isn't answered again.
+      findingThread("eeeeeeeeee", 505, [reply("teammate", "Known."), { ...reply("github-actions", "<!-- mergelight:remembered -->\nRemembered."), author: { __typename: "Bot", login: "github-actions" } }, reply("teammate", "Also, the gateway blocks it.")]),
+    ],
+  });
+  const answered = await withFakeGh(env, () => answerRemembered(new GitHub("o", "r"), 7, ["aaaaaaaaaa", "bbbbbbbbbb", "dddddddddd", "eeeeeeeeee"], new Set(["aaaaaaaaaa"])));
+  assert.equal(answered, 2, "a thread is answered once, even after a newer reply");
+  assert.deepEqual(writes().map((w) => [w.method, w.path]), [["POST", "pulls/7/comments/501/replies"], ["POST", "pulls/7/comments/504/replies"]]);
+  assert.match(writes()[0].body, /^<!-- mergelight:remembered -->\n🧠 \*\*Remembered\.\*\*/);
+  assert.match(writes()[0].body, /only its end, the newest part, is kept/);
+  assert.equal(await withFakeGh(env, () => answerRemembered(new GitHub("o", "r"), 7, [], new Set())), 0);
+});
+
+test("a reason the server hasn't confirmed is sent again in later reviews, until Mergelight has answered in its thread", async () => {
+  const base = stateOf([finding({ id: "aaaaaaaaaa", file: "src/a.ts", line: 12, end_line: 12 })]);
+  const pending = { ...base, remember: [{ id: "aaaaaaaaaa", at: "2001-01-01T00:00:00Z" }] };
+  const thread = (extra = []) => findingThread("aaaaaaaaaa", 501, [reply("teammate", "Known, leave it.", "2001-01-01T00:00:00Z"), ...extra]);
+  const read = async (state, threads, compare = { status: "ahead", files: [] }) => {
+    const { env } = useScenario({ issueComments: [summaryComment(state)], threads, compare });
+    return (await withFakeGh(env, () => previousFindings(new GitHub("o", "r"), 7, PUSHED)))[0].handled;
+  };
+  // An old reply: only the pending list keeps it, and only while the code there is unchanged.
+  assert.equal((await read(pending, [thread()])).remember, true);
+  assert.equal((await read(pending, [thread()], { status: "diverged", files: [] })).remember, undefined, "can't tell if the code changed: not sent again");
+  assert.equal((await read(base, [thread()])).remember, undefined, "nothing pending: an old reply isn't kept");
+  const answered = [thread([{ databaseId: 10, body: "<!-- mergelight:remembered -->\nRemembered.", createdAt: "2001-01-02T00:00:00Z", author: { __typename: "Bot", login: "github-actions" } }])];
+  assert.equal((await read(pending, answered)).remember, undefined, "answered in the thread: the server has it");
+  const otherBot = [thread([{ databaseId: 10, body: "<!-- mergelight:remembered -->", createdAt: "2001-01-02T00:00:00Z", author: { __typename: "Bot", login: "echo-bot" } }])];
+  assert.equal((await read(pending, otherBot)).remember, true, "another bot's copy isn't Mergelight's answer");
+  const forged = [thread([{ databaseId: 10, body: "<!-- mergelight:remembered -->", createdAt: "2001-01-02T00:00:00Z", author: { __typename: "User", login: "teammate" } }])];
+  assert.equal((await read(pending, forged)).remember, true, "only Mergelight's own answer counts");
+  const tried = { ...base, remember: [{ id: "aaaaaaaaaa", at: "2001-01-01T00:00:00Z", tries: 3 }] };
+  assert.equal((await read(tried, [thread()])).remember, undefined, "sent 3 times: given up on, so a silent server isn't sent it forever");
+  const twice = await read({ ...base, remember: [{ id: "aaaaaaaaaa", at: "2001-01-01T00:00:00Z", tries: 2 }] }, [thread()]);
+  assert.equal(twice.remember, true);
+  assert.equal(twice.tries, 2);
+  // Someone else's reply after Mergelight's answer doesn't undo it.
+  const otherReply = [thread([{ databaseId: 10, body: "<!-- mergelight:remembered -->\nRemembered.", createdAt: "2001-01-02T00:00:00Z", author: { __typename: "Bot", login: "github-actions" } }, reply("pr-author", "Thanks all.", "2001-01-03T00:00:00Z")])];
+  assert.equal((await read(pending, otherReply)).remember, undefined);
+  const later = await read(pending, [thread([reply("teammate", "Thanks!", "2001-01-05T00:00:00Z")])]);
+  assert.equal(later.remember, true, "a later thanks doesn't cancel it");
+  const newer = { ...base, remember: [{ id: "aaaaaaaaaa", at: "2002-01-01T00:00:00Z" }] };
+  assert.equal((await read(newer, [thread()])).remember, undefined, "the waiting reason is newer than any reply here");
+});
+
+test("publishing a review without a new list keeps the reasons still waiting for the server", async () => {
+  const state = { ...stateOf([finding()]), remember: [{ id: "aaaaaaaaaa", at: "2030-01-02T00:00:00Z" }] };
+  const { env, writes } = useScenario({ issueComments: [summaryComment(state)], head: PUSHED });
+  await withFakeGh(env, async () => {
+    const review = { pr: { owner: "o", repo: "r", number: 7, head_sha: PUSHED }, provider: { name: "codex", model: null }, light: "green", summary: "S", findings: [], stats: { duration_ms: 1 }, created_at: "2030-01-03T00:00:00Z" };
+    await publishReview(review);
+    assert.deepEqual(decodeState(writes().find((w) => w.path === "issues/comments/1").body).remember, [{ id: "aaaaaaaaaa", at: "2030-01-02T00:00:00Z" }]);
+    await publishReview(review, { remember: [] });
+    assert.equal("remember" in decodeState(writes().filter((w) => w.path === "issues/comments/1").at(-1).body), false, "a review that sent its list replaces it");
+  });
+});
+
+test("a candidate reason is kept only when the verifier dropped its finding because the team declined it", () => {
+  const candidate = (id) => ({ id, title: "T", file: "src/a.ts", line: 1, handled: { as: "wont_fix", note: "said", by: "ada", sha: null, from: "reply", at: "2030-01-01T00:00:00Z", remember: true, tries: 1 } });
+  const kept = confirmReasons(
+    [candidate("aaaaaaaaaa"), candidate("bbbbbbbbbb"), candidate("cccccccccc")],
+    [{ candidate: "aaaaaaaaaa", reason: "The team decided not to fix this." }, { candidate: "bbbbbbbbbb", reason: "the team resolved it" }],
+  );
+  assert.equal(kept[0].handled.remember, true);
+  assert.equal(kept[1].handled.remember, undefined, "an ok or a fix note isn't a reason");
+  assert.equal(kept[2].handled.remember, undefined, "the verifier kept the finding");
+  assert.equal("tries" in kept[2].handled, false);
+  assert.equal(kept[2].handled.note, "said", "what was said stays for this pull request");
+  assert.equal(confirmReasons(undefined, []), undefined);
 });
