@@ -7,7 +7,8 @@
 //
 // Before a delete, take the org out of the server's CONNECT_ORGS. The server turns on every org listed
 // there at each start, so a deleted org that is still listed comes back at the next deploy, and its
-// runs are stored again. The delete refuses an org listed in CONNECT_ORGS in its own environment.
+// runs are stored again. The delete refuses an org listed in CONNECT_ORGS in its own environment,
+// and always reminds to check the server's own list, which this shell may not have.
 //
 // The id is GitHub's number for the account: gh api users/<login> --jq .id
 
@@ -53,7 +54,8 @@ try {
   } else {
     console.log((await deleteOrg(pool, id)) ? `Removed everything stored for ${id}.` : `Nothing was stored for ${id}.`);
     // This shell may not have the server's settings, so say it even when CONNECT_ORGS is empty here.
-    if (connectOrgs.length === 0) console.log("CONNECT_ORGS lists no org here. Check that the server's own CONNECT_ORGS doesn't list this org, or it comes back at the next start.");
+    // This shell's CONNECT_ORGS can be empty or older than the server's, so always say it.
+    console.log("Check that the server's own CONNECT_ORGS doesn't list this org, or it comes back at the next start.");
   }
 } catch (err) {
   console.error((err as Error).message);

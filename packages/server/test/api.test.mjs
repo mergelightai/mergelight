@@ -670,11 +670,11 @@ test("the admin command won't delete an org the server turns back on at its next
   const ok = spawnSync(process.execPath, [admin, "delete", "1002"], { env: { ...unset, CONNECT_ORGS: "1001:acme" }, encoding: "utf8" });
   assert.equal(ok.status, 0, ok.stderr);
   assert.match(ok.stdout, /Removed everything stored for 1002/);
-  assert.doesNotMatch(ok.stdout, /CONNECT_ORGS lists no org here/);
+  assert.match(ok.stdout, /Check that the server's own CONNECT_ORGS doesn't list this org/);
   for (const value of [undefined, "", " , "]) {
     const quiet = spawnSync(process.execPath, [admin, "delete", "1002"], { env: value === undefined ? unset : { ...unset, CONNECT_ORGS: value }, encoding: "utf8" });
     assert.equal(quiet.status, 0, quiet.stderr);
-    assert.match(quiet.stdout, /Nothing was stored for 1002[\s\S]*CONNECT_ORGS lists no org here/);
+    assert.match(quiet.stdout, /Nothing was stored for 1002[\s\S]*Check that the server's own CONNECT_ORGS/);
   }
 });
 
