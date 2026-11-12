@@ -78,7 +78,8 @@ const SECTIONS: Section[] = [
             'The token server checks the pass, asks GitHub for a short-lived token for that one repository, and sends it back to the run. It keeps nothing: it has no database and writes no files, its logs hold only the names of errors, and it does not read IP addresses.',
             'To keep your AI login fresh, the run saves it to your own repository secrets. The login goes from your runner to GitHub, never to us.',
             'After you connect a ChatGPT login, the Action posts part of the account\'s email address on the pull request, so your team can see whose plan pays for reviews. That comment lives on GitHub, not with us.',
-            <>You can leave out the token server: set the Action's <code className="font-mono text-[0.92em] text-fg">token-server</code> input to empty. The run then posts as github-actions[bot], and nothing at all reaches us.</>,
+            <>When your organization uses the dashboard, the Action's <code className="font-mono text-[0.92em] text-fg">server</code> input is set. Then each run also sends a pass that GitHub signs to our dashboard server, with the review's numbers and the findings your team declined (see <a href="#dashboard" className="text-fg underline decoration-line underline-offset-4 hover:decoration-fg">The dashboard</a>).</>,
+            <>You can leave us out: set the Action's <code className="font-mono text-[0.92em] text-fg">token-server</code> and <code className="font-mono text-[0.92em] text-fg">server</code> inputs to empty. The run then posts as github-actions[bot], and nothing at all reaches us.</>,
           ]}
         />
       </>
@@ -94,7 +95,7 @@ const SECTIONS: Section[] = [
           'To check if the Mergelight AI app is on the repository you picked, the page sends your GitHub token and the repository\'s name to our token server. It asks GitHub, answers, and keeps neither.',
           'Your browser then talks to GitHub directly to add the workflow file and open the pull request. Your GitHub token stays in the page\'s memory, and is gone when you close the tab.',
           'The page keeps the repository you picked and the sign-in state in your browser\'s session storage. The browser deletes it when you close the tab.',
-          'When you sign in to Claude, the page puts the sign-in code in your repository for up to 60 seconds, as a hidden git reference, so the run can pick it up. Then it deletes it.',
+          'When you sign in to Claude, the page puts the sign-in code in your repository as a hidden git reference, so the run can pick it up. Anyone who can read the repository can see it. The page deletes it after 60 seconds. If you close the tab before that, it stays until your next Claude sign-in for that repository. The code works only once, and only for a short time.',
           'When the page opens, it calls our token server once to wake it up. That call carries no data about you.',
         ]}
       />
@@ -111,8 +112,8 @@ const SECTIONS: Section[] = [
             'The names and GitHub ids of the organization and its repositories.',
             'Numbers for each review: the run, the pull request number, the commit, the result (green, yellow or red), the number of findings, which AI and model reviewed, how long it took and how many lines changed. No names and no text.',
             'Decisions: when someone declines a finding with a reason, we keep the finding\'s title, file and lines, the reason, the pull request, the time, and the GitHub username of the person who declined it. Later reviews use this so they do not raise the same thing again.',
-            'Rules, checks and skills that your team writes on the dashboard: their name and text, the files they cover, and the GitHub username of who added them. For a skill folder picked from a repository, we keep only its path.',
-            'A log of changes: who changed a rule, check or skill, when, and what changed. For a rule or check, this includes its text.',
+            'Rules, checks and skills that your team writes on the dashboard: their name and text, the files they cover, and the GitHub username and account id of who added them. For a skill folder picked from a repository, we keep its path instead of any text.',
+            'A log of changes: who added or deleted a rule, check or skill, or forgot a decision, with their GitHub username and account id, when, and what changed. For a rule or check, this includes its text. For a skill, its name and description, or its path.',
           ]}
         />
         <P>
@@ -135,7 +136,7 @@ const SECTIONS: Section[] = [
         items={[
           'A decision that no review has used for 90 days is deleted on its own. A repository keeps 500 decisions at most.',
           'Forget on the dashboard deletes a decision\'s title and reason at once. A marker without text stays: the finding\'s id, its line and the pull request.',
-          'A rule, check or skill you delete stops being used at once. Its text stays in the log of changes until your organization\'s data is deleted.',
+          'A rule, check or skill you delete stops being used at once. The log of changes keeps the text of a deleted rule or check, and the name and description of a deleted skill, until your organization\'s data is deleted.',
           'Everything else stays until your organization asks us to delete it.',
           <>To delete all of your organization's data, write to {mail}. We check on GitHub that you own the organization, and delete everything within one month.</>,
         ]}
@@ -181,8 +182,8 @@ const SECTIONS: Section[] = [
           Write to {mail}, and we answer within one month.
         </P>
         <P>
-          Your GitHub username can be in your organization's decisions, rules and log of changes. If you ask, we delete it or replace it with a
-          placeholder.
+          Your GitHub username and account id can be in your organization's decisions, rules, checks, skills and log of changes. If you ask, we
+          delete them or replace them with a placeholder.
         </P>
         <P>You can also complain to the data protection authority where you live or work.</P>
       </>
