@@ -21,13 +21,18 @@ export const REVIEW_APPS = ["mergelight-ai", "github-actions"];
 /**
  * Whether a review summary lists a finding on the planted file. Only the findings to fix count: the
  * summary's opening text, the "Left alone" list and "Your call" can name the file without flagging
- * the bug. So the search starts at "#### To fix" or "#### Also worth fixing", stops at either of the
- * others, and a finding shows as `file:line`.
+ * the bug. So the search starts at "#### To fix" or "#### Also worth fixing", or, in a summary with
+ * only one list and no heading, at its bold headline. It stops at either of the others, and a
+ * finding shows as `file:line`.
  */
 export function summaryFlags(summary, file = PLANTED_FILE) {
   const text = summary ?? "";
   const starts = ["#### To fix", "#### Also worth fixing"].map((m) => text.indexOf(m)).filter((i) => i >= 0);
-  if (starts.length === 0) return false;
+  if (starts.length === 0) {
+    const headline = /^\*\*[^\n]+\*\*[ \t]*$/m.exec(text);
+    if (!headline) return false;
+    starts.push(headline.index + headline[0].length);
+  }
   const from = Math.min(...starts);
   const ends = ["<details><summary>Left alone", "#### Your call"].map((m) => text.indexOf(m, from)).filter((i) => i >= 0);
   const findings = text.slice(from, ends.length ? Math.min(...ends) : undefined);
@@ -88,11 +93,11 @@ async function github(path, token) {
   return res.json();
 }
 
-async function readCanary(tag, publishedAt, isNewest, token) {
+async function readCanary(tag, sha, publishedAt, isNewest, token) {
   const [owner] = CANARY_REPO.split("/");
   const pulls = await github(`repos/${CANARY_REPO}/pulls?state=all&per_page=10&head=${owner}:${encodeURIComponent(canaryBranch(tag))}`, token);
-  // A canary opened before the release was published tested an earlier commit under the same tag.
-  const pull = pulls.filter((p) => !publishedAt || Date.parse(p.created_at) >= Date.parse(publishedAt)).sort((a, b) => b.number - a.number)[0];
+  // Only a canary of this exact commit counts: canary.yml writes the commit into the pull request.
+  const pull = pulls.filter((p) => (p.body ?? "").includes(sha)).sort((a, b) => b.number - a.number)[0];
   // The newest release's canary opens right after it. If it never did, it would wait forever without a
   // word, so it gets the same 3 hours. An older release without one is just passed over: it may be from
   // before canaries existed, and a newer release has its own.
@@ -144,20 +149,20 @@ async function main() {
   const verdicts = new Map();
   for (const release of releases) {
     if ((current && release.sha === current) || now) break;
-    const canary = sandboxToken ? await readCanary(release.tag, published.get(release.tag), release === releases[0], sandboxToken) : { verdict: "waiting", note: "no release app" };
+    const canary = sandboxToken ? await readCanary(release.tag, release.sha, published.get(release.tag), release === releases[0], sandboxToken) : { verdict: "waiting", note: "no release app" };
     verdicts.set(release.tag, canary.verdict);
     console.log(`${release.tag}: canary ${canary.verdict} (${canary.note})`);
   }
 
+  const out = (line) => process.env.GITHUB_OUTPUT && appendFileSync(process.env.GITHUB_OUTPUT, `${line}\n`);
   const pick = pickRelease(releases, (tag) => verdicts.get(tag) ?? "waiting", current, now);
   // After a roll-out by hand with "now", the tag sits on the newest release before its canary ran. Read
   // that canary too, so a failure still turns the run red.
   if (pick.stay && pick.stay === releases[0].tag && sandboxToken && !now) {
-    const canary = await readCanary(pick.stay, published.get(pick.stay), true, sandboxToken);
+    const canary = await readCanary(pick.stay, releases[0].sha, published.get(pick.stay), true, sandboxToken);
     console.log(`${pick.stay}: canary ${canary.verdict} (${canary.note})`);
-    if (canary.verdict === "failed") pick.failed.push(pick.stay);
+    if (canary.verdict === "failed") out(`current_failed=${pick.stay}`);
   }
-  const out = (line) => process.env.GITHUB_OUTPUT && appendFileSync(process.env.GITHUB_OUTPUT, `${line}\n`);
   out(`major=${major}`);
   out(`failed=${pick.failed.join(" ")}`);
   if (pick.move) {

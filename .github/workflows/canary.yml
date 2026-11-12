@@ -103,4 +103,4 @@ jobs:
           git add .github/workflows/mergelight.yml canary/delete-project.js
           git commit -q -m "Canary for $TAG"
           git push -q origin "$branch"
-          gh pr create --base main --head "$branch" --title "Canary: $TAG" --body "Opened by the Canary workflow in mergelightai/mergelight. It runs the review with $TAG on one planted bug. The roll-out moves \`@v0\` to $TAG only once this review finished and found something. Don't merge it: a newer canary closes it."
+          gh pr create --base main --head "$branch" --title "Canary: $TAG" --body "Opened by the Canary workflow in mergelightai/mergelight. It runs the review with $TAG (commit $SHA) on one planted bug. The roll-out moves \`@v0\` to $TAG only once this review finished and found something. Don't merge it: a newer canary closes it."

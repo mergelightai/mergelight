@@ -74,12 +74,25 @@ jobs:
           TAG: ${{ steps.pick.outputs.tag }}
           SHA: ${{ steps.pick.outputs.sha }}
         run: |
+          # Only a commit on main, so a release someone made from another branch can't reach @v0.
+          if ! git merge-base --is-ancestor "$SHA" origin/main; then
+            echo "::error::$TAG ($SHA) isn't on main, so $MAJOR stays where it is."
+            exit 1
+          fi
           git tag -f "$MAJOR" "$SHA"
           if ! git push -f origin "refs/tags/$MAJOR"; then
             echo "::error::GitHub refused to move $MAJOR to $TAG. If the error above names a workflow file, the release app is missing: set RELEASE_APP_ID and RELEASE_APP_PRIVATE_KEY (see the top of this file)."
             exit 1
           fi
           echo "$MAJOR moved to $TAG."
+      - name: Say that v0 is on a release whose canary failed
+        if: steps.pick.outputs.current_failed != ''
+        env:
+          MAJOR: ${{ steps.pick.outputs.major }}
+          TAG: ${{ steps.pick.outputs.current_failed }}
+        run: |
+          echo "::error::$MAJOR is on $TAG, and its canary failed (the reason is above). Pull $TAG (mark it as a pre-release), and the next run moves $MAJOR off it."
+          exit 1
       - name: Say which canaries didn't pass
         if: steps.pick.outputs.failed != ''
         env:
