@@ -308,6 +308,7 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
   if (ws.conventions.length) progress(`Using ${ws.conventions.map((c) => c.path).join(", ")} from ${pr.baseRef}`);
   const ruleFiles = [...new Set(ws.rules.filter((r) => ruleApplies(r, ws.touchedPaths)).map((r) => r.source))];
   if (ruleFiles.length) progress(`Using the rules in ${ruleFiles.join(", ")} from ${pr.baseRef}`);
+  if (ws.unreadRules.length) progress(`Couldn't read the rule file${ws.unreadRules.length === 1 ? "" : "s"} ${ws.unreadRules.join(", ")}, so ${ws.unreadRules.length === 1 ? "its" : "their"} rules aren't used`);
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const log = (step: string) => join(cacheDir(), "logs", `${pr.owner}-${pr.repo}-${pr.number}-${stamp}-${step}.log`);
   let checksRun: ChecksRun | null = null;

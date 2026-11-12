@@ -90,3 +90,30 @@ test("Mergelight's own rule files come first, so others can't crowd them out", (
   const rules = repoRules([big, big, big, big, { path: ".mergelight/rules.md", text: "- Mine." }]);
   assert.equal(rules[0].text, "Mine.");
 });
+
+test("Copilot files follow Copilot's own settings: no applyTo or excludeAgent code-review keeps them out", () => {
+  assert.deepEqual(parseRuleFile(".github/instructions/howto.instructions.md", "# How to write a migration\n- Step one.\n"), [], "attached by hand in Copilot");
+  assert.deepEqual(parseRuleFile(".github/instructions/agent.instructions.md", '---\napplyTo: "**"\nexcludeAgent: "code-review"\n---\n- Only for the coding agent.\n'), []);
+  assert.equal(parseRuleFile(".github/instructions/all.instructions.md", '---\napplyTo: "**"\n---\n- Everywhere.\n').length, 1, "** is every file, and it counts");
+});
+
+test("rules a team commented out don't count, and a long Copilot file says where it was cut", () => {
+  const md = "- Kept.\n<!--\n- Turned off.\n-->\n- Also kept. <!-- a note -->\n";
+  assert.deepEqual(parseRuleFile(".mergelight/rules.md", md).map((r) => r.text), ["Kept.", "Also kept."]);
+  const [long] = parseRuleFile(".github/instructions/long.instructions.md", `---\napplyTo: "src/**"\n---\n${"x".repeat(13_000)}`);
+  assert.equal(long.text.length, 12_000 + "\n(cut here: the file is longer)".length);
+  assert.match(long.text, /\(cut here: the file is longer\)$/);
+});
+
+test("one rule over the budget is left out, and shorter ones after it still count", () => {
+  const files = [
+    { path: ".mergelight/rules.md", text: "- First." },
+    { path: ".github/instructions/a.instructions.md", text: `---\napplyTo: "src/**"\n---\n${"a".repeat(12_000)}` },
+    { path: ".github/instructions/b.instructions.md", text: `---\napplyTo: "src/**"\n---\n${"b".repeat(12_000)}` },
+    { path: ".github/instructions/c.instructions.md", text: `---\napplyTo: "src/**"\n---\n${"c".repeat(12_000)}` },
+    { path: ".mergelight/rules/z.md", text: "- Last, short." },
+  ];
+  const texts = repoRules(files).map((r) => r.text.slice(0, 12));
+  assert.ok(texts.includes("Last, short."));
+  assert.ok(texts.includes("First."));
+});

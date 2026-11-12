@@ -17,21 +17,27 @@ export const RULE_FILE = /^(?:\.mergelight\/rules\.md|\.mergelight\/rules\/[^/]+
 /** Limits, so a long file can't fill every prompt. */
 export const MAX_REPO_RULES = 40;
 const MAX_BULLET_CHARS = 1000;
-const MAX_FILE_RULE_CHARS = 8000;
+const MAX_FILE_RULE_CHARS = 12_000;
 export const MAX_REPO_RULE_CHARS = 30_000;
 
-/** The patterns a file's front matter names, and the text after it. */
-export function frontMatter(text: string): { paths: string[]; body: string } {
+/**
+ * The patterns a file's front matter names, and the text after it. scoped: it names some (Copilot only
+ * applies a file by itself when it does). forReview: false when Copilot's excludeAgent keeps the file
+ * out of code review.
+ */
+export function frontMatter(text: string): { paths: string[]; body: string; scoped: boolean; forReview: boolean } {
   const m = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(text);
-  if (!m) return { paths: [], body: text };
-  const value = /^(?:applyTo|globs)[ \t]*:[ \t]*(.*)$/m.exec(m[1]!)?.[1]?.trim() ?? "";
+  if (!m) return { paths: [], body: text, scoped: false, forReview: true };
+  const forReview = !/^excludeAgent[ \t]*:.*\bcode-review\b/m.test(m[1]!);
+  const line = /^(?:applyTo|globs)[ \t]*:[ \t]*(.*)$/m.exec(m[1]!);
+  const value = line?.[1]?.trim() ?? "";
   const patterns = splitOutsideBraces(value.trim().replace(/^\[([\s\S]*)\]$/, "$1").replace(/^["']|["']$/g, ""))
     .map((p) => p.trim().replace(/^["']|["']$/g, "").trim())
     .flatMap(expandBraces)
     .filter(Boolean);
   // "**" anywhere in the list means every file.
   const paths = patterns.some((p) => p === "**" || p === "*" || p === "**/*") ? [] : patterns;
-  return { paths, body: text.slice(m[0].length) };
+  return { paths, body: text.slice(m[0].length), scoped: patterns.length > 0, forReview };
 }
 
 /** Splits on commas, but not on the ones inside braces, as in "**\/*.{ts,tsx},*.sql". */
@@ -67,7 +73,9 @@ function bullets(body: string): string[] {
   const out: string[] = [];
   let current: string | null = null;
   let fence: string | null = null;
-  for (const line of body.split(/\r?\n/)) {
+  // HTML comments are what a team turned off: GitHub doesn't show them, so they don't count.
+  const lines = body.replace(/<!--[\s\S]*?(?:-->|$)/g, "").split(/\r?\n/);
+  for (const line of lines) {
     const marker = /^[ \t]*(`{3,}|~{3,})/.exec(line)?.[1];
     if (fence) {
       if (marker && marker[0] === fence[0] && marker.length >= fence.length) fence = null;
@@ -94,11 +102,14 @@ function bullets(body: string): string[] {
 
 /** The rules in one file, as the reviewers get them. Hidden characters are taken out. */
 export function parseRuleFile(path: string, text: string): Omit<TeamRule, "id">[] {
-  const { paths, body } = frontMatter(withoutHidden(text));
+  const { paths, body, scoped, forReview } = frontMatter(withoutHidden(text));
   const only = paths.length ? { paths } : {};
   if (path.startsWith(".github/instructions/")) {
-    const whole = body.trim();
-    return whole ? [{ kind: "rule", text: whole.slice(0, MAX_FILE_RULE_CHARS), scope: "repo", source: path, ...only }] : [];
+    // As Copilot does: a file without applyTo is attached by hand, and excludeAgent can keep it out of review.
+    if (!scoped || !forReview) return [];
+    const whole = body.replace(/<!--[\s\S]*?(?:-->|$)/g, "").trim();
+    const cut = whole.length > MAX_FILE_RULE_CHARS;
+    return whole ? [{ kind: "rule", text: cut ? `${whole.slice(0, MAX_FILE_RULE_CHARS)}\n(cut here: the file is longer)` : whole, scope: "repo", source: path, ...only }] : [];
   }
   return bullets(body).map((b) => ({ kind: "rule" as const, text: b.slice(0, MAX_BULLET_CHARS), scope: "repo" as const, source: path, ...only }));
 }
@@ -114,7 +125,9 @@ export function repoRules(files: { path: string; text: string }[], changedPaths?
   for (const f of [...files].sort((a, b) => own(a.path) - own(b.path) || a.path.localeCompare(b.path))) {
     for (const r of parseRuleFile(f.path, f.text)) {
       if (changedPaths && !ruleApplies({ ...r, id: "" }, changedPaths)) continue;
-      if (rules.length >= MAX_REPO_RULES || total + r.text.length > MAX_REPO_RULE_CHARS) return rules;
+      if (rules.length >= MAX_REPO_RULES) return rules;
+      // One long rule over the budget is left out; shorter ones after it can still fit.
+      if (total + r.text.length > MAX_REPO_RULE_CHARS) continue;
       total += r.text.length;
       rules.push({ id: `F${rules.length + 1}`, ...r });
     }

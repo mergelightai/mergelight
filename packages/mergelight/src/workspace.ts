@@ -153,8 +153,8 @@ const MAX_RULE_FILES = 30;
  * The team's instruction files and rule files, as the base branch has them, from one listing of it.
  * Conventions are background for the reviewers; rules are what they check (repo-rules.ts).
  */
-export async function teamFilesFor(mirror: string, base: string, changedPaths: string[] = []): Promise<{ conventions: Convention[]; rules: TeamRule[] }> {
-  const none = { conventions: [], rules: [] };
+export async function teamFilesFor(mirror: string, base: string, changedPaths: string[] = []): Promise<{ conventions: Convention[]; rules: TeamRule[]; unreadRules: string[] }> {
+  const none = { conventions: [], rules: [], unreadRules: [] };
   const git = (args: string[]) =>
     run("git", ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential", "-C", mirror, ...args], {
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
@@ -186,10 +186,11 @@ export async function teamFilesFor(mirror: string, base: string, changedPaths: s
     const text = (await blob(file.sha))?.trim();
     return text ? { path, sha: file.sha, text } : null;
   };
+  const rulePaths = [...tree.keys()].filter((p) => RULE_FILE.test(p)).sort((a, b) => Number(!a.startsWith(".mergelight/")) - Number(!b.startsWith(".mergelight/")) || a.localeCompare(b)).slice(0, MAX_RULE_FILES);
   // Both kinds at once: one slow read mustn't leave the other no time.
   const [found, ruleFiles] = await Promise.all([
     Promise.all(conventionPaths([...tree.keys()], changedPaths).slice(0, MAX_CONVENTION_FILES * 2).map(read)),
-    Promise.all([...tree.keys()].filter((p) => RULE_FILE.test(p)).sort((a, b) => Number(!a.startsWith(".mergelight/")) - Number(!b.startsWith(".mergelight/")) || a.localeCompare(b)).slice(0, MAX_RULE_FILES).map(read)),
+    Promise.all(rulePaths.map(read)),
   ]);
   const conventions: Convention[] = [];
   const seen = new Set<string>();
@@ -204,7 +205,9 @@ export async function teamFilesFor(mirror: string, base: string, changedPaths: s
     total += Math.min(f.text.length, room);
   }
   const rules = repoRules(ruleFiles.filter((f): f is { path: string; sha: string; text: string } => f !== null), changedPaths.length ? changedPaths : undefined);
-  return { conventions, rules };
+  // A rule file that couldn't be read is named, never dropped without a word.
+  const unreadRules = rulePaths.filter((_, i) => ruleFiles[i] === null);
+  return { conventions, rules, unreadRules };
 }
 
 /** The answer, or the fallback once the time is up, for work that must never hold up a review. */
@@ -275,6 +278,8 @@ export interface Workspace {
   conventions: Convention[];
   /** The rules written in the repository's rule files, from the base branch. */
   rules: TeamRule[];
+  /** Rule files that exist on the base branch but couldn't be read: empty, too large, or a link out. */
+  unreadRules: string[];
   cleanup: () => Promise<void>;
 }
 
@@ -358,7 +363,7 @@ export async function prepareWorkspace(pr: PullRequest, at?: string, skillFolder
     } catch {
       written = [];
     }
-    const { conventions, rules: repoRuleList } = await withDeadline(teamFilesFor(mirror, teamBase, touchedPaths), SKILL_IMPORT_TIMEOUT_MS + 2 * SKILL_GIT_TIMEOUT_MS, { conventions: [], rules: [] });
+    const { conventions, rules: repoRuleList, unreadRules } = await withDeadline(teamFilesFor(mirror, teamBase, touchedPaths), SKILL_IMPORT_TIMEOUT_MS + 2 * SKILL_GIT_TIMEOUT_MS, { conventions: [], rules: [], unreadRules: [] });
 
     return {
       dir,
@@ -373,6 +378,7 @@ export async function prepareWorkspace(pr: PullRequest, at?: string, skillFolder
       writtenSkills: written,
       conventions,
       rules: repoRuleList,
+      unreadRules,
       cleanup: async () => {
         await run("git", ["-C", mirror, "worktree", "remove", "--force", dir]);
         rmSync(dir, { recursive: true, force: true });

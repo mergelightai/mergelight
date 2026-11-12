@@ -73,7 +73,7 @@ applyTo: "src/billing/**,*.sql"
 - Every refund checks the invoice status first.
 ```
 
-Mergelight also checks each `.github/instructions/*.instructions.md` file as a rule for the files its `applyTo` names. A rule counts from the review after it is merged into the base branch, so a pull request can't add or drop rules for itself. Commit the rule in its own change, and say so in your report.
+Mergelight also checks each `.github/instructions/*.instructions.md` file as a rule for the files its `applyTo` names, unless its `excludeAgent` is `"code-review"`. A rule counts from the review after it is merged into the base branch, so a pull request can't add or drop rules for itself. Commit the rule in its own change, and say so in your report.
 
 ## 6. Report back
 

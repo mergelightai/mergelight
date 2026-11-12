@@ -114,7 +114,7 @@ applyTo: "src/billing/**,*.sql"
 - Every refund checks the invoice status first.
 ```
 
-Mergelight also checks each `.github/instructions/*.instructions.md` file as a rule, for the files its `applyTo` names. Rules are read from the base branch, so they count from the review after they are merged, and a pull request can't add or drop a rule for itself. They work next to the rules set on the dashboard, and the review log says which rule files it used. A review reads at most 40 rules from the repository.
+Mergelight also checks each `.github/instructions/*.instructions.md` file as a rule, for the files its `applyTo` names. As in Copilot, a file without `applyTo` is left out, and so is one whose `excludeAgent` is `"code-review"`. Bullets inside code blocks or HTML comments are not rules. Rules are read from the base branch, so they count from the review after they are merged, and a pull request can't add or drop a rule for itself. They work next to the rules set on the dashboard, and the review log says which rule files it used. A review reads at most 40 rules from the repository.
 
 ## Inputs
 
