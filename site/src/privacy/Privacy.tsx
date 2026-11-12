@@ -95,7 +95,7 @@ const SECTIONS: Section[] = [
           'To check if the Mergelight AI app is on the repository you picked, the page sends your GitHub token and the repository\'s name to our token server. It asks GitHub, answers, and keeps neither.',
           'Your browser then talks to GitHub directly to add the workflow file and open the pull request. Your GitHub token stays in the page\'s memory, and is gone when you close the tab.',
           'The page keeps the repository you picked and the sign-in state in your browser\'s session storage. The browser deletes it when you close the tab.',
-          'When you sign in to Claude, the page puts the sign-in code in your repository as a hidden git reference, so the run can pick it up. Anyone who can read the repository can see it. The page deletes it after 60 seconds. If you close the tab before that, it stays until your next Claude sign-in for that repository. The code works only once, and only for a short time.',
+          'When you sign in to Claude, the page puts the sign-in code in your repository as a hidden git reference, so the run can pick it up. Anyone who can read the repository can see it. The page removes the reference after 60 seconds. If you close the tab before that, it stays until your next Claude sign-in for that repository. Even after that, GitHub can keep the code itself for a while, because GitHub has no way to delete it at once. The code works only once, and only for a short time.',
           'When the page opens, it calls our token server once to wake it up. That call carries no data about you.',
         ]}
       />
@@ -117,9 +117,11 @@ const SECTIONS: Section[] = [
           ]}
         />
         <P>
-          You sign in to the dashboard with GitHub. We use your GitHub token once, to learn your username and which organizations and repositories you can
-          see, and then drop it. Your session is a random key that our server keeps in memory for 15 minutes. Your browser keeps it in session storage,
-          with drafts of what you type into the dashboard's forms.
+          You sign in to the dashboard with GitHub. As on the setup page, your browser trades GitHub's sign-in code for your GitHub token through our
+          token server, which keeps nothing. The dashboard server uses your GitHub token once, to learn your username and which organizations and
+          repositories you can see, and then drops it. Your session is a random key that our server keeps in memory for 15 minutes. Your browser keeps
+          in session storage, until you close the tab: the key, your GitHub username and account id, your list of organizations, what you last
+          picked, and drafts of what you type into the dashboard's forms.
         </P>
         <P>
           The dashboard sets one cookie, <code className="font-mono text-[0.92em] text-fg">sidebar_state</code>, which remembers for 7 days whether the
