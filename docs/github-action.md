@@ -68,6 +68,8 @@ updates:
       - dependency-name: mergelightai/mergelight
 ```
 
+**Approvals.** A 🟢 review approves the PR, like a reviewer would, when every one of your team's own checks passed. A later review that isn't 🟢 takes the approval back. Where a branch rule asks for one approval, a 🟢 PR can then be merged with no person approving it. Set `auto-approve: false` if a person must always approve.
+
 **Optional: let it hold merges.** Set `yellow-blocks: true` and require the **Mergelight** check in branch protection or a ruleset. 🔴 then fails until the code changes, and 🟡 waits for an approval. Without `yellow-blocks`, both end neutral, which GitHub counts as passing.
 
 ## Set it up by hand
@@ -111,6 +113,7 @@ They're separate files so a PR's merge box only shows the review, not skipped jo
 | `model` | Codex default | Model to review with |
 | `effort` | `high` | Reasoning effort: `low`, `medium` or `high` |
 | `verify-with` | `codex` | Who checks the findings: `codex`, or `claude` on a runner with Claude Code logged in |
+| `auto-approve` | `true` | When a review is 🟢 and every one of your team's own checks passed, Mergelight approves the PR like a reviewer would, and takes the approval back when a later review isn't 🟢. `false` turns that off: it never approves, and takes back an approval it gave before |
 | `yellow-blocks` | `false` | Let the check hold merges: 🟡 waits for an approval and 🔴 fails until the code changes. Your team's own checks from the dashboard follow it too: on, one that failed, couldn't tell or couldn't run holds the merge, and off, it ends neutral. A check that was skipped, because none of its files changed, never holds a merge. For teams: GitHub doesn't let you approve your own PR |
 | `codex-version` | `0.166.0` | Codex CLI version |
 | `token-server` | Mergelight's | Where to get an app token. Empty means always post as `github-actions[bot]` |

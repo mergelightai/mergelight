@@ -46,6 +46,13 @@ inputs:
   yellow-blocks:
     description: 'Set to "true" for a team that wants the check to hold merges: a "needs a human" check then waits for an approval, and a "blocked" one fails until the code changes. Off, both end neutral. The same goes for your team''s own checks from the dashboard: on, one that failed, couldn''t tell or couldn''t run holds the merge, and off, it ends neutral. Leave it off if you work alone, since GitHub bars approving your own PR.'
     default: "false"
+  auto-approve:
+    description: >
+      When a review is green and every one of your team's own checks passed, Mergelight approves the
+      pull request, like a reviewer would, and takes the approval back when a later review isn't
+      green. Set to "false" to turn that off: Mergelight then never approves, and takes back an
+      approval it gave before. Where a branch rule asks for an approval, a person then has to give it.
+    default: "true"
   codex-version:
     description: Version of the Codex CLI to install.
     default: "0.166.0"
@@ -305,6 +312,7 @@ runs:
         EFFORT: ${{ inputs.effort }}
         VERIFY_WITH: ${{ inputs.verify-with }}
         YELLOW_BLOCKS: ${{ inputs.yellow-blocks }}
+        AUTO_APPROVE: ${{ inputs.auto-approve }}
         MERGELIGHT_ACTION_REF: ${{ github.action_ref }}
         MERGELIGHT_SERVER: ${{ inputs.server }}
         SECRET_NAME: ${{ inputs.auth-secret-name }}
@@ -317,6 +325,7 @@ runs:
         [ -n "$MODEL" ] && args+=(--model "$MODEL")
         [ -n "$EFFORT" ] && args+=(--effort "$EFFORT")
         [ "$YELLOW_BLOCKS" = "true" ] && args+=(--yellow-blocks)
+        [ "$AUTO_APPROVE" = "false" ] && args+=(--no-approve)
         node "$GITHUB_ACTION_PATH/packages/mergelight/dist/cli.js" "${args[@]}"
 
     # Codex may have refreshed the login during the run. Save the new one, or the next run
