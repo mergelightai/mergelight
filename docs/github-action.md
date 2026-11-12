@@ -55,7 +55,7 @@ There's no key or token to manage. The workflow's `id-token: write` permission p
 
 **Versions.** The setup page and `mergelight setup` pin the workflows to the latest release's commit, like `mergelightai/mergelight@<commit> # v0.1.2`. That step can read your AI login, so new code only runs once you merge an update. A pinned repo never changes by itself: the review says when a newer release is out, and the setup page opens a pull request that updates it. Our own Action pins the actions it uses too.
 
-**To get each release by itself instead,** use `@v0`, which the files in `examples/` do, or run `mergelight setup owner/repo --no-pin`. `v0` moves to a release a day after it's published, so a bad one can be pulled first, but you're trusting each release as it comes. To get update pull requests from Dependabot, add this to `.github/dependabot.yml`:
+**To get each release by itself instead,** use `@v0`, which the files in `examples/` do, or run `mergelight setup owner/repo --no-pin`. `v0` moves to a release only after a real review with it passed in our test repository, but you're trusting each release as it comes. To get update pull requests from Dependabot, add this to `.github/dependabot.yml`:
 
 ```yaml
 version: 2

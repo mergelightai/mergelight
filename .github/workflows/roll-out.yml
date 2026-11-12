@@ -1,31 +1,34 @@
-# Moves the major tag people follow, like v0, to the newest release that is a day old. The wait
-# is there so a bad release can be pulled before it reaches anyone on @v0.
+# Moves the major tag people follow, like v0, to the newest release whose canary passed.
 #
-# To roll out sooner: run this by hand with "now" ticked.
-# To pull a bad release: mark it as a pre-release, or delete it. The tag goes back to the latest good
-# release on the next run. Run this by hand to do that right away. Pull it also when a fixed release
-# is already out: the tag takes the newest release that is a day old, and that can be the bad one.
+# The canary: after each release, canary.yml opens a pull request in the sandbox repository that runs
+# the review with the new release on one planted, obvious bug. It passed when that review finished
+# and found something. So a release that can't review, or that misses the bug, never reaches @v0, and
+# this run turns red to say so. The logic is in .github/scripts/roll-out.mjs.
+#
+# To roll out without the canary: run this by hand with "now" ticked.
+# To pull a bad release: mark it as a pre-release, or delete it. The tag goes back to the newest
+# release whose canary passed on the next run. Run this by hand to do that right away.
 #
 # The tag moves with the "Mergelight Release" GitHub App, not the workflow's own token. GitHub never
 # lets the workflow's token point a tag at a commit whose workflow files differ, by git or by the API,
-# and most releases change one (tested Nov 12 2026: v0 stayed on v0.1.4 for that reason). The app has
-# Contents and Workflows write on this repository only. Its id is the variable RELEASE_APP_ID and its
-# private key the secret RELEASE_APP_PRIVATE_KEY. The app is also the only one the tag ruleset lets
-# move v0, so nobody else can, not even an admin's token.
+# and most releases change one (tested Nov 12 2026: v0 stayed on v0.1.4 for that reason). The app is
+# installed on this repository and the sandbox only. Its id is the variable RELEASE_APP_ID and its
+# private key the secret RELEASE_APP_PRIVATE_KEY. It is also the only one the tag ruleset lets move
+# v0, so nobody else can, not even an admin's token.
 name: Roll out
 
 on:
   schedule:
-    - cron: "41 */6 * * *"
+    - cron: "41 * * * *"
   workflow_dispatch:
     inputs:
       now:
-        description: Don't wait for the release to be a day old
+        description: Roll out the newest release without waiting for its canary
         type: boolean
         default: false
 
 permissions:
-  contents: write
+  contents: write # Only used without the release app, by a run with "now".
 
 concurrency:
   group: release
@@ -41,47 +44,42 @@ jobs:
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: mergelightai
+          repositories: mergelight,action-sandbox
           permission-contents: write
           permission-workflows: write
+          permission-pull-requests: read
+          permission-checks: read
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
           fetch-tags: true
           # The push at the end uses this token.
           token: ${{ steps.app.outputs.token || github.token }}
-      - name: Move the major tag
+      - name: Pick the release
+        id: pick
         env:
           GH_TOKEN: ${{ github.token }}
+          SANDBOX_TOKEN: ${{ steps.app.outputs.token }}
           NOW: ${{ inputs.now }}
+        run: node .github/scripts/roll-out.mjs
+      - name: Move the major tag
+        if: steps.pick.outputs.tag != ''
+        env:
+          MAJOR: ${{ steps.pick.outputs.major }}
+          TAG: ${{ steps.pick.outputs.tag }}
+          SHA: ${{ steps.pick.outputs.sha }}
         run: |
-          # Every release people can get: not a draft, not a pre-release. Newest version first, by its
-          # number and not by when it was published, so a release made again later doesn't count as new.
-          releases="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '[.[] | select((.draft or .prerelease) | not) | {tag: .tag_name, at: .published_at, age: (now - (.published_at | fromdate) | floor)}] | sort_by(.tag | ltrimstr("v") | split(".") | map(tonumber? // 0)) | reverse')"
-          newest="$(jq -r '.[0].tag // empty' <<<"$releases")"
-          if [ -z "$newest" ]; then echo "There is no release yet."; exit 0; fi
-          major="${newest%%.*}"
-          list="$(jq --arg major "$major" '[.[] | select(.tag | startswith($major + "."))]' <<<"$releases")"
-          # The newest of them that is a day old. Not only the newest release: when a new one comes out
-          # every day, the newest is never a day old, and the tag would never move.
-          min=86400
-          if [ "$NOW" = "true" ]; then min=0; fi
-          read -r tag age < <(jq -r --argjson min "$min" '[.[] | select(.age >= $min)][0] // empty | "\(.tag) \(.age)"' <<<"$list") || true
-          if [ -z "$tag" ]; then echo "No $major release is a day old yet. $newest is $(jq -r '.[0].age' <<<"$list") seconds old."; exit 0; fi
-          target="$(git rev-parse "$tag^{commit}")"
-          current="$(git rev-parse -q --verify "refs/tags/$major^{commit}" || true)"
-          if [ "$current" = "$target" ]; then echo "$major is already on $tag."; exit 0; fi
-          # Never back: a release someone rolled out by hand ("now") stays until a newer one is a day old.
-          # A pulled release (a pre-release, or deleted) isn't in the list, so the tag moves off it.
-          for newer in $(jq -r '.[].tag' <<<"$list"); do
-            [ "$newer" = "$tag" ] && break
-            if [ "$(git rev-parse -q --verify "refs/tags/$newer^{commit}" || true)" = "$current" ]; then
-              echo "$major is on $newer, which is newer than $tag and still a release. It stays."
-              exit 0
-            fi
-          done
-          git tag -f "$major" "$target"
-          if ! git push -f origin "refs/tags/$major"; then
-            echo "::error::GitHub refused to move $major to $tag. If the error above names a workflow file, the release app is missing: set RELEASE_APP_ID and RELEASE_APP_PRIVATE_KEY (see the top of this file)."
+          git tag -f "$MAJOR" "$SHA"
+          if ! git push -f origin "refs/tags/$MAJOR"; then
+            echo "::error::GitHub refused to move $MAJOR to $TAG. If the error above names a workflow file, the release app is missing: set RELEASE_APP_ID and RELEASE_APP_PRIVATE_KEY (see the top of this file)."
             exit 1
           fi
-          echo "$major moved to $tag ($age seconds old)."
+          echo "$MAJOR moved to $TAG."
+      - name: Say which canaries failed
+        if: steps.pick.outputs.failed != ''
+        env:
+          FAILED: ${{ steps.pick.outputs.failed }}
+        run: |
+          echo "::error::The canary failed for $FAILED, so @v0 doesn't get it. Look at the canary pull request in mergelightai/action-sandbox, then pull the release (mark it as a pre-release) or run the canary again."
+          exit 1

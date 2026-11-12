@@ -1,0 +1,99 @@
+# Opens the canary for a release: a pull request in the sandbox repository that runs the review with
+# that release, on one planted, obvious bug. roll-out.yml moves v0 to a release only once this review
+# finished and found something. Runs after each release (release.yml calls it), or by hand for one
+# that came out before the canary existed.
+#
+# Only one canary is open at a time: a new one closes the older ones and removes their branches.
+# It needs the "Mergelight Release" GitHub App installed on the sandbox, see roll-out.yml.
+name: Canary
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The release to test, like v0.1.18
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: canary
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then echo "::error::\"$TAG\" isn't a release tag like v0.1.18."; exit 1; fi
+          # Only a published release that people can get. A pre-release has been pulled.
+          state="$(gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json isDraft,isPrerelease --jq 'if .isDraft or .isPrerelease then "pulled" else "out" end')"
+          if [ "$state" != "out" ]; then echo "::error::$TAG isn't a published release."; exit 1; fi
+          echo "SHA=$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha)" >> "$GITHUB_ENV"
+      - name: Get the release app's token
+        id: app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: mergelightai
+          repositories: action-sandbox
+          permission-contents: write
+          permission-workflows: write
+          permission-pull-requests: write
+      - uses: actions/checkout@v5
+        with:
+          repository: mergelightai/action-sandbox
+          token: ${{ steps.app.outputs.token }}
+          path: sandbox
+      - name: Open the canary pull request
+        working-directory: sandbox
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          branch="canary/$TAG"
+          for n in $(gh pr list --state open --limit 100 --json number,headRefName --jq '.[] | select(.headRefName | startswith("canary/")) | .number'); do
+            gh pr close "$n" --delete-branch --comment "A newer canary replaces this one."
+          done
+          # A canary run again for the same release starts over.
+          git push origin --delete "$branch" 2> /dev/null || true
+
+          git switch -c "$branch"
+          sed -i -E "s|^( *- uses: mergelightai/mergelight@)[^ ]+.*$|\1$SHA # $TAG, canary|" .github/workflows/mergelight.yml
+          if ! grep -q "mergelightai/mergelight@$SHA" .github/workflows/mergelight.yml; then
+            echo "::error::Couldn't find the Mergelight step in the sandbox's .github/workflows/mergelight.yml."
+            exit 1
+          fi
+          # The planted bug: an assignment where a comparison belongs, so anyone can delete any project.
+          # A review that works calls this out; one that says it's safe to merge is broken.
+          mkdir -p canary
+          cat > canary/delete-project.js << 'CODE'
+          // Deletes a project. Only the project's owner may do it.
+          export function deleteProject(db, user, projectId) {
+            const project = db.projects.get(projectId);
+            if (!project) throw new Error("No such project.");
+            if (project.ownerId = user.id) {
+              db.projects.delete(projectId);
+              return true;
+            }
+            throw new Error("Only the owner can delete this project.");
+          }
+          CODE
+
+          git config user.name "Mergelight canary"
+          git config user.email "noreply@mergelight.dev"
+          git add .github/workflows/mergelight.yml canary/delete-project.js
+          git commit -q -m "Canary for $TAG"
+          git push -q origin "$branch"
+          gh pr create --base main --head "$branch" --title "Canary: $TAG" --body "Opened by the Canary workflow in mergelightai/mergelight. It runs the review with $TAG on one planted bug. The roll-out moves \`@v0\` to $TAG only once this review finished and found something. Don't merge it: a newer canary closes it."

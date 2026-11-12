@@ -1,10 +1,10 @@
 # Releases whatever version packages/mergelight/package.json says, when that changes on main.
-# To release: bump the version in a pull request and merge it. People on @v0 get it a day later,
-# when roll-out.yml moves the tag.
+# To release: bump the version in a pull request and merge it. Then canary.yml opens a canary pull
+# request in the sandbox, and people on @v0 get the release once that review passed, when
+# roll-out.yml moves the tag.
 #
-# A bad release: mark it as a pre-release on GitHub, also when a fixed release is already out.
-# roll-out.yml takes the newest release that is a day old, so a bad one can still reach @v0 after
-# its fix is out. Only a person knows a release is bad, so this step is not automatic.
+# A bad release the canary missed: mark it as a pre-release on GitHub, also when a fixed release is
+# already out. roll-out.yml takes the newest release whose canary passed, and that can be the bad one.
 name: Release
 
 on:
@@ -28,12 +28,15 @@ jobs:
   release:
     needs: tests
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.publish.outputs.tag }}
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
           fetch-tags: true
       - name: Publish the release
+        id: publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -50,3 +53,13 @@ jobs:
           \`\`\`"
           gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" --generate-notes --notes "$notes"
           gh workflow enable roll-out.yml
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  # Tests the new release with a real review in the sandbox, before it can reach @v0.
+  canary:
+    needs: release
+    if: needs.release.outputs.tag != '' && vars.RELEASE_APP_ID != ''
+    uses: ./.github/workflows/canary.yml
+    with:
+      tag: ${{ needs.release.outputs.tag }}
+    secrets: inherit
