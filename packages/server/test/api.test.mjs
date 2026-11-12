@@ -656,6 +656,25 @@ test("the admin command refuses a database role that can skip the row rules", ()
   assert.match(ok.stdout, /The dashboard is on for acme/);
 });
 
+test("the admin command won't delete an org the server turns back on at its next start", async () => {
+  const admin = fileURLToPath(new URL("../dist/admin.js", import.meta.url));
+  const env = { ...process.env, DATABASE_URL: postgres.url };
+  assert.equal(spawnSync(process.execPath, [admin, "connect", "1002", "listed"], { env, encoding: "utf8" }).status, 0);
+  const refused = spawnSync(process.execPath, [admin, "delete", "1002"], { env: { ...env, CONNECT_ORGS: "1001:acme, 1002:listed" }, encoding: "utf8" });
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /1002 is in CONNECT_ORGS/);
+  const bad = spawnSync(process.execPath, [admin, "delete", "1002"], { env: { ...env, CONNECT_ORGS: "listed" }, encoding: "utf8" });
+  assert.equal(bad.status, 1);
+  assert.match(bad.stderr, /CONNECT_ORGS has an entry/);
+  const { CONNECT_ORGS: _, ...unset } = env;
+  const ok = spawnSync(process.execPath, [admin, "delete", "1002"], { env: { ...unset, CONNECT_ORGS: "1001:acme" }, encoding: "utf8" });
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.match(ok.stdout, /Removed everything stored for 1002/);
+  const quiet = spawnSync(process.execPath, [admin, "delete", "1002"], { env: unset, encoding: "utf8" });
+  assert.equal(quiet.status, 0, quiet.stderr);
+  assert.match(quiet.stdout, /Nothing was stored for 1002[\s\S]*CONNECT_ORGS isn't set here/);
+});
+
 test("unknown paths and wrong methods get no further", async () => {
   assert.equal((await api(new Request("https://server.test/"))).status, 200);
   assert.equal((await api(new Request("https://server.test/v1/orgs"))).status, 404);
