@@ -289,6 +289,8 @@ export async function publishReview(
   opts: ApiOptions & {
     checkRunId?: number | null;
     yellowBlocks?: boolean;
+    /** False when the team turned Mergelight's approvals off. It then never approves, and takes back an approval it gave before. */
+    approve?: boolean;
     /** True when the team's server couldn't be asked, so its rules and checks weren't used in this review. */
     teamUnread?: boolean;
     /** When this review read the pull request's threads. A reply written after it is newer than this round. */
@@ -387,9 +389,14 @@ export async function publishReview(
     },
   };
   await writeCheck(api, opts.checkRunId, review.pr.head_sha, check, log);
-  // A review that isn't green takes the approval back for what it found. Only a green one is held by something else.
-  const hold = review.light === "green" ? approvalHold(review, opts.teamUnread) : null;
-  await syncApproval(api, n, approvalLight(review, opts.teamUnread), review.pr.head_sha, log, hold ? { why: hold } : {});
+  if (opts.approve === false) {
+    // Turned off: no approval, and none of Mergelight's earlier ones stands next to a review that doesn't give one.
+    await syncApproval(api, n, "yellow", review.pr.head_sha, log, { why: APPROVALS_OFF });
+  } else {
+    // A review that isn't green takes the approval back for what it found. Only a green one is held by something else.
+    const hold = review.light === "green" ? approvalHold(review, opts.teamUnread) : null;
+    await syncApproval(api, n, approvalLight(review, opts.teamUnread), review.pr.head_sha, log, hold ? { why: hold } : {});
+  }
 
   return { summaryUrl, inline: inline.length, outside: outside.length, resolved, light: review.light };
 }
@@ -411,6 +418,9 @@ export function approvalHold(review: Pick<Review, "team_checks">, teamUnread = f
 export function approvalLight(review: Pick<Review, "light" | "team_checks">, teamUnread = false): Light {
   return review.light === "green" && approvalHold(review, teamUnread) ? "yellow" : review.light;
 }
+
+/** What a dismissal says when a team turned Mergelight's approvals off. */
+export const APPROVALS_OFF = "Approvals by Mergelight are turned off for this repository (auto-approve: false).";
 
 /** What a dismissal says when a review that couldn't run takes Mergelight's earlier approval back. */
 export const UNREVIEWED = "Mergelight couldn't review the newest commit, so its approval of an earlier one no longer stands.";
