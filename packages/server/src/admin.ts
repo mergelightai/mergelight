@@ -28,15 +28,15 @@ if (!url) {
 if (!isId(id)) usage();
 if (command !== "connect" && command !== "delete") usage();
 if (command === "connect" && !/^[\w.-]{1,100}$/.test(login ?? "")) usage();
+let connectOrgs: { id: number }[] = [];
 if (command === "delete") {
-  let listed: boolean;
   try {
-    listed = parseConnectOrgs(process.env.CONNECT_ORGS).some((org) => org.id === id);
+    connectOrgs = parseConnectOrgs(process.env.CONNECT_ORGS);
   } catch (err) {
     console.error((err as Error).message);
     process.exit(1);
   }
-  if (listed) {
+  if (connectOrgs.some((org) => org.id === id)) {
     console.error(`${id} is in CONNECT_ORGS, so the server would turn it back on at its next start. Take it out of CONNECT_ORGS first.`);
     process.exit(1);
   }
@@ -53,7 +53,7 @@ try {
   } else {
     console.log((await deleteOrg(pool, id)) ? `Removed everything stored for ${id}.` : `Nothing was stored for ${id}.`);
     // This shell may not have the server's settings, so say it even when CONNECT_ORGS is empty here.
-    if (!process.env.CONNECT_ORGS) console.log("CONNECT_ORGS isn't set here. Check that the server's own CONNECT_ORGS doesn't list this org, or it comes back at the next start.");
+    if (connectOrgs.length === 0) console.log("CONNECT_ORGS lists no org here. Check that the server's own CONNECT_ORGS doesn't list this org, or it comes back at the next start.");
   }
 } catch (err) {
   console.error((err as Error).message);
