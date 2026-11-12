@@ -269,7 +269,7 @@ async function main(): Promise<number> {
       log(`Posted: ${result.inline} inline, ${result.outside} in the summary only, ${result.resolved} resolved. ${result.summaryUrl ?? ""}`);
       if (review.team_checks?.length) {
         checksPosted = true;
-        const posted = await publishTeamChecks(api, review.pr.head_sha, review.team_checks, log).catch((e) => (log(`Couldn't post your team's checks: ${(e as Error).message}`), 0));
+        const posted = await publishTeamChecks(api, review.pr.head_sha, review.team_checks, log, Boolean(values["yellow-blocks"])).catch((e) => (log(`Couldn't post your team's checks: ${(e as Error).message}`), 0));
         if (posted) log(`Posted ${posted} of your team's check${posted === 1 ? "" : "s"}.`);
       }
       if (cloud.connected) {
@@ -308,7 +308,7 @@ async function main(): Promise<number> {
       // the answer it already has, or that it wasn't asked.
       const unasked = cloud.checks.map((c) => ({ id: c.id, name: c.name, text: c.text, outcome: "error" as const, summary: "The review couldn't run, so this check wasn't asked.", problems: [] }));
       const owed = checksPosted ? [] : (answered ?? unasked);
-      if (owed.length) await publishTeamChecks(api, headSha, owed, log).catch((e) => log(`Couldn't post your team's checks: ${(e as Error).message}`));
+      if (owed.length) await publishTeamChecks(api, headSha, owed, log, Boolean(values["yellow-blocks"])).catch((e) => log(`Couldn't post your team's checks: ${(e as Error).message}`));
     }
     return 1;
   }

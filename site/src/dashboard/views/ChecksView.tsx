@@ -147,8 +147,8 @@ export function ChecksView({ orgId, checks, onAdd, onRemove, resume }: { orgId: 
             'A check runs only when a pull request changes its files.',
             'Each run is one more AI run on your own plan.',
             'It reports, and never changes code.',
-            "To make it stop a merge, require that check in your branch rules on GitHub. Pick the app that posts it as the check's source there, so nothing else can post a check of that name.",
-            "Only a real pass gets through then: a check that couldn't tell or couldn't run holds the merge too.",
+            "To make it stop a merge, set yellow-blocks: true in the workflow and require that check in your branch rules on GitHub. Pick the app that posts it as the check's source there, so nothing else can post a check of that name.",
+            "A check that failed, couldn't tell or couldn't run then holds the merge. One that passed gets through, and so does one that was skipped because none of its files changed. Without yellow-blocks, a check that didn't pass is a warning on the pull request.",
           ]}
         />
       </div>

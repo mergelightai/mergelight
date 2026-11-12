@@ -166,7 +166,7 @@ test("words from the AI or the server can't post a link, a picture, a mention or
   assert.equal(plain("`@alice` [x](y)"), "`@alice` \\[x\\]\\(y\\)");
 });
 
-test("each outcome becomes a check of its own on GitHub, and no answer never counts as a pass", () => {
+test("each outcome becomes a check of its own on GitHub, and it holds a merge only where the team said so", () => {
   const base = { id: "K3", name: "Translations", text: check.text };
   assert.equal(teamCheckName("Translations"), "Mergelight: Translations");
   const pass = teamCheckBody({ ...base, outcome: "pass", summary: "Both files have the key.", problems: [] });
@@ -175,8 +175,10 @@ test("each outcome becomes a check of its own on GitHub, and no answer never cou
   assert.equal(pass.output.summary, "**The check:** `Every new key in en.json has a Danish text in da.json.`\n\nBoth files have the key.");
 
   const fail = teamCheckBody({ ...base, outcome: "fail", summary: "One key is missing. cc @alice <!-- mergelight:summary --> [fix](https://a.test)", problems: [{ file: "src/i18n/da.json", line: 3, note: "`page.invalid` is missing." }, { file: "src/`odd`.json", line: 0, note: "No Danish file at all." }] });
-  assert.equal(fail.conclusion, "failure");
+  // Without yellow-blocks no Mergelight check holds a merge: a failed one is neutral, and its title still says "Failed".
+  assert.equal(fail.conclusion, "neutral");
   assert.equal(fail.output.title, "Failed: 2 places to fix");
+  assert.match(fail.output.summary, /it doesn't hold the merge\. To let Mergelight's checks hold merges, set `yellow-blocks: true` in the workflow\.$/);
   assert.ok(fail.output.summary.includes("- `src/i18n/da.json:3` `page.invalid` is missing."));
   assert.ok(fail.output.summary.includes("- `src/'odd'.json` No Danish file at all."));
   assert.doesNotMatch(fail.output.summary, /@alice|<!--|\]\(https:\/\//);
@@ -188,16 +190,25 @@ test("each outcome becomes a check of its own on GitHub, and no answer never cou
 
   const skipped = teamCheckBody({ ...base, outcome: "skipped", summary: "This pull request changes none of the files this check is about.", problems: [] });
   assert.equal(skipped.conclusion, "skipped");
-  // GitHub lets a neutral check through a branch rule. So "couldn't tell" and "couldn't run" ask for a person
-  // instead: a pull request's author can't get past a required check by making its run fail.
   const unsure = teamCheckBody({ ...base, outcome: "unsure", summary: "The removed lines aren't shown.", problems: [] });
-  assert.equal(unsure.conclusion, "action_required");
+  assert.equal(unsure.conclusion, "neutral");
   assert.equal(unsure.output.title, "Couldn't tell: look at this one yourself");
-  assert.match(unsure.output.summary, /This is not a pass/);
+  assert.match(unsure.output.summary, /This is not a pass\. This check is neutral/);
   const error = teamCheckBody({ ...base, outcome: "error", summary: "The AI run for this check failed.", problems: [] });
-  assert.equal(error.conclusion, "action_required");
-  assert.match(error.output.summary, /This is not a pass/);
-  for (const outcome of ["pass", "fail", "unsure", "skipped", "error"]) assert.notEqual(teamCheckBody({ ...base, outcome, summary: "x", problems: [] }).conclusion, "neutral");
+  assert.equal(error.conclusion, "neutral");
+  assert.match(error.output.summary, /This is not a pass\. This check is neutral/);
+  // No answer is never a pass, with the switch or without it.
+  for (const holds of [false, true]) for (const outcome of ["fail", "unsure", "error"]) assert.notEqual(teamCheckBody({ ...base, outcome, summary: "x", problems: [] }, holds).conclusion, "success");
+
+  // With yellow-blocks the team's checks hold merges, like the Mergelight check itself. GitHub lets a neutral check
+  // through a branch rule, so "couldn't tell" and "couldn't run" then ask for a person: a pull request's author
+  // can't get past a required check by making its run fail.
+  const outcomes = (holds) => Object.fromEntries(["pass", "fail", "unsure", "skipped", "error"].map((outcome) => [outcome, teamCheckBody({ ...base, outcome, summary: "x", problems: [] }, holds).conclusion]));
+  assert.deepEqual(outcomes(true), { pass: "success", fail: "failure", unsure: "action_required", skipped: "skipped", error: "action_required" });
+  assert.deepEqual(outcomes(false), { pass: "success", fail: "neutral", unsure: "neutral", skipped: "skipped", error: "neutral" });
+  const held = teamCheckBody({ ...base, outcome: "fail", summary: "One key is missing.", problems: [] }, true);
+  assert.doesNotMatch(held.output.summary, /neutral|yellow-blocks/);
+  assert.match(teamCheckBody({ ...base, outcome: "unsure", summary: "x", problems: [] }, true).output.summary, /It holds the merge until a run can tell\.$/);
 });
 
 test("for a check, Codex is started without the instruction files and the skills of the checkout", async () => {
@@ -217,6 +228,13 @@ test("the checks are posted one by one, and one that can't be posted doesn't sto
   } };
   assert.equal(await publishTeamChecks(api, "abc123", results, (l) => lines.push(l)), 2);
   assert.deepEqual(sent, [["POST", "check-runs", "Mergelight: One", "abc123", "completed", "success"], ["POST", "check-runs", "Mergelight: Three", "abc123", "completed", "success"]]);
+  // The switch reaches GitHub: the same failed check is neutral without it and a failure with it.
+  const failed = [{ id: "K9", name: "Nine", text: "t", outcome: "fail", summary: "No.", problems: [] }];
+  const conclusions = [];
+  const seeing = { write: async (_m, _p, body) => (conclusions.push(body.conclusion), {}) };
+  await publishTeamChecks(seeing, "abc123", failed, () => {});
+  await publishTeamChecks(seeing, "abc123", failed, () => {}, true);
+  assert.deepEqual(conclusions, ["neutral", "failure"]);
   assert.deepEqual(lines, [`Couldn't post your team's check "Two": GitHub 502`]);
 
   // A personal gh login can't write checks at all: said once, and the rest aren't tried.

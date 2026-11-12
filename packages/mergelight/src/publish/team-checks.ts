@@ -30,27 +30,37 @@ export function plain(text: string): string {
 }
 
 /** What GitHub shows for one check: its conclusion, a title, and the reasons. */
+/** What a check says below its result when it didn't pass and the team's checks don't hold merges. */
+const WARNING = "This check is neutral, so it doesn't hold the merge. To let Mergelight's checks hold merges, set `yellow-blocks: true` in the workflow.";
+
 /**
- * A team makes a check stop a merge by requiring it on GitHub, and GitHub lets a neutral check
- * through. So only a real pass is a success: "couldn't tell" and "couldn't run" ask for a person,
- * which a required check doesn't let through. Otherwise the author of a pull request could get past
- * a check by making its run fail.
+ * What GitHub shows for one check: its conclusion, a title, and the reasons.
+ *
+ * Whether a check that didn't pass can hold a merge is the team's choice, and the same one as for
+ * the Mergelight check itself: yellow-blocks in the workflow. Off, a failed check, one that
+ * couldn't tell and one that couldn't run all end neutral, which GitHub lets through, and the title
+ * says what happened. On, a failed check fails, and "couldn't tell" and "couldn't run" ask for a
+ * person, which a required check doesn't let through. So where a team lets its checks hold merges,
+ * the author of a pull request can't get past one by making its run fail.
  */
-export function teamCheckBody(r: TeamCheckResult): { conclusion: "success" | "failure" | "skipped" | "action_required"; output: { title: string; summary: string } } {
+export function teamCheckBody(r: TeamCheckResult, holds = false): { conclusion: "success" | "failure" | "skipped" | "action_required" | "neutral"; output: { title: string; summary: string } } {
   const asked = `**The check:** ${code(r.text)}`;
   if (r.outcome === "skipped") return { conclusion: "skipped", output: { title: "Not needed: none of its files changed", summary: `${asked}\n\n${r.summary}` } };
   if (r.outcome === "unsure") {
-    return { conclusion: "action_required", output: { title: "Couldn't tell: look at this one yourself", summary: `${asked}\n\n${plain(r.summary)}\n\nThis is not a pass. If your team requires this check, it holds the merge until a run can tell.` } };
+    const then = holds ? "This is not a pass. It holds the merge until a run can tell." : `This is not a pass. ${WARNING}`;
+    return { conclusion: holds ? "action_required" : "neutral", output: { title: "Couldn't tell: look at this one yourself", summary: `${asked}\n\n${plain(r.summary)}\n\n${then}` } };
   }
   if (r.outcome === "error") {
-    return { conclusion: "action_required", output: { title: "Couldn't run this check", summary: `${asked}\n\n${plain(r.summary)}\n\nThis is not a pass. If your team requires this check, it holds the merge. Run the review again, or push, to try once more.` } };
+    const then = holds ? "This is not a pass. It holds the merge. Run the review again, or push, to try once more." : `This is not a pass. ${WARNING}`;
+    return { conclusion: holds ? "action_required" : "neutral", output: { title: "Couldn't run this check", summary: `${asked}\n\n${plain(r.summary)}\n\n${then}` } };
   }
   const problems = r.problems.map((p) => `- ${code(p.line ? `${p.file}:${p.line}` : p.file)} ${plain(p.note)}`);
+  const failed = r.outcome === "fail";
   return {
-    conclusion: r.outcome === "pass" ? "success" : "failure",
+    conclusion: !failed ? "success" : holds ? "failure" : "neutral",
     output: {
-      title: r.outcome === "pass" ? "Passed" : `Failed${r.problems.length ? `: ${r.problems.length} place${r.problems.length === 1 ? "" : "s"} to fix` : ""}`,
-      summary: [asked, "", plain(r.summary), ...(problems.length ? ["", ...problems] : [])].join("\n").slice(0, 60_000),
+      title: !failed ? "Passed" : `Failed${r.problems.length ? `: ${r.problems.length} place${r.problems.length === 1 ? "" : "s"} to fix` : ""}`,
+      summary: [asked, "", plain(r.summary), ...(problems.length ? ["", ...problems] : []), ...(failed && !holds ? ["", WARNING] : [])].join("\n").slice(0, 60_000),
     },
   };
 }
@@ -59,11 +69,11 @@ export function teamCheckBody(r: TeamCheckResult): { conclusion: "success" | "fa
  * Posts each of the team's checks as a check of its own on the commit. Returns how many were
  * posted. One that can't be posted is logged and doesn't stop the others.
  */
-export async function publishTeamChecks(api: Pick<GitHub, "write">, headSha: string, results: TeamCheckResult[], log: (line: string) => void = () => {}): Promise<number> {
+export async function publishTeamChecks(api: Pick<GitHub, "write">, headSha: string, results: TeamCheckResult[], log: (line: string) => void = () => {}, holds = false): Promise<number> {
   let posted = 0;
   for (const r of results) {
     try {
-      await api.write("POST", "check-runs", { name: teamCheckName(r.name), head_sha: headSha, status: "completed", completed_at: new Date().toISOString(), ...teamCheckBody(r) });
+      await api.write("POST", "check-runs", { name: teamCheckName(r.name), head_sha: headSha, status: "completed", completed_at: new Date().toISOString(), ...teamCheckBody(r, holds) });
       posted++;
     } catch (err) {
       const message = (err as Error).message;

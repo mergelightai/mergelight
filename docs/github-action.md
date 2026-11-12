@@ -111,7 +111,7 @@ They're separate files so a PR's merge box only shows the review, not skipped jo
 | `model` | Codex default | Model to review with |
 | `effort` | `high` | Reasoning effort: `low`, `medium` or `high` |
 | `verify-with` | `codex` | Who checks the findings: `codex`, or `claude` on a runner with Claude Code logged in |
-| `yellow-blocks` | `false` | Let the check hold merges: 🟡 waits for an approval and 🔴 fails until the code changes. For teams: GitHub doesn't let you approve your own PR |
+| `yellow-blocks` | `false` | Let the check hold merges: 🟡 waits for an approval and 🔴 fails until the code changes. Your team's own checks from the dashboard follow it too: on, one that failed, couldn't tell or couldn't run holds the merge, and off, it ends neutral. A check that was skipped, because none of its files changed, never holds a merge. For teams: GitHub doesn't let you approve your own PR |
 | `codex-version` | `0.166.0` | Codex CLI version |
 | `token-server` | Mergelight's | Where to get an app token. Empty means always post as `github-actions[bot]` |
 | `server` | | Address of a [Mergelight server](../packages/server/README.md), for the dashboard. Empty means off. With it, each run shows the server GitHub's signed token (repository, branch, workflow, who started it) and, if your org turned the dashboard on, sends the review's numbers and the findings your team declined: title, file and lines, the reason, and who declined it and when. Never code |
