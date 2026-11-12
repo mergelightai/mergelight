@@ -47,6 +47,8 @@ function Segmented<T extends string>({ label, value, onChange, options, mono = f
 /** The server address a workflow names, in a quiet box with a copy button. */
 function ServerAddress() {
   const [copied, setCopied] = useState<'no' | 'yes' | 'failed'>('no');
+  const timer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
   const host = SERVER.replace(/^https?:\/\//, '');
   return (
     <div className="flex h-9 items-center gap-2 rounded-[8px] bg-panel pl-3.5 pr-1 hairline">
@@ -60,7 +62,8 @@ function ServerAddress() {
         onClick={() => {
           const done = (state: 'yes' | 'failed') => {
             setCopied(state);
-            window.setTimeout(() => setCopied('no'), state === 'yes' ? 1500 : 4000);
+            window.clearTimeout(timer.current);
+            timer.current = window.setTimeout(() => setCopied('no'), state === 'yes' ? 1500 : 4000);
           };
           if (!navigator.clipboard) return done('failed');
           navigator.clipboard.writeText(SERVER).then(
@@ -294,7 +297,7 @@ export function ReviewsView({ overview, login, orgLogin }: { overview: Overview;
         meta={ORDER.map((l) => `${by(l)} ${l === 'green' ? 'safe' : l === 'yellow' ? (by(l) === 1 ? 'needs a human' : 'need a human') : 'blocked'}`).join(' · ')}
       >
         {shown.length === 0 ? (
-          <p className="px-5 py-10 text-center text-[13.5px] text-ink-3">No reviews{show === 'all' ? '' : ' with this light'} {range === 'all' ? 'yet' : `in the last ${range}`}.</p>
+          <p className="px-5 py-10 text-center text-[13.5px] text-ink-3">No reviews{show === 'all' ? '' : ' with this light'} {capped ? `among the latest ${overview.reviews.length}` : range === 'all' ? 'yet' : `in the last ${range}`}.</p>
         ) : (
           <DataTable>
             <DataHead>

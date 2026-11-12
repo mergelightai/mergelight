@@ -38,7 +38,9 @@ export function DecisionsView({ decisions, total, onForget }: { decisions: Decis
       />
       <div className="grid flex-1 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_320px] xl:items-stretch">
         <div className="flex min-w-0 flex-col gap-3">
-          {decisions.length === 0 ? (
+          {decisions.length === 0 && total > 0 ? (
+            <EmptyList title="More decisions are kept">You made Mergelight forget the ones shown here. Refresh the page, in the menu at the top right, to see the next ones.</EmptyList>
+          ) : decisions.length === 0 ? (
             <EmptyList title="Nothing yet">Decline a finding with a reason on a pull request, and it shows up here after that pull request's next review.</EmptyList>
           ) : (
             <DataCard fill title="Decisions" count={total} meta={total > decisions.length ? `showing the ${decisions.length} most recent` : undefined}>
