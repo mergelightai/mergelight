@@ -518,7 +518,8 @@ const done = async (t) => {
   const withChecks = await t.text();
   expect(/Translations Every new text in en\.json has a translation in da\.json\. set by ada, 2 days ago acme\/widgets src\/i18n\/\*\*/.test(withChecks), `a check shows with its name, its text, its repository and its files (${withChecks.match(/Check Repository.{0,80}/)?.[0]})`);
   expect(/Refunds A refund is never larger than its invoice\. set by bo, 10 hours ago acme\/api src\/billing\/\*\*, \*\.sql/.test(withChecks), 'and so does one in a repository this person only reads');
-  expect(/runs only when a pull request changes its files/.test(withChecks) && /one more AI run on your own plan/.test(withChecks) && /never changes code/.test(withChecks) && /require that check in your branch rules/.test(withChecks) && /couldn't tell or couldn't run holds the merge too/.test(withChecks), 'the view says when a check runs, what it costs, that it only reports, and how to make it stop a merge');
+  expect(/runs only when a pull request changes its files/.test(withChecks) && /one more AI run on your own plan/.test(withChecks) && /never changes code/.test(withChecks) && /require that check in your branch rules/.test(withChecks) && /A check that failed, couldn't tell or couldn't run then holds the merge/.test(withChecks) && /so does one that was skipped because none of its files changed/.test(withChecks), 'the view says when a check runs, what it costs, that it only reports, and how to make it stop a merge');
+  expect(/set yellow-blocks: true in the workflow and require that check in your branch rules/.test(withChecks) && /Without yellow-blocks, a check that didn't pass is a warning on the pull request/.test(withChecks), 'the view says that a check holds a merge only with yellow-blocks');
   const checkRemoves = await t.page.evaluate(() => [...document.querySelectorAll('button')].filter((b) => b.textContent.trim() === 'Remove check').length);
   expect(checkRemoves === 1, 'only a check in a repository this person is an admin of has a Remove button');
   await t.click('button', 'New check');
@@ -596,7 +597,7 @@ const done = async (t) => {
   await t.view('Checks');
   await wait(400);
   const sheetOpen = await t.page.evaluate(() => !!document.querySelector('[data-mobile=true]'));
-  expect(!sheetOpen && /Only a real pass gets through/.test(await t.text()), 'on a phone, picking a view closes the menu and shows the view');
+  expect(!sheetOpen && /A check that failed, couldn't tell or couldn't run then holds the merge/.test(await t.text()), 'on a phone, picking a view closes the menu and shows the view');
   await t.page.setViewport({ width: 1280, height: 900, deviceScaleFactor: 2 });
   await wait(400);
   await t.view('Reviews');

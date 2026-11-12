@@ -44,7 +44,7 @@ inputs:
     description: "Who checks the findings: claude or codex. Empty means whoever does the review. A Claude review is always checked by Claude."
     required: false
   yellow-blocks:
-    description: 'Set to "true" for a team that wants the check to hold merges: a "needs a human" check then waits for an approval, and a "blocked" one fails until the code changes. Off, both end neutral. Leave it off if you work alone, since GitHub bars approving your own PR.'
+    description: 'Set to "true" for a team that wants the check to hold merges: a "needs a human" check then waits for an approval, and a "blocked" one fails until the code changes. Off, both end neutral. The same goes for your team's own checks from the dashboard: on, one that failed, couldn't tell or couldn't run holds the merge, and off, it ends neutral. Leave it off if you work alone, since GitHub bars approving your own PR.'
     default: "false"
   codex-version:
     description: Version of the Codex CLI to install.
