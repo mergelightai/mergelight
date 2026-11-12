@@ -175,3 +175,9 @@ test("a code block that closes with a longer fence still shields its comment mar
   const md = "```\n<!--\n````\n- Kept.\n<!-- - Turned off. -->\n";
   assert.deepEqual(parseRuleFile(".mergelight/rules.md", md).map((r) => r.text), ["Kept."]);
 });
+
+test("reviewers name a rule by what it says, never by its id", () => {
+  const input = { pr: { owner: "acme", repo: "widgets", number: 1, title: "t", author: "a", baseRef: "main", body: "" }, mergeBase: "base", headSha: "head", diffStat: "", diff: "", diffTruncated: false };
+  const prompt = buildHunterPrompt({ ...input, rules: [{ id: "F1", kind: "rule", text: "Route files export their router by name.", scope: "repo", source: ".mergelight/rules.md" }] }, "data");
+  assert.match(prompt, /A rule's id is only for this prompt and means nothing to the people who read your findings\. Where you write about a rule, name it by what it says/);
+});
