@@ -226,13 +226,18 @@ const RANGES: { id: Range; label: string; ms: number }[] = [
 function History({ reviews, slots = 24 }: { reviews: Review[]; slots?: number }) {
   const last = reviews.slice(-slots);
   const empty = slots - last.length;
+  // A screen reader hears what the bars show, as one sentence: "Last 5 reviews: 3 safe to merge, 1 blocked".
+  const told = ORDER.map((l) => [l, last.filter((r) => r.light === l).length] as const)
+    .filter(([, n]) => n > 0)
+    .map(([l, n]) => `${n} ${LIGHTS[l].label.toLowerCase()}`)
+    .join(', ');
   return (
-    <span className="inline-flex h-5 items-stretch gap-[2px]" aria-label={`The light of its last ${last.length} reviews`}>
+    <span role="img" className="inline-flex h-5 items-stretch gap-[2px]" aria-label={`Last ${plural(last.length, 'review')}: ${told}`}>
       {Array.from({ length: empty }, (_, i) => (
-        <span key={`e${i}`} className="w-[3px] rounded-[1px] bg-white/[0.07]" />
+        <span key={`e${i}`} aria-hidden="true" className="w-[3px] rounded-[1px] bg-white/[0.07]" />
       ))}
       {last.map((r) => (
-        <span key={`${r.pr}-${r.created_at}`} title={`#${r.pr} · ${LIGHTS[r.light].label}`} className={cn('w-[3px] rounded-[1px]', LIGHTS[r.light].bar)} />
+        <span key={`${r.pr}-${r.created_at}`} aria-hidden="true" title={`#${r.pr} · ${LIGHTS[r.light].label}`} className={cn('w-[3px] rounded-[1px]', LIGHTS[r.light].bar)} />
       ))}
     </span>
   );
