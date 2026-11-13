@@ -460,4 +460,23 @@ test("a job's sandbox may read the folder Codex is installed in, found from the 
   const [found] = codexInstall(`/nowhere:${join(root, "bin")}`);
   assert.ok(found.endsWith("/lib/node_modules/@openai/codex"), found);
   assert.deepEqual(codexInstall("/nowhere"), []);
+  // A program on its own is read from its own folder, never from the one above it.
+  const solo = mkdtempSync(join(tmpdir(), "mergelight-codex-solo-"));
+  mkdirSync(join(solo, "bin"));
+  writeFileSync(join(solo, "bin/codex"), "");
+  assert.deepEqual(codexInstall(join(solo, "bin")).map((p) => p.replace(/^\/private/, "")), [join(solo, "bin").replace(/^\/private/, "")]);
+});
+
+test("a UTF-16 text file, with its byte-order mark, isn't taken for a binary one", async () => {
+  const { head, jobGit } = repo();
+  const result = await runJobs({
+    git: jobGit,
+    head,
+    jobs: [job("strings", "locales/*")],
+    ask: async (j, dir) => {
+      writeFileSync(join(dir, "locales/Localizable.strings"), Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('"hi" = "hej";\n', "utf16le")]));
+      return { summary: "Done." };
+    },
+  });
+  assert.equal(result.outcomes[0].status, "changed", result.outcomes[0].summary);
 });

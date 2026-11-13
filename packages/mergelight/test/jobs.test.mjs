@@ -190,6 +190,8 @@ test("jobs are read from the base branch, never from the pull request", async ()
   mkdirSync(join(dir, ".claude/skills/linked"), { recursive: true });
   symlinkSync("../real/SKILL.md", join(dir, ".claude/skills/linked/SKILL.md"));
   write(".mergelight/jobs/linked-skill.md", "---\non: src\nmay-change: guide\nskill: .claude/skills/linked\n---\nUse the linked skill.\n");
+  write("tools/empty-skill/SKILL.md", "");
+  write(".mergelight/jobs/empty-skill.md", "---\non: src\nmay-change: guide\nskill: tools/empty-skill\n---\nUse an empty skill.\n");
   write(".claude/skills/write-docs/SKILL.md", "---\nname: write-docs\n---\nHow we write docs.\n");
   write(".mergelight/jobs/guide.md", "---\non: src\nmay-change: guide\nskill: .claude/skills/write-docs\n---\nWrite the guide.\n");
   write(".mergelight/jobs/typo.md", "---\non: src\nmay-change: guide\nskill: .claude/skills/write-doc\n---\nWrite the guide.\n");
@@ -236,9 +238,10 @@ test("jobs are read from the base branch, never from the pull request", async ()
   assert.equal(jobs[2].source, ".mergelight/jobs/review-notes.md", "a link into .github is fine: no job may change a file there");
   assert.equal(jobs[3].source, ".mergelight/jobs/translations.md", "the real file wins over a link to it");
   const why = Object.fromEntries(problems.map((p) => [p.source, p.problem]));
-  assert.deepEqual(Object.keys(why), [".mergelight/jobs/broken.md", ".mergelight/jobs/docs.md", ".mergelight/jobs/i18n.md", ".mergelight/jobs/linked-skill.md", ".mergelight/jobs/outside.md", ".mergelight/jobs/typo.md", ".mergelight/jobs/Upper.MD", ".mergelight/jobs/web/deep.md", ".mergelight/Jobs/cased.md", ".mergelight/jobs/notes.markdown", ".mergelight/jobs/deep-link.md", ".mergelight/jobs.md", ".mergelight/jobs/Copy Job.md", ".mergelight/jobs/via-link.md", ".mergelight/jobs/extra.md", ".mergelight/jobs/README.md", ".mergelight/jobs/copy-link.md"].sort((a, b) => a.localeCompare(b)));
+  assert.deepEqual(Object.keys(why), [".mergelight/jobs/broken.md", ".mergelight/jobs/docs.md", ".mergelight/jobs/i18n.md", ".mergelight/jobs/linked-skill.md", ".mergelight/jobs/outside.md", ".mergelight/jobs/typo.md", ".mergelight/jobs/Upper.MD", ".mergelight/jobs/web/deep.md", ".mergelight/Jobs/cased.md", ".mergelight/jobs/notes.markdown", ".mergelight/jobs/deep-link.md", ".mergelight/jobs.md", ".mergelight/jobs/Copy Job.md", ".mergelight/jobs/via-link.md", ".mergelight/jobs/extra.md", ".mergelight/jobs/README.md", ".mergelight/jobs/copy-link.md", ".mergelight/jobs/empty-skill.md"].sort((a, b) => a.localeCompare(b)));
   assert.match(why[".mergelight/jobs.md"], /jobs are files right in the \.mergelight\/jobs folder/);
   assert.match(why[".mergelight/jobs/README.md"], /is the folder's notes, never read as a job/);
+  assert.match(why[".mergelight/jobs/empty-skill.md"], /its skill's SKILL\.md is empty, so the skill can't be used/);
   assert.match(why[".mergelight/jobs/extra.md"], /is a link to \.mergelight\/jobs\.md, which isn't a job file that is read/);
   assert.match(why[".mergelight/jobs/copy-link.md"], /is a link to \.mergelight\/jobs\/Copy Job\.md, which doesn't run as a job: see/);
   assert.match(why[".mergelight/jobs/Copy Job.md"], /must be lowercase/);

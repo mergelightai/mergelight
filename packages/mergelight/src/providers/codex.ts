@@ -100,8 +100,12 @@ export function codexInstall(path = process.env.PATH ?? ""): string[] {
   for (const dir of path.split(":").filter(Boolean)) {
     try {
       const real = realpathSync(join(dir, "codex"));
-      // The npm package: <root>/bin/codex.js, with the native program in <root>/node_modules.
-      return [/\/bin\/codex(?:\.js)?$/.test(real) ? dirname(dirname(real)) : dirname(real)];
+      // The npm package: <root>/bin/codex.js, with the native program in <root>/node_modules. A program on
+      // its own is read from its own folder. Never the home folder, or one that holds it.
+      const folder = /\/bin\/codex\.js$/.test(real) ? dirname(dirname(real)) : dirname(real);
+      const home = homedir();
+      if (folder === "/" || folder === home || home.startsWith(`${folder}/`)) return [];
+      return [folder];
     } catch {
       // Not in this folder.
     }
@@ -110,7 +114,7 @@ export function codexInstall(path = process.env.PATH ?? ""): string[] {
 }
 
 /** On Linux, the top-level folders a job's commands may read: the system and nothing else. /proc is the sandbox's own. */
-export const LINUX_KEEP = ["/usr", "/etc", "/dev", "/proc"];
+export const LINUX_KEEP = ["/usr", "/etc", "/dev", "/proc", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/nix"];
 
 /** Every top-level folder on this disk that is a real folder, not a link such as /bin to /usr/bin. */
 function topFolders(): string[] {
@@ -372,7 +376,7 @@ export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
   try {
     const result = await run("codex", args, {
       input: opts.prompt,
-      timeoutMs: opts.deadline ? opts.deadline - Date.now() : (opts.timeoutMs ?? 25 * 60_000),
+      timeoutMs: opts.deadline ? Math.max(1, opts.deadline - Date.now()) : (opts.timeoutMs ?? 25 * 60_000),
       onStdout,
       env: codexEnv(),
     });

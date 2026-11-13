@@ -237,8 +237,10 @@ async function whyRefused(git: JobGit, job: Job, guarded: string[], headLinks: S
   for (const e of mine) {
     if (e.status === "D") continue;
     const head = await git.bytes(["cat-file", "blob", e.newSha]);
-    // Git's own test for a binary file: a zero byte near the start.
-    if (!head || head.subarray(0, 8000).includes(0)) binary.push(e.path);
+    // Git's own test for a binary file: a zero byte near the start. Text in UTF-16, which starts with its
+    // byte-order mark, has zero bytes too, such as an older iOS project's Localizable.strings.
+    const utf16 = head && ((head[0] === 0xff && head[1] === 0xfe) || (head[0] === 0xfe && head[1] === 0xff));
+    if (!head || (!utf16 && head.subarray(0, 8000).includes(0))) binary.push(e.path);
   }
   if (binary.length) return `It wrote binary files, which a job may never write: ${some(binary)}.`;
   // A job's files get pushed: one that holds a secret the file didn't have before is never kept.

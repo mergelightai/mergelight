@@ -175,6 +175,8 @@ export const REFUSED_FILES = [
   "amplify.yml",
   "amplify.yaml",
   "vercel.json",
+  "vercel.ts",
+  "firebase.json",
   "now.json",
   "render.yaml",
   "railway.json",

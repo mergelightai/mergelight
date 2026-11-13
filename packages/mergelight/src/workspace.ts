@@ -272,6 +272,15 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
   // A skill that isn't on the base branch: the job would run without what the team meant it to follow.
   // Only an ordinary SKILL.md counts, as the skill copy takes no links.
   const parsed = readJobs([...kept.values()], (folder) => ["100644", "100755"].includes(tree.mode(`${folder}/SKILL.md`) ?? ""));
+  // A SKILL.md the skill copy won't take: empty, or over its size. Said now, not as a failed job each run.
+  for (const job of [...parsed.jobs]) {
+    if (!job.skill) continue;
+    const size = await tree.size(`${job.skill}/SKILL.md`);
+    if (size !== null && (size === 0 || size > MAX_SKILL_FILE_BYTES)) {
+      parsed.jobs.splice(parsed.jobs.indexOf(job), 1);
+      parsed.problems.push({ source: job.source, problem: `its skill's SKILL.md is ${size === 0 ? "empty" : `over ${MAX_SKILL_FILE_BYTES / 1000} KB`}, so the skill can't be used` });
+    }
+  }
   // No job to run: no guard to work out, and nothing to say about one.
   // A link to a file that couldn't be a job doesn't "count once": say where the reason is.
   const refusedSources = new Set(parsed.problems.map((p) => p.source));
@@ -393,6 +402,7 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
     // files in it are opened through the link too, so their imports are read from the folder they have
     // there as well. Through a guarded link every Markdown file counts; through any other, only
     // instruction files, and the folder itself isn't guarded for it.
+    const markdown = tree.paths.filter((p) => /\.mdc?$/i.test(p));
     for (const link of tree.paths.filter((p) => tree.mode(p) === "120000")) {
       const guardedLink = inGuard(link);
       const end = guardedLink ? await follow(link) : await resolve(link, false);
@@ -403,8 +413,8 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
         break;
       }
       if (typeof end !== "string" || end === "deep") continue;
-      for (const p of tree.paths) {
-        if (!p.startsWith(`${end}/`) || !/\.mdc?$/i.test(p)) continue;
+      for (const p of markdown) {
+        if (!p.startsWith(`${end}/`)) continue;
         const through = `${link}/${p.slice(end.length + 1)}`;
         if (guardedLink || isInstructions(p) || refusedPath(through)) enqueue(p, [posix.dirname(through)], 0);
       }
@@ -450,6 +460,9 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
   // A guard that couldn't be worked out in full hands out no job, whatever reads them.
   return incomplete ? { jobs: [], problems: sorted, guarded, incomplete } : { jobs: parsed.jobs, problems: sorted, guarded };
 }
+
+/** The largest SKILL.md the skill copy takes (skills.ts). */
+const MAX_SKILL_FILE_BYTES = 60_000;
 
 /** How many links from files no job may change are followed, to guard what they lead to, and how far each. */
 const MAX_GUARDED_LINKS = 1000;
