@@ -417,3 +417,21 @@ test("rules in a folder a protected link leads to, and a large instruction file,
   assert.ok(guarded.includes("docs/style-guide.md"), "a rule in the folder .cursor links to");
   assert.ok(guarded.includes("docs/late.md"), "an import far down a large CLAUDE.md");
 });
+
+test("instruction files in a guarded folder that is a link are read for imports from the link's path too", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-jobs-imports3-"));
+  const git = (...args) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t.test", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
+  const write = (path, text) => {
+    mkdirSync(join(dir, path, ".."), { recursive: true });
+    writeFileSync(join(dir, path), text);
+  };
+  git("init", "-q", "-b", "main");
+  write("config/claude/CLAUDE.md", "See @../docs/guide.md\n");
+  write("docs/guide.md", "Guide.\n");
+  symlinkSync("config/claude", join(dir, ".claude"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "base");
+  const { guarded, incomplete } = await jobFilesFor(dir, "main");
+  assert.equal(incomplete, undefined);
+  assert.ok(guarded.includes("docs/guide.md"), "read as .claude/CLAUDE.md, ../docs is the root's docs");
+});

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { fetchPullRequest, type PrRef } from "./github.js";
 import { jobsToRun } from "./jobs.js";
 import { runModel, TOOLING, type ProviderName } from "./providers/index.js";
-import { buildJobPrompt, isJobCommit, JOB_SCHEMA, JOB_TIMEOUT_MS, mirrorGit, runJobs, type JobsResult } from "./run-jobs.js";
+import { buildJobPrompt, isJobCommit, JOB_SCHEMA, mirrorGit, runJobs, type JobsResult } from "./run-jobs.js";
 import { cacheDir, jobFilesFor, prepareWorkspace, skillsFor } from "./workspace.js";
 
 export interface JobsCommandOptions {
@@ -78,11 +78,13 @@ export async function jobsCommand(ref: PrRef, o: JobsCommandOptions): Promise<nu
       guarded,
       problems,
       onProgress: progress,
-      ask: async (job, dir, earlier) => {
+      ask: async (job, dir, earlier, timeLeftMs) => {
         // The skill comes from the base branch, into a folder of its own next to the job's copy.
         const skillDir = job.skill ? mkdtempSync(join(tmpdir(), `mergelight-job-skill-${job.name}-`)) : null;
         try {
           const [found] = skillDir && job.skill ? await skillsFor(ws.mirror, ws.teamBase, skillDir, [job.skill]) : [];
+          // A job without the skill it names would do something else than the team wrote.
+          if (job.skill && !found) throw new Error(`its skill ${job.skill} couldn't be copied from ${pr.baseRef}`);
           const prompt = buildJobPrompt({
             job,
             pr,
@@ -93,6 +95,7 @@ export async function jobsCommand(ref: PrRef, o: JobsCommandOptions): Promise<nu
             skill: found && skillDir ? { name: found.name, path: join(skillDir, found.read) } : undefined,
             earlier,
             tooling: TOOLING[provider],
+            guarded,
           });
           const answer = await runModel(provider, {
             cwd: dir,
@@ -102,7 +105,7 @@ export async function jobsCommand(ref: PrRef, o: JobsCommandOptions): Promise<nu
             readDirs: skillDir ? [skillDir] : [],
             model: o.model,
             effort: o.effort,
-            timeoutMs: JOB_TIMEOUT_MS,
+            timeoutMs: timeLeftMs,
             logFile: join(cacheDir(), "logs", `${pr.owner}-${pr.repo}-${pr.number}-${stamp}-job-${job.name}.log`),
           });
           return answer.output;

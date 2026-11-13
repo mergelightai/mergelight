@@ -384,6 +384,15 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
       const at = tree.mode(p) === "120000" ? await follow(p) : p;
       if (at) enqueue(at, [posix.dirname(p)], 0);
     }
+    // A guarded folder that is a link, like .claude to config/claude: its instruction files are opened
+    // through the link too, so their imports are read from the folder they have there as well.
+    for (const link of tree.paths.filter((p) => tree.mode(p) === "120000" && inGuard(p))) {
+      const end = await follow(link);
+      if (!end) continue;
+      for (const p of tree.paths) {
+        if (p.startsWith(`${end}/`) && /\.mdc?$/i.test(p)) enqueue(p, [posix.dirname(`${link}/${p.slice(end.length + 1)}`)], 0);
+      }
+    }
     const imported = new Set<string>();
     while (queue.length && !incomplete) {
       const { path, dirs, depth } = queue.shift()!;

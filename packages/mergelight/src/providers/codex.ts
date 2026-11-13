@@ -90,11 +90,20 @@ function mcpServers(config: string): string[] {
  * steer them, so the folder with the login is taken out of what they can read. Codex itself still reads it.
  * For a job, they may also write in the one folder the job works in, and nowhere else.
  */
-export function sandboxArgs(home = codexHome(), writable?: string): string[] {
+export function sandboxArgs(home = codexHome(), writable?: string, hidden: string[] = []): string[] {
   if (writable) {
-    return ["-c", 'default_permissions="mergelight_job"', "-c", `permissions.mergelight_job.filesystem={":root"="read",${JSON.stringify(writable)}="write",${JSON.stringify(home)}="none"}`];
+    // A job's files get pushed, so its commands can't read where secrets live either: the home folder,
+    // Mergelight's cache and the runner's own folders. Only the job's folder can be written.
+    const paths: [string, string][] = [[":root", "read"], ...hidden.map((h): [string, string] => [h, "none"]), [home, "none"], [writable, "write"]];
+    return ["-c", 'default_permissions="mergelight_job"', "-c", `permissions.mergelight_job.filesystem={${paths.map(([path, access]) => `${JSON.stringify(path)}="${access}"`).join(",")}}`];
   }
   return ["-c", 'default_permissions="mergelight_review"', "-c", `permissions.mergelight_review.filesystem={":root"="read",${JSON.stringify(home)}="none"}`];
+}
+
+/** Folders a job's commands may not read: where secrets and other code live. One that holds the job's own folder stays readable. */
+export function jobHidden(jobDir: string, env: NodeJS.ProcessEnv = process.env): string[] {
+  const places = [homedir(), env.MERGELIGHT_CACHE, env.RUNNER_TEMP, env.GITHUB_WORKSPACE].filter((p): p is string => Boolean(p));
+  return [...new Set(places)].filter((p) => jobDir !== p && !jobDir.startsWith(`${p.replace(/\/+$/, "")}/`));
 }
 
 /** Tokens the runner holds that a reviewing agent has no use for. It only needs its own login. */
@@ -168,7 +177,7 @@ export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
 
   const args = [
     "exec",
-    ...sandboxArgs(codexHome(), opts.edit ? opts.cwd : undefined),
+    ...sandboxArgs(codexHome(), opts.edit ? opts.cwd : undefined, opts.edit ? jobHidden(opts.cwd) : []),
     "--ephemeral",
     "--skip-git-repo-check",
     "--json",

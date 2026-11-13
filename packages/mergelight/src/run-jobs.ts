@@ -68,8 +68,10 @@ export interface JobGit {
  * link in the repository can't lead the AI's edits out of the copy.
  */
 export function mirrorGit(mirror: string): JobGit {
-  const base = ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential", "-c", "core.symlinks=false", "-c", "core.autocrlf=false", "-c", "core.hooksPath=/dev/null", "--git-dir", mirror];
-  const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: devNull };
+  const base = ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential", "-c", "core.symlinks=false", "-c", "core.autocrlf=false", "-c", "core.hooksPath=/dev/null", "-c", `core.excludesFile=${devNull}`, "-c", `core.attributesFile=${devNull}`, "--git-dir", mirror];
+  // Attributes come from the empty tree, so files are written out and read back byte for byte: no line
+  // ending or filter changes a file the AI never touched.
+  const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: devNull, GIT_ATTR_SOURCE: EMPTY_TREE };
   return {
     run: (args, extra = {}) => run("git", [...base, ...args], { env: { ...env, ...extra }, timeoutMs: 120_000 }),
     bytes: (args) =>
@@ -79,10 +81,34 @@ export function mirrorGit(mirror: string): JobGit {
   };
 }
 
-/** Whether a commit is one that jobs made: its message ends with the jobs line. */
+/** git's tree with nothing in it, which every repository knows. */
+const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+/** Whether a commit is one that jobs made: the last line of its message is the jobs line. */
 export async function isJobCommit(git: JobGit, sha: string): Promise<boolean> {
   const r = await git.run(["log", "-1", "--format=%B", sha]);
-  return r.code === 0 && new RegExp(`^${JOBS_TRAILER}:`, "m").test(r.stdout);
+  const last = r.stdout.trim().split("\n").pop() ?? "";
+  return r.code === 0 && last.startsWith(`${JOBS_TRAILER}:`);
+}
+
+/** What looks like a secret: private keys and the token shapes of GitHub, Anthropic, OpenAI, AWS, Slack and JWTs. */
+const SECRET = /-----BEGIN [A-Z ]*PRIVATE KEY-----|\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,}|sk-ant-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{32,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,})|eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g;
+/** The runner's own secrets, by name, for an exact match. */
+const SECRET_ENV = ["GH_TOKEN", "GITHUB_TOKEN", "ACTIONS_RUNTIME_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "SECRETS_TOKEN", "MERGELIGHT_CLAUDE_TOKEN"];
+
+/** A secret in the new text that the old text didn't have, or null. A job never writes one. */
+export function newSecret(next: string, before = "", env: NodeJS.ProcessEnv = process.env): string | null {
+  for (const name of SECRET_ENV) {
+    const value = env[name];
+    if (value && value.length >= 20 && next.includes(value) && !before.includes(value)) return name;
+  }
+  for (const m of next.matchAll(SECRET)) if (!before.includes(m[0])) return "a key or token";
+  return null;
+}
+
+/** Text cut to a number of characters, never in the middle of one. */
+function cut(text: string, max: number): string {
+  return Array.from(text).slice(0, max).join("");
 }
 
 async function must(git: JobGit, args: string[], env?: Record<string, string>): Promise<string> {
@@ -106,6 +132,7 @@ async function readBack(git: JobGit, dir: string, index: string): Promise<string
 interface Entry {
   oldMode: string;
   newMode: string;
+  oldSha: string;
   newSha: string;
   status: string;
   path: string;
@@ -117,8 +144,8 @@ async function changed(git: JobGit, from: string, to: string): Promise<Entry[]> 
   const parts = out.split("\0");
   const entries: Entry[] = [];
   for (let i = 0; i + 1 < parts.length; i += 2) {
-    const m = /^:(\d{6}) (\d{6}) [0-9a-f]+ ([0-9a-f]+) (\w)/.exec(parts[i]!);
-    if (m) entries.push({ oldMode: m[1]!, newMode: m[2]!, newSha: m[3]!, status: m[4]!, path: parts[i + 1]! });
+    const m = /^:(\d{6}) (\d{6}) ([0-9a-f]+) ([0-9a-f]+) (\w)/.exec(parts[i]!);
+    if (m) entries.push({ oldMode: m[1]!, newMode: m[2]!, oldSha: m[3]!, newSha: m[4]!, status: m[5]!, path: parts[i + 1]! });
   }
   return entries;
 }
@@ -157,13 +184,21 @@ async function whyRefused(git: JobGit, job: Job, guarded: string[], headLinks: S
     if (!head || head.subarray(0, 8000).includes(0)) binary.push(e.path);
   }
   if (binary.length) return `It wrote binary files, which a job may never write: ${some(binary)}.`;
+  // A job's files get pushed: one that holds a secret the file didn't have before is never kept.
+  for (const e of mine) {
+    if (e.status === "D") continue;
+    const next = (await git.bytes(["cat-file", "blob", e.newSha]))?.toString("utf8") ?? "";
+    const before = /^0+$/.test(e.oldSha) ? "" : ((await git.bytes(["cat-file", "blob", e.oldSha]))?.toString("utf8") ?? "");
+    const secret = newSecret(next, before);
+    if (secret) return `It wrote what looks like ${secret === "a key or token" ? "a key or token" : `the runner's ${secret}`} into ${e.path}.`;
+  }
   return null;
 }
 
 /** One line of the AI's own words, cut to size. Whatever it is, it ends up as text on GitHub. */
 function summaryOf(answer: unknown): string {
   const s = (answer as { summary?: unknown } | null)?.summary;
-  return typeof s === "string" ? s.replace(/\s+/g, " ").trim().slice(0, 300).trim() : "";
+  return typeof s === "string" ? cut(s.replace(/\s+/g, " ").trim(), 300).trim() : "";
 }
 
 export interface RunJobsOptions {
@@ -178,7 +213,7 @@ export interface RunJobsOptions {
    * Has the AI do one job in dir, and resolves with its answer. What it changed is read from dir afterwards.
    * earlier names the jobs before it whose changes are already in dir.
    */
-  ask: (job: Job, dir: string, earlier: string[]) => Promise<unknown>;
+  ask: (job: Job, dir: string, earlier: string[], timeLeftMs: number) => Promise<unknown>;
   onProgress?: (message: string) => void;
   limits?: { each: number; all: number };
   /** Where the job's folders are made. */
@@ -224,9 +259,10 @@ export async function runJobs(o: RunJobsOptions): Promise<JobsResult> {
           timer = setTimeout(() => reject(new Error("it took too long")), Math.min(limits.each, left));
         });
         const earlier = outcomes.filter((x) => x.status === "changed").map((x) => x.name);
-        answer = await Promise.race([o.ask(job, dir, earlier), late]);
+        // The AI run gets the same time as the race, so its process is stopped when the job is given up.
+        answer = await Promise.race([o.ask(job, dir, earlier, Math.min(limits.each, left)), late]);
       } catch (err) {
-        const reason = (err instanceof Error ? err.message : String(err)).replace(/\s+/g, " ").trim().slice(0, 300);
+        const reason = cut((err instanceof Error ? err.message : String(err)).replace(/\s+/g, " ").trim(), 300);
         outcome("failed", `The AI run for this job failed${reason ? `: ${/[.!?]$/.test(reason) ? reason : `${reason}.`}` : "."} Its changes were dropped.`);
         continue;
       } finally {
@@ -288,6 +324,8 @@ export interface JobPromptInput {
   earlier?: string[];
   /** How the AI reads and edits files: Codex through a shell, Claude through file tools. */
   tooling: "shell" | "files";
+  /** Folders and files no job may change on this repository, such as skills and what instruction files import. */
+  guarded?: string[];
 }
 
 /** Text that came from the pull request: shown as data, fenced so it can't close the fence itself. */
@@ -313,6 +351,8 @@ export function buildJobPrompt(input: JobPromptInput): string {
     "",
     `- You may only create, change or delete files that match these paths: ${job.mayChange.map((p) => `\`${p}\``).join(", ")}. If you change any other file, all your changes are thrown away.`,
     "- Never change anything under .github or .mergelight, a link, a file that can run, or a binary file. Those changes are thrown away too.",
+    "- Even inside your paths, never change files that steer AI agents, reviews or CI: AGENTS.md, CLAUDE.md, GEMINI.md, CONTRIBUTING.md, SKILL.md, CODEOWNERS, OWNERS and the like, or anything in folders such as .claude, .cursor or .vscode.",
+    ...(input.guarded?.length ? [`- On this repository, also never change anything in: ${input.guarded.slice(0, 30).map((p) => `\`${p}\``).join(", ")}${input.guarded.length > 30 ? ` and ${input.guarded.length - 30} more` : ""}.`] : []),
     "- Keep each file's own style: its indentation, the order of its keys or sections, its line endings, and a newline at the end if it has one.",
     "- If the job has nothing to do on this pull request, change nothing.",
     input.tooling === "shell"
