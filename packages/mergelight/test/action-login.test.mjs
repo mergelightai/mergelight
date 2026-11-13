@@ -25,7 +25,7 @@ function stepScript(name) {
 }
 
 /** Runs the login step. A stand-in for gh records any call, because the step should need none. */
-function login({ event, authJson = "", apiKey = "", headRepo = "", actor = "someone" }) {
+function login({ event, authJson = "", apiKey = "", headRepo = "", actor = "someone", run }) {
   const dir = mkdtempSync(join(tmpdir(), "mergelight-action-"));
   const bin = join(dir, "bin");
   mkdirSync(bin);
@@ -50,11 +50,21 @@ function login({ event, authJson = "", apiKey = "", headRepo = "", actor = "some
       HEAD_REPO: headRepo,
       AUTH_JSON: authJson,
       API_KEY: apiKey,
+      ...(run ? { RUN: run } : {}),
     },
   });
   const env = Object.fromEntries(readFileSync(envFile, "utf8").trim().split("\n").filter(Boolean).map((l) => l.split("=")));
   return { code: r.status, out: r.stdout, env, askedGh: existsSync(asked), saved: existsSync(join(dir, "codex-home", "auth.json")) };
 }
+
+test("the jobs step never starts a sign-in: with no login it skips, and the review connects one", () => {
+  const r = login({ event: "pull_request", headRepo: "acme/widgets", run: "jobs" });
+  assert.equal(r.code, 0);
+  assert.equal(r.env.MERGELIGHT_NO_LOGIN, "1");
+  assert.notEqual(r.env.MERGELIGHT_CONNECT, "1");
+  assert.match(r.out, /Skipping the jobs: there's no AI login yet/);
+  assert.equal(login({ event: "pull_request", headRepo: "acme/widgets", run: "review" }).env.MERGELIGHT_CONNECT, "1", "the review still connects");
+});
 
 test("the refresh job with no login has nothing to do, and doesn't fail", () => {
   for (const event of ["schedule", "workflow_dispatch"]) {

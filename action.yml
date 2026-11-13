@@ -70,6 +70,24 @@ inputs:
       Needs the app installed and "id-token: write". Without them, or with this empty, the run posts
       as github-actions[bot].
     default: https://api.mergelight.dev/token
+  run:
+    description: >
+      What this step does. "review", the default, reviews the pull request. "jobs" runs the team's
+      jobs from .mergelight/jobs instead, and writes what they changed to a file for the push-jobs
+      step; it posts nothing and pushes nothing. See docs/jobs.md.
+    default: review
+  commit:
+    description: The commit to review. Empty means the pull request's newest. After jobs, the commit they pushed.
+    required: false
+  jobs-result:
+    description: For a review after jobs, the file the jobs step wrote, for the Jobs part of the summary.
+    required: false
+  jobs-commit:
+    description: For a review after jobs, the commit the push-jobs step made, if it made one.
+    required: false
+  jobs-why:
+    description: For a review after jobs, why the push-jobs step pushed nothing, if it didn't.
+    required: false
   server:
     description: >
       Address of a Mergelight server, for teams that use the dashboard: reviews in one place, memory
@@ -82,6 +100,14 @@ inputs:
       reviews leave it out. Never code, never
       other findings, and never your AI login. Needs "id-token: write".
     default: ""
+
+outputs:
+  jobs-changes:
+    description: With run set to jobs, how many files the jobs changed.
+    value: ${{ steps.jobs.outputs.changes }}
+  jobs-result:
+    description: With run set to jobs, the file that says what the jobs did and changed.
+    value: ${{ steps.jobs.outputs.result }}
 
 runs:
   using: composite
@@ -124,10 +150,16 @@ runs:
       if: github.event_name != 'pull_request_review'
       shell: bash
       env:
+        RUN: ${{ inputs.run }}
         WANTED: ${{ inputs.provider }}
         HAS_CLAUDE: ${{ (inputs.claude-code-oauth-token != '' || inputs.anthropic-api-key != '') && '1' || '' }}
         HAS_CODEX: ${{ (inputs.codex-auth-json != '' || inputs.openai-api-key != '') && '1' || '' }}
       run: |
+        RUN="${RUN:-review}"
+        if [ "$RUN" != review ] && [ "$RUN" != jobs ]; then
+          echo "::error::run must be review or jobs, not \"$RUN\"."
+          exit 1
+        fi
         provider="$WANTED"
         if [ -z "$provider" ]; then
           if [ -n "$HAS_CLAUDE" ] && [ -z "$HAS_CODEX" ]; then provider=claude; else provider=codex; fi
@@ -152,7 +184,7 @@ runs:
         fi
 
     - name: Install Claude Code
-      if: github.event_name != 'pull_request_review' && (env.MERGELIGHT_PROVIDER == 'claude' || inputs.verify-with == 'claude')
+      if: github.event_name != 'pull_request_review' && (env.MERGELIGHT_PROVIDER == 'claude' || (inputs.verify-with == 'claude' && inputs.run != 'jobs'))
       shell: bash
       run: npm install -g "@anthropic-ai/claude-code@${{ inputs.claude-code-version }}" --no-audit --no-fund --loglevel=error
 
@@ -184,6 +216,7 @@ runs:
         AUTH_JSON: ${{ inputs.codex-auth-json }}
         API_KEY: ${{ inputs.openai-api-key }}
         HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        RUN: ${{ inputs.run }}
       run: |
         set -euo pipefail
         export CODEX_HOME="$RUNNER_TEMP/codex-home"
@@ -211,6 +244,10 @@ runs:
         elif [ -n "${HEAD_REPO:-}" ] && [ "$HEAD_REPO" != "$GITHUB_REPOSITORY" ]; then
           # A fork's runs get no secrets either, and a stranger's pull request must never start a sign-in.
           echo "::notice::Skipping the review: GitHub gives pull requests from forks no secrets."
+          echo "MERGELIGHT_NO_LOGIN=1" >> "$GITHUB_ENV"
+        elif [ "${RUN:-}" = jobs ]; then
+          # The review step connects ChatGPT. Jobs wait for a login, so two steps never ask at once.
+          echo "::notice::Skipping the jobs: there's no AI login yet. The review on this pull request connects one."
           echo "MERGELIGHT_NO_LOGIN=1" >> "$GITHUB_ENV"
         elif [ "$GITHUB_EVENT_NAME" = "pull_request" ] || [ "$GITHUB_EVENT_NAME" = "pull_request_target" ]; then
           # No login yet: the next step connects ChatGPT from the pull request.
@@ -305,9 +342,13 @@ runs:
       run: bash "$GITHUB_ACTION_PATH/packages/mergelight/scripts/save-claude-login.sh"
 
     - name: Review
-      if: (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && env.MERGELIGHT_NO_LOGIN != '1'
+      if: (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && env.MERGELIGHT_NO_LOGIN != '1' && inputs.run != 'jobs'
       shell: bash
       env:
+        COMMIT: ${{ inputs.commit }}
+        JOBS_RESULT: ${{ inputs.jobs-result }}
+        JOBS_COMMIT: ${{ inputs.jobs-commit }}
+        JOBS_WHY: ${{ inputs.jobs-why }}
         GH_TOKEN: ${{ steps.app.outputs.token || inputs.github-token }}
         PR: ${{ github.event.pull_request.number }}
         MODEL: ${{ inputs.model }}
@@ -326,6 +367,13 @@ runs:
         args=(review "$GITHUB_REPOSITORY#$PR" --post --provider "$MERGELIGHT_PROVIDER" --verify-with "${VERIFY_WITH:-$MERGELIGHT_PROVIDER}" --out "$RUNNER_TEMP/mergelight-review.json")
         [ -n "$MODEL" ] && args+=(--model "$MODEL")
         [ -n "$EFFORT" ] && args+=(--effort "$EFFORT")
+        [ -n "$COMMIT" ] && args+=(--at "$COMMIT")
+        # After jobs: what they did, for the summary. A missing file means no job ran.
+        if [ -n "$JOBS_RESULT" ] && [ -f "$JOBS_RESULT" ]; then
+          args+=(--jobs "$JOBS_RESULT")
+          [ -n "$JOBS_COMMIT" ] && args+=(--jobs-commit "$JOBS_COMMIT")
+          [ -n "$JOBS_WHY" ] && args+=(--jobs-why "$JOBS_WHY")
+        fi
         [ "$YELLOW_BLOCKS" = "true" ] && args+=(--yellow-blocks)
         # Only a value that clearly means on keeps approvals on. A typo turns them off and says so:
         # an approval nobody wanted is worse than one a person has to give.
@@ -334,6 +382,27 @@ runs:
           false|no|off|0) args+=(--no-approve) ;;
           *) echo "::warning::auto-approve is \"$AUTO_APPROVE\", which isn't true or false, so Mergelight won't approve." ; args+=(--no-approve) ;;
         esac
+        node "$GITHUB_ACTION_PATH/packages/mergelight/dist/cli.js" "${args[@]}"
+
+    # The team's jobs instead of a review: the result goes to a file, for the push-jobs step to check
+    # again and push from a workflow job of its own. Nothing here can push.
+    - name: Run the jobs
+      id: jobs
+      if: (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && env.MERGELIGHT_NO_LOGIN != '1' && inputs.run == 'jobs'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.app.outputs.token || inputs.github-token }}
+        PR: ${{ github.event.pull_request.number }}
+        MODEL: ${{ inputs.model }}
+        EFFORT: ${{ inputs.effort }}
+        SECRET_NAME: ${{ inputs.auth-secret-name }}
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-code-oauth-token || env.MERGELIGHT_CLAUDE_TOKEN }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+      run: |
+        set -euo pipefail
+        args=(jobs "$GITHUB_REPOSITORY#$PR" --provider "$MERGELIGHT_PROVIDER" --out "$RUNNER_TEMP/mergelight-jobs.json")
+        [ -n "$MODEL" ] && args+=(--model "$MODEL")
+        [ -n "$EFFORT" ] && args+=(--effort "$EFFORT")
         node "$GITHUB_ACTION_PATH/packages/mergelight/dist/cli.js" "${args[@]}"
 
     # Codex may have refreshed the login during the run. Save the new one, or the next run
