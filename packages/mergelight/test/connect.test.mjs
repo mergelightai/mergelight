@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { claudeSetupLink, connect, connectBody, connectedAccount, connectedBody, connectFailedBody, githubConnect, installAppBody, parseDeviceLogin, withState } from "../dist/connect.js";
+import { checkWaitingTitle, claudeSetupLink, connect, connectBody, connectCheckBody, connectedAccount, connectedBody, connectFailedBody, githubConnect, installAppBody, parseDeviceLogin, withState } from "../dist/connect.js";
 import { claudeCodeRef, parseClaudeLink, parseClaudeToken, readCodeRef, readPastedCode, shareClaudeToken, startClaudeSignIn, waitForPastedCode } from "../dist/connect-claude.js";
 import { isPendingSummary, PENDING_MARKER, SUMMARY_MARKER } from "../dist/publish/markdown.js";
 import { ownSummary } from "../dist/publish/publish.js";
@@ -417,4 +417,50 @@ test("the comment sends Claude to the setup page, and shows no code to paste", (
 test("a value can't end the hidden line early", () => {
   const line = connectBody(null, undefined, "https://claude.com/a-->b").split("\n").find((l) => l.startsWith("<!-- mergelight:connect:v1"));
   assert.equal(line.match(/-->/g).length, 1, "only the end of the line closes it");
+});
+
+test("connecting the AI that checks says so, names who reviews, and that the review won't wait for ever", () => {
+  const device = { url: "https://auth.openai.com/d", code: "AAAA-BBBB" };
+  const chatgpt = connectCheckBody("codex", "claude", device, "https://github.com/run", undefined, claudeSetupLink("acme/api", 7));
+  assert.match(chatgpt, /^### 🔌 Connect ChatGPT to check this review$/m);
+  assert.match(chatgpt, /^\[Open ChatGPT\]\(https:\/\/auth\.openai\.com\/d\) and enter `AAAA-BBBB`\. Claude's review then starts by itself, and Codex checks its findings\.$/m);
+  assert.match(chatgpt, /If nobody connects it within 15 minutes, the review starts anyway, checked by Claude\./);
+  assert.match(chatgpt, /Checks use the plan of whoever connects it/);
+  assert.ok(isPendingSummary(chatgpt), "the review replaces it");
+  assert.match(chatgpt, /"for":"check"/, "the setup page can tell a checker's login from a reviewer's");
+  assert.doesNotMatch(chatgpt, /Connect on mergelight\.dev/, "Claude already reviews, so only ChatGPT is offered");
+  const claude = connectCheckBody("claude", "codex", null, undefined, LINK, claudeSetupLink("acme/api", 7));
+  assert.match(claude, /^### 🔌 Connect Claude to check this review$/m);
+  assert.match(claude, /\[Connect on mergelight\.dev\]\(https:\/\/mergelight\.dev\/setup\/\?repo=acme\/api&pr=7&connect=claude\)\. Codex's review then starts by itself, and Claude checks its findings\./);
+  assert.doesNotMatch(claude, /ChatGPT security settings/);
+  assert.equal(checkWaitingTitle("codex"), "Waiting for you to connect ChatGPT to check the review");
+});
+
+test("connecting a checker that nobody finishes holds nothing up, and leaves the reviewer as it is", async () => {
+  const env = { GH_TOKEN: "app" };
+  const api = fakeApi(() => false);
+  const logs = [];
+  const deps = githubConnect(api, 7, "abc", (l) => logs.push(l), env, { purpose: "check", ai: "codex", reviewer: "claude" });
+  assert.equal(await deps.startClaude(), null, "only ChatGPT is offered");
+  await deps.failed("The code ran out.");
+  assert.ok(!api.writes.some((w) => w.path.startsWith("issues/")), "the review's summary replaces the connect comment");
+  const check = api.writes.find((w) => w.path === "check-runs");
+  assert.equal(check.body.output.title, "ChatGPT wasn't connected");
+  assert.match(check.body.output.summary, /The review goes on, checked by Claude\./);
+  // Connecting Claude to check offers no ChatGPT code, and says why when it ends.
+  const claudeOnly = githubConnect(api, 7, "abc", () => {}, env, { purpose: "check", ai: "claude", reviewer: "codex" });
+  assert.equal(claudeOnly.only, "claude");
+  assert.equal(await claudeOnly.startLogin(() => {}), 1);
+  const d = raced({ codexExit: 1, claudeOk: false, codexOutput: [] });
+  d.only = "claude";
+  assert.equal(await connect(d), 1);
+  assert.match(d.events.at(-1), /^failed The Claude link ran out before anyone finished signing in\.$/);
+});
+
+test("a Claude login connected to check leaves the reviewer as it is", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-share-check-"));
+  const file = join(dir, "env");
+  writeFileSync(file, "");
+  shareClaudeToken(TOKEN, { GITHUB_ENV: file }, () => {}, false);
+  assert.equal(readFileSync(file, "utf8"), `MERGELIGHT_CLAUDE_TOKEN=${TOKEN}\n`);
 });

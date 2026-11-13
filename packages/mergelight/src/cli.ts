@@ -47,6 +47,8 @@ Options
   --model <name>        Model for the hunters (default: your Codex config, or opus on Claude)
   --effort <level>      Reasoning effort: low, medium, high (default: high)
   --verify-with <name>  Who checks the findings: claude or codex
+  --verify-missed <name>
+                        The AI that was meant to check but had no login: the summary says so
                         (default: claude when Claude Code is installed)
   --verify-model <name> Model for the checker (default for claude: opus)
   --keep                Keep the temporary checkout
@@ -58,6 +60,9 @@ Options
   --no-pin              For setup: follow @v0 and get each release by itself, instead of pinning to the latest
   --yes                 For setup: don't stop to ask whether the app is installed
   --no-save             For connect: there's nowhere to save a login, so ask for the app instead
+  --for check --ai <name> --reviewer <name>
+                        For connect: connect the AI that checks another AI's review. Nobody
+                        connecting it holds nothing up: the reviewer checks instead
   -h, --help            Show this help
 
 Reviews run on your own logged-in Codex CLI, and Claude Code if you check with it.
@@ -119,6 +124,10 @@ async function main(): Promise<number> {
       "no-pin": { type: "boolean" },
       yes: { type: "boolean" },
       "no-save": { type: "boolean" },
+      for: { type: "string" },
+      ai: { type: "string" },
+      reviewer: { type: "string" },
+      "verify-missed": { type: "string" },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -180,6 +189,12 @@ async function main(): Promise<number> {
     log(`mergelight: --verify-with must be codex or claude, not "${verifyWith}"`);
     return 1;
   }
+  // The AI the team asked to check, which had no login, so the reviewer's own AI checked instead.
+  const verifyMissed = values["verify-missed"];
+  if (verifyMissed !== undefined && verifyMissed !== "codex" && verifyMissed !== "claude") {
+    log(`mergelight: --verify-missed must be codex or claude, not "${verifyMissed}"`);
+    return 1;
+  }
 
   if (command === "post") {
     const review = JSON.parse(readFileSync(target, "utf8")) as Review;
@@ -206,9 +221,30 @@ async function main(): Promise<number> {
   }
 
   if (command === "connect") {
+    // --for check: connect the AI that checks another AI's review. It never stops the review: when nobody
+    // connects it, or it can't be saved, the reviewer's own AI checks, and the review's summary says so.
+    const check = values.for === "check";
+    const ai = values.ai;
+    const reviewer = values.reviewer;
+    if (values.for !== undefined && values.for !== "check" && values.for !== "review") {
+      log(`mergelight: --for must be review or check, not "${values.for}"`);
+      return 1;
+    }
+    if (check && ((ai !== "codex" && ai !== "claude") || (reviewer !== "codex" && reviewer !== "claude") || ai === reviewer)) {
+      log("mergelight: connect --for check needs --ai and --reviewer, each codex or claude, and not the same.");
+      return 1;
+    }
     try {
       const api = new GitHub(ref.owner, ref.repo, { log });
       const { headSha } = await fetchPullRequest(ref);
+      if (check) {
+        if (values["no-save"]) {
+          log(`There's nowhere to save a ${ai === "codex" ? "ChatGPT" : "Claude"} login without the Mergelight AI app, so the reviewer's own AI checks this time.`);
+          return 0;
+        }
+        await connect(githubConnect(api, ref.number, headSha, log, process.env, { purpose: "check", ai: ai as "codex" | "claude", reviewer: reviewer as "codex" | "claude" }));
+        return 0;
+      }
       if (values["no-save"]) {
         await askForApp(api, ref.number, headSha);
         log("Install the Mergelight AI app: without it there's nowhere to save the ChatGPT login.");
@@ -258,7 +294,9 @@ async function main(): Promise<number> {
   let checksPosted = false;
   try {
     // The login step already found this login can't be refreshed, so don't send every reviewer to find out.
-    if (process.env.MERGELIGHT_LOGIN_LOST === "1") throw new LoginError(loginFailureMessage(process.env.SECRET_NAME || undefined));
+    // Only when Codex is in this review: a Claude review whose Codex checker lost its login is checked by Claude.
+    const usesCodex = (provider ?? "codex") === "codex" || verifyWith === "codex";
+    if (usesCodex && process.env.MERGELIGHT_LOGIN_LOST === "1") throw new LoginError(loginFailureMessage(process.env.SECRET_NAME || undefined));
     // Before the threads are read: a reply written after this counts as newer than this review.
     const startedAt = new Date();
     let previous = values.post ? await previousFindings(api, ref.number, headSha ?? undefined) : undefined;
@@ -287,6 +325,7 @@ async function main(): Promise<number> {
       onProgress: progress.onProgress,
     });
     progress.stop();
+    if (verifyMissed && verifyMissed !== review.verifier?.name) review.checker_missed = verifyMissed;
 
     const json = JSON.stringify(review, null, 2);
     if (values.out) writeFileSync(values.out, `${json}\n`);

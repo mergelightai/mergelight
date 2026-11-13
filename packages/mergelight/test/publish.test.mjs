@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { parsePatch, place } from "../dist/publish/diff-lines.js";
 import { mergeLight, tierOf } from "../dist/review.js";
 import { closedBody, patchTouches, readClosed, reopenedBody, resolvedByPeople, threadAction } from "../dist/publish/closed.js";
-import { clean, failedSummaryBody, isFailedSummary, limitNotice, notReadLine, loginNotice, FINDING_MARKER_RE, inlineBody, isPendingSummary, pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "../dist/publish/markdown.js";
+import { checkerMissedLine, clean, failedSummaryBody, isFailedSummary, limitNotice, notReadLine, loginNotice, FINDING_MARKER_RE, inlineBody, isPendingSummary, pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "../dist/publish/markdown.js";
 import { APPROVAL_MARKER, approvalHold, approvalLight, UNREVIEWED, checkConclusion, isYellowCheck, syncApproval, trustedComment, CHECK_FAILED_TITLE, checkLimitTitle, checkLoginTitle, isFailedCheckTitle } from "../dist/publish/publish.js";
 import { decodeState, encodeState, nextState } from "../dist/publish/state.js";
 import { buildVerifierPrompt } from "../dist/prompt.js";
@@ -646,4 +646,13 @@ test("the last line of a review names the models and the tokens it used", async 
   // An older review without a count says nothing about tokens.
   const older = summaryBody({ review: { ...review, stats: { duration_ms: 1000 } }, state: nextState(null, [], "abcdef1234", "green", new Map()), urls: new Map() });
   assert.doesNotMatch(older, /tokens/);
+});
+
+test("the summary says when the AI set to check had no login yet, so the reviewer checked", () => {
+  assert.equal(
+    checkerMissedLine({ checker_missed: "codex", provider: { name: "claude", model: "claude-opus-5-5", effort: "high" } }),
+    "⚠️ Codex was set to check this review, but it has no ChatGPT login yet, so Claude checked it.",
+  );
+  assert.equal(checkerMissedLine({ checker_missed: "claude", provider: { name: "codex", model: null, effort: "high" } }), "⚠️ Claude was set to check this review, but it has no Claude login yet, so Codex checked it.");
+  assert.equal(checkerMissedLine({ provider: { name: "codex", model: null, effort: "high" } }), null);
 });

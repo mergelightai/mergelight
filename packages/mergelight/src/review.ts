@@ -344,7 +344,8 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
     }
     // Who checks is known before the hunt, so the first reviewer that answers can name both models.
     const verifyWith = opts.verifyWith ?? (provider === "claude" || (await claudeAvailable()) ? "claude" : "codex");
-    const verifyModel = verifyWith === "codex" ? (opts.verifyModel ?? opts.model) : (opts.verifyModel ?? "opus");
+    // The reviewer's model only carries over to the same AI: a Claude model name means nothing to Codex.
+    const verifyModel = verifyWith === "codex" ? (opts.verifyModel ?? (provider === "codex" ? opts.model : undefined)) : (opts.verifyModel ?? "opus");
     let named = false;
     const nameModels = (reviewerModel: string | null) => {
       if (named) return;

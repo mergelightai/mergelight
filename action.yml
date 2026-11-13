@@ -22,8 +22,8 @@ inputs:
     required: false
   provider:
     description: >
-      Who reviews: claude or codex. Leave it empty and a repository with only a Claude login uses
-      Claude, and every other repository uses Codex.
+      Who reviews: claude or codex. A value here always wins. Leave it empty and a repository with only
+      a Claude login uses Claude, and every other repository uses Codex.
     required: false
   secrets-token:
     description: >
@@ -41,7 +41,12 @@ inputs:
     description: "Reasoning effort: low, medium or high."
     required: false
   verify-with:
-    description: "Who checks the findings: claude or codex. Empty means whoever does the review. A Claude review is always checked by Claude."
+    description: >
+      Who checks the findings: claude or codex. A value here always wins. Leave it empty and, when both
+      AIs have a login, the one that doesn't review checks, so two AIs look at every finding; otherwise
+      the reviewer checks its own. When the checker has no login yet, a pull request from this
+      repository asks to connect it, the same way as the reviewer's login. If nobody does within 15
+      minutes, or it can't be asked here, the reviewer checks and the summary says so.
     required: false
   yellow-blocks:
     description: 'Set to "true" for a team that wants the check to hold merges: a "needs a human" check then waits for an approval, and a "blocked" one fails until the code changes. Off, both end neutral. The same goes for your team''s own checks from the dashboard: on, one that failed, couldn''t tell or couldn''t run holds the merge, and off, it ends neutral. Leave it off if you work alone, since GitHub bars approving your own PR.'
@@ -120,13 +125,15 @@ runs:
         COMMIT: ${{ github.event.review.commit_id }}
       run: node "$GITHUB_ACTION_PATH/packages/mergelight/dist/cli.js" approve "$GITHUB_REPOSITORY#$PR" --by "$BY" --at "$COMMIT"
 
-    - name: Choose the reviewer
+    - name: Choose who reviews and who checks
       if: github.event_name != 'pull_request_review'
       shell: bash
       env:
         WANTED: ${{ inputs.provider }}
+        WANTED_CHECKER: ${{ inputs.verify-with }}
         HAS_CLAUDE: ${{ (inputs.claude-code-oauth-token != '' || inputs.anthropic-api-key != '') && '1' || '' }}
         HAS_CODEX: ${{ (inputs.codex-auth-json != '' || inputs.openai-api-key != '') && '1' || '' }}
+        HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
       run: |
         provider="$WANTED"
         if [ -z "$provider" ]; then
@@ -140,24 +147,64 @@ runs:
           echo "::error::The provider is claude, but there's no Claude login. Set claude-code-oauth-token or anthropic-api-key."
           exit 1
         fi
-        echo "MERGELIGHT_PROVIDER=$provider" >> "$GITHUB_ENV"
-        # A job can run this Action more than once, so nothing carries over from an earlier run.
-        if [ "$provider" = claude ]; then
-          {
-            echo "MERGELIGHT_CHATGPT=0"
-            echo "MERGELIGHT_CONNECT=0"
-            echo "MERGELIGHT_NO_LOGIN=0"
-            echo "MERGELIGHT_LOGIN_LOST=0"
-          } >> "$GITHUB_ENV"
+        # Who checks: with a login for both AIs, the one that doesn't review, so two AIs look at every
+        # finding. Otherwise the reviewer checks its own findings.
+        checker="$WANTED_CHECKER"
+        if [ -z "$checker" ]; then
+          if [ -n "$HAS_CLAUDE" ] && [ -n "$HAS_CODEX" ]; then
+            if [ "$provider" = claude ]; then checker=codex; else checker=claude; fi
+          else
+            checker="$provider"
+          fi
         fi
+        if [ "$checker" != claude ] && [ "$checker" != codex ]; then
+          echo "::error::verify-with must be claude or codex, not \"$checker\"."
+          exit 1
+        fi
+        # A checker with no login yet is connected from a pull request of this repository, the same way as
+        # the reviewer's login. Forks and Dependabot get no secrets, so nothing could be saved for them.
+        # One sign-in per run: a Codex reviewer with no login connects first, and the checker comes later.
+        # Without it, the reviewer checks, and the review's summary says so.
+        connect_check=""
+        if [ "$checker" != "$provider" ]; then
+          if [ "$checker" = claude ]; then has="$HAS_CLAUDE"; else has="$HAS_CODEX"; fi
+          from_here=""
+          if [ -z "${HEAD_REPO:-}" ] || [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ]; then from_here=1; fi
+          if [ -z "$has" ] && [ -n "$from_here" ] && [ "$GITHUB_ACTOR" != "dependabot[bot]" ] &&
+            { [ "$GITHUB_EVENT_NAME" = pull_request ] || [ "$GITHUB_EVENT_NAME" = pull_request_target ]; } &&
+            { [ "$provider" = claude ] || [ -n "$HAS_CODEX" ]; }; then
+            connect_check="$checker"
+          fi
+        fi
+        # Left empty, a checker that is the reviewer stays the reviewer: connecting Claude in place of
+        # ChatGPT further on makes Claude review, and then Claude checks too.
+        follows=0
+        if [ -z "$WANTED_CHECKER" ] && [ "$checker" = "$provider" ]; then follows=1; fi
+        uses_codex=0
+        if [ "$provider" = codex ] || [ "$checker" = codex ]; then uses_codex=1; fi
+        uses_claude=0
+        if [ "$provider" = claude ] || [ "$checker" = claude ]; then uses_claude=1; fi
+        # A job can run this Action more than once, so nothing carries over from an earlier run.
+        {
+          echo "MERGELIGHT_PROVIDER=$provider"
+          echo "MERGELIGHT_VERIFY=$checker"
+          echo "MERGELIGHT_VERIFY_FOLLOWS=$follows"
+          echo "MERGELIGHT_CONNECT_CHECK=$connect_check"
+          echo "MERGELIGHT_USES_CODEX=$uses_codex"
+          echo "MERGELIGHT_USES_CLAUDE=$uses_claude"
+          echo "MERGELIGHT_CHATGPT=0"
+          echo "MERGELIGHT_CONNECT=0"
+          echo "MERGELIGHT_NO_LOGIN=0"
+          echo "MERGELIGHT_LOGIN_LOST=0"
+        } >> "$GITHUB_ENV"
 
     - name: Install Claude Code
-      if: github.event_name != 'pull_request_review' && (env.MERGELIGHT_PROVIDER == 'claude' || inputs.verify-with == 'claude')
+      if: github.event_name != 'pull_request_review' && env.MERGELIGHT_USES_CLAUDE == '1'
       shell: bash
       run: npm install -g "@anthropic-ai/claude-code@${{ inputs.claude-code-version }}" --no-audit --no-fund --loglevel=error
 
     - name: Install Codex
-      if: github.event_name != 'pull_request_review' && env.MERGELIGHT_PROVIDER != 'claude'
+      if: github.event_name != 'pull_request_review' && env.MERGELIGHT_USES_CODEX == '1'
       shell: bash
       run: npm install -g "@openai/codex@${{ inputs.codex-version }}" --no-audit --no-fund --loglevel=error
 
@@ -165,7 +212,7 @@ runs:
     # runners block through AppArmor. Without them Codex can't read the code. Same fix as
     # OpenAI's codex-action (PR #77). Self-hosted runners need this configured ahead of time.
     - name: Let the Codex sandbox start
-      if: github.event_name != 'pull_request_review' && env.MERGELIGHT_PROVIDER != 'claude' && runner.os == 'Linux'
+      if: github.event_name != 'pull_request_review' && env.MERGELIGHT_USES_CODEX == '1' && runner.os == 'Linux'
       shell: bash
       run: |
         userns="$(sysctl -n kernel.unprivileged_userns_clone 2>/dev/null || true)"
@@ -178,7 +225,7 @@ runs:
         fi
 
     - name: Log in to Codex
-      if: github.event_name != 'pull_request_review' && env.MERGELIGHT_PROVIDER != 'claude'
+      if: github.event_name != 'pull_request_review' && env.MERGELIGHT_USES_CODEX == '1'
       shell: bash
       env:
         AUTH_JSON: ${{ inputs.codex-auth-json }}
@@ -204,6 +251,11 @@ runs:
           echo "MERGELIGHT_CHATGPT=1" >> "$GITHUB_ENV"
         elif [ -n "$API_KEY" ]; then
           printf '%s' "$API_KEY" | codex login --with-api-key
+        elif [ "${MERGELIGHT_PROVIDER:-codex}" != codex ]; then
+          # Codex only checks. Without a login it is connected further on when it can be, and otherwise
+          # the reviewer checks: the review itself goes ahead either way.
+          if [ "${MERGELIGHT_CONNECT_CHECK:-}" = codex ]; then printf 'cli_auth_credentials_store = "file"\n' > "$CODEX_HOME/config.toml"; fi
+          echo "No Codex login yet, so it can't check the review on this run unless it's connected now."
         elif [ "$GITHUB_ACTOR" = "dependabot[bot]" ]; then
           # GitHub keeps repository secrets from Dependabot's runs, so a login can't be read or saved here.
           echo "::notice::Skipping the review: GitHub gives Dependabot's runs no secrets."
@@ -245,7 +297,7 @@ runs:
     # update secrets. Find out before asking anyone to enter a code. Being able to post isn't enough.
     - name: Check the login can be saved
       id: saving
-      if: env.MERGELIGHT_CONNECT == '1'
+      if: env.MERGELIGHT_CONNECT == '1' || env.MERGELIGHT_CONNECT_CHECK != ''
       shell: bash
       env:
         SECRETS_TOKEN: ${{ inputs.secrets-token }}
@@ -281,14 +333,30 @@ runs:
         [ "$CAN_SAVE" = "true" ] || args+=(--no-save)
         node "$GITHUB_ACTION_PATH/packages/mergelight/dist/cli.js" "${args[@]}"
 
+    # The AI that checks the review, when it has no login yet. Nobody connecting it holds nothing up:
+    # the review starts when the code runs out, checked by the reviewer, and its summary says so.
+    - name: Connect the checker
+      if: env.MERGELIGHT_CONNECT_CHECK != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.app.outputs.token || inputs.github-token }}
+        PR: ${{ github.event.pull_request.number }}
+        GITHUB_WORKFLOW_TOKEN: ${{ inputs.github-token }}
+        CAN_SAVE: ${{ steps.saving.outputs.can_save }}
+        SECRET_NAME: ${{ inputs.auth-secret-name }}
+      run: |
+        args=(connect "$GITHUB_REPOSITORY#$PR" --for check --ai "$MERGELIGHT_CONNECT_CHECK" --reviewer "$MERGELIGHT_PROVIDER")
+        [ "$CAN_SAVE" = "true" ] || args+=(--no-save)
+        node "$GITHUB_ACTION_PATH/packages/mergelight/dist/cli.js" "${args[@]}" || echo "::warning::Connecting the checker didn't finish, so the reviewer checks this time."
+
     - name: Hide the new Codex login in the logs
-      if: env.MERGELIGHT_CONNECT == '1'
+      if: env.MERGELIGHT_CONNECT == '1' || env.MERGELIGHT_CONNECT_CHECK == 'codex'
       shell: bash
       run: node "$GITHUB_ACTION_PATH/packages/mergelight/scripts/mask-login.mjs"
 
     # Saved right away, so a pull request opened during this review doesn't ask for another code.
     - name: Save the new Codex login
-      if: env.MERGELIGHT_CONNECT == '1'
+      if: env.MERGELIGHT_CONNECT == '1' || env.MERGELIGHT_CONNECT_CHECK == 'codex'
       shell: bash
       env:
         SECRETS_TOKEN: ${{ inputs.secrets-token }}
@@ -312,7 +380,6 @@ runs:
         PR: ${{ github.event.pull_request.number }}
         MODEL: ${{ inputs.model }}
         EFFORT: ${{ inputs.effort }}
-        VERIFY_WITH: ${{ inputs.verify-with }}
         YELLOW_BLOCKS: ${{ inputs.yellow-blocks }}
         AUTO_APPROVE: ${{ inputs.auto-approve }}
         MERGELIGHT_ACTION_REF: ${{ github.action_ref }}
@@ -322,8 +389,23 @@ runs:
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
       run: |
         set -euo pipefail
-        if [ "$MERGELIGHT_PROVIDER" = claude ]; then VERIFY_WITH=claude; fi
-        args=(review "$GITHUB_REPOSITORY#$PR" --post --provider "$MERGELIGHT_PROVIDER" --verify-with "${VERIFY_WITH:-$MERGELIGHT_PROVIDER}" --out "$RUNNER_TEMP/mergelight-review.json")
+        # The checker needs a login that works now. Without one, the reviewer checks, and the summary says so.
+        verify="${MERGELIGHT_VERIFY:-$MERGELIGHT_PROVIDER}"
+        if [ "${MERGELIGHT_VERIFY_FOLLOWS:-0}" = 1 ]; then verify="$MERGELIGHT_PROVIDER"; fi
+        missed=""
+        if [ "$verify" != "$MERGELIGHT_PROVIDER" ]; then
+          if [ "$verify" = claude ]; then
+            [ -n "$CLAUDE_CODE_OAUTH_TOKEN$ANTHROPIC_API_KEY" ] || missed=claude
+          elif [ "${MERGELIGHT_LOGIN_LOST:-0}" = 1 ] || ! codex login status > /dev/null 2>&1; then
+            missed=codex
+          fi
+        fi
+        if [ -n "$missed" ]; then
+          echo "::notice::$missed has no login yet, so $MERGELIGHT_PROVIDER checks this review."
+          verify="$MERGELIGHT_PROVIDER"
+        fi
+        args=(review "$GITHUB_REPOSITORY#$PR" --post --provider "$MERGELIGHT_PROVIDER" --verify-with "$verify" --out "$RUNNER_TEMP/mergelight-review.json")
+        [ -n "$missed" ] && args+=(--verify-missed "$missed")
         [ -n "$MODEL" ] && args+=(--model "$MODEL")
         [ -n "$EFFORT" ] && args+=(--effort "$EFFORT")
         [ "$YELLOW_BLOCKS" = "true" ] && args+=(--yellow-blocks)
@@ -339,7 +421,7 @@ runs:
     # Codex may have refreshed the login during the run. Save the new one, or the next run
     # starts from tokens that no longer work. An API key's login is never saved over a ChatGPT one.
     - name: Save the refreshed Codex login
-      if: always() && github.event_name != 'pull_request_review' && (env.MERGELIGHT_CHATGPT == '1' || env.MERGELIGHT_CONNECT == '1')
+      if: always() && github.event_name != 'pull_request_review' && (env.MERGELIGHT_CHATGPT == '1' || env.MERGELIGHT_CONNECT == '1' || env.MERGELIGHT_CONNECT_CHECK == 'codex')
       shell: bash
       env:
         SECRETS_TOKEN: ${{ inputs.secrets-token }}

@@ -93,6 +93,8 @@ export interface Review {
   /** Who hunted for problems. */
   provider: { name: "codex" | "claude"; model: string | null; effort: string };
   /** Who checked and sorted them, when that differs from the hunters. */
+  /** The AI the team asked to check the findings, which had no login yet, so the reviewer's own AI checked. */
+  checker_missed?: "codex" | "claude";
   verifier?: { name: "codex" | "claude"; model: string | null; effort: string; cost_usd?: number | null };
   light: Light;
   summary: string;

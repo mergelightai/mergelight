@@ -16,6 +16,14 @@ const MAX_BODY = 65_000;
  * Model text goes into comments, so it must not be able to fake our hidden
  * markers or ping people.
  */
+/** Says when the AI the team asked to check had no login yet, so the reviewer's own AI checked instead. */
+export function checkerMissedLine(r: Pick<Review, "checker_missed" | "provider">): string | null {
+  if (!r.checker_missed || r.checker_missed === r.provider.name) return null;
+  const name = (ai: "codex" | "claude") => (ai === "codex" ? "Codex" : "Claude");
+  const login = r.checker_missed === "codex" ? "ChatGPT" : "Claude";
+  return `⚠️ ${name(r.checker_missed)} was set to check this review, but it has no ${login} login yet, so ${name(r.provider.name)} checked it.`;
+}
+
 export function clean(text: string): string {
   return text
     .replace(/<!--/g, "&lt;!--")
@@ -303,6 +311,8 @@ export function summaryBody({ review: r, state, urls, marks = new Map(), handled
 
   const unread = notReadLine(r.not_read);
   if (unread) out.push("", unread);
+  const missed = checkerMissedLine(r);
+  if (missed) out.push("", missed);
 
   const reviewer = modelLabel(r.provider.name, r.provider.model);
   const checker = r.verifier ? modelLabel(r.verifier.name, r.verifier.model) : reviewer;

@@ -171,8 +171,9 @@ export async function waitForPastedCode(deps: WaitDeps, timeoutMs = WAIT_MS, pol
 }
 
 /** Hands the token to the rest of the job: hidden in its logs, and available to the steps that save and use it. */
-export function shareClaudeToken(token: string, env: NodeJS.ProcessEnv = process.env, print: (line: string) => void = console.log): void {
+export function shareClaudeToken(token: string, env: NodeJS.ProcessEnv = process.env, print: (line: string) => void = console.log, reviews = true): void {
   if (!/^sk-ant-oat[\w-]+$/.test(token)) throw new Error("That doesn't look like a Claude token.");
   print(`::add-mask::${token}`);
-  if (env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, `MERGELIGHT_CLAUDE_TOKEN=${token}\nMERGELIGHT_PROVIDER=claude\nMERGELIGHT_CONNECT=0\n`);
+  // A login connected to check the review leaves the reviewer as it is.
+  if (env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, reviews ? `MERGELIGHT_CLAUDE_TOKEN=${token}\nMERGELIGHT_PROVIDER=claude\nMERGELIGHT_CONNECT=0\n` : `MERGELIGHT_CLAUDE_TOKEN=${token}\n`);
 }
