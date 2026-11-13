@@ -46,7 +46,7 @@ interface ApiPull {
   html_url: string;
   user: { login: string } | null;
   base: { ref: string; sha: string };
-  head: { sha: string };
+  head: { sha: string; ref: string; repo: { full_name: string } | null };
   additions: number;
   deletions: number;
   changed_files: number;
@@ -78,6 +78,8 @@ export async function fetchPullRequest(ref: PrRef): Promise<PullRequest> {
     baseRef: pull.base.ref,
     baseSha: pull.base.sha,
     headSha: pull.head.sha,
+    headRef: pull.head.ref,
+    headRepo: pull.head.repo?.full_name ?? null,
     additions: pull.additions,
     deletions: pull.deletions,
     changedFiles: pull.changed_files,
