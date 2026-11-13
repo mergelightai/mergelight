@@ -74,6 +74,9 @@ export interface PullRequest {
   baseSha: string;
   /** Latest commit on the PR. */
   headSha: string;
+  /** The branch the PR comes from, and its repository: owner/name, or null when that repository is gone. */
+  headRef?: string;
+  headRepo?: string | null;
   additions: number;
   deletions: number;
   changedFiles: number;

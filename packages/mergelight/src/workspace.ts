@@ -597,6 +597,31 @@ export interface Workspace {
 }
 
 /**
+ * The mirror with the pull request's head and its base branch fetched, for a step that reads the
+ * team's files and the head's file modes but checks nothing out. The team's files come from the base
+ * branch as it is now, or from the commit the pull request names when that branch is gone.
+ */
+export async function fetchMirror(pr: PullRequest): Promise<{ mirror: string; teamBase: string }> {
+  const mirror = join(cacheDir(), "repos", pr.owner, `${pr.repo}.git`);
+  mkdirSync(join(cacheDir(), "repos", pr.owner), { recursive: true });
+  if (!existsSync(mirror)) {
+    await git(["clone", "--bare", "--filter=blob:none", "--quiet", `https://github.com/${pr.owner}/${pr.repo}.git`, mirror]);
+  }
+  return withLock(mirror, async () => {
+    const fetch = (...refspecs: string[]) => git(["fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "origin", ...refspecs], mirror);
+    await fetch(`+refs/pull/${pr.number}/head:refs/mergelight/pull/${pr.number}`);
+    if (!(await hasCommit(mirror, pr.headSha))) await fetch(pr.headSha);
+    try {
+      await fetch(`+refs/heads/${pr.baseRef}:refs/mergelight/base/${pr.baseRef}`);
+      return { mirror, teamBase: `refs/mergelight/base/${pr.baseRef}` };
+    } catch {
+      if (!(await hasCommit(mirror, pr.baseSha))) await fetch(pr.baseSha);
+      return { mirror, teamBase: pr.baseSha };
+    }
+  });
+}
+
+/**
  * Keeps a blobless bare mirror of the repository in the cache, fetches the PR,
  * and checks out the commit under review in a temporary worktree.
  */
