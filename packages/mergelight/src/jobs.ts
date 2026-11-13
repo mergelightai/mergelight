@@ -1,0 +1,119 @@
+import { matchesPath } from "./prompt.js";
+import { frontMatterBlock, listValue, scalarValue, withoutComments } from "./repo-rules.js";
+import { isSkillPath, withoutHidden } from "./skills.js";
+
+/**
+ * Jobs: tasks a team writes once in its repository. On each pull request that needs one, the AI does the
+ * task and Mergelight pushes the result as one commit to the pull request's branch. This file reads and
+ * checks the job files. They are read from the base branch, like rules, so a pull request can't add a
+ * job, or widen one, for itself.
+ *
+ *   ---
+ *   name: translations
+ *   on: locales/en.json
+ *   may-change: locales/*.json
+ *   ---
+ *   When en.json gets new keys, add each one to every other file in locales/, translated.
+ *
+ * - `on`: the files whose change starts the job.
+ * - `may-change`: the only files the job may change, add or delete.
+ * - `skill` (optional): a skill folder in the repository that the job uses.
+ * - `name` (optional): the file's name without .md when left out.
+ */
+export const JOB_FILE = /^\.mergelight\/jobs\/[^/]+\.md$/;
+
+/** Limits: each job is an AI run of its own, on the team's plan. */
+export const MAX_JOBS = 5;
+export const MAX_JOB_TASK_CHARS = 8000;
+/** How many job files are read at most. */
+export const MAX_JOB_FILES = 20;
+
+const NAME = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
+
+/**
+ * Paths a job can never change, whatever its file says, wherever they sit: workflows and Mergelight's own
+ * files decide what runs and what a job may do, and git's own files change how it reads the rest.
+ */
+export const REFUSED_PATHS = [".github", ".mergelight", ".gitmodules", ".gitattributes", ".git"];
+
+export interface Job {
+  name: string;
+  /** The files whose change starts the job. */
+  on: string[];
+  /** The only files the job may change. */
+  mayChange: string[];
+  /** A skill folder in the repository that the job uses. */
+  skill?: string;
+  /** What to do, in the team's words. */
+  task: string;
+  /** The job file it came from. */
+  source: string;
+}
+
+/** A job file that was left out, and why, in words for the summary. */
+export interface JobProblem {
+  source: string;
+  problem: string;
+}
+
+/** A pattern that leaves the repository, or one so short it isn't one. */
+function badPattern(pattern: string): boolean {
+  return pattern.split("/").some((part) => part === "..") || !pattern.replace(/^\.?\//, "").trim();
+}
+
+/** One job file: its job, or why it can't be one. Hidden characters are taken out first. */
+export function parseJobFile(path: string, text: string): { job: Job } | { problem: string } {
+  const block = frontMatterBlock(withoutHidden(text));
+  if (!block) return { problem: "starts with no front matter, so it names no on and may-change paths" };
+  const named = scalarValue(block.fm, "name");
+  const name = named || path.slice(path.lastIndexOf("/") + 1).replace(/\.md$/, "");
+  if (!NAME.test(name)) return { problem: `its name "${name.slice(0, 60)}" isn't lowercase letters, digits and dashes, up to 40 of them` };
+  const on = listValue(block.fm, "on");
+  if (!on?.length) return { problem: "names no on paths, the files whose change starts the job" };
+  const mayChange = listValue(block.fm, "may-change");
+  if (!mayChange?.length) return { problem: "names no may-change paths, the only files the job may change" };
+  const bad = [...on, ...mayChange].find(badPattern);
+  if (bad !== undefined) return { problem: `the path "${bad.slice(0, 100)}" leaves the repository or names nothing` };
+  if (mayChange.every(refusedPath)) {
+    return { problem: "its may-change paths only name files a job can never change, like .github and .mergelight" };
+  }
+  const skill = scalarValue(block.fm, "skill") || undefined;
+  if (skill !== undefined && !isSkillPath(skill.replace(/\/+$/, ""))) return { problem: `its skill "${skill.slice(0, 100)}" isn't a folder in the repository, like .claude/skills/write-docs` };
+  // HTML comments are what a team turned off, as in rule files.
+  const task = withoutComments(block.body).trim();
+  if (!task) return { problem: "has no task under its front matter" };
+  if (task.length > MAX_JOB_TASK_CHARS) return { problem: `its task is longer than ${MAX_JOB_TASK_CHARS.toLocaleString("en-US")} characters` };
+  return { job: { name, on, mayChange, ...(skill ? { skill: skill.replace(/\/+$/, "") } : {}), task, source: path } };
+}
+
+/**
+ * The repository's jobs, within the limits, and every job file that was left out with the reason. Files
+ * are taken by path, so which ones count past a limit doesn't change from run to run.
+ */
+export function readJobs(files: { path: string; text: string }[]): { jobs: Job[]; problems: JobProblem[] } {
+  const jobs: Job[] = [];
+  const problems: JobProblem[] = [];
+  for (const f of [...files].sort((a, b) => a.path.localeCompare(b.path))) {
+    const parsed = parseJobFile(f.path, f.text);
+    if ("problem" in parsed) problems.push({ source: f.path, problem: parsed.problem });
+    else if (jobs.some((j) => j.name === parsed.job.name)) problems.push({ source: f.path, problem: `${jobs.find((j) => j.name === parsed.job.name)!.source} already has a job named ${parsed.job.name}` });
+    else if (jobs.length >= MAX_JOBS) problems.push({ source: f.path, problem: `only ${MAX_JOBS} jobs run in a repository` });
+    else jobs.push(parsed.job);
+  }
+  return { jobs, problems };
+}
+
+/** The jobs that one of the changed files starts. */
+export function jobsToRun(jobs: Job[], changedPaths: string[]): Job[] {
+  return jobs.filter((job) => changedPaths.some((file) => job.on.some((pattern) => matchesPath(pattern, file))));
+}
+
+/** A path no job may change, whatever its file says. */
+export function refusedPath(path: string): boolean {
+  return REFUSED_PATHS.some((refused) => matchesPath(refused, path));
+}
+
+/** Whether this job may change, add or delete the file. */
+export function mayChange(job: Job, path: string): boolean {
+  return !refusedPath(path) && job.mayChange.some((pattern) => matchesPath(pattern, path));
+}

@@ -26,33 +26,55 @@ export const MAX_REPO_RULE_CHARS = 30_000;
  * out of code review.
  */
 export function frontMatter(text: string): { paths: string[]; body: string; scoped: boolean; forReview: boolean } {
+  const block = frontMatterBlock(text);
+  if (!block) return { paths: [], body: text, scoped: false, forReview: true };
+  const forReview = !/^excludeAgent[ \t]*:.*\bcode-review\b/m.test(block.fm);
+  const patterns = listValue(block.fm, "applyTo|globs") ?? [];
+  // "**" anywhere in the list means every file.
+  const paths = patterns.some((p) => p === "**" || p === "*" || p === "**/*") ? [] : patterns;
+  return { paths, body: block.body, scoped: patterns.length > 0, forReview };
+}
+
+/** The front matter of a Markdown file and the text after it, or null when it has none. */
+export function frontMatterBlock(text: string): { fm: string; body: string } | null {
   // The block between the first two "---" lines, which may be empty: an empty one must not reach on to a
   // later "---" divider and take the rules before it.
   const m = /^---[ \t]*\r?\n(?:([\s\S]*?)\r?\n)??---[ \t]*(?:\r?\n|$)/.exec(text);
-  if (!m) return { paths: [], body: text, scoped: false, forReview: true };
-  const fm = m[1] ?? "";
-  const forReview = !/^excludeAgent[ \t]*:.*\bcode-review\b/m.test(fm);
-  const line = /^(?:applyTo|globs)[ \t]*:[ \t]*(.*)$/m.exec(fm);
-  // A YAML comment after the value isn't part of it: applyTo: "src/billing/**" # billing only.
-  let value = (line?.[1] ?? "").replace(/(?:^|[ \t])#.*$/, "").trim();
-  if (line && !value) {
+  return m ? { fm: m[1] ?? "", body: text.slice(m[0].length) } : null;
+}
+
+/** Without a YAML comment after it: applyTo: "src/billing/**" # billing only. */
+const withoutYamlComment = (value: string) => value.replace(/(?:^|[ \t])#.*$/, "").trim();
+
+/** The value of a one-line key, without quotes or a comment, or null when the key isn't there. */
+export function scalarValue(fm: string, key: string): string | null {
+  const line = new RegExp(`^(?:${key})[ \\t]*:[ \\t]*(.*)$`, "m").exec(fm);
+  return line ? withoutYamlComment(line[1] ?? "").replace(/^(["'])(.*)\1$/, "$2").trim() : null;
+}
+
+/**
+ * The patterns a key names: a comma list, a [list], or a YAML list on the lines below it, with braces
+ * expanded. Null when the key isn't there. keys is one name, or names joined with "|".
+ */
+export function listValue(fm: string, keys: string): string[] | null {
+  const line = new RegExp(`^(?:${keys})[ \\t]*:[ \\t]*(.*)$`, "m").exec(fm);
+  if (!line) return null;
+  let value = withoutYamlComment(line[1] ?? "");
+  if (!value) {
     // A YAML list on the lines below the key: "applyTo:" then "  - src/billing/**".
     const after = fm.slice(line.index + line[0].length).split(/\r?\n/).slice(1);
     const items: string[] = [];
     for (const l of after) {
       const item = /^[ \t]*-[ \t]*(.+)$/.exec(l);
       if (!item) break;
-      items.push(item[1]!.replace(/(?:^|[ \t])#.*$/, "").trim());
+      items.push(withoutYamlComment(item[1]!));
     }
     value = items.join(",");
   }
-  const patterns = splitOutsideBraces(value.trim().replace(/^\[([\s\S]*)\]$/, "$1").replace(/^["']|["']$/g, ""))
+  return splitOutsideBraces(value.trim().replace(/^\[([\s\S]*)\]$/, "$1").replace(/^["']|["']$/g, ""))
     .map((p) => p.trim().replace(/^["']|["']$/g, "").trim())
     .flatMap(expandBraces)
     .filter(Boolean);
-  // "**" anywhere in the list means every file.
-  const paths = patterns.some((p) => p === "**" || p === "*" || p === "**/*") ? [] : patterns;
-  return { paths, body: text.slice(m[0].length), scoped: patterns.length > 0, forReview };
 }
 
 /** Splits on commas, but not on the ones inside braces, as in "**\/*.{ts,tsx},*.sql". */

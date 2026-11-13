@@ -4,6 +4,7 @@ import { join, posix } from "node:path";
 import { run, runOk } from "./run.js";
 import { importSkills, SKILL_GIT_TIMEOUT_MS, SKILL_IMPORT_TIMEOUT_MS, writeSkills, type TeamSkill, type WrittenSkill } from "./skills.js";
 import type { Convention, TeamRule } from "./prompt.js";
+import { JOB_FILE, MAX_JOB_FILES, readJobs, type Job, type JobProblem } from "./jobs.js";
 import { parseRuleFile, repoRules, RULE_FILE } from "./repo-rules.js";
 import type { PullRequest } from "./types.js";
 
@@ -146,22 +147,26 @@ export async function conventionsFor(mirror: string, base: string, changedPaths:
   return (await teamFilesFor(mirror, base, changedPaths)).conventions;
 }
 
-/** How many rule files are read at most. */
-const MAX_RULE_FILES = 100;
+/** A file as the base branch has it. */
+interface BaseFile {
+  path: string;
+  sha: string;
+  text: string;
+}
 
 /**
- * The team's instruction files and rule files, as the base branch has them, from one listing of it.
- * Conventions are background for the reviewers; rules are what they check (repo-rules.ts).
+ * The base branch's files, listed once, and a way to read one. A file that is a link is followed once,
+ * to a file inside the repository. A file that is missing, too large or can't be read is null. Null as a
+ * whole when the branch can't be listed.
  */
-export async function teamFilesFor(mirror: string, base: string, changedPaths: string[] = []): Promise<{ conventions: Convention[]; rules: TeamRule[]; unreadRules: string[]; droppedRules: number }> {
-  const none = { conventions: [], rules: [], unreadRules: [], droppedRules: 0 };
+async function baseTree(mirror: string, base: string): Promise<{ paths: string[]; read: (path: string) => Promise<BaseFile | null> } | null> {
   const git = (args: string[]) =>
     run("git", ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential", "-C", mirror, ...args], {
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
       timeoutMs: SKILL_GIT_TIMEOUT_MS,
     }).catch(() => null);
   const listed = await git(["ls-tree", "-r", "-z", "--full-tree", base]);
-  if (listed?.code !== 0) return none;
+  if (listed?.code !== 0) return null;
   const tree = new Map<string, { mode: string; sha: string }>();
   for (const entry of listed.stdout.split("\0")) {
     const m = /^(\d{6}) blob ([0-9a-f]{40,64})\t([\s\S]+)$/.exec(entry);
@@ -173,7 +178,7 @@ export async function teamFilesFor(mirror: string, base: string, changedPaths: s
     const read = await git(["cat-file", "blob", sha]);
     return read?.code === 0 ? read.stdout : null;
   };
-  const read = async (path: string): Promise<{ path: string; sha: string; text: string } | null> => {
+  const read = async (path: string): Promise<BaseFile | null> => {
     let file = tree.get(path);
     if (file?.mode === "120000") {
       // A link: git keeps the target's path as its content.
@@ -186,11 +191,44 @@ export async function teamFilesFor(mirror: string, base: string, changedPaths: s
     const text = (await blob(file.sha))?.trim();
     return text ? { path, sha: file.sha, text } : null;
   };
-  const allRulePaths = [...tree.keys()].filter((p) => RULE_FILE.test(p)).sort((a, b) => Number(!a.startsWith(".mergelight/")) - Number(!b.startsWith(".mergelight/")) || a.localeCompare(b));
+  return { paths: [...tree.keys()], read };
+}
+
+/**
+ * The repository's jobs, as the base branch has them, and every job file that was left out with the
+ * reason. A pull request can't add a job or widen one for itself: its own copies don't count.
+ */
+export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs: Job[]; problems: JobProblem[] }> {
+  const tree = await baseTree(mirror, base);
+  if (!tree) return { jobs: [], problems: [] };
+  const all = tree.paths.filter((p) => JOB_FILE.test(p)).sort();
+  const files = await Promise.all(all.slice(0, MAX_JOB_FILES).map(tree.read));
+  // A job file and a link to it are one file.
+  const seen = new Set<string>();
+  const read = files.filter((f): f is BaseFile => f !== null && !seen.has(f.sha) && Boolean(seen.add(f.sha)));
+  const { jobs, problems } = readJobs(read);
+  const unread = all.slice(0, MAX_JOB_FILES).filter((_, i) => files[i] === null).map((source) => ({ source, problem: "couldn't be read: it is empty, too large, or a link that leaves the repository" }));
+  const past = all.slice(MAX_JOB_FILES).map((source) => ({ source, problem: `only ${MAX_JOB_FILES} job files are read` }));
+  return { jobs, problems: [...problems, ...unread, ...past] };
+}
+
+/** How many rule files are read at most. */
+const MAX_RULE_FILES = 100;
+
+/**
+ * The team's instruction files and rule files, as the base branch has them, from one listing of it.
+ * Conventions are background for the reviewers; rules are what they check (repo-rules.ts).
+ */
+export async function teamFilesFor(mirror: string, base: string, changedPaths: string[] = []): Promise<{ conventions: Convention[]; rules: TeamRule[]; unreadRules: string[]; droppedRules: number }> {
+  const none = { conventions: [], rules: [], unreadRules: [], droppedRules: 0 };
+  const tree = await baseTree(mirror, base);
+  if (!tree) return none;
+  const { read } = tree;
+  const allRulePaths = tree.paths.filter((p) => RULE_FILE.test(p)).sort((a, b) => Number(!a.startsWith(".mergelight/")) - Number(!b.startsWith(".mergelight/")) || a.localeCompare(b));
   const rulePaths = allRulePaths.slice(0, MAX_RULE_FILES);
   // Both kinds at once: one slow read mustn't leave the other no time.
   const [found, ruleFiles] = await Promise.all([
-    Promise.all(conventionPaths([...tree.keys()], changedPaths).slice(0, MAX_CONVENTION_FILES * 2).map(read)),
+    Promise.all(conventionPaths(tree.paths, changedPaths).slice(0, MAX_CONVENTION_FILES * 2).map(read)),
     Promise.all(rulePaths.map(read)),
   ]);
   const conventions: Convention[] = [];
@@ -207,7 +245,7 @@ export async function teamFilesFor(mirror: string, base: string, changedPaths: s
   }
   // A rule file and a link to it are one file: its rules count once.
   const seenRules = new Set<string>();
-  const readRules = ruleFiles.filter((f): f is { path: string; sha: string; text: string } => f !== null && !seenRules.has(f.sha) && Boolean(seenRules.add(f.sha)));
+  const readRules = ruleFiles.filter((f): f is BaseFile => f !== null && !seenRules.has(f.sha) && Boolean(seenRules.add(f.sha)));
   const stats = { dropped: 0 };
   const rules = repoRules(readRules, changedPaths.length ? changedPaths : undefined, stats);
   // A rule file that couldn't be read is named, never dropped without a word.
