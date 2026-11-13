@@ -82,6 +82,7 @@ test("the reviewers get a repository rule with the file it came from", () => {
 
 test("a comma list inside one YAML item is split, as before", () => {
   assert.deepEqual(frontMatter('---\napplyTo:\n  - "**/*.ts,**/*.tsx"\n  - src/billing/**, db/*.sql\n---\nx').paths, ["**/*.ts", "**/*.tsx", "src/billing/**", "db/*.sql"]);
+  assert.deepEqual(frontMatter("---\napplyTo:\n  - [src/billing/**, db/*.sql]\n---\nx").paths, ["src/billing/**", "db/*.sql"], "an item that is a [list] of its own");
 });
 
 test("brace patterns are spread out, and commas inside braces don't split a pattern", () => {

@@ -54,6 +54,7 @@ test("a job file that can't be a job says why", () => {
   assert.match(problem("---\non: x\nmay-change: y\n---\nTask.", ".mergelight/jobs/My Job.md"), /"My Job" must be lowercase/);
   assert.match(problem("---\non: x\nmay-change: ../other-repo/**\n---\nTask."), /"\.\.\/other-repo\/\*\*" leaves the repository/);
   assert.match(problem('---\non: x\nmay-change: ["**", "!config/secrets/**"]\n---\nTask.'), /"!config\/secrets\/\*\*" starts with !, but a job can't leave files out that way/);
+  assert.match(problem("---\non: [locales/en.json,\n  locales/en-GB.json]\nmay-change: y\n---\nTask."), /"\[locales\/en\.json" looks like part of a \[list\]: write the whole list on one line/);
   for (const nothing of ["/", ".", "//", "./", "docs/./x"]) assert.match(problem(`---\non: x\nmay-change: "${nothing}"\n---\nTask.`), /names no file\. For every file, write \*\*/, nothing);
   assert.match(problem("---\non: x\nmay-change: y\nskill: ../skills\n---\nTask."), /isn't a folder in the repository/);
   assert.match(problem("---\non: x\nmay-change: y\nskill: .claude/skills/*\n---\nTask."), /isn't a folder in the repository/);
@@ -142,6 +143,9 @@ test("jobs are read from the base branch, never from the pull request", async ()
   write(".mergelight/jobs/web/deep.md", "---\non: src\nmay-change: docs\n---\nToo deep.\n");
   write(".mergelight/jobs/Upper.MD", "---\non: src\nmay-change: docs\n---\nWrong ending.\n");
   write(".mergelight/jobs/notes.markdown", "---\non: src\nmay-change: docs\n---\nOther ending.\n");
+  write("docs/ai-guide.md", "How agents work here.\n");
+  symlinkSync("docs/ai-guide.md", join(dir, "AGENTS.md"));
+  symlinkSync("web/deep.md", join(dir, ".mergelight/jobs/deep-link.md"));
 
   git("add", "-A");
   // A folder in another letter case, which macOS's own files can't hold next to the real one: straight into git.
@@ -155,7 +159,7 @@ test("jobs are read from the base branch, never from the pull request", async ()
   git("commit", "-q", "-m", "pr");
 
   const { jobs, problems, guarded } = await jobFilesFor(dir, "main");
-  assert.deepEqual(guarded, [".claude/skills/linked", ".claude/skills/real", ".claude/skills/write-docs"]);
+  assert.deepEqual(guarded, [".claude/skills/linked", ".claude/skills/real", ".claude/skills/write-docs", "docs/ai-guide.md", "shared/docs-job.md"], "what AGENTS.md or a job file links to is guarded too");
   assert.deepEqual(jobs.map((j) => [j.name, j.mayChange, j.task]), [
     ["guide", ["guide"], "Write the guide."],
     ["review-notes", ["reviews"], "Write the review notes."],
@@ -164,7 +168,8 @@ test("jobs are read from the base branch, never from the pull request", async ()
   assert.equal(jobs[1].source, ".mergelight/jobs/review-notes.md", "a link into .github is fine: no job may change a file there");
   assert.equal(jobs[2].source, ".mergelight/jobs/translations.md", "the real file wins over a link to it");
   const why = Object.fromEntries(problems.map((p) => [p.source, p.problem]));
-  assert.deepEqual(Object.keys(why), [".mergelight/jobs/broken.md", ".mergelight/jobs/docs.md", ".mergelight/jobs/i18n.md", ".mergelight/jobs/linked-skill.md", ".mergelight/jobs/outside.md", ".mergelight/jobs/typo.md", ".mergelight/jobs/Upper.MD", ".mergelight/jobs/web/deep.md", ".mergelight/Jobs/cased.md", ".mergelight/jobs/notes.markdown"].sort((a, b) => a.localeCompare(b)));
+  assert.deepEqual(Object.keys(why), [".mergelight/jobs/broken.md", ".mergelight/jobs/docs.md", ".mergelight/jobs/i18n.md", ".mergelight/jobs/linked-skill.md", ".mergelight/jobs/outside.md", ".mergelight/jobs/typo.md", ".mergelight/jobs/Upper.MD", ".mergelight/jobs/web/deep.md", ".mergelight/Jobs/cased.md", ".mergelight/jobs/notes.markdown", ".mergelight/jobs/deep-link.md"].sort((a, b) => a.localeCompare(b)));
+  assert.match(why[".mergelight/jobs/deep-link.md"], /is a link to \.mergelight\/jobs\/web\/deep\.md, which isn't a job file that is read/);
   assert.match(why[".mergelight/jobs/linked-skill.md"], /its skill \.claude\/skills\/linked has no SKILL\.md/, "a SKILL.md that is a link isn't copied, so it doesn't count");
   assert.match(why[".mergelight/jobs/docs.md"], /is a link to shared\/docs-job\.md, a file a job could change\. Keep job files in \.mergelight/);
   assert.match(why[".mergelight/jobs/i18n.md"], /is the same file as \.mergelight\/jobs\/translations\.md, so its job counts once/);

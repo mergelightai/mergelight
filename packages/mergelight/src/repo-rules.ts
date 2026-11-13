@@ -72,7 +72,8 @@ export function listValue(fm: string, keys: string): string[] | null {
       if (/^[ \t]*(?:#.*)?$/.test(l)) continue;
       const item = /^[ \t]*-[ \t]*(.+)$/.exec(l);
       if (!item) break;
-      items.push(unquote(withoutYamlComment(item[1]!)));
+      // An item can be a [list] of its own, as the inline value can.
+      items.push(unquote(withoutYamlComment(item[1]!)).replace(/^\[([\s\S]*)\]$/, "$1"));
     }
   }
   return items.flatMap(splitOutsideBraces).map(unquote).flatMap(expandBraces).filter(Boolean);

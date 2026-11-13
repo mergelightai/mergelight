@@ -163,7 +163,7 @@ interface BaseFile {
  * to a file inside the repository. A file that is missing, too large or can't be read is null. Null as a
  * whole when the branch can't be listed.
  */
-async function baseTree(mirror: string, base: string): Promise<{ paths: string[]; mode: (path: string) => string | undefined; read: (path: string) => Promise<BaseFile | null> } | null> {
+async function baseTree(mirror: string, base: string): Promise<{ paths: string[]; mode: (path: string) => string | undefined; read: (path: string) => Promise<BaseFile | null>; linkTarget: (path: string) => Promise<string | null> } | null> {
   const git = (args: string[]) =>
     run("git", ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential", "-C", mirror, ...args], {
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
@@ -182,6 +182,14 @@ async function baseTree(mirror: string, base: string): Promise<{ paths: string[]
     const read = await git(["cat-file", "blob", sha]);
     return read?.code === 0 ? read.stdout : null;
   };
+  /** Where a link leads, file or folder, when that is inside the repository. */
+  const linkTarget = async (path: string): Promise<string | null> => {
+    const file = tree.get(path);
+    if (file?.mode !== "120000") return null;
+    const target = (await blob(file.sha))?.trim() ?? "";
+    const resolved = posix.normalize(posix.join(posix.dirname(path), target));
+    return !target || target.startsWith("/") || resolved === ".." || resolved.startsWith("../") ? null : resolved;
+  };
   const read = async (path: string): Promise<BaseFile | null> => {
     let file = tree.get(path);
     const link = file?.mode === "120000";
@@ -197,7 +205,7 @@ async function baseTree(mirror: string, base: string): Promise<{ paths: string[]
     const text = (await blob(file.sha))?.trim();
     return text ? { path, sha: file.sha, text, link, ...(resolved ? { target: resolved } : {}) } : null;
   };
-  return { paths: [...tree.keys()], mode: (path) => tree.get(path)?.mode, read };
+  return { paths: [...tree.keys()], mode: (path) => tree.get(path)?.mode, read, linkTarget };
 }
 
 /**
@@ -217,10 +225,13 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
   // A job file and a link to it, or two copies of one file, are one job. The real file wins over a link.
   const kept = new Map<string, BaseFile>();
   const read = files.filter((f): f is BaseFile => f !== null).sort((a, b) => Number(a.link) - Number(b.link) || a.path.localeCompare(b.path));
+  const readPaths = new Set(all.slice(0, MAX_JOB_FILES));
   for (const f of read) {
     const first = kept.get(f.sha);
     // A job could change the file a link leads to, unless it sits where no job may write.
     if (f.target && !refusedPath(f.target)) problems.push({ source: f.path, problem: `is a link to ${f.target}, a file a job could change. Keep job files in .mergelight` });
+    // A link to a file in .mergelight/jobs that isn't read as a job itself would run what is named as not read.
+    else if (f.target && f.target.toLowerCase().startsWith(".mergelight/jobs/") && !readPaths.has(f.target)) problems.push({ source: f.path, problem: `is a link to ${f.target}, which isn't a job file that is read` });
     else if (first) problems.push({ source: f.path, problem: `is the same file as ${first.path}, so its job counts once` });
     else kept.set(f.sha, f);
   }
@@ -229,8 +240,16 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
   const parsed = readJobs([...kept.values()], (folder) => ["100644", "100755"].includes(tree.mode(`${folder}/SKILL.md`) ?? ""));
   const unread = all.slice(0, MAX_JOB_FILES).filter((_, i) => files[i] === null).map((source) => ({ source, problem: "couldn't be read: it is empty, too large, a link to something that isn't a file in the repository, or git couldn't read it this time" }));
   const past = all.slice(MAX_JOB_FILES).map((source) => ({ source, problem: `only ${MAX_JOB_FILES} job files are read` }));
-  return { jobs: parsed.jobs, problems: [...parsed.problems, ...problems, ...unread, ...past].sort((a, b) => a.source.localeCompare(b.source)), guarded: guardedFolders(tree.paths, parsed.jobs) };
+  // A file no job may change can be a link to one it could, like AGENTS.md to docs/ai-guide.md: what it
+  // leads to is guarded too.
+  const links = tree.paths.filter((p) => tree.mode(p) === "120000" && refusedPath(p)).slice(0, MAX_GUARDED_LINKS);
+  const targets = (await Promise.all(links.map(tree.linkTarget))).filter((t): t is string => t !== null && !refusedPath(t));
+  const guarded = [...new Set([...guardedFolders(tree.paths, parsed.jobs), ...targets])].sort();
+  return { jobs: parsed.jobs, problems: [...parsed.problems, ...problems, ...unread, ...past].sort((a, b) => a.source.localeCompare(b.source)), guarded };
 }
+
+/** How many links from files no job may change are followed, to guard what they lead to. */
+const MAX_GUARDED_LINKS = 200;
 
 /** How many rule files are read at most. */
 const MAX_RULE_FILES = 100;
