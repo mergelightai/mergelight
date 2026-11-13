@@ -54,8 +54,11 @@ test("a job file that can't be a job says why", () => {
   assert.match(problem("---\non: x\nmay-change: y\n---\nTask.", ".mergelight/jobs/My Job.md"), /"My Job" must be lowercase/);
   assert.match(problem("---\non: x\nmay-change: ../other-repo/**\n---\nTask."), /"\.\.\/other-repo\/\*\*" leaves the repository/);
   assert.match(problem('---\non: x\nmay-change: ["**", "!config/secrets/**"]\n---\nTask.'), /"!config\/secrets\/\*\*" starts with !, but a job can't leave files out that way/);
-  assert.match(problem("---\non: [locales/en.json,\n  locales/en-GB.json]\nmay-change: y\n---\nTask."), /"\[locales\/en\.json" looks like part of a \[list\]: write the whole list on one line/);
+  assert.match(problem("---\non: [locales/en.json,\n  locales/en-GB.json]\nmay-change: y\n---\nTask."), /its on line ends with a comma: write the whole list on one line/);
+  assert.match(problem("---\non: [locales/en.json, locales/en-GB.json\n  , locales/x.json]\nmay-change: y\n---\nTask."), /"\[locales\/en\.json" looks like part of a \[list\]: write the whole list on one line/);
   assert.equal(problem('---\non: app/[locale]/page.tsx\nmay-change: "[locale]/messages.json"\n---\nTask.'), undefined, "brackets that close are part of a name, as in Next.js");
+  assert.match(problem("---\non: src\nmay-change: [locale]/messages.json, app/[locale]\n---\nTask."), /looks like part of a \[list\]/, "unquoted, the outer brackets are taken for a list and leave unpaired ones");
+  assert.match(problem("---\non: locales/en.json,\n  locales/en-GB.json\nmay-change: y\n---\nTask."), /its on line ends with a comma/);
   for (const value of ["|", ">-", "|2", ">2-", "~", "null"]) assert.match(problem(`---\non: ${value}\n  locales/en.json\nmay-change: y\n---\nTask.`), /is a YAML block or an empty value/, value);
   assert.match(problem("---\non: src\nmay-change: tools/write-docs/**\nskill: tools/write-docs\n---\nTask."), /only name files a job can never change, or its own skill folder, tools\/write-docs/);
   assert.match(problem("---\non: src\nmay-change: .github/**, tools/write-docs/**\nskill: tools/write-docs\n---\nTask."), /only name files a job can never change, or its own skill folder/);
@@ -119,6 +122,11 @@ test("a job may change only its own paths, and never workflows, Mergelight's fil
   const { job: translations } = parseJobFile(".mergelight/jobs/translations.md", TRANSLATIONS);
   assert.ok(mayChange(translations, "locales/da.json"));
   assert.ok(!mayChange(translations, "locales/da/extra.json"), "* stays inside one folder");
+  const { job: star } = parseJobFile(".mergelight/jobs/x.md", "---\non: src\nmay-change: locales/*\n---\nTask.");
+  assert.ok(mayChange(star, "locales/da.json"));
+  assert.ok(!mayChange(star, "locales/legacy/admin/strings.json"), "a pattern ending in * never covers a whole subfolder");
+  const { job: folder } = parseJobFile(".mergelight/jobs/x.md", "---\non: src\nmay-change: docs, guides/**\n---\nTask.");
+  assert.ok(mayChange(folder, "docs/a/b.md") && mayChange(folder, "guides/a/b.md"), "a plain folder name, or **, covers what is inside");
   assert.ok(!mayChange(translations, "src/i18n.ts"));
 });
 

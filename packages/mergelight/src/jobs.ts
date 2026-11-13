@@ -118,6 +118,9 @@ export function parseJobFile(path: string, text: string): { job: Job } | { probl
   const named = scalarValue(block.fm, "name");
   const name = named || path.slice(path.lastIndexOf("/") + 1).replace(/\.md$/, "");
   if (!NAME.test(name)) return { problem: `its name "${name.slice(0, 60)}" must be lowercase letters, digits and dashes, start and end with a letter or digit, and be 40 long at most` };
+  // A list that goes on past a trailing comma on the next line: only the key's own line is read.
+  const cut = ["on", "may-change"].find((key) => scalarValue(block.fm, key)?.endsWith(","));
+  if (cut) return { problem: `its ${cut} line ends with a comma: write the whole list on one line, or as a YAML list` };
   const on = listValue(block.fm, "on");
   if (!on?.length) return { problem: "names no on paths, the files whose change starts the job" };
   const mayChange = listValue(block.fm, "may-change");
@@ -127,7 +130,8 @@ export function parseJobFile(path: string, text: string): { job: Job } | { probl
   if (negated !== undefined) return { problem: `the path "${negated.slice(0, 100)}" starts with !, but a job can't leave files out that way. List only the files it may change` };
   // A [list] split over lines reads as "[a," and "b]": only the key's own line is read.
   // Brackets that open and close, like Next.js's app/[locale], are part of a name.
-  const split = [...on, ...mayChange].find((p) => (p.startsWith("[") && !p.includes("]")) || (p.endsWith("]") && !p.includes("[")));
+  const count = (p: string, ch: string) => p.split(ch).length - 1;
+  const split = [...on, ...mayChange].find((p) => count(p, "[") !== count(p, "]") || p.indexOf("]") < p.indexOf("["));
   if (split !== undefined) return { problem: `the path "${split.slice(0, 100)}" looks like part of a [list]: write the whole list on one line, or as a YAML list` };
   const bad = [...on, ...mayChange].find(badPattern);
   if (bad !== undefined) return { problem: `the path "${bad.slice(0, 100)}" leaves the repository or names no file. For every file, write **` };
@@ -195,7 +199,8 @@ export function mayChange(job: Job, path: string, guarded: string[] = []): boole
   if (refusedPath(path)) return false;
   const lower = path.toLowerCase();
   if ([...(job.skill ? [job.skill] : []), ...guarded].some((folder) => matchesPath(`/${folder}`.toLowerCase(), lower))) return false;
-  return job.mayChange.some((pattern) => matchesPath(pattern, path));
+  // Strictly: "locales/*" is the files right in locales, not a subfolder and all inside it.
+  return job.mayChange.some((pattern) => matchesPath(pattern, path, false));
 }
 
 /**
