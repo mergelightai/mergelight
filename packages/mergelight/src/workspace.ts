@@ -254,7 +254,7 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
     // By the file it is, so a link and what it leads to are one, but two copies with the same text aren't.
     const first = kept.get(f.target ?? f.path);
     // A job could change the file a link leads to, unless it sits where no job may write.
-    if (f.target && !refusedPath(f.target)) problems.push({ source: f.path, problem: `is a link to ${f.target}, a file a job could change. Keep job files in .mergelight` });
+    if (f.target && !refusedPath(f.target)) problems.push({ source: f.path, problem: `is a link to ${f.target}, outside .mergelight: keep job files themselves in .mergelight` });
     // A link to a file in .mergelight/jobs that isn't read as a job itself would run what is named as not read.
     else if (f.target && /^\.mergelight\/jobs(?:\/|\.|$)/i.test(f.target) && !readPaths.has(f.target)) problems.push({ source: f.path, problem: `is a link to ${f.target}, which isn't a job file that is read` });
     else if (first) problems.push({ source: f.path, problem: `is the same file as ${first.path}, so its job counts once` });
@@ -314,7 +314,8 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
     // A link to the repository's root would guard every file: that can't be told apart from a mistake.
     if (!done.length) return "deep";
     const end = done.join("/");
-    if (!refusedPath(end)) targets.add(end);
+    // Guarded even when its own name is refused: a folder named like a refused file isn't refused inside.
+    targets.add(end);
     return end;
   };
   const followed = new Set<string>();
@@ -332,7 +333,7 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
       const content = await tree.linkContent(link);
       if (typeof content === "string" && content.trim() && !content.trim().startsWith("/")) {
         const asRead = posix.normalize(posix.join(posix.dirname(link), content.trim())).replace(/\/+$/, "");
-        if (asRead && asRead !== "." && !asRead.startsWith("..") && !refusedPath(asRead)) targets.add(asRead);
+        if (asRead && asRead !== "." && !asRead.startsWith("..")) targets.add(asRead);
       }
       const end = await resolve(link);
       if (end === "unread") incomplete ??= `${link} couldn't be read this time, so no job runs. The next push tries again.`;
@@ -344,7 +345,8 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
   // link like docs/ci to .github/workflows can't carry a change into a protected place.
   const links = tree.paths.filter((p) => tree.mode(p) === "120000");
   const guarded = [...new Set([...folders, ...targets, ...links])].sort();
-  return { jobs: parsed.jobs, problems: sorted, guarded, ...(incomplete ? { incomplete } : {}) };
+  // A guard that couldn't be worked out in full hands out no job, whatever reads them.
+  return incomplete ? { jobs: [], problems: sorted, guarded, incomplete } : { jobs: parsed.jobs, problems: sorted, guarded };
 }
 
 /** How many links from files no job may change are followed, to guard what they lead to, and how far each. */

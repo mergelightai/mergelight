@@ -237,7 +237,7 @@ test("jobs are read from the base branch, never from the pull request", async ()
   assert.match(why[".mergelight/jobs/via-link.md"], /its skill \.agents\/skills\/real is reached through \.agents\/skills, which is a link: name the skill by its real folder/);
   assert.match(why[".mergelight/jobs/deep-link.md"], /is a link to \.mergelight\/jobs\/web\/deep\.md, which isn't a job file that is read/);
   assert.match(why[".mergelight/jobs/linked-skill.md"], /its skill \.claude\/skills\/linked has a SKILL\.md that is a link: it must be a real file/, "a SKILL.md that is a link isn't copied, so it doesn't count");
-  assert.match(why[".mergelight/jobs/docs.md"], /is a link to shared\/docs-job\.md, a file a job could change\. Keep job files in \.mergelight/);
+  assert.match(why[".mergelight/jobs/docs.md"], /is a link to shared\/docs-job\.md, outside \.mergelight: keep job files themselves in \.mergelight/);
   assert.match(why[".mergelight/jobs/i18n.md"], /is the same file as \.mergelight\/jobs\/translations\.md, so its job counts once/);
   assert.match(why[".mergelight/jobs/outside.md"], /a link to something that isn't a file in the repository/);
   assert.match(why[".mergelight/jobs/typo.md"], /its skill \.claude\/skills\/write-doc has no SKILL\.md on the base branch/);
@@ -340,7 +340,9 @@ test("the guard follows links the way the file system does, and runs no job when
   link("chain/hop0.md", "CLAUDE.md");
   git("add", "-A");
   git("commit", "-q", "-m", "chain");
-  assert.match((await jobFilesFor(dir, "main")).incomplete, /CLAUDE\.md leads through more than 10 links, or to the repository's root, so no job runs/);
+  const tooDeep = await jobFilesFor(dir, "main");
+  assert.match(tooDeep.incomplete, /CLAUDE\.md leads through more than 10 links, or to the repository's root, so no job runs/);
+  assert.deepEqual(tooDeep.jobs, [], "an incomplete guard hands out no job");
 });
 
 test("a protected link to the repository's root runs no job", async () => {

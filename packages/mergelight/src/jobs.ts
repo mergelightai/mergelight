@@ -348,6 +348,7 @@ export function mayChange(job: Job, path: string, guarded: string[] = [], isLink
  */
 export function guardedFolders(paths: string[], jobs: Job[] = []): string[] {
   const folders = new Set<string>();
+  // In any letter case on purpose: on macOS, a folder's skill.md is what opens as its SKILL.md.
   for (const p of paths) if (/(^|\/)SKILL\.md$/i.test(p) && p.includes("/")) folders.add(p.slice(0, p.lastIndexOf("/")));
   for (const j of jobs) if (j.skill) folders.add(j.skill);
   return [...folders].sort();
