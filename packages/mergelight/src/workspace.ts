@@ -245,38 +245,55 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
   const parsed = readJobs([...kept.values()], (folder) => ["100644", "100755"].includes(tree.mode(`${folder}/SKILL.md`) ?? ""));
   const unread = all.slice(0, MAX_JOB_FILES).filter((_, i) => files[i] === null).map((source) => ({ source, problem: "couldn't be read: it is empty, too large, a link to something that isn't a file in the repository, or git couldn't read it this time" }));
   const past = all.slice(MAX_JOB_FILES).map((source) => ({ source, problem: `only ${MAX_JOB_FILES} job files are read` }));
-  // A file no job may change can be a link to one it could, like AGENTS.md to docs/ai-guide.md: what it
-  // leads to is guarded too, and so is each further link in a chain. If that can't be worked out in full,
-  // no job runs: the guard is never quietly smaller than it should be.
+  // A file no job may change can be a link to one it could, like AGENTS.md to docs/ai-guide.md. Every link
+  // from a protected file or folder is followed the way the file system would, through links in its
+  // folders too, and every file and folder on the way is guarded. Links inside what that guards are
+  // followed in turn, until nothing new turns up. If that can't be worked out in full, no job runs: the
+  // guard is never quietly smaller than it should be.
   const sorted = [...parsed.problems, ...problems, ...unread, ...past].sort((a, b) => a.source.localeCompare(b.source));
-  const links = tree.paths.filter((p) => tree.mode(p) === "120000" && refusedPath(p));
-  if (links.length > MAX_GUARDED_LINKS) {
-    return { jobs: parsed.jobs, problems: sorted, guarded: [], incomplete: `The base branch has ${links.length} links from files no job may change, more than the ${MAX_GUARDED_LINKS} that are checked, so no job runs.` };
-  }
   const targets = new Set<string>();
+  const folders = guardedFolders(tree.paths, parsed.jobs);
+  const inGuard = (p: string) => refusedPath(p) || [...folders, ...targets].some((t) => p === t || p.startsWith(`${t}/`));
+  /** A path with every link in it and in its folders followed. Each place a link leads to is guarded. */
+  const resolve = async (path: string): Promise<string | null | "unread" | "deep"> => {
+    let parts = path.split("/");
+    let hops = 0;
+    for (let i = 1; i <= parts.length; i++) {
+      const at = parts.slice(0, i).join("/");
+      if (tree.mode(at) !== "120000") continue;
+      if (++hops > MAX_LINK_HOPS) return "deep";
+      const next = await tree.linkTarget(at);
+      if (next === "unread" || next === null) return next;
+      if (!refusedPath(next)) targets.add(next);
+      parts = [...next.split("/"), ...parts.slice(i)];
+      i = 0;
+    }
+    return parts.join("/");
+  };
+  const followed = new Set<string>();
   let incomplete: string | undefined;
-  await Promise.all(
-    links.map(async (link) => {
-      let at = link;
-      for (let hop = 0; hop < MAX_LINK_HOPS; hop++) {
-        const next = await tree.linkTarget(at);
-        if (next === "unread") {
-          incomplete = `${at} couldn't be read this time, so no job runs. The next push tries again.`;
-          return;
-        }
-        if (next === null || refusedPath(next) || targets.has(next)) return;
-        targets.add(next);
-        at = next;
-      }
-    }),
-  );
-  const guarded = [...new Set([...guardedFolders(tree.paths, parsed.jobs), ...targets])].sort();
+  for (;;) {
+    const todo = tree.paths.filter((p) => tree.mode(p) === "120000" && !followed.has(p) && inGuard(p));
+    if (!todo.length) break;
+    if (followed.size + todo.length > MAX_GUARDED_LINKS) {
+      incomplete = `The base branch has more than ${MAX_GUARDED_LINKS} links from files no job may change, so no job runs.`;
+      break;
+    }
+    for (const link of todo) {
+      followed.add(link);
+      const end = await resolve(link);
+      if (end === "unread") incomplete ??= `${link} couldn't be read this time, so no job runs. The next push tries again.`;
+      if (end === "deep") incomplete ??= `${link} leads through more than ${MAX_LINK_HOPS} links, so no job runs.`;
+    }
+    if (incomplete) break;
+  }
+  const guarded = [...new Set([...folders, ...targets])].sort();
   return { jobs: parsed.jobs, problems: sorted, guarded, ...(incomplete ? { incomplete } : {}) };
 }
 
 /** How many links from files no job may change are followed, to guard what they lead to, and how far each. */
 const MAX_GUARDED_LINKS = 1000;
-const MAX_LINK_HOPS = 5;
+const MAX_LINK_HOPS = 10;
 
 /** How many rule files are read at most. */
 const MAX_RULE_FILES = 100;

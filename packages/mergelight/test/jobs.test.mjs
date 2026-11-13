@@ -55,8 +55,9 @@ test("a job file that can't be a job says why", () => {
   assert.match(problem("---\non: x\nmay-change: ../other-repo/**\n---\nTask."), /"\.\.\/other-repo\/\*\*" leaves the repository/);
   assert.match(problem('---\non: x\nmay-change: ["**", "!config/secrets/**"]\n---\nTask.'), /"!config\/secrets\/\*\*" starts with !, but a job can't leave files out that way/);
   assert.match(problem("---\non: [locales/en.json,\n  locales/en-GB.json]\nmay-change: y\n---\nTask."), /"\[locales\/en\.json" looks like part of a \[list\]: write the whole list on one line/);
-  for (const value of ["|", ">-", "~", "null"]) assert.match(problem(`---\non: ${value}\n  locales/en.json\nmay-change: y\n---\nTask.`), /is a YAML block or an empty value/, value);
-  assert.match(problem("---\non: src\nmay-change: tools/write-docs/**\nskill: tools/write-docs\n---\nTask."), /only name its own skill folder, tools\/write-docs, which no job may change/);
+  for (const value of ["|", ">-", "|2", ">2-", "~", "null"]) assert.match(problem(`---\non: ${value}\n  locales/en.json\nmay-change: y\n---\nTask.`), /is a YAML block or an empty value/, value);
+  assert.match(problem("---\non: src\nmay-change: tools/write-docs/**\nskill: tools/write-docs\n---\nTask."), /only name files a job can never change, or its own skill folder, tools\/write-docs/);
+  assert.match(problem("---\non: src\nmay-change: .github/**, tools/write-docs/**\nskill: tools/write-docs\n---\nTask."), /only name files a job can never change, or its own skill folder/);
   for (const nothing of ["/", ".", "//", "./", "docs/./x"]) assert.match(problem(`---\non: x\nmay-change: "${nothing}"\n---\nTask.`), /names no file\. For every file, write \*\*/, nothing);
   assert.match(problem("---\non: x\nmay-change: y\nskill: ../skills\n---\nTask."), /isn't a folder in the repository/);
   assert.match(problem("---\non: x\nmay-change: y\nskill: .claude/skills/*\n---\nTask."), /isn't a folder in the repository/);
@@ -108,7 +109,7 @@ test("a job runs only when a pull request changed one of its on files", () => {
 
 test("a job may change only its own paths, and never workflows, Mergelight's files or git's files", () => {
   const { job } = parseJobFile(".mergelight/jobs/x.md", '---\non: src\nmay-change: "**"\n---\nTask.');
-  for (const p of [".github/workflows/ci.yml", "packages/web/.github/x.yml", ".mergelight/jobs/x.md", ".mergelight/rules.md", ".gitmodules", "src/.gitattributes", ".git/config", ".GITHUB/workflows/ci.yml", "docs/.GitAttributes", ".GitModules", "CODEOWNERS", "docs/CODEOWNERS", "AGENTS.md", "packages/web/CLAUDE.md", ".claude/settings.json", ".agents/skills/x/SKILL.md", ".codex/config.toml", ".cursor/rules/style.mdc", "CONTRIBUTING.md", "docs/CONTRIBUTING.md", "GEMINI.md", ".cursorrules", "tools/x/SKILL.md"]) {
+  for (const p of [".github/workflows/ci.yml", "packages/web/.github/x.yml", ".mergelight/jobs/x.md", ".mergelight/rules.md", ".gitmodules", "src/.gitattributes", ".git/config", ".GITHUB/workflows/ci.yml", "docs/.GitAttributes", ".GitModules", "CODEOWNERS", "docs/CODEOWNERS", "AGENTS.md", "packages/web/CLAUDE.md", ".claude/settings.json", ".agents/skills/x/SKILL.md", ".codex/config.toml", ".cursor/rules/style.mdc", "CONTRIBUTING.md", "docs/CONTRIBUTING.md", "GEMINI.md", ".cursorrules", "tools/x/SKILL.md", ".mcp.json", "CLAUDE.local.md", "AGENTS.override.md", ".vscode/tasks.json", ".roo/rules.md", ".kiro/steering/x.md"]) {
     assert.ok(refusedPath(p), p);
     assert.ok(!mayChange(job, p), p);
   }
@@ -227,4 +228,44 @@ test("a job left out for its skill doesn't take the name or the place of another
   );
   assert.deepEqual(jobs.map((j) => j.source), [".mergelight/jobs/b.md"]);
   assert.match(problems[0].problem, /its skill missing\/skill has no SKILL\.md/);
+});
+
+test("the guard follows links the way the file system does, and runs no job when it can't", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-jobs-links-"));
+  const git = (...args) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t.test", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
+  const write = (path, text) => {
+    mkdirSync(join(dir, path, ".."), { recursive: true });
+    writeFileSync(join(dir, path), text);
+  };
+  const link = (target, path) => {
+    mkdirSync(join(dir, path, ".."), { recursive: true });
+    symlinkSync(target, join(dir, path));
+  };
+  git("init", "-q", "-b", "main");
+  // AGENTS.md leads to a file through a folder that is itself a link.
+  write("vendor/ai/guide.md", "Guide.\n");
+  link("../vendor/ai", "shared/ai");
+  link("shared/ai/guide.md", "AGENTS.md");
+  // .cursor is a link to a folder, and a link inside that folder leads elsewhere.
+  write("config/cursor/style.md", "Style.\n");
+  write("docs/rules-src.md", "Rules.\n");
+  link("config/cursor", ".cursor");
+  link("../../docs/rules-src.md", "config/cursor/rules.md");
+  write("src/index.ts", "export {};\n");
+  git("add", "-A");
+  git("commit", "-q", "-m", "base");
+  const { guarded, incomplete } = await jobFilesFor(dir, "main");
+  assert.equal(incomplete, undefined);
+  assert.deepEqual(guarded, ["config/cursor", "docs/rules-src.md", "shared/ai/guide.md", "vendor/ai"]);
+  const job = parseJobFile(".mergelight/jobs/x.md", '---\non: src\nmay-change: "**"\n---\nTask.').job;
+  for (const p of ["vendor/ai/guide.md", "config/cursor/style.md", "docs/rules-src.md"]) assert.ok(!mayChange(job, p, guarded), p);
+  assert.ok(mayChange(job, "src/index.ts", guarded));
+
+  // A chain longer than the guard follows: no job runs.
+  for (let i = 0; i < 11; i++) link(`hop${i + 1}.md`, `chain/hop${i}.md`);
+  write("chain/hop11.md", "End.\n");
+  link("chain/hop0.md", "CLAUDE.md");
+  git("add", "-A");
+  git("commit", "-q", "-m", "chain");
+  assert.match((await jobFilesFor(dir, "main")).incomplete, /CLAUDE\.md leads through more than 10 links, so no job runs/);
 });
