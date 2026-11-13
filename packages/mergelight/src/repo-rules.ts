@@ -57,7 +57,8 @@ function withoutYamlComment(value: string): string {
     } else if ((ch === '"' || ch === "'") && (i === 0 || /[\s,[]/.test(value[i - 1]!))) quote = ch;
     else if (ch === "#" && (i === 0 || value[i - 1] === " " || value[i - 1] === "\t")) return value.slice(0, i).trim();
   }
-  return value.trim();
+  // A quote that never closes isn't a quote: cut at the first comment, as before quotes were read.
+  return quote ? value.replace(/(?:^|[ \t])#.*$/, "").trim() : value.trim();
 }
 
 /** The value of a one-line key, without quotes or a comment, or null when the key isn't there. */

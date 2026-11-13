@@ -85,6 +85,7 @@ test("a comma list inside one YAML item is split, as before", () => {
   assert.deepEqual(frontMatter("---\napplyTo:\n  - [src/billing/**, db/*.sql]\n---\nx").paths, ["src/billing/**", "db/*.sql"], "an item that is a [list] of its own");
   assert.deepEqual(frontMatter("---\napplyTo:\n  - '[locale]/*.json'\n---\nx").paths, ["[locale]/*.json"], "a quoted item keeps its brackets");
   assert.deepEqual(frontMatter("---\napplyTo: docs/don't/** # old notes\n---\nx").paths, ["docs/don't/**"], "an apostrophe inside a word doesn't open a quote");
+  assert.deepEqual(frontMatter("---\napplyTo: 'src/billing/** # billing only\n---\nx").paths, ["src/billing/**"], "a quote that never closes still loses its comment");
 });
 
 test("brace patterns are spread out, and commas inside braces don't split a pattern", () => {

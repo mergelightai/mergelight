@@ -63,6 +63,9 @@ export const REFUSED_FOLDERS = [
   ".aiassistant",
   ".qwen",
   ".factory",
+  // Editors whose settings can start commands on a teammate's machine.
+  ".idx",
+  ".zed",
   // CI services, git hooks and dev containers.
   ".gitlab",
   ".circleci",
@@ -236,7 +239,7 @@ export function parseJobFile(path: string, text: string): { job: Job } | { probl
   if (yamlBlock !== undefined) return { problem: `the path "${yamlBlock}" is a YAML block or an empty value: write the paths as a list, or on the key's own line` };
   // A path on an indented line under the key's own value is part of it in YAML, but only the key's line is read.
   const goesOn = ["on", "may-change", "skill"].find((key) => new RegExp(`^${key}[ \\t]*:[ \\t]*[^\\s#][^\\n]*\\n[ \\t]+[^\\s#-]`, "m").test(block.fm));
-  if (goesOn) return { problem: `its ${goesOn} value goes on to an indented line, which isn't read: write the paths as a list` };
+  if (goesOn) return { problem: goesOn === "skill" ? "its skill value goes on to an indented line, which isn't read: write the skill folder on the skill line itself" : `its ${goesOn} value goes on to an indented line, which isn't read: write the paths as a list` };
   if (mayChange.every(refusedPath)) {
     return { problem: "its may-change paths only name files a job can never change, like .github and .mergelight" };
   }
