@@ -56,9 +56,10 @@ export interface JobProblem {
   problem: string;
 }
 
-/** A pattern that leaves the repository, or one so short it isn't one. */
+/** A pattern that leaves the repository, or names no file: read the way matchesPath reads it. */
 function badPattern(pattern: string): boolean {
-  return pattern.split("/").some((part) => part === "..") || !pattern.replace(/^\.?\//, "").trim();
+  const plain = pattern.trim().replace(/\/{2,}/g, "/").replace(/^(\.\/|\/)+/, "").replace(/\/+$/, "");
+  return !plain || plain.split("/").some((part) => part === "." || part === "..");
 }
 
 /** One job file: its job, or why it can't be one. Hidden characters are taken out first. */
@@ -67,13 +68,13 @@ export function parseJobFile(path: string, text: string): { job: Job } | { probl
   if (!block) return { problem: "starts with no front matter, so it names no on and may-change paths" };
   const named = scalarValue(block.fm, "name");
   const name = named || path.slice(path.lastIndexOf("/") + 1).replace(/\.md$/, "");
-  if (!NAME.test(name)) return { problem: `its name "${name.slice(0, 60)}" isn't lowercase letters, digits and dashes, up to 40 of them` };
+  if (!NAME.test(name)) return { problem: `its name "${name.slice(0, 60)}" must be lowercase letters, digits and dashes, start and end with a letter or digit, and be 40 long at most` };
   const on = listValue(block.fm, "on");
   if (!on?.length) return { problem: "names no on paths, the files whose change starts the job" };
   const mayChange = listValue(block.fm, "may-change");
   if (!mayChange?.length) return { problem: "names no may-change paths, the only files the job may change" };
   const bad = [...on, ...mayChange].find(badPattern);
-  if (bad !== undefined) return { problem: `the path "${bad.slice(0, 100)}" leaves the repository or names nothing` };
+  if (bad !== undefined) return { problem: `the path "${bad.slice(0, 100)}" leaves the repository or names no file. For every file, write **` };
   if (mayChange.every(refusedPath)) {
     return { problem: "its may-change paths only name files a job can never change, like .github and .mergelight" };
   }
@@ -108,9 +109,10 @@ export function jobsToRun(jobs: Job[], changedPaths: string[]): Job[] {
   return jobs.filter((job) => changedPaths.some((file) => job.on.some((pattern) => matchesPath(pattern, file))));
 }
 
-/** A path no job may change, whatever its file says. */
+/** A path no job may change, whatever its file says. In any letter case: on macOS and Windows, .GitAttributes is .gitattributes. */
 export function refusedPath(path: string): boolean {
-  return REFUSED_PATHS.some((refused) => matchesPath(refused, path));
+  const lower = path.toLowerCase();
+  return REFUSED_PATHS.some((refused) => matchesPath(refused, lower));
 }
 
 /** Whether this job may change, add or delete the file. */

@@ -152,6 +152,8 @@ interface BaseFile {
   path: string;
   sha: string;
   text: string;
+  /** True when the path is a link, and text is what it leads to. */
+  link: boolean;
 }
 
 /**
@@ -180,7 +182,8 @@ async function baseTree(mirror: string, base: string): Promise<{ paths: string[]
   };
   const read = async (path: string): Promise<BaseFile | null> => {
     let file = tree.get(path);
-    if (file?.mode === "120000") {
+    const link = file?.mode === "120000";
+    if (file && link) {
       // A link: git keeps the target's path as its content.
       const target = (await blob(file.sha))?.trim() ?? "";
       const resolved = posix.normalize(posix.join(posix.dirname(path), target));
@@ -189,7 +192,7 @@ async function baseTree(mirror: string, base: string): Promise<{ paths: string[]
     }
     if (!file || (file.mode !== "100644" && file.mode !== "100755")) return null;
     const text = (await blob(file.sha))?.trim();
-    return text ? { path, sha: file.sha, text } : null;
+    return text ? { path, sha: file.sha, text, link } : null;
   };
   return { paths: [...tree.keys()], read };
 }
@@ -203,13 +206,26 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
   if (!tree) return { jobs: [], problems: [] };
   const all = tree.paths.filter((p) => JOB_FILE.test(p)).sort();
   const files = await Promise.all(all.slice(0, MAX_JOB_FILES).map(tree.read));
-  // A job file and a link to it are one file.
-  const seen = new Set<string>();
-  const read = files.filter((f): f is BaseFile => f !== null && !seen.has(f.sha) && Boolean(seen.add(f.sha)));
-  const { jobs, problems } = readJobs(read);
-  const unread = all.slice(0, MAX_JOB_FILES).filter((_, i) => files[i] === null).map((source) => ({ source, problem: "couldn't be read: it is empty, too large, or a link that leaves the repository" }));
+  const problems: JobProblem[] = [];
+  // A job file and a link to it, or two copies of one file, are one job. The real file wins over a link.
+  const kept = new Map<string, BaseFile>();
+  const read = files.filter((f): f is BaseFile => f !== null).sort((a, b) => Number(a.link) - Number(b.link) || a.path.localeCompare(b.path));
+  for (const f of read) {
+    const first = kept.get(f.sha);
+    if (first) problems.push({ source: f.path, problem: `is the same file as ${first.path}, so its job counts once` });
+    else kept.set(f.sha, f);
+  }
+  const parsed = readJobs([...kept.values()]);
+  // A skill that isn't on the base branch: the job would run without what the team meant it to follow.
+  const present = new Set(tree.paths);
+  const jobs = parsed.jobs.filter((job) => {
+    if (!job.skill || present.has(`${job.skill}/SKILL.md`)) return true;
+    problems.push({ source: job.source, problem: `its skill ${job.skill} has no SKILL.md on the ${base.replace(/^refs\/mergelight\/base\//, "")} branch` });
+    return false;
+  });
+  const unread = all.slice(0, MAX_JOB_FILES).filter((_, i) => files[i] === null).map((source) => ({ source, problem: "couldn't be read: it is empty, too large, or a link to something that isn't a file in the repository" }));
   const past = all.slice(MAX_JOB_FILES).map((source) => ({ source, problem: `only ${MAX_JOB_FILES} job files are read` }));
-  return { jobs, problems: [...problems, ...unread, ...past] };
+  return { jobs, problems: [...parsed.problems, ...problems, ...unread, ...past].sort((a, b) => a.source.localeCompare(b.source)) };
 }
 
 /** How many rule files are read at most. */

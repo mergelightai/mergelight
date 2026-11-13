@@ -65,6 +65,8 @@ export function listValue(fm: string, keys: string): string[] | null {
     const after = fm.slice(line.index + line[0].length).split(/\r?\n/).slice(1);
     const items: string[] = [];
     for (const l of after) {
+      // A blank line or a comment between the items doesn't end the list.
+      if (/^[ \t]*(?:#.*)?$/.test(l)) continue;
       const item = /^[ \t]*-[ \t]*(.+)$/.exec(l);
       if (!item) break;
       items.push(withoutYamlComment(item[1]!));
