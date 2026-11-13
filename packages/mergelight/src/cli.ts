@@ -64,6 +64,7 @@ Options
   --skip-branches <a,b> For setup: don't review pull requests from these branches
   --relogin             For setup: log in to Codex again
   --no-pin              For setup: follow @v0 and get each release by itself, instead of pinning to the latest
+  --with-jobs           For setup: also run the team's jobs from .mergelight/jobs (see docs/jobs.md)
   --yes                 For setup: don't stop to ask whether the app is installed
   --no-save             For connect: there's nowhere to save a login, so ask for the app instead
   -h, --help            Show this help
@@ -125,6 +126,7 @@ async function main(): Promise<number> {
       relogin: { type: "boolean" },
       pin: { type: "boolean" },
       "no-pin": { type: "boolean" },
+      "with-jobs": { type: "boolean" },
       yes: { type: "boolean" },
       "no-save": { type: "boolean" },
       from: { type: "string" },
@@ -153,6 +155,7 @@ async function main(): Promise<number> {
           skipBranches: values["skip-branches"]?.split(",").map((b) => b.trim()).filter(Boolean),
           relogin: values.relogin,
           pin: !values["no-pin"],
+          jobs: values["with-jobs"],
           yes: values.yes,
         },
         realDeps(),
