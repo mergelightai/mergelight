@@ -488,3 +488,24 @@ test("an ordinary link to the repository's root doesn't turn jobs off", async ()
   git("commit", "-q", "-m", "base");
   assert.equal((await jobFilesFor(dir, "main")).incomplete, undefined);
 });
+
+test("a large file that isn't Markdown, named with @, is guarded but doesn't turn jobs off; a large Markdown one does", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-jobs-bigimport-"));
+  const git = (...args) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t.test", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
+  git("init", "-q", "-b", "main");
+  mkdirSync(join(dir, ".mergelight/jobs"), { recursive: true });
+  writeFileSync(join(dir, ".mergelight/jobs/translations.md"), TRANSLATIONS);
+  writeFileSync(join(dir, "package-lock.json"), `{"x":"${"a".repeat(4_100_000)}"}\n`);
+  writeFileSync(join(dir, "CLAUDE.md"), "Versions are in @package-lock.json.\n");
+  git("add", "-A");
+  git("commit", "-q", "-m", "base");
+  const { guarded, incomplete, jobs } = await jobFilesFor(dir, "main");
+  assert.equal(incomplete, undefined);
+  assert.equal(jobs.length, 1);
+  assert.ok(guarded.includes("package-lock.json"));
+  writeFileSync(join(dir, "big.md"), `${"a".repeat(4_100_000)}\n`);
+  writeFileSync(join(dir, "CLAUDE.md"), "Read @big.md.\n");
+  git("add", "-A");
+  git("commit", "-q", "-m", "big markdown");
+  assert.match((await jobFilesFor(dir, "main")).incomplete, /big\.md is too large to check what it imports/);
+});

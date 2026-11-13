@@ -427,8 +427,9 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
         incomplete = `${path} couldn't be read this time, so no job runs. The next push tries again.`;
         break;
       }
-      // Too large to read for its imports: no job runs rather than one with a smaller guard.
-      if (file === null && ((await tree.size(path)) ?? 0) > MAX_INSTRUCTIONS_BYTES) {
+      // A Markdown file too large to read for its imports: no job runs rather than one with a smaller guard.
+      // Any other file named with @, such as a large package-lock.json, is guarded itself and read no further.
+      if (file === null && /\.mdc?$/i.test(path) && ((await tree.size(path)) ?? 0) > MAX_INSTRUCTIONS_BYTES) {
         incomplete = `${path} is too large to check what it imports, so no job runs.`;
         break;
       }
