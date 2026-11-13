@@ -3,7 +3,7 @@ import { fetchPullRequest, type PrRef } from "./github.js";
 import { mayChange, type Job } from "./jobs.js";
 import { GitHub } from "./publish/api.js";
 import { run } from "./run.js";
-import { isBinary, JOBS_TRAILER, MAX_CHANGE_BYTES, MAX_CHANGED_FILES, withoutSecrets, type JobsResult } from "./run-jobs.js";
+import { isBinary, JOBS_TRAILER, MAX_CHANGE_BYTES, MAX_CHANGED_FILES, newSecret, withoutSecrets, type JobsResult } from "./run-jobs.js";
 import { fetchMirror, jobFilesFor } from "./workspace.js";
 
 /**
@@ -60,8 +60,12 @@ export function checkPush(result: unknown, jobs: Job[], head: string, modes: Map
     seen.add(path);
     // Never through a folder that is a link at the head: the file would land wherever the link leads.
     const parts = path.split("/");
-    const through = parts.slice(0, -1).map((_, i) => parts.slice(0, i + 1).join("/")).find((at) => modes.get(at) === "120000");
+    const folders = parts.slice(0, -1).map((_, i) => parts.slice(0, i + 1).join("/"));
+    const through = folders.find((at) => modes.get(at) === "120000");
     if (through) return { why: `${path} is inside ${through}, which is a link at the head.` };
+    // A folder on the way that is a file or a submodule at the head can't hold it.
+    const blocked = folders.find((at) => modes.get(at) != null && modes.get(at) !== "040000");
+    if (blocked) return { why: `${path} is inside ${blocked}, which isn't a folder at the head.` };
     // Only an ordinary file may change: the commit can't keep a link, a submodule or a file that can run as one.
     const mode = modes.get(path);
     if (mode === undefined) return { why: `${path} wasn't looked up at the head.` };
@@ -103,13 +107,13 @@ export function commitMessage(plan: PushPlan): { headline: string; body: string 
   return { headline: `Run the job${names.length === 1 ? "" : "s"} ${list}`, body: `${lines.join("\n")}\n\n${JOBS_TRAILER}: ${names.join(", ")}` };
 }
 
-/** Each changed path's mode at the head, or null when the head has no such file, and the mode of each folder on the way that is a link. */
+/** Each changed path's mode at the head, or null when the head has nothing there, and the mode of each folder on the way: 040000 for a folder. */
 async function modesAt(mirror: string, head: string, paths: string[]): Promise<Map<string, string | null>> {
   const folders = paths.flatMap((p) => p.split("/").slice(0, -1).map((_, i, all) => p.split("/").slice(0, i + 1).join("/")));
   const modes = new Map<string, string | null>([...folders.map((f): [string, string | null] => [f, null]), ...paths.map((p): [string, string | null] => [p, null])]);
   if (!paths.length) return modes;
   // The whole tree: ls-tree reads paths as patterns, and a path must only ever match itself.
-  const listed = await run("git", ["--git-dir", mirror, "ls-tree", "-r", "-z", "--full-tree", head]);
+  const listed = await run("git", ["--git-dir", mirror, "ls-tree", "-r", "-t", "-z", "--full-tree", head]);
   if (listed.code !== 0) throw new Error(`Couldn't read the file modes at ${head.slice(0, 7)}.`);
   for (const entry of listed.stdout.split("\0")) {
     const m = /^(\d{6}) \w+ [0-9a-f]+\t([\s\S]+)$/.exec(entry);
@@ -150,65 +154,80 @@ export async function pushJobs(ref: PrRef, o: PushJobsOptions): Promise<number> 
     output({ pushed: "false", why });
     return code;
   };
-  let result: unknown;
+  // Whatever goes wrong, the step's outputs say so: a later step that reports why nothing was pushed has a reason.
   try {
-    result = JSON.parse(readFileSync(o.from, "utf8"));
-  } catch {
-    return refuse(`The jobs result in ${o.from} can't be read.`, 1);
-  }
-  if (!Array.isArray((result as JobsResult | null)?.changes) || !(result as JobsResult).changes.length) return refuse("The jobs changed nothing.", 0);
-
-  const pr = await fetchPullRequest(ref);
-  // GitHub gives a fork's pull request no token that can push to it, and Mergelight never asks for one.
-  // GitHub ignores letter case in a repository's name. A fork's pull request is no failure: nothing can be pushed to it.
-  if (pr.headRepo?.toLowerCase() !== `${pr.owner}/${pr.repo}`.toLowerCase() || !pr.headRef) return refuse("The pull request comes from another repository, and nothing is pushed to one.", 0);
-  // Closed or merged while the jobs ran: a commit on its branch would go nowhere.
-  if (pr.state && pr.state !== "open") return refuse("The pull request is closed.", 0);
-  if ((result as JobsResult).head !== pr.headSha) return refuse(`The jobs ran on ${String((result as JobsResult).head).slice(0, 7)}, but the branch is at ${pr.headSha.slice(0, 7)} now. The next push runs them again.`, 0);
-
-  const { mirror, teamBase } = await fetchMirror(pr);
-  const { jobs, guarded, incomplete } = await jobFilesFor(mirror, teamBase);
-  if (incomplete) return refuse(incomplete, 0);
-  const paths = (result as JobsResult).changes.map((c) => c?.path).filter(plainPath);
-  const plan = checkPush(result, jobs, pr.headSha, await modesAt(mirror, pr.headSha, paths), guarded);
-  if ("why" in plan) return refuse(plan.why, 1);
-
-  const message = commitMessage(plan);
-  const api = new GitHub(pr.owner, pr.repo, { dryRun: o.dryRun, log: o.log });
-  const input = {
-    branch: { repositoryNameWithOwner: `${pr.owner}/${pr.repo}`, branchName: pr.headRef },
-    // GitHub refuses when the branch has moved on since: a push that came in between is never undone.
-    expectedHeadOid: pr.headSha,
-    message,
-    fileChanges: {
-      additions: plan.additions.map((a) => ({ path: a.path, contents: a.bytes.toString("base64") })),
-      deletions: plan.deletions.map((path) => ({ path })),
-    },
-  };
-  type Answer = { data?: { createCommitOnBranch?: { commit?: { oid: string; url: string } } }; errors?: { message: string }[] };
-  let answer: Answer | null;
-  try {
-    answer = await api.write<Answer>("POST", "/graphql", { query: CREATE_COMMIT, variables: { input } });
-  } catch (err) {
-    // gh ends with an error when GitHub's answer holds one.
-    answer = { errors: [{ message: err instanceof Error ? err.message : String(err) }] };
-  }
-  if (o.dryRun) return 0;
-  const commit = answer?.data?.createCommitOnBranch?.commit;
-  if (!commit) {
-    const why = answer?.errors?.map((e) => e.message).join(" ") ?? "GitHub gave no commit back.";
-    // An earlier try may have landed with its answer lost, and a later one then fails, saying the branch
-    // moved or with a server error: if the branch now has our commit, it was pushed.
-    const ours = await landedCommit(api, pr.headRef, pr.headSha, `${message.headline}\n\n${message.body}`);
-    if (ours) {
-      o.log(`Pushed ${ours.slice(0, 7)}: ${message.headline}.`);
-      output({ pushed: "true", commit: ours });
-      return 0;
+    let result: unknown;
+    try {
+      result = JSON.parse(readFileSync(o.from, "utf8"));
+    } catch {
+      return refuse(`The jobs result in ${o.from} can't be read.`, 1);
     }
-    if (/STALE_DATA|expected branch to point to/i.test(why)) return refuse(`The branch moved while the jobs ran. The next push runs them again. (${why.slice(0, 200)})`, 0);
-    return refuse(`GitHub refused the commit: ${why.slice(0, 300)}`, 1);
+    if (!Array.isArray((result as JobsResult | null)?.changes) || !(result as JobsResult).changes.length) return refuse("The jobs changed nothing.", 0);
+
+    const pr = await fetchPullRequest(ref);
+    // GitHub gives a fork's pull request no token that can push to it, and Mergelight never asks for one.
+    // GitHub ignores letter case in a repository's name. A fork's pull request is no failure: nothing can be pushed to it.
+    if (pr.headRepo?.toLowerCase() !== `${pr.owner}/${pr.repo}`.toLowerCase() || !pr.headRef) return refuse("The pull request comes from another repository, and nothing is pushed to one.", 0);
+    // Closed or merged while the jobs ran: a commit on its branch would go nowhere.
+    if (pr.state && pr.state !== "open") return refuse("The pull request is closed.", 0);
+    if ((result as JobsResult).head !== pr.headSha) return refuse(`The jobs ran on ${String((result as JobsResult).head).slice(0, 7)}, but the branch is at ${pr.headSha.slice(0, 7)} now. The next push runs them again.`, 0);
+
+    const { mirror, teamBase } = await fetchMirror(pr);
+    const { jobs, guarded, incomplete } = await jobFilesFor(mirror, teamBase);
+    // The guard on the base branch couldn't be worked out in full: what the jobs step ran on is not checked.
+    if (incomplete) return refuse(incomplete.replace(/so no job runs/g, "so nothing is pushed"), 0);
+    const paths = (result as JobsResult).changes.map((c) => c?.path).filter(plainPath);
+    const modes = await modesAt(mirror, pr.headSha, paths);
+    const plan = checkPush(result, jobs, pr.headSha, modes, guarded);
+    if ("why" in plan) return refuse(plan.why, 1);
+    // The jobs step drops a job that writes a secret the file didn't have. The file it hands over is checked again.
+    for (const a of plan.additions) {
+      const old = modes.get(a.path) ? await run("git", ["--git-dir", mirror, "cat-file", "blob", `${pr.headSha}:${a.path}`]) : null;
+      if (old && old.code !== 0) throw new Error(`Couldn't read ${a.path} at ${pr.headSha.slice(0, 7)}.`);
+      const before = old?.stdout ?? "";
+      const secret = newSecret(a.bytes.toString("utf8"), before);
+      if (secret) return refuse(`${a.path} would hold what looks like ${secret === "a key or token" ? "a key or token" : `the runner's ${secret}`}.`, 1);
+    }
+
+    const message = commitMessage(plan);
+    const api = new GitHub(pr.owner, pr.repo, { dryRun: o.dryRun, log: o.log });
+    const input = {
+      branch: { repositoryNameWithOwner: `${pr.owner}/${pr.repo}`, branchName: pr.headRef },
+      // GitHub refuses when the branch has moved on since: a push that came in between is never undone.
+      expectedHeadOid: pr.headSha,
+      message,
+      fileChanges: {
+        additions: plan.additions.map((a) => ({ path: a.path, contents: a.bytes.toString("base64") })),
+        deletions: plan.deletions.map((path) => ({ path })),
+      },
+    };
+    type Answer = { data?: { createCommitOnBranch?: { commit?: { oid: string; url: string } } }; errors?: { message: string }[] };
+    let answer: Answer | null;
+    try {
+      answer = await api.write<Answer>("POST", "/graphql", { query: CREATE_COMMIT, variables: { input } });
+    } catch (err) {
+      // gh ends with an error when GitHub's answer holds one.
+      answer = { errors: [{ message: err instanceof Error ? err.message : String(err) }] };
+    }
+    if (o.dryRun) return 0;
+    const commit = answer?.data?.createCommitOnBranch?.commit;
+    if (!commit) {
+      const why = answer?.errors?.map((e) => e.message).join(" ") ?? "GitHub gave no commit back.";
+      // An earlier try may have landed with its answer lost, and a later one then fails, saying the branch
+      // moved or with a server error: if the branch now has our commit, it was pushed.
+      const ours = await landedCommit(api, pr.headRef, pr.headSha, `${message.headline}\n\n${message.body}`);
+      if (ours) {
+        o.log(`Pushed ${ours.slice(0, 7)}: ${message.headline}.`);
+        output({ pushed: "true", commit: ours });
+        return 0;
+      }
+      if (/STALE_DATA|expected branch to point to/i.test(why)) return refuse(`The branch moved while the jobs ran. The next push runs them again. (${why.slice(0, 200)})`, 0);
+      return refuse(`GitHub refused the commit: ${why.slice(0, 300)}`, 1);
+    }
+    o.log(`Pushed ${commit.oid.slice(0, 7)}: ${message.headline}. ${commit.url}`);
+    output({ pushed: "true", commit: commit.oid });
+    return 0;
+  } catch (err) {
+    return refuse(`Something went wrong: ${(err instanceof Error ? err.message : String(err)).replace(/\s+/g, " ").slice(0, 300)}`, 1);
   }
-  o.log(`Pushed ${commit.oid.slice(0, 7)}: ${message.headline}. ${commit.url}`);
-  output({ pushed: "true", commit: commit.oid });
-  return 0;
 }

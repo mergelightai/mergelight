@@ -89,3 +89,12 @@ test("a job's summary is cut by characters in the commit, never in the middle of
   const scrubbed = checkPush(result([{ path: "locales/da.json", contents: b64("{}\n") }], [{ name: "translations", source: ".mergelight/jobs/translations.md", status: "changed", files: ["locales/da.json"], summary: `Used ${key}.` }]), [translations], HEAD, modes({ "locales/da.json": "100644" }));
   assert.doesNotMatch(scrubbed.jobs[0].summary, /ghp_/);
 });
+
+test("the push refuses a write that clashes with a file, a submodule or a folder at the head", () => {
+  const all = parseJobFile(".mergelight/jobs/all.md", '---\non: src\nmay-change: "**"\n---\nTask.').job;
+  const why = (path, m) => checkPush(result([{ path, contents: b64("x\n") }], [{ name: "all", source: ".mergelight/jobs/all.md", status: "changed", files: [path], summary: "" }]), [all], HEAD, modes(m)).why;
+  assert.match(why("docs/a.md/x.md", { docs: "040000", "docs/a.md": "100644", "docs/a.md/x.md": null }), /inside docs\/a\.md, which isn't a folder at the head/);
+  assert.match(why("vendor/lib/x.md", { vendor: "040000", "vendor/lib": "160000", "vendor/lib/x.md": null }), /inside vendor\/lib, which isn't a folder at the head/);
+  assert.match(why("docs", { docs: "040000" }), /isn't an ordinary file at the head \(mode 040000\)/);
+  assert.equal(why("docs/new.md", { docs: "040000", "docs/new.md": null }), undefined);
+});
