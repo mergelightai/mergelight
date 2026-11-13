@@ -29,6 +29,8 @@ export const MAX_JOB_TASK_CHARS = 8000;
 export const MAX_JOB_FILES = 20;
 
 const NAME = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
+/** The keys a job file's front matter may have. */
+const JOB_KEYS = ["name", "on", "may-change", "skill"];
 
 /**
  * Paths a job can never change, whatever its file says, wherever they sit: workflows and Mergelight's own
@@ -121,6 +123,12 @@ export const REFUSED_PATHS = [
   ".pullapprove.yml",
   ".mergify.yml",
   ".mergify",
+  "renovate.json",
+  "renovate.json5",
+  ".renovaterc",
+  ".renovaterc.json",
+  ".kodiak.toml",
+  "bors.toml",
   ".gitlab",
   ".circleci",
   "Jenkinsfile",
@@ -176,7 +184,7 @@ export function parseJobFile(path: string, text: string): { job: Job } | { probl
   // "./name" means the root, as "/name" does: without that it would be "name" in any folder.
   const rooted = (paths: string[] | null) => paths?.map((p) => p.replace(/^\.\//, "/"));
   // A key with nothing on its line, then a path on an indented line that isn't a "- " item: the path isn't read.
-  const indented = (key: string) => new RegExp(`^${key}[ \\t]*:[ \\t]*(?:#.*)?\\n[ \\t]+[^\\s#-]`, "m").test(block.fm);
+  const indented = (key: string) => new RegExp(`^${key}[ \\t]*:[ \\t]*(?:#.*)?\\r?\\n(?:[ \\t]*(?:#.*)?\\r?\\n)*[ \\t]+[^\\s#-]`, "m").test(block.fm);
   const on = rooted(listValue(block.fm, "on"));
   if (!on?.length) return { problem: indented("on") ? "its on value goes on to an indented line, which isn't read: write the paths as a list" : "names no on paths, the files whose change starts the job" };
   const mayChange = rooted(listValue(block.fm, "may-change"));
@@ -190,7 +198,7 @@ export function parseJobFile(path: string, text: string): { job: Job } | { probl
   const split = [...on, ...mayChange].find((p) => count(p, "[") !== count(p, "]") || p.indexOf("]") < p.indexOf("["));
   if (split !== undefined) return { problem: `the path "${split.slice(0, 100)}" looks like part of a [list]: write the whole list on one line, or as a YAML list` };
   // "locales/*/" reads as "locales/*", the files right in locales: the opposite of what it says.
-  const slash = [...on, ...mayChange].find((p) => /[*?][^/]*\/+$/.test(p));
+  const slash = [...on, ...mayChange].find((p) => /[*?][^/]*\/+$/.test(p) && !/(?:^|\/)\*\*\/+$/.test(p));
   if (slash !== undefined) return { problem: `the path "${slash.slice(0, 100)}" ends in a slash after a wildcard: write locales/* for the files in a folder, or locales for all of it` };
   const bad = [...on, ...mayChange].find(badPattern);
   if (bad !== undefined) return { problem: `the path "${bad.slice(0, 100)}" leaves the repository or names no file. For every file, write **` };
@@ -212,6 +220,22 @@ export function parseJobFile(path: string, text: string): { job: Job } | { probl
   // A pattern in no man's land: only files a job can never change, or only its own skill folder, which no job may change.
   if (skill && mayChange.every((p) => refusedPath(p) || matchesPath(`/${skill}`.toLowerCase(), p.replace(/^(\.\/|\/)+/, "").toLowerCase()))) {
     return { problem: `its may-change paths only name files a job can never change, or its own skill folder, ${skill}` };
+  }
+  // Every line of the front matter must be one that is read: a job's own key, a list item under on or
+  // may-change, a blank line or a comment. Anything else (a typo in a key, a value that goes on to the next
+  // line, an item under a key that already has a value) would be dropped without a word.
+  let list: string | null = null;
+  for (const line of block.fm.split(/\r?\n/)) {
+    if (/^[ \t]*(?:#.*)?$/.test(line)) continue;
+    const keyLine = /^([^\s:#][^:]*?)[ \t]*:[ \t]*(.*)$/.exec(line);
+    if (keyLine) {
+      const key = keyLine[1]!;
+      if (!JOB_KEYS.includes(key)) return { problem: `its front matter has a key a job doesn't know: ${key.slice(0, 40)}. A job knows name, on, may-change and skill` };
+      list = (key === "on" || key === "may-change") && /^(?:#.*)?$/.test(keyLine[2]!.trim()) ? key : null;
+      continue;
+    }
+    if (list && /^[ \t]+-[ \t]*\S/.test(line)) continue;
+    return { problem: `its front matter has a line that isn't read: "${line.trim().slice(0, 60)}". Write each key on a line of its own, and list items under on or may-change with nothing after the colon` };
   }
   // HTML comments are what a team turned off, as in rule files.
   const task = withoutComments(block.body).trim();
