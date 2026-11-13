@@ -4,7 +4,7 @@ import { join, posix } from "node:path";
 import { run, runOk } from "./run.js";
 import { importSkills, SKILL_GIT_TIMEOUT_MS, SKILL_IMPORT_TIMEOUT_MS, writeSkills, type TeamSkill, type WrittenSkill } from "./skills.js";
 import type { Convention, TeamRule } from "./prompt.js";
-import { JOB_FILE, MAX_JOB_FILES, readJobs, type Job, type JobProblem } from "./jobs.js";
+import { JOB_FILE, MAX_JOB_FILES, readJobs, refusedPath, type Job, type JobProblem } from "./jobs.js";
 import { parseRuleFile, repoRules, RULE_FILE } from "./repo-rules.js";
 import type { PullRequest } from "./types.js";
 
@@ -163,7 +163,7 @@ interface BaseFile {
  * to a file inside the repository. A file that is missing, too large or can't be read is null. Null as a
  * whole when the branch can't be listed.
  */
-async function baseTree(mirror: string, base: string): Promise<{ paths: string[]; read: (path: string) => Promise<BaseFile | null> } | null> {
+async function baseTree(mirror: string, base: string): Promise<{ paths: string[]; mode: (path: string) => string | undefined; read: (path: string) => Promise<BaseFile | null> } | null> {
   const git = (args: string[]) =>
     run("git", ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential", "-C", mirror, ...args], {
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
@@ -197,7 +197,7 @@ async function baseTree(mirror: string, base: string): Promise<{ paths: string[]
     const text = (await blob(file.sha))?.trim();
     return text ? { path, sha: file.sha, text, link, ...(resolved ? { target: resolved } : {}) } : null;
   };
-  return { paths: [...tree.keys()], read };
+  return { paths: [...tree.keys()], mode: (path) => tree.get(path)?.mode, read };
 }
 
 /**
@@ -220,13 +220,13 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
   for (const f of read) {
     const first = kept.get(f.sha);
     // A job could change the file a link leads to, unless it sits where no job may write.
-    if (f.target && !f.target.startsWith(".mergelight/")) problems.push({ source: f.path, problem: `is a link to ${f.target}, outside .mergelight, where a job could change it` });
+    if (f.target && !refusedPath(f.target)) problems.push({ source: f.path, problem: `is a link to ${f.target}, a file a job could change. Keep job files in .mergelight` });
     else if (first) problems.push({ source: f.path, problem: `is the same file as ${first.path}, so its job counts once` });
     else kept.set(f.sha, f);
   }
   // A skill that isn't on the base branch: the job would run without what the team meant it to follow.
-  const present = new Set(tree.paths);
-  const parsed = readJobs([...kept.values()], (folder) => present.has(`${folder}/SKILL.md`));
+  // Only an ordinary SKILL.md counts, as the skill copy takes no links.
+  const parsed = readJobs([...kept.values()], (folder) => ["100644", "100755"].includes(tree.mode(`${folder}/SKILL.md`) ?? ""));
   const unread = all.slice(0, MAX_JOB_FILES).filter((_, i) => files[i] === null).map((source) => ({ source, problem: "couldn't be read: it is empty, too large, a link to something that isn't a file in the repository, or git couldn't read it this time" }));
   const past = all.slice(MAX_JOB_FILES).map((source) => ({ source, problem: `only ${MAX_JOB_FILES} job files are read` }));
   return { jobs: parsed.jobs, problems: [...parsed.problems, ...problems, ...unread, ...past].sort((a, b) => a.source.localeCompare(b.source)) };

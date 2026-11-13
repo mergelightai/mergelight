@@ -74,6 +74,9 @@ export function parseJobFile(path: string, text: string): { job: Job } | { probl
   if (!on?.length) return { problem: "names no on paths, the files whose change starts the job" };
   const mayChange = listValue(block.fm, "may-change");
   if (!mayChange?.length) return { problem: "names no may-change paths, the only files the job may change" };
+  // "!" excludes files in GitHub's path filters, but here it would be part of a name and exclude nothing.
+  const negated = [...on, ...mayChange].find((p) => p.startsWith("!"));
+  if (negated !== undefined) return { problem: `the path "${negated.slice(0, 100)}" starts with !, but a job can't leave files out that way. List only the files it may change` };
   const bad = [...on, ...mayChange].find(badPattern);
   if (bad !== undefined) return { problem: `the path "${bad.slice(0, 100)}" leaves the repository or names no file. For every file, write **` };
   if (mayChange.every(refusedPath)) {
@@ -126,6 +129,7 @@ export function refusedPath(path: string): boolean {
  */
 export function mayChange(job: Job, path: string, jobs: Job[] = []): boolean {
   if (refusedPath(path)) return false;
-  if ([job, ...jobs].some((j) => j.skill && matchesPath(`/${j.skill}`, path))) return false;
+  const lower = path.toLowerCase();
+  if ([job, ...jobs].some((j) => j.skill && matchesPath(`/${j.skill}`.toLowerCase(), lower))) return false;
   return job.mayChange.some((pattern) => matchesPath(pattern, path));
 }

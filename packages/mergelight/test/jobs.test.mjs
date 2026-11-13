@@ -31,7 +31,7 @@ test("a job's paths can be written the ways rule files write them", () => {
   const md = '---\non:\n  - src/**/*.{ts,tsx} # code\n  - "api/**"\n  - "docs/guides,old"\nmay-change: [docs/**, README.md]\nskill: ./.claude/skills/write-docs/\n---\nUpdate the docs.\n';
   const { job } = parseJobFile(".mergelight/jobs/docs.md", md);
   assert.equal(job.name, "docs", "the file's name, when the job names none");
-  assert.deepEqual(job.on, ["src/**/*.ts", "src/**/*.tsx", "api/**", "docs/guides,old"], "a YAML item is one pattern, commas and all");
+  assert.deepEqual(job.on, ["src/**/*.ts", "src/**/*.tsx", "api/**", "docs/guides", "old"], "a YAML item is split on its commas, as rule files read it");
   assert.deepEqual(job.mayChange, ["docs/**", "README.md"]);
   assert.equal(job.skill, ".claude/skills/write-docs");
 });
@@ -53,6 +53,7 @@ test("a job file that can't be a job says why", () => {
   assert.match(problem("---\nname: docs-\non: x\nmay-change: y\n---\nTask."), /"docs-" must be lowercase letters, digits and dashes, start and end with a letter or digit/);
   assert.match(problem("---\non: x\nmay-change: y\n---\nTask.", ".mergelight/jobs/My Job.md"), /"My Job" must be lowercase/);
   assert.match(problem("---\non: x\nmay-change: ../other-repo/**\n---\nTask."), /"\.\.\/other-repo\/\*\*" leaves the repository/);
+  assert.match(problem('---\non: x\nmay-change: ["**", "!config/secrets/**"]\n---\nTask.'), /"!config\/secrets\/\*\*" starts with !, but a job can't leave files out that way/);
   for (const nothing of ["/", ".", "//", "./", "docs/./x"]) assert.match(problem(`---\non: x\nmay-change: "${nothing}"\n---\nTask.`), /names no file\. For every file, write \*\*/, nothing);
   assert.match(problem("---\non: x\nmay-change: y\nskill: ../skills\n---\nTask."), /isn't a folder in the repository/);
   assert.match(problem("---\non: x\nmay-change: y\nskill: .claude/skills/*\n---\nTask."), /isn't a folder in the repository/);
@@ -124,6 +125,12 @@ test("jobs are read from the base branch, never from the pull request", async ()
   symlinkSync("../../shared/docs-job.md", join(dir, ".mergelight/jobs/docs.md"));
   symlinkSync("../../../outside.md", join(dir, ".mergelight/jobs/outside.md"));
   symlinkSync("translations.md", join(dir, ".mergelight/jobs/i18n.md"));
+  write(".github/mergelight/review-job.md", "---\non: src\nmay-change: reviews\n---\nWrite the review notes.\n");
+  symlinkSync("../../.github/mergelight/review-job.md", join(dir, ".mergelight/jobs/review-notes.md"));
+  write(".claude/skills/real/SKILL.md", "---\nname: real\n---\nReal.\n");
+  mkdirSync(join(dir, ".claude/skills/linked"), { recursive: true });
+  symlinkSync("../real/SKILL.md", join(dir, ".claude/skills/linked/SKILL.md"));
+  write(".mergelight/jobs/linked-skill.md", "---\non: src\nmay-change: guide\nskill: .claude/skills/linked\n---\nUse the linked skill.\n");
   write(".claude/skills/write-docs/SKILL.md", "---\nname: write-docs\n---\nHow we write docs.\n");
   write(".mergelight/jobs/guide.md", "---\non: src\nmay-change: guide\nskill: .claude/skills/write-docs\n---\nWrite the guide.\n");
   write(".mergelight/jobs/typo.md", "---\non: src\nmay-change: guide\nskill: .claude/skills/write-doc\n---\nWrite the guide.\n");
@@ -140,12 +147,15 @@ test("jobs are read from the base branch, never from the pull request", async ()
   const { jobs, problems } = await jobFilesFor(dir, "main");
   assert.deepEqual(jobs.map((j) => [j.name, j.mayChange, j.task]), [
     ["guide", ["guide"], "Write the guide."],
+    ["review-notes", ["reviews"], "Write the review notes."],
     ["translations", ["locales/*.json"], "When en.json gets new keys, add each one to every other file in locales/, translated."],
   ]);
-  assert.equal(jobs[1].source, ".mergelight/jobs/translations.md", "the real file wins over a link to it");
+  assert.equal(jobs[1].source, ".mergelight/jobs/review-notes.md", "a link into .github is fine: no job may change a file there");
+  assert.equal(jobs[2].source, ".mergelight/jobs/translations.md", "the real file wins over a link to it");
   const why = Object.fromEntries(problems.map((p) => [p.source, p.problem]));
-  assert.deepEqual(Object.keys(why), [".mergelight/jobs/broken.md", ".mergelight/jobs/docs.md", ".mergelight/jobs/i18n.md", ".mergelight/jobs/outside.md", ".mergelight/jobs/typo.md", ".mergelight/jobs/Upper.MD", ".mergelight/jobs/web/deep.md"].sort((a, b) => a.localeCompare(b)));
-  assert.match(why[".mergelight/jobs/docs.md"], /is a link to shared\/docs-job\.md, outside \.mergelight, where a job could change it/);
+  assert.deepEqual(Object.keys(why), [".mergelight/jobs/broken.md", ".mergelight/jobs/docs.md", ".mergelight/jobs/i18n.md", ".mergelight/jobs/linked-skill.md", ".mergelight/jobs/outside.md", ".mergelight/jobs/typo.md", ".mergelight/jobs/Upper.MD", ".mergelight/jobs/web/deep.md"].sort((a, b) => a.localeCompare(b)));
+  assert.match(why[".mergelight/jobs/linked-skill.md"], /its skill \.claude\/skills\/linked has no SKILL\.md/, "a SKILL.md that is a link isn't copied, so it doesn't count");
+  assert.match(why[".mergelight/jobs/docs.md"], /is a link to shared\/docs-job\.md, a file a job could change\. Keep job files in \.mergelight/);
   assert.match(why[".mergelight/jobs/i18n.md"], /is the same file as \.mergelight\/jobs\/translations\.md, so its job counts once/);
   assert.match(why[".mergelight/jobs/outside.md"], /a link to something that isn't a file in the repository/);
   assert.match(why[".mergelight/jobs/typo.md"], /its skill \.claude\/skills\/write-doc has no SKILL\.md on the base branch/);
@@ -172,6 +182,7 @@ test("a job may never change a skill folder that guides a job", () => {
   const { job: docs } = parseJobFile(".mergelight/jobs/docs.md", '---\non: src\nmay-change: "**"\nskill: .claude/skills/write-docs\n---\nTask.');
   const { job: other } = parseJobFile(".mergelight/jobs/other.md", "---\non: src\nmay-change: x\nskill: tools/skills/translate\n---\nTask.");
   assert.ok(!mayChange(docs, ".claude/skills/write-docs/SKILL.md"), "its own skill");
+  assert.ok(!mayChange(docs, ".Claude/Skills/write-docs/SKILL.md"), "in any letter case");
   assert.ok(!mayChange(docs, "tools/skills/translate/SKILL.md", [docs, other]), "another job's skill");
   assert.ok(mayChange(docs, "tools/skills/translate/SKILL.md"), "without the other jobs, only its own counts");
   assert.ok(mayChange(docs, ".claude/skills/other/SKILL.md", [docs, other]));

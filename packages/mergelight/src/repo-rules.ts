@@ -61,24 +61,21 @@ export function listValue(fm: string, keys: string): string[] | null {
   if (!line) return null;
   const unquote = (p: string) => p.trim().replace(/^["']|["']$/g, "").trim();
   const value = withoutYamlComment(line[1] ?? "");
+  // An inline value, or a YAML list on the lines below the key: "applyTo:" then "  - src/billing/**".
+  // Teams write comma lists inside one item too ("- **/*.ts,**/*.tsx"), so every item is split on its
+  // commas, as Copilot reads it.
+  const items = value ? [value.replace(/^\[([\s\S]*)\]$/, "$1").replace(/^["']|["']$/g, "")] : [];
   if (!value) {
-    // A YAML list on the lines below the key: "applyTo:" then "  - src/billing/**". Each item is one
-    // pattern, commas and all.
     const after = fm.slice(line.index + line[0].length).split(/\r?\n/).slice(1);
-    const items: string[] = [];
     for (const l of after) {
       // A blank line or a comment between the items doesn't end the list.
       if (/^[ \t]*(?:#.*)?$/.test(l)) continue;
       const item = /^[ \t]*-[ \t]*(.+)$/.exec(l);
       if (!item) break;
-      items.push(withoutYamlComment(item[1]!));
+      items.push(unquote(withoutYamlComment(item[1]!)));
     }
-    return items.map(unquote).flatMap(expandBraces).filter(Boolean);
   }
-  return splitOutsideBraces(value.trim().replace(/^\[([\s\S]*)\]$/, "$1").replace(/^["']|["']$/g, ""))
-    .map(unquote)
-    .flatMap(expandBraces)
-    .filter(Boolean);
+  return items.flatMap(splitOutsideBraces).map(unquote).flatMap(expandBraces).filter(Boolean);
 }
 
 /** Splits on commas, but not on the ones inside braces, as in "**\/*.{ts,tsx},*.sql". */
