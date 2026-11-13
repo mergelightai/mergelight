@@ -174,9 +174,10 @@ async function readBack(git: JobGit, dir: string, index: string, from: string, k
   return (await must(git, ["write-tree"], { GIT_INDEX_FILE: index })).trim();
 }
 
-/** Whether path is a folder in the tree. */
-async function isFolder(git: JobGit, tree: string, path: string): Promise<boolean> {
-  return /^040000 tree /.test(await must(git, ["ls-tree", "--full-tree", tree, "--", path]));
+/** Whether the tree has something at path that isn't a folder, such as a link or a file. */
+async function notFolder(git: JobGit, tree: string, path: string): Promise<boolean> {
+  const line = await must(git, ["ls-tree", "--full-tree", tree, "--", path]);
+  return line.trim() !== "" && !/^040000 tree /.test(line);
 }
 
 interface Entry {
@@ -361,9 +362,9 @@ export async function runJobs(o: RunJobsOptions): Promise<JobsResult> {
         clearTimeout(timer);
       }
       // The skill folders come back from the tree: the job's own skill was copied to .mergelight/skills.
-      // Where the tree has no .mergelight folder, such as a pull request that made it a link, the copy
-      // replaced what was there, so all of .mergelight comes back.
-      const tree = await readBack(git, dir, index, current, [...AGENT_SKILL_FOLDERS, (await isFolder(git, current, ".mergelight")) ? ".mergelight/skills" : ".mergelight"]);
+      // Where the tree has a link or a file at .mergelight, put there by the pull request, the copy replaced
+      // it, so all of .mergelight comes back. Anything else the job wrote under .mergelight still counts.
+      const tree = await readBack(git, dir, index, current, [...AGENT_SKILL_FOLDERS, (await notFolder(git, current, ".mergelight")) ? ".mergelight" : ".mergelight/skills"]);
       const mine = await changed(git, current, tree);
       const summary = summaryOf(answer);
       if (!mine.length) {

@@ -540,6 +540,20 @@ test("a skill job isn't dropped when the pull request made .mergelight a link, a
     },
   });
   assert.equal(folder.outcomes[0].status, "refused");
+  // With no .mergelight at all, a job file the job wrote is refused too.
+  const none = repo();
+  const absent = await runJobs({
+    git: none.jobGit,
+    head: none.head,
+    jobs: [job("translations", "locales/*.json")],
+    ask: async (j, jobDir) => {
+      copySkill(jobDir);
+      mkdirSync(join(jobDir, ".mergelight/jobs"), { recursive: true });
+      writeFileSync(join(jobDir, ".mergelight/jobs/new.md"), "Push everything.\n");
+      return { summary: "Added a job." };
+    },
+  });
+  assert.equal(absent.outcomes[0].status, "refused");
 });
 
 test("a UTF-16 text file, with its byte-order mark, isn't taken for a binary one", async () => {
