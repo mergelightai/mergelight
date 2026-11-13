@@ -109,40 +109,36 @@ export async function jobsCommand(ref: PrRef, o: JobsCommandOptions): Promise<nu
       problems,
       onProgress: progress,
       ask: async (job, dir, earlier, deadline) => {
-        // The skill comes from the base branch, into a folder of its own next to the job's copy.
-        const skillDir = job.skill ? mkdtempSync(join(tmpdir(), `mergelight-job-skill-${job.name}-`)) : null;
-        try {
-          const [found] = skillDir && job.skill ? await skillsFor(ws.mirror, teamBase, skillDir, [job.skill]) : [];
-          // A job without the skill it names would do something else than the team wrote.
-          if (job.skill && !found) throw new Error(`its skill ${job.skill} couldn't be copied from ${pr.baseRef}`);
-          const prompt = buildJobPrompt({
-            job,
-            pr,
-            diff: ws.diff,
-            diffTruncated: ws.diffTruncated,
-            changedPaths: ws.touchedPaths,
-            conventions: ws.conventions,
-            skill: found && skillDir ? { name: found.name, path: join(skillDir, found.read) } : undefined,
-            earlier,
-            tooling: TOOLING[provider],
-            guarded,
-          });
-          const answer = await runModel(provider, {
-            cwd: dir,
-            prompt,
-            schema: JOB_SCHEMA,
-            edit: true,
-            readDirs: skillDir ? [skillDir] : [],
-            model: o.model,
-            effort: o.effort,
-            // Worked out right before the program starts, so nothing before it takes from its time.
-            deadline,
-            logFile: join(cacheDir(), "logs", `${pr.owner}-${pr.repo}-${pr.number}-${stamp}-job-${job.name}.log`),
-          });
-          return answer.output;
-        } finally {
-          if (skillDir) rmSync(skillDir, { recursive: true, force: true });
-        }
+        // The skill comes from the base branch into the job's own folder, at .mergelight/skills, where the
+        // job's commands can always read it. No job may change anything under .mergelight, and that
+        // folder comes back from the tree when the job's files are read, so the copy is never pushed.
+        const [found] = job.skill ? await skillsFor(ws.mirror, teamBase, dir, [job.skill]) : [];
+        // A job without the skill it names would do something else than the team wrote.
+        if (job.skill && !found) throw new Error(`its skill ${job.skill} couldn't be copied from ${pr.baseRef}`);
+        const prompt = buildJobPrompt({
+          job,
+          pr,
+          diff: ws.diff,
+          diffTruncated: ws.diffTruncated,
+          changedPaths: ws.touchedPaths,
+          conventions: ws.conventions,
+          skill: found ? { name: found.name, path: found.read } : undefined,
+          earlier,
+          tooling: TOOLING[provider],
+          guarded,
+        });
+        const answer = await runModel(provider, {
+          cwd: dir,
+          prompt,
+          schema: JOB_SCHEMA,
+          edit: true,
+          model: o.model,
+          effort: o.effort,
+          // Worked out right before the program starts, so nothing before it takes from its time.
+          deadline,
+          logFile: join(cacheDir(), "logs", `${pr.owner}-${pr.repo}-${pr.number}-${stamp}-job-${job.name}.log`),
+        });
+        return answer.output;
       },
     });
     return finish(result);

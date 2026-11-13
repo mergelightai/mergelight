@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { run } from "../run.js";
@@ -109,20 +109,38 @@ export function codexInstall(path = process.env.PATH ?? ""): string[] {
   return [];
 }
 
-/** What a shell and its tools need on Linux, and nothing more: no home folders, no runner, no temp folder, no /proc. */
-export const LINUX_SYSTEM = ["/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/etc", "/dev"];
+/** On Linux, the top-level folders a job's commands may read: the system and nothing else. /proc is the sandbox's own. */
+export const LINUX_KEEP = ["/usr", "/etc", "/dev", "/proc"];
 
-export function sandboxArgs(home = codexHome(), writable?: string, hidden: string[] = [], readable: string[] = [], platform: NodeJS.Platform = process.platform): string[] {
+/** Every top-level folder on this disk that is a real folder, not a link such as /bin to /usr/bin. */
+function topFolders(): string[] {
+  try {
+    return readdirSync("/", { withFileTypes: true })
+      .filter((d) => d.isDirectory() && !d.isSymbolicLink())
+      .map((d) => `/${d.name}`);
+  } catch {
+    return [];
+  }
+}
+
+export function sandboxArgs(home = codexHome(), writable?: string, hidden: string[] = [], readable: string[] = [], platform: NodeJS.Platform = process.platform, top: string[] = platform === "linux" ? topFolders() : []): string[] {
   if (writable) {
     // A job's files get pushed, so its commands mustn't reach secrets or other code. On Linux, where
-    // runners are, they read nothing but the system folders a shell needs. Elsewhere (a Mac, where the
-    // system needs more than that) they read the disk but none of the places secrets live. Either way the
-    // job's own skill stays readable and only the job's folder can be written: the more specific rule wins.
-    const start: [string, string][] =
-      platform === "linux"
-        ? [[":root", "none"], ...LINUX_SYSTEM.map((p): [string, string] => [p, "read"])]
-        : [[":root", "read"], ...hidden.map((h): [string, string] => [h, "none"])];
-    const paths: [string, string][] = [...start, [home, "none"], ...readable.map((r): [string, string] => [r, "read"]), [writable, "write"]];
+    // runners are, every top-level folder but the system's is hidden, whatever the runner's layout: home
+    // folders, /root, /opt, /var, /run, /tmp and any runner folder. The links at the top, such as /bin,
+    // stay and lead into /usr. On a Mac, whose system needs more, the disk stays readable but the places
+    // secrets live are hidden. Either way the job's folder is the one place it can write, and the more
+    // specific rule wins. A rule inside a hidden folder is left out, as Linux's sandbox can't make one.
+    const off = platform === "linux" ? top.filter((t) => !LINUX_KEEP.includes(t)) : [];
+    const inside = (p: string) => off.some((t) => p === t || p.startsWith(`${t}/`));
+    const paths: [string, string][] = [
+      [":root", "read"],
+      ...off.map((t): [string, string] => [t, "none"]),
+      ...hidden.filter((h) => !inside(h)).map((h): [string, string] => [h, "none"]),
+      ...(inside(home) ? [] : [[home, "none"] as [string, string]]),
+      ...readable.map((r): [string, string] => [r, "read"]),
+      [writable, "write"],
+    ];
     return ["-c", 'default_permissions="mergelight_job"', "-c", `permissions.mergelight_job.filesystem={${paths.map(([path, access]) => `${JSON.stringify(path)}="${access}"`).join(",")}}`];
   }
   return ["-c", 'default_permissions="mergelight_review"', "-c", `permissions.mergelight_review.filesystem={":root"="read",${JSON.stringify(home)}="none"}`];

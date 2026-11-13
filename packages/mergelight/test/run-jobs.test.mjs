@@ -217,9 +217,11 @@ test("the job's prompt gives the team's task as the instruction, and the pull re
 });
 
 test("a job's Codex sandbox may write in the job's folder only, and can't read where secrets live", () => {
-  // On Linux, where runners are: nothing but the system folders, the skill and the job's own folder.
-  const linux = sandboxArgs("/home/.codex", "/tmp/job", ["/home/runner"], ["/tmp/skill"], "linux")[3];
-  assert.equal(linux, 'permissions.mergelight_job.filesystem={":root"="none","/usr"="read","/bin"="read","/sbin"="read","/lib"="read","/lib32"="read","/lib64"="read","/libx32"="read","/etc"="read","/dev"="read","/home/.codex"="none","/tmp/skill"="read","/tmp/job"="write"}');
+  // On Linux, where runners are: every top-level folder but the system's is hidden, whatever the layout.
+  // A rule inside a hidden folder is left out, as Linux's sandbox can't make one; the job's own rules stay.
+  const linux = sandboxArgs("/home/runner/.codex", "/tmp/job", ["/home/runner", "/srv/kube/config"], ["/opt/hostedtoolcache/node/x64/lib/node_modules/@openai/codex"], "linux", ["/home", "/opt", "/tmp", "/usr", "/etc", "/dev", "/proc", "/var", "/runner", "/srv"])[3];
+  assert.equal(linux, 'permissions.mergelight_job.filesystem={":root"="read","/home"="none","/opt"="none","/tmp"="none","/var"="none","/runner"="none","/srv"="none","/opt/hostedtoolcache/node/x64/lib/node_modules/@openai/codex"="read","/tmp/job"="write"}');
+  assert.match(sandboxArgs("/x/.codex", "/tmp/job", ["/etc/kube/config"], [], "linux", ["/tmp", "/etc"])[3], /"\/etc\/kube\/config"="none"/, "a secret inside a readable system folder is still hidden");
   const args = sandboxArgs("/home/.codex", "/tmp/job dir", ["/home/runner", "/tmp"], ["/tmp/skill"], "darwin");
   assert.deepEqual(args.slice(0, 2), ["-c", 'default_permissions="mergelight_job"']);
   assert.equal(args[3], 'permissions.mergelight_job.filesystem={":root"="read","/home/runner"="none","/tmp"="none","/home/.codex"="none","/tmp/skill"="read","/tmp/job dir"="write"}');

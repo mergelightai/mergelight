@@ -342,7 +342,8 @@ export async function runJobs(o: RunJobsOptions): Promise<JobsResult> {
       } finally {
         clearTimeout(timer);
       }
-      const tree = await readBack(git, dir, index, current, AGENT_SKILL_FOLDERS);
+      // The skill folders come back from the tree: the job's own skill was copied to .mergelight/skills.
+      const tree = await readBack(git, dir, index, current, [...AGENT_SKILL_FOLDERS, ".mergelight/skills"]);
       const mine = await changed(git, current, tree);
       const summary = summaryOf(answer);
       if (!mine.length) {
