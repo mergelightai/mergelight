@@ -84,12 +84,26 @@ export const REFUSED_PATHS = [
   ".continue",
   ".rules",
   ".goosehints",
+  ".roorules",
+  ".roomodes",
+  ".continuerules",
   ".aider.conf.yml",
   ".gitmodules",
   ".gitattributes",
   ".lfsconfig",
   // Other places that decide what runs: CI services, git hooks and dev containers.
   ".gitlab-ci.yml",
+  ".travis.yml",
+  ".drone.yml",
+  ".woodpecker.yml",
+  ".woodpecker",
+  ".gitea",
+  ".forgejo",
+  ".pre-commit-config.yaml",
+  "lefthook.yml",
+  ".lefthook.yml",
+  ".gitpod.yml",
+  ".devcontainer.json",
   ".gitlab",
   ".circleci",
   "Jenkinsfile",
@@ -142,6 +156,9 @@ export function parseJobFile(path: string, text: string): { job: Job } | { probl
   const cut = ["on", "may-change"].find((key) => scalarValue(block.fm, key)?.endsWith(",")) ?? (/^[ \t]*-[^\n#]*,[ \t]*(?:#.*)?$/m.test(block.fm) ? "list" : undefined);
   if (cut === "list") return { problem: "a list item in its front matter ends with a comma: write each path as an item of its own" };
   if (cut) return { problem: `its ${cut} line ends with a comma: write the whole list on one line, or as a YAML list` };
+  // A path on an indented line under the key's own value is part of it in YAML, but only the key's line is read.
+  const goesOn = ["on", "may-change", "skill"].find((key) => new RegExp(`^${key}[ \\t]*:[ \\t]*[^\\s#][^\\n]*\\n[ \\t]+[^\\s#-]`, "m").test(block.fm));
+  if (goesOn) return { problem: `its ${goesOn} value goes on to an indented line, which isn't read: write the paths as a list` };
   // "./name" means the root, as "/name" does: without that it would be "name" in any folder.
   const rooted = (paths: string[] | null) => paths?.map((p) => p.replace(/^\.\//, "/"));
   const on = rooted(listValue(block.fm, "on"));
@@ -156,6 +173,9 @@ export function parseJobFile(path: string, text: string): { job: Job } | { probl
   const count = (p: string, ch: string) => p.split(ch).length - 1;
   const split = [...on, ...mayChange].find((p) => count(p, "[") !== count(p, "]") || p.indexOf("]") < p.indexOf("["));
   if (split !== undefined) return { problem: `the path "${split.slice(0, 100)}" looks like part of a [list]: write the whole list on one line, or as a YAML list` };
+  // "locales/*/" reads as "locales/*", the files right in locales: the opposite of what it says.
+  const slash = [...on, ...mayChange].find((p) => /[*?][^/]*\/+$/.test(p));
+  if (slash !== undefined) return { problem: `the path "${slash.slice(0, 100)}" ends in a slash after a wildcard: write locales/* for the files in a folder, or locales for all of it` };
   const bad = [...on, ...mayChange].find(badPattern);
   if (bad !== undefined) return { problem: `the path "${bad.slice(0, 100)}" leaves the repository or names no file. For every file, write **` };
   // A YAML block or empty value ("|", ">-", "~") would be read as a path: only lists and one-line values are read.
@@ -215,11 +235,16 @@ export function refusedPath(path: string): boolean {
 /**
  * Whether this job may change, add or delete the file. Never one in a skill folder: the job's own, or one
  * in guarded, which holds every folder with a SKILL.md on the base branch (guardedFolders). A skill
- * guides a job or a review, and a job mustn't rewrite what tells it or a review what to do.
+ * guides a job or a review, and a job mustn't rewrite what tells it or a review what to do. guarded only
+ * knows the base branch: the step that writes passes isLink for the pull request's own links.
  */
-export function mayChange(job: Job, path: string, guarded: string[] = []): boolean {
+export function mayChange(job: Job, path: string, guarded: string[] = [], isLink: (path: string) => boolean = () => false): boolean {
   // A path that steps out of a folder could reach past what a pattern names.
-  if (path.split("/").some((part) => part === "." || part === ".." || part === "")) return false;
+  const parts = path.split("/");
+  if (parts.some((part) => part === "." || part === ".." || part === "")) return false;
+  // isLink tells about the branch being written, which can have links the base branch doesn't: a write
+  // at or through one would land wherever it leads.
+  if (parts.some((_, i) => isLink(parts.slice(0, i + 1).join("/")))) return false;
   if (refusedPath(path)) return false;
   const lower = path.toLowerCase();
   if ([...(job.skill ? [job.skill] : []), ...guarded].some((folder) => matchesPath(`/${folder}`.toLowerCase(), lower))) return false;

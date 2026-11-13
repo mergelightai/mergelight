@@ -27,6 +27,12 @@ test("a job file gives its name, the files that start it, the files it may chang
   });
 });
 
+test("quotes keep what is inside them: a # isn't a comment, and brackets stay", () => {
+  const { job } = parseJobFile(".mergelight/jobs/x.md", "---\non:\n  - '[locale]/messages.json'\nmay-change:\n  - \"build #2/**\" # the second build\n---\nTask.");
+  assert.deepEqual(job.on, ["[locale]/messages.json"]);
+  assert.deepEqual(job.mayChange, ["build #2/**"]);
+});
+
 test("a job's paths can be written the ways rule files write them", () => {
   const md = '---\non:\n  - src/**/*.{ts,tsx} # code\n  - "api/**"\n  - "docs/guides,old"\nmay-change: [docs/**, README.md]\nskill: ./.claude/skills/write-docs/\n---\nUpdate the docs.\n';
   const { job } = parseJobFile(".mergelight/jobs/docs.md", md);
@@ -55,11 +61,14 @@ test("a job file that can't be a job says why", () => {
   assert.match(problem("---\non: x\nmay-change: ../other-repo/**\n---\nTask."), /"\.\.\/other-repo\/\*\*" leaves the repository/);
   assert.match(problem('---\non: x\nmay-change: ["**", "!config/secrets/**"]\n---\nTask.'), /"!config\/secrets\/\*\*" starts with !, but a job can't leave files out that way/);
   assert.match(problem("---\non: [locales/en.json,\n  locales/en-GB.json]\nmay-change: y\n---\nTask."), /its on line ends with a comma: write the whole list on one line/);
-  assert.match(problem("---\non: [locales/en.json, locales/en-GB.json\n  , locales/x.json]\nmay-change: y\n---\nTask."), /"\[locales\/en\.json" looks like part of a \[list\]: write the whole list on one line/);
+  assert.match(problem("---\non: [locales/en.json, locales/en-GB.json\n  , locales/x.json]\nmay-change: y\n---\nTask."), /its on value goes on to an indented line/);
+  assert.match(problem("---\non: [locales/en.json, locales/en-GB.json\nmay-change: y\n---\nTask."), /"\[locales\/en\.json" looks like part of a \[list\]: write the whole list on one line/);
   assert.equal(problem('---\non: app/[locale]/page.tsx\nmay-change: "[locale]/messages.json"\n---\nTask.'), undefined, "brackets that close are part of a name, as in Next.js");
   assert.match(problem("---\non: src\nmay-change: [locale]/messages.json, app/[locale]\n---\nTask."), /looks like part of a \[list\]/, "unquoted, the outer brackets are taken for a list and leave unpaired ones");
   assert.match(problem("---\non: locales/en.json,\n  locales/en-GB.json\nmay-change: y\n---\nTask."), /its on line ends with a comma/);
   assert.match(problem("---\non:\n  - locales/en.json,\n    locales/en-GB.json\nmay-change: y\n---\nTask."), /a list item in its front matter ends with a comma/);
+  assert.match(problem("---\non: locales/en.json\n  locales/en-GB.json\nmay-change: y\n---\nTask."), /its on value goes on to an indented line, which isn't read/);
+  assert.match(problem("---\non: src\nmay-change: locales/*/\n---\nTask."), /ends in a slash after a wildcard/);
   for (const value of ["|", ">-", "|2", ">2-", "~", "null"]) assert.match(problem(`---\non: ${value}\n  locales/en.json\nmay-change: y\n---\nTask.`), /is a YAML block or an empty value/, value);
   assert.match(problem("---\non: src\nmay-change: tools/write-docs/**\nskill: tools/write-docs\n---\nTask."), /only name files a job can never change, or its own skill folder, tools\/write-docs/);
   assert.match(problem("---\non: src\nmay-change: .github/**, tools/write-docs/**\nskill: tools/write-docs\n---\nTask."), /only name files a job can never change, or its own skill folder/);
@@ -116,7 +125,7 @@ test("a job runs only when a pull request changed one of its on files", () => {
 
 test("a job may change only its own paths, and never workflows, Mergelight's files or git's files", () => {
   const { job } = parseJobFile(".mergelight/jobs/x.md", '---\non: src\nmay-change: "**"\n---\nTask.');
-  for (const p of [".github/workflows/ci.yml", "packages/web/.github/x.yml", ".mergelight/jobs/x.md", ".mergelight/rules.md", ".gitmodules", "src/.gitattributes", ".git/config", ".GITHUB/workflows/ci.yml", "docs/.GitAttributes", ".GitModules", "CODEOWNERS", "docs/CODEOWNERS", "AGENTS.md", "packages/web/CLAUDE.md", ".claude/settings.json", ".agents/skills/x/SKILL.md", ".codex/config.toml", ".cursor/rules/style.mdc", "CONTRIBUTING.md", "docs/CONTRIBUTING.md", "GEMINI.md", ".cursorrules", "tools/x/SKILL.md", ".mcp.json", "CLAUDE.local.md", "AGENTS.override.md", ".vscode/tasks.json", ".roo/rules.md", ".kiro/steering/x.md", ".lfsconfig", "CONVENTIONS.md", ".continue/rules/x.md", ".goosehints", "AGENT.md", "QWEN.md", "CRUSH.md", ".kilocode/rules/x.md", ".trae/rules/x.md", ".augment-guidelines", ".openhands/microagents/x.md", ".gitlab-ci.yml", ".circleci/config.yml", "Jenkinsfile", "azure-pipelines.yml", ".husky/pre-commit", ".devcontainer/devcontainer.json", "WARP.md", "opencode.json", ".idx/airules.md"]) {
+  for (const p of [".github/workflows/ci.yml", "packages/web/.github/x.yml", ".mergelight/jobs/x.md", ".mergelight/rules.md", ".gitmodules", "src/.gitattributes", ".git/config", ".GITHUB/workflows/ci.yml", "docs/.GitAttributes", ".GitModules", "CODEOWNERS", "docs/CODEOWNERS", "AGENTS.md", "packages/web/CLAUDE.md", ".claude/settings.json", ".agents/skills/x/SKILL.md", ".codex/config.toml", ".cursor/rules/style.mdc", "CONTRIBUTING.md", "docs/CONTRIBUTING.md", "GEMINI.md", ".cursorrules", "tools/x/SKILL.md", ".mcp.json", "CLAUDE.local.md", "AGENTS.override.md", ".vscode/tasks.json", ".roo/rules.md", ".kiro/steering/x.md", ".lfsconfig", "CONVENTIONS.md", ".continue/rules/x.md", ".goosehints", "AGENT.md", "QWEN.md", "CRUSH.md", ".kilocode/rules/x.md", ".trae/rules/x.md", ".augment-guidelines", ".openhands/microagents/x.md", ".gitlab-ci.yml", ".circleci/config.yml", "Jenkinsfile", "azure-pipelines.yml", ".husky/pre-commit", ".devcontainer/devcontainer.json", "WARP.md", "opencode.json", ".idx/airules.md", ".travis.yml", ".gitea/workflows/ci.yml", ".pre-commit-config.yaml", "lefthook.yml", ".devcontainer.json", ".roomodes"]) {
     assert.ok(refusedPath(p), p);
     assert.ok(!mayChange(job, p), p);
   }
@@ -128,6 +137,9 @@ test("a job may change only its own paths, and never workflows, Mergelight's fil
   const { job: star } = parseJobFile(".mergelight/jobs/x.md", "---\non: src\nmay-change: locales/*\n---\nTask.");
   assert.ok(mayChange(star, "locales/da.json"));
   assert.ok(!mayChange(star, "locales/legacy/admin/strings.json"), "a pattern ending in * never covers a whole subfolder");
+  // A link on the branch being written, which the base branch doesn't have, is never written at or through.
+  const links = new Set(["locales/ci"]);
+  assert.ok(!mayChange(star, "locales/ci", [], (p) => links.has(p)) && !mayChange(star, "locales/ci/x.json", [], (p) => links.has(p)));
   const { job: root } = parseJobFile(".mergelight/jobs/x.md", "---\non: src\nmay-change: ./CHANGELOG.md, ./*.json\n---\nTask.");
   assert.ok(mayChange(root, "CHANGELOG.md") && mayChange(root, "package.json"));
   assert.ok(!mayChange(root, "docs/CHANGELOG.md") && !mayChange(root, "docs/x.json"), "./ means the root, as / does");

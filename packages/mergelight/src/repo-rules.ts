@@ -43,8 +43,21 @@ export function frontMatterBlock(text: string): { fm: string; body: string } | n
   return m ? { fm: m[1] ?? "", body: text.slice(m[0].length) } : null;
 }
 
-/** Without a YAML comment after it: applyTo: "src/billing/**" # billing only. */
-const withoutYamlComment = (value: string) => value.replace(/(?:^|[ \t])#.*$/, "").trim();
+/**
+ * Without a YAML comment after it: applyTo: "src/billing/**" # billing only. A # inside quotes is part of
+ * the value, as in YAML.
+ */
+function withoutYamlComment(value: string): string {
+  let quote: string | null = null;
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i]!;
+    if (quote) {
+      if (ch === quote) quote = null;
+    } else if (ch === '"' || ch === "'") quote = ch;
+    else if (ch === "#" && (i === 0 || value[i - 1] === " " || value[i - 1] === "\t")) return value.slice(0, i).trim();
+  }
+  return value.trim();
+}
 
 /** The value of a one-line key, without quotes or a comment, or null when the key isn't there. */
 export function scalarValue(fm: string, key: string): string | null {
@@ -72,8 +85,9 @@ export function listValue(fm: string, keys: string): string[] | null {
       if (/^[ \t]*(?:#.*)?$/.test(l)) continue;
       const item = /^[ \t]*-[ \t]*(.+)$/.exec(l);
       if (!item) break;
-      // An item can be a [list] of its own, as the inline value can.
-      items.push(unquote(withoutYamlComment(item[1]!)).replace(/^\[([\s\S]*)\]$/, "$1"));
+      // An item can be a [list] of its own, as the inline value can. Brackets go before quotes, so a
+      // quoted "[locale]" keeps its brackets, as it does inline.
+      items.push(unquote(withoutYamlComment(item[1]!).replace(/^\[([\s\S]*)\]$/, "$1")));
     }
   }
   return items.flatMap(splitOutsideBraces).map(unquote).flatMap(expandBraces).filter(Boolean);
