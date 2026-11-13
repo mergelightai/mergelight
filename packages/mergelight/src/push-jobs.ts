@@ -2,7 +2,7 @@ import { appendFileSync, readFileSync } from "node:fs";
 import { fetchPullRequest, type PrRef } from "./github.js";
 import { mayChange, type Job } from "./jobs.js";
 import { GitHub } from "./publish/api.js";
-import { isBinary, JOBS_TRAILER, MAX_CHANGE_BYTES, MAX_CHANGED_FILES, mirrorGit, newSecret, withoutSecrets, type JobsResult } from "./run-jobs.js";
+import { isBinary, JOBS_TRAILER, MAX_CHANGE_BYTES, MAX_CHANGED_FILES, mirrorGit, newSecret, textOf, withoutSecrets, type JobsResult } from "./run-jobs.js";
 import { fetchMirror, jobFilesFor } from "./workspace.js";
 
 /**
@@ -183,10 +183,10 @@ export async function pushJobs(ref: PrRef, o: PushJobsOptions): Promise<number> 
     // The jobs step drops a job that writes a secret the file didn't have. The file it hands over is checked again.
     for (const a of plan.additions) {
       // The mirror holds no file contents until they are asked for, so this fetches them, with the login a private repository needs.
-      const old = modes.get(a.path) ? await mirrorGit(mirror).run(["cat-file", "blob", `${pr.headSha}:${a.path}`]) : null;
-      if (old && old.code !== 0) throw new Error(`Couldn't read ${a.path} at ${pr.headSha.slice(0, 7)}.`);
-      const before = old?.stdout ?? "";
-      const secret = newSecret(a.bytes.toString("utf8"), before);
+      const old = modes.get(a.path) ? await mirrorGit(mirror).bytes(["cat-file", "blob", `${pr.headSha}:${a.path}`]) : Buffer.alloc(0);
+      if (!old) throw new Error(`Couldn't read ${a.path} at ${pr.headSha.slice(0, 7)}.`);
+      // Read as the text it is, so a key in a UTF-16 file is seen too.
+      const secret = newSecret(textOf(a.bytes), textOf(old));
       if (secret) return refuse(`${a.path} would hold what looks like ${secret === "a key or token" ? "a key or token" : `the runner's ${secret}`}.`, 1);
     }
 

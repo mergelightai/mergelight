@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { parseJobFile } from "../dist/jobs.js";
-import { buildJobPrompt, caseClashes, isJobCommit, JOBS_TRAILER, MAX_CHANGED_FILES, mirrorGit, newSecret, runJobs, withoutSecrets } from "../dist/run-jobs.js";
+import { buildJobPrompt, caseClashes, isBinary, isJobCommit, JOBS_TRAILER, MAX_CHANGED_FILES, mirrorGit, newSecret, runJobs, textOf, withoutSecrets } from "../dist/run-jobs.js";
 import { besides, codexInstall, jobHidden, runnerInstall, sandboxArgs, shimManager } from "../dist/providers/codex.js";
 
 /** A repository with one commit: an English file, a Danish one, a script that can run, a link and a workflow. */
@@ -568,4 +568,35 @@ test("a UTF-16 text file, with its byte-order mark, isn't taken for a binary one
     },
   });
   assert.equal(result.outcomes[0].status, "changed", result.outcomes[0].summary);
+  // A key written in UTF-16 is seen by the secret check all the same.
+  const { head: again, jobGit: git2 } = repo();
+  const key = `ghp_${"B".repeat(36)}`;
+  const keyed = await runJobs({
+    git: git2,
+    head: again,
+    jobs: [job("strings", "locales/*")],
+    ask: async (j, dir) => {
+      writeFileSync(join(dir, "locales/Localizable.strings"), Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(`"token" = "${key}";\n`, "utf16le")]));
+      return { summary: "Done." };
+    },
+  });
+  assert.equal(keyed.outcomes[0].status, "refused");
+  assert.match(keyed.outcomes[0].summary, /a key or token/);
+});
+
+test("UTF-16 counts as text only with whole characters and no zero one, and is read as the text it is", () => {
+  const le = (text) => Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, "utf16le")]);
+  const be = (text) => {
+    const body = Buffer.from(text, "utf16le").swap16();
+    return Buffer.concat([Buffer.from([0xfe, 0xff]), body]);
+  };
+  assert.equal(isBinary(le("hej")), false);
+  assert.equal(isBinary(be("hej")), false);
+  assert.equal(isBinary(Buffer.concat([le("hej"), Buffer.from([0x41])])), true, "half a character at the end");
+  assert.equal(isBinary(le("a\u0000b")), true, "a zero character");
+  assert.equal(isBinary(Buffer.from([0x50, 0x4b, 0x00])), true);
+  assert.equal(isBinary(Buffer.from("plain\n")), false);
+  assert.equal(textOf(le("Grüß 🎉")), "Grüß 🎉");
+  assert.equal(textOf(be("Grüß 🎉")), "Grüß 🎉");
+  assert.equal(textOf(Buffer.from("plain")), "plain");
 });
