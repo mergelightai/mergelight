@@ -89,7 +89,7 @@ function matchesSegment(pattern: string, name: string): boolean {
  * It is matched folder by folder with a table of what was tried, so the work is bounded by the
  * lengths of the pattern and the path. A pattern can't be written that makes it hang.
  */
-export function matchesPath(pattern: string, file: string): boolean {
+export function matchesPath(pattern: string, file: string, wildFolders = true): boolean {
   // Doubled slashes are one, and a slash at either end isn't part of a name.
   const plain = (path: string) => path.replace(/\/{2,}/g, "/").replace(/^(\.\/|\/)+/, "").replace(/\/+$/, "");
   const trimmed = plain(pattern);
@@ -100,7 +100,10 @@ export function matchesPath(pattern: string, file: string): boolean {
   const parts = trimmed.includes("/") || rooted ? trimmed.split("/") : ["**", trimmed];
   const all = plain(file).split("/");
   // The file itself, then each folder it sits in: a pattern that matches a folder covers what is inside.
-  for (let length = all.length; length >= 1; length--) {
+  // Without wildFolders, only a pattern that ends in a plain name does: "locales/*" is then the files
+  // right in locales, never a subfolder of it and everything below.
+  const lowest = wildFolders || !/[*?]/.test(parts[parts.length - 1] ?? "") ? 1 : all.length;
+  for (let length = all.length; length >= lowest; length--) {
     if (matchesNames(parts, all.slice(0, length))) return true;
   }
   return false;

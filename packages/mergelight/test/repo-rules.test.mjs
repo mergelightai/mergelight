@@ -80,6 +80,15 @@ test("the reviewers get a repository rule with the file it came from", () => {
   assert.match(prompt, /Where a rule from a repository file and a rule without from disagree, the rule without from wins\./);
 });
 
+test("a comma list inside one YAML item is split, as before", () => {
+  assert.deepEqual(frontMatter('---\napplyTo:\n  - "**/*.ts,**/*.tsx"\n  - src/billing/**, db/*.sql\n---\nx').paths, ["**/*.ts", "**/*.tsx", "src/billing/**", "db/*.sql"]);
+  assert.deepEqual(frontMatter("---\napplyTo:\n  - [src/billing/**, db/*.sql]\n---\nx").paths, ["src/billing/**", "db/*.sql"], "an item that is a [list] of its own");
+  assert.deepEqual(frontMatter("---\napplyTo:\n  - '[locale]/*.json'\n---\nx").paths, ["[locale]/*.json"], "a quoted item keeps its brackets");
+  assert.deepEqual(frontMatter("---\napplyTo: docs/don't/** # old notes\n---\nx").paths, ["docs/don't/**"], "an apostrophe inside a word doesn't open a quote");
+  assert.deepEqual(frontMatter("---\napplyTo: 'src/billing/** # billing only\n---\nx").paths, ["src/billing/**"], "a quote that never closes still loses its comment");
+  assert.deepEqual(frontMatter("---\napplyTo: 'src/billing/** # don't touch\n---\nx").paths, ["src/billing/**"], "an apostrophe in the comment doesn't close the quote");
+});
+
 test("brace patterns are spread out, and commas inside braces don't split a pattern", () => {
   assert.deepEqual(frontMatter('---\napplyTo: "src/**/*.{ts,tsx},*.sql"\n---\nx').paths, ["src/**/*.ts", "src/**/*.tsx", "*.sql"]);
   assert.deepEqual(expandBraces("{a,b}/*.{x,y}"), ["a/*.x", "a/*.y", "b/*.x", "b/*.y"]);
