@@ -98,7 +98,14 @@ test("a pull request from a fork or from Dependabot never starts a sign-in", () 
 test("a fork's pull request is still reviewed when the workflow gives it a login", () => {
   const r = login({ event: "pull_request_target", headRepo: "stranger/widgets", authJson: "{}" });
   assert.equal(r.env.MERGELIGHT_CHATGPT, "1");
-  assert.equal(r.env.MERGELIGHT_NO_LOGIN, "0");
+  assert.notEqual(r.env.MERGELIGHT_NO_LOGIN, "1");
+});
+
+test("the Codex login never clears the choice step's skip, which a Claude reviewer with no login sets", () => {
+  // A fork's pull request with Claude to review and Codex to check, and no secrets: the choice step skips.
+  const skip = choose({ wanted: "claude", checker: "codex", headRepo: "stranger/widgets" });
+  assert.equal(skip.env.MERGELIGHT_NO_LOGIN, "1");
+  assert.doesNotMatch(stepScript("Log in to Codex"), /MERGELIGHT_NO_LOGIN=0/);
 });
 
 test("the refresh and its save come before the review", () => {
@@ -203,7 +210,7 @@ test("Codex that only checks, with no login, holds nothing up", () => {
     });
     assert.equal(r.status, 0, r.stderr);
     const env = Object.fromEntries(readFileSync(envFile, "utf8").trim().split("\n").filter(Boolean).map((l) => l.split("=")));
-    assert.equal(env.MERGELIGHT_NO_LOGIN, "0", "the Claude review still runs");
+    assert.notEqual(env.MERGELIGHT_NO_LOGIN, "1", "the Claude review still runs");
     assert.equal(env.MERGELIGHT_CONNECT, "0", "no reviewer's sign-in");
     assert.equal(existsSync(join(dir, "codex-home", "config.toml")), connectCheck === "codex", connectCheck);
     rmSync(join(dir, "codex-home"), { recursive: true, force: true });

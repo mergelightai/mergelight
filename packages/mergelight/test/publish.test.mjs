@@ -10,7 +10,7 @@ import { parsePatch, place } from "../dist/publish/diff-lines.js";
 import { mergeLight, tierOf } from "../dist/review.js";
 import { closedBody, patchTouches, readClosed, reopenedBody, resolvedByPeople, threadAction } from "../dist/publish/closed.js";
 import { checkerMissedLine, clean, failedSummaryBody, isFailedSummary, limitNotice, notReadLine, loginNotice, FINDING_MARKER_RE, inlineBody, isPendingSummary, pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "../dist/publish/markdown.js";
-import { APPROVAL_MARKER, approvalHold, approvalLight, UNREVIEWED, checkConclusion, isYellowCheck, syncApproval, trustedComment, CHECK_FAILED_TITLE, checkLimitTitle, checkLoginTitle, isFailedCheckTitle } from "../dist/publish/publish.js";
+import { APPROVAL_MARKER, approvalHold, approvalLight, failSummary, UNREVIEWED, checkConclusion, isYellowCheck, syncApproval, trustedComment, CHECK_FAILED_TITLE, checkLimitTitle, checkLoginTitle, isFailedCheckTitle } from "../dist/publish/publish.js";
 import { decodeState, encodeState, nextState } from "../dist/publish/state.js";
 import { buildVerifierPrompt } from "../dist/prompt.js";
 import { assignIds } from "../dist/review.js";
@@ -655,4 +655,19 @@ test("the summary says when the AI set to check had no login yet, so the reviewe
   );
   assert.equal(checkerMissedLine({ checker_missed: "claude", provider: { name: "codex", model: null, effort: "high" } }), "⚠️ Claude was set to check this review, but it has no Claude login yet, so Codex checked it.");
   assert.equal(checkerMissedLine({ provider: { name: "codex", model: null, effort: "high" } }), null);
+});
+
+test("a failed review keeps what earlier rounds found, when it replaces a pending summary", async () => {
+  const state = encodeState({ v: 1, round: 3, findings: [] });
+  const writes = [];
+  const api = {
+    list: async (path) => (path.startsWith("issues/") ? [{ id: 5, user: { login: "mergelight-ai[bot]", type: "Bot" }, author_association: "NONE", body: `${pendingSummaryBody()}\n${state}` }] : []),
+    viewer: async () => null,
+    write: async (method, path, body) => writes.push({ method, path, body }),
+  };
+  await failSummary(api, 7);
+  assert.equal(writes.length, 1);
+  assert.ok(isFailedSummary(writes[0].body.body));
+  assert.ok(writes[0].body.body.endsWith(state), "the state block is still there");
+  assert.equal(decodeState(writes[0].body.body)?.round, 3);
 });

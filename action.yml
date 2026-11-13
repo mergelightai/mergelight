@@ -247,11 +247,11 @@ runs:
         export CODEX_HOME="$RUNNER_TEMP/codex-home"
         mkdir -p -m 700 "$CODEX_HOME"
         echo "CODEX_HOME=$CODEX_HOME" >> "$GITHUB_ENV"
-        # A job can run this Action more than once, so nothing carries over from an earlier run.
+        # A job can run this Action more than once, so nothing carries over from an earlier run. The choice
+        # step already set MERGELIGHT_NO_LOGIN, which a Claude reviewer with no login keeps here.
         {
           echo "MERGELIGHT_CHATGPT=0"
           echo "MERGELIGHT_CONNECT=0"
-          echo "MERGELIGHT_NO_LOGIN=0"
           echo "MERGELIGHT_LOGIN_LOST=0"
         } >> "$GITHUB_ENV"
         if [ -n "$AUTH_JSON" ]; then
@@ -388,7 +388,15 @@ runs:
         SECRETS_TOKEN: ${{ inputs.secrets-token }}
         SECRET_NAME: ${{ inputs.auth-secret-name }}
         TOKEN_SERVER: ${{ inputs.token-server }}
-      run: bash "$GITHUB_ACTION_PATH/packages/mergelight/scripts/save-login.sh"
+      run: |
+        bash "$GITHUB_ACTION_PATH/packages/mergelight/scripts/save-login.sh" && exit 0
+        # A checker's login that can't be saved doesn't stop a review whose reviewer has a login. The run's
+        # last step tries to save it again.
+        if [ "${MERGELIGHT_CONNECT:-0}" != 1 ] && [ "${MERGELIGHT_CONNECT_CHECK:-}" = codex ]; then
+          echo "::warning::The new ChatGPT login couldn't be saved yet. This review goes on, and the run tries again when it ends."
+          exit 0
+        fi
+        exit 1
 
     - name: Save the new Claude login
       if: env.MERGELIGHT_CLAUDE_TOKEN != ''
@@ -396,7 +404,14 @@ runs:
       env:
         SECRETS_TOKEN: ${{ inputs.secrets-token }}
         TOKEN_SERVER: ${{ inputs.token-server }}
-      run: bash "$GITHUB_ACTION_PATH/packages/mergelight/scripts/save-claude-login.sh"
+      run: |
+        bash "$GITHUB_ACTION_PATH/packages/mergelight/scripts/save-claude-login.sh" && exit 0
+        # A checker's login that can't be saved doesn't stop the review: this run still checks with it.
+        if [ "${MERGELIGHT_CONNECT_CHECK:-}" = claude ]; then
+          echo "::warning::The new Claude login couldn't be saved, so the next run asks for it again. This review goes on."
+          exit 0
+        fi
+        exit 1
 
     - name: Review
       if: (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && env.MERGELIGHT_NO_LOGIN != '1'
