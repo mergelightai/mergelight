@@ -104,6 +104,23 @@ export const REFUSED_PATHS = [
   ".lefthook.yml",
   ".gitpod.yml",
   ".devcontainer.json",
+  ".cirrus.yml",
+  "appveyor.yml",
+  ".appveyor.yml",
+  ".semaphore",
+  "cloudbuild.yaml",
+  "cloudbuild.yml",
+  "buildspec.yml",
+  "bitrise.yml",
+  "codemagic.yaml",
+  ".githooks",
+  // Who must approve, and what merges by itself.
+  "OWNERS",
+  "OWNERS_ALIASES",
+  ".policy.yml",
+  ".pullapprove.yml",
+  ".mergify.yml",
+  ".mergify",
   ".gitlab",
   ".circleci",
   "Jenkinsfile",
@@ -158,10 +175,12 @@ export function parseJobFile(path: string, text: string): { job: Job } | { probl
   if (cut) return { problem: `its ${cut} line ends with a comma: write the whole list on one line, or as a YAML list` };
   // "./name" means the root, as "/name" does: without that it would be "name" in any folder.
   const rooted = (paths: string[] | null) => paths?.map((p) => p.replace(/^\.\//, "/"));
+  // A key with nothing on its line, then a path on an indented line that isn't a "- " item: the path isn't read.
+  const indented = (key: string) => new RegExp(`^${key}[ \\t]*:[ \\t]*(?:#.*)?\\n[ \\t]+[^\\s#-]`, "m").test(block.fm);
   const on = rooted(listValue(block.fm, "on"));
-  if (!on?.length) return { problem: "names no on paths, the files whose change starts the job" };
+  if (!on?.length) return { problem: indented("on") ? "its on value goes on to an indented line, which isn't read: write the paths as a list" : "names no on paths, the files whose change starts the job" };
   const mayChange = rooted(listValue(block.fm, "may-change"));
-  if (!mayChange?.length) return { problem: "names no may-change paths, the only files the job may change" };
+  if (!mayChange?.length) return { problem: indented("may-change") ? "its may-change value goes on to an indented line, which isn't read: write the paths as a list" : "names no may-change paths, the only files the job may change" };
   // "!" excludes files in GitHub's path filters, but here it would be part of a name and exclude nothing.
   const negated = [...on, ...mayChange].find((p) => p.startsWith("!"));
   if (negated !== undefined) return { problem: `the path "${negated.slice(0, 100)}" starts with !, but a job can't leave files out that way. List only the files it may change` };

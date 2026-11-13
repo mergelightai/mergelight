@@ -53,7 +53,8 @@ function withoutYamlComment(value: string): string {
     const ch = value[i]!;
     if (quote) {
       if (ch === quote) quote = null;
-    } else if (ch === '"' || ch === "'") quote = ch;
+      // A quote opens only where a value or an item starts, as in YAML: one inside a word, like don't, is a letter.
+    } else if ((ch === '"' || ch === "'") && (i === 0 || /[\s,[]/.test(value[i - 1]!))) quote = ch;
     else if (ch === "#" && (i === 0 || value[i - 1] === " " || value[i - 1] === "\t")) return value.slice(0, i).trim();
   }
   return value.trim();
