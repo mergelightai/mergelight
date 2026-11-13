@@ -269,6 +269,8 @@ export function parseJobFile(path: string, text: string): { job: Job } | { probl
   const goesOn = ["on", "may-change", "skill"].find((key) => new RegExp(`^${key}[ \\t]*:[ \\t]*[^\\s#][^\\n]*\\n[ \\t]+[^\\s#-]`, "m").test(block.fm));
   if (goesOn) return { problem: goesOn === "skill" ? "its skill value goes on to an indented line, which isn't read: write the skill folder on the skill line itself" : `its ${goesOn} value goes on to an indented line, which isn't read: write the paths as a list` };
   // A pattern is refused when what is in it is too: "owners" names a folder of ordinary files, not OWNERS.
+  // On purpose, a job that names only a refused file, like CODEOWNERS, is accepted: it can't change it
+  // anyway, and refusing it here would refuse every folder called owners too.
   const refusedPattern = (p: string) => refusedPath(p) && refusedPath(`${p.replace(/\/+$/, "")}/x`);
   if (mayChange.every(refusedPattern)) {
     return { problem: "its may-change paths only name files a job can never change, like .github and .mergelight" };
@@ -308,7 +310,7 @@ export function parseJobFile(path: string, text: string): { job: Job } | { probl
     for (let i = 0; i < value.length; i++) {
       const ch = value[i]!;
       if (quote) {
-        if (ch === quote) quote = null;
+        if (ch === quote && (i + 1 === value.length || /[\s,\]]/.test(value[i + 1]!))) quote = null;
       } else if ((ch === '"' || ch === "'") && (i === 0 || /[\s,[]/.test(value[i - 1]!))) quote = ch;
       else if (ch === "#" && (i === 0 || /\s/.test(value[i - 1]!))) break;
     }

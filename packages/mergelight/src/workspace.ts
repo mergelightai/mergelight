@@ -257,7 +257,7 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
     if (f.target && !refusedPath(f.target)) problems.push({ source: f.path, problem: `is a link to ${f.target}, outside .mergelight: keep job files themselves in .mergelight` });
     // A link to a file in .mergelight/jobs that isn't read as a job itself would run what is named as not read.
     else if (f.target && /^\.mergelight\/jobs(?:\/|\.|$)/i.test(f.target) && !readPaths.has(f.target)) problems.push({ source: f.path, problem: `is a link to ${f.target}, which isn't a job file that is read` });
-    else if (first) problems.push({ source: f.path, problem: `is the same file as ${first.path}, so its job counts once` });
+    else if (first) problems.push({ source: f.path, problem: `is the same file as ${first.path}, so its job counts once`, ...(f.target ? { target: f.target } : {}) });
     else kept.set(f.target ?? f.path, f);
   }
   // A skill that isn't on the base branch: the job would run without what the team meant it to follow.
@@ -267,7 +267,7 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
   const refusedSources = new Set(parsed.problems.map((p) => p.source));
   for (const p of problems) {
     const same = /is the same file as (.+?), so its job counts once/.exec(p.problem)?.[1];
-    if (same && refusedSources.has(same)) p.problem = `is a link to ${same}, which doesn't run as a job: see ${same}`;
+    if (same && refusedSources.has(same)) p.problem = `is a link to ${(p as JobProblem & { target?: string }).target ?? same}, which doesn't run as a job: see ${same}`;
   }
   // A skill named through a linked folder: the copy only takes the real folder, so say that, not "no SKILL.md".
   for (const p of parsed.problems) {
@@ -284,7 +284,7 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
   // folders too, and every file and folder on the way is guarded. Links inside what that guards are
   // followed in turn, until nothing new turns up. If that can't be worked out in full, no job runs: the
   // guard is never quietly smaller than it should be.
-  const sorted = [...parsed.problems, ...problems, ...unread, ...past].sort((a, b) => a.source.localeCompare(b.source));
+  const sorted = [...parsed.problems, ...problems, ...unread, ...past].map(({ source, problem }) => ({ source, problem })).sort((a, b) => a.source.localeCompare(b.source));
   const targets = new Set<string>();
   const folders = guardedFolders(tree.paths, parsed.jobs);
   const inGuard = (p: string) => refusedPath(p) || [...folders, ...targets].some((t) => p === t || p.startsWith(`${t}/`));
@@ -348,30 +348,50 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
     if (incomplete) break;
   }
   // Instruction files can pull other files in, like "@docs/ai-guide.md" in CLAUDE.md, which Claude Code
-  // and Gemini CLI read as instructions too, up to 5 levels deep. Those files are guarded as well. A name
-  // that only looks like an import is guarded too: guarding too much is safe.
+  // and Gemini CLI read as instructions too, up to 5 levels deep. Those files are guarded as well, through
+  // any links on the way. A name that only looks like an import is guarded too: guarding too much is safe.
   if (!incomplete) {
-    const instructions = tree.paths.filter((p) => tree.mode(p) !== "120000" && /\.md$/i.test(p) && refusedPath(p));
-    const queue = instructions.map((path) => ({ path, depth: 0 }));
-    const seenImports = new Set(instructions);
+    const isInstructions = (p: string) => /\.mdc?$/i.test(p) && refusedPath(p);
+    const queue: { path: string; depth: number }[] = [];
+    const queued = new Set<string>();
+    const enqueue = (path: string, depth: number) => {
+      if (queued.has(path) || depth >= MAX_IMPORT_DEPTH || !tree.mode(path)) return;
+      queued.add(path);
+      queue.push({ path, depth });
+    };
+    const follow = async (path: string): Promise<string | null> => {
+      const end = await resolve(path);
+      if (end === "unread") incomplete ??= `${path} couldn't be read this time, so no job runs. The next push tries again.`;
+      if (end === "deep") incomplete ??= `${path} leads through more than ${MAX_LINK_HOPS} links, or to the repository's root, so no job runs.`;
+      return typeof end === "string" ? end : null;
+    };
+    // Each instruction file, and where a linked one really leads.
+    for (const p of tree.paths.filter(isInstructions)) {
+      const at = tree.mode(p) === "120000" ? await follow(p) : p;
+      if (at) enqueue(at, 0);
+    }
+    const imported = new Set<string>();
     while (queue.length && !incomplete) {
-      if (seenImports.size > MAX_GUARDED_LINKS) {
-        incomplete = `The base branch's instruction files import more than ${MAX_GUARDED_LINKS} files, so no job runs.`;
-        break;
-      }
       const { path, depth } = queue.shift()!;
       const file = await tree.readOrFail(path);
       if (file === FAILED) {
         incomplete = `${path} couldn't be read this time, so no job runs. The next push tries again.`;
         break;
       }
-      for (const m of file?.text.matchAll(/(?:^|\s)@((?:\.{1,2}\/)*[\w-][\w./-]*)/g) ?? []) {
-        // A full stop or comma after it ends the sentence, not the path.
-        const imported = posix.normalize(posix.join(posix.dirname(path), m[1]!.replace(/[.,;:]+$/, ""))).replace(/\/+$/, "");
-        if (!imported || imported === "." || imported.startsWith("..") || seenImports.has(imported)) continue;
-        seenImports.add(imported);
-        targets.add(imported);
-        if (depth + 1 < MAX_IMPORT_DEPTH && tree.mode(imported)) queue.push({ path: imported, depth: depth + 1 });
+      for (const m of file?.text.matchAll(/(?:^|\s)@(\S+)/g) ?? []) {
+        // A full stop, comma or bracket after it ends the sentence, not the path. A home or absolute path is outside the repository.
+        const raw = m[1]!.replace(/[.,;:)\]]+$/, "");
+        if (!raw || raw.startsWith("~") || raw.startsWith("/")) continue;
+        const joined = posix.normalize(posix.join(posix.dirname(path), raw)).replace(/\/+$/, "");
+        if (!joined || joined === "." || joined.startsWith("..") || imported.has(joined)) continue;
+        imported.add(joined);
+        if (imported.size > MAX_GUARDED_LINKS) {
+          incomplete = `The base branch's instruction files import more than ${MAX_GUARDED_LINKS} files, so no job runs.`;
+          break;
+        }
+        targets.add(joined);
+        const at = await follow(joined);
+        if (at) enqueue(at, depth + 1);
       }
     }
   }
