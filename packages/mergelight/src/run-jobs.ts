@@ -174,6 +174,16 @@ async function readBack(git: JobGit, dir: string, index: string, from: string, k
   return (await must(git, ["write-tree"], { GIT_INDEX_FILE: index })).trim();
 }
 
+/**
+ * Git's own test for a binary file: a zero byte near the start. Text in UTF-16, which starts with its
+ * byte-order mark, has zero bytes too, such as an older iOS project's Localizable.strings. The push step
+ * uses the same test, so a file the jobs keep is one it pushes.
+ */
+export function isBinary(bytes: Uint8Array): boolean {
+  const utf16 = (bytes[0] === 0xff && bytes[1] === 0xfe) || (bytes[0] === 0xfe && bytes[1] === 0xff);
+  return !utf16 && bytes.subarray(0, 8000).includes(0);
+}
+
 /** Whether the tree has something at path that isn't a folder, such as a link or a file. */
 async function notFolder(git: JobGit, tree: string, path: string): Promise<boolean> {
   const line = await must(git, ["ls-tree", "--full-tree", tree, "--", path]);
@@ -243,10 +253,7 @@ async function whyRefused(git: JobGit, job: Job, guarded: string[], headLinks: S
   for (const e of mine) {
     if (e.status === "D") continue;
     const head = await git.bytes(["cat-file", "blob", e.newSha]);
-    // Git's own test for a binary file: a zero byte near the start. Text in UTF-16, which starts with its
-    // byte-order mark, has zero bytes too, such as an older iOS project's Localizable.strings.
-    const utf16 = head && ((head[0] === 0xff && head[1] === 0xfe) || (head[0] === 0xfe && head[1] === 0xff));
-    if (!head || (!utf16 && head.subarray(0, 8000).includes(0))) binary.push(e.path);
+    if (!head || isBinary(head)) binary.push(e.path);
   }
   if (binary.length) return `It wrote binary files, which a job may never write: ${some(binary)}.`;
   // A job's files get pushed: one that holds a secret the file didn't have before is never kept.

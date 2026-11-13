@@ -150,6 +150,9 @@ test("a job may change only its own paths, and never workflows, Mergelight's fil
     assert.ok(!mayChange(job, p), p);
   }
   assert.ok(mayChange(job, "src/index.ts"));
+  // Build services that run a command from their settings, in any folder, and Heroku's app.json at the root only.
+  for (const p of ["netlify.yml", "site/netlify.yaml", "netlify.json", "vercel.mjs", "apps/web/vercel.js", "vercel.cjs", "vercel.mts", "app.json", "App.JSON", "./app.json"]) assert.ok(refusedPath(p), p);
+  for (const p of ["public/locales/da/app.json", "apps/mobile/app.json"]) assert.ok(mayChange(job, p), p);
   // A refused file name is only the file itself: a folder with that name is ordinary.
   for (const p of ["src/main/resources/templates/owners/ownerDetails.html", "app/views/agent.md/x.md", "docs/codeowners-guide/a.md", "src/integrations/buildkite/client.ts"]) assert.ok(mayChange(job, p), p);
   for (const p of ["src/../package.json", "src/./index.ts", "src//index.ts"]) assert.ok(!mayChange(job, p), p);

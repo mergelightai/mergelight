@@ -3,7 +3,7 @@ import { fetchPullRequest, type PrRef } from "./github.js";
 import { mayChange, type Job } from "./jobs.js";
 import { GitHub } from "./publish/api.js";
 import { run } from "./run.js";
-import { JOBS_TRAILER, MAX_CHANGE_BYTES, MAX_CHANGED_FILES, type JobsResult } from "./run-jobs.js";
+import { isBinary, JOBS_TRAILER, MAX_CHANGE_BYTES, MAX_CHANGED_FILES, type JobsResult } from "./run-jobs.js";
 import { fetchMirror, jobFilesFor } from "./workspace.js";
 
 /**
@@ -82,7 +82,7 @@ export function checkPush(result: unknown, jobs: Job[], head: string, modes: Map
     const contents = (change as { contents?: unknown }).contents;
     if (typeof contents !== "string" || !/^[A-Za-z0-9+/]*={0,2}$/.test(contents)) return { why: `The new contents of ${path} can't be read.` };
     const decoded = Buffer.from(contents, "base64");
-    if (decoded.subarray(0, 8000).includes(0)) return { why: `${path} would be a binary file.` };
+    if (isBinary(decoded)) return { why: `${path} would be a binary file.` };
     bytes += decoded.length;
     if (bytes > MAX_CHANGE_BYTES) return { why: `The jobs wrote more than ${MAX_CHANGE_BYTES / 1000} KB.` };
     additions.push({ path, bytes: decoded });
@@ -144,7 +144,8 @@ export async function pushJobs(ref: PrRef, o: PushJobsOptions): Promise<number> 
 
   const pr = await fetchPullRequest(ref);
   // GitHub gives a fork's pull request no token that can push to it, and Mergelight never asks for one.
-  if (pr.headRepo !== `${pr.owner}/${pr.repo}` || !pr.headRef) return refuse("The pull request comes from another repository.", 1);
+  // GitHub ignores letter case in a repository's name.
+  if (pr.headRepo?.toLowerCase() !== `${pr.owner}/${pr.repo}`.toLowerCase() || !pr.headRef) return refuse("The pull request comes from another repository.", 1);
   if ((result as JobsResult).head !== pr.headSha) return refuse(`The jobs ran on ${String((result as JobsResult).head).slice(0, 7)}, but the branch is at ${pr.headSha.slice(0, 7)} now. The next push runs them again.`, 0);
 
   const { mirror, teamBase } = await fetchMirror(pr);
@@ -181,8 +182,12 @@ export async function pushJobs(ref: PrRef, o: PushJobsOptions): Promise<number> 
     // The branch moved between the check and the push.
     if (/STALE_DATA|expected branch to point to/i.test(why)) {
       // A retry after a push whose answer got lost is refused the same way: the branch now has our commit.
-      const ours = await api.get<{ sha: string; parents: { sha: string }[]; commit: { message: string } }>(`commits/${(await fetchPullRequest(ref)).headSha}`).catch(() => null);
-      if (ours && ours.parents[0]?.sha === pr.headSha && (ours.commit.message.trim().split("\n").pop() ?? "").startsWith(`${JOBS_TRAILER}:`)) {
+      // Read from the branch itself, which moves at once, not the pull request's head, which GitHub
+      // updates a little later. Ours is the one on the commit we checked, with this very message.
+      const branch = await api.get<{ object: { sha: string } }>(`git/ref/heads/${pr.headRef.split("/").map(encodeURIComponent).join("/")}`).catch(() => null);
+      const ours = branch && (await api.get<{ sha: string; parents: { sha: string }[]; commit: { message: string } }>(`commits/${branch.object.sha}`).catch(() => null));
+      const same = (text: string) => text.replace(/\r\n/g, "\n").trim();
+      if (ours && ours.parents.length === 1 && ours.parents[0]?.sha === pr.headSha && same(ours.commit.message) === same(`${message.headline}\n\n${message.body}`)) {
         o.log(`Pushed ${ours.sha.slice(0, 7)}: ${message.headline}.`);
         output({ pushed: "true", commit: ours.sha });
         return 0;

@@ -72,3 +72,11 @@ test("the commit says what each job did, and ends with the line that keeps jobs 
   assert.equal(two.headline, "Run the jobs translations and docs");
   assert.equal(two.body, "- translations:  fake\n- docs: Wrote a page.\n\nMergelight-Jobs: translations, docs");
 });
+
+test("the push keeps UTF-16 text with its byte-order mark, as the jobs step does, and refuses other zero bytes", () => {
+  const utf16 = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('"hello" = "Hej";\n', "utf16le")]);
+  const plan = checkPush(result([{ path: "locales/da.json", contents: utf16.toString("base64") }]), [translations], HEAD, modes({ "locales/da.json": "100644" }));
+  assert.deepEqual(plan.additions.map((a) => a.path), ["locales/da.json"]);
+  const binary = checkPush(result([{ path: "locales/da.json", contents: Buffer.from([0x50, 0x4b, 0x00, 0x01]).toString("base64") }]), [translations], HEAD, modes({ "locales/da.json": "100644" }));
+  assert.match(binary.why, /would be a binary file/);
+});

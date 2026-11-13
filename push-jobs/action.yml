@@ -6,7 +6,8 @@ branding:
   color: green
 
 # Use it in a workflow job of its own, after the job that runs Mergelight's jobs, with only
-# "contents: write". It installs no AI and is given no AI login. It trusts nothing in the result file:
+# "contents: write" and "pull-requests: read" (it reads the pull request first, which a private
+# repository allows only with that). It installs no AI and is given no AI login. It trusts nothing in the result file:
 # it reads the jobs again from the base branch, checks every changed file against them, and makes one
 # commit that GitHub refuses if the branch moved on since. It never force-pushes.
 
@@ -16,8 +17,8 @@ inputs:
     required: true
   github-token:
     description: >
-      A token that can push to the pull request's branch. The workflow's own token with
-      "contents: write" is enough. A push made with it starts the repository's other workflows only
+      A token that can push to the pull request's branch and read the pull request. The workflow's own
+      token with "contents: write" and "pull-requests: read" is enough. A push made with it starts the repository's other workflows only
       after a person with write access approves them in the pull request.
     default: ${{ github.token }}
 

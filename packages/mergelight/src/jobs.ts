@@ -183,8 +183,9 @@ export const REFUSED_FILES = [
   "vercel.mjs",
   "vercel.cjs",
   "vercel.mts",
-  // Heroku runs its scripts, such as postdeploy, on review apps.
-  "app.json",
+  // Only at the root, where Heroku reads it and runs its scripts, such as postdeploy, on review apps. An
+  // app.json elsewhere, such as a translation namespace, is ordinary.
+  "/app.json",
   "firebase.json",
   "now.json",
   "render.yaml",
@@ -392,7 +393,9 @@ export function refusedPath(path: string): boolean {
   const name = lower.replace(/\/+$/, "").split("/").pop() ?? "";
   // Roo reads .roorules-<mode> for each mode, and lefthook reads lefthook-local.<any>.
   if (/^lefthook-local\./.test(name) || /^\.lintstagedrc/.test(name) || /^lint-staged\.config\./.test(name)) return true;
-  return REFUSED_FOLDERS.some((refused) => matchesPath(folded(refused), lower)) || REFUSED_FILES.some((refused) => folded(refused) === name) || name.startsWith(".roorules-");
+  // A name that starts with / counts only at the root.
+  const rooted = lower.replace(/^(\.\/|\/)+/, "").replace(/\/+$/, "");
+  return REFUSED_FOLDERS.some((refused) => matchesPath(folded(refused), lower)) || REFUSED_FILES.some((refused) => (refused.startsWith("/") ? folded(refused.slice(1)) === rooted : folded(refused) === name)) || name.startsWith(".roorules-");
 }
 
 /**
