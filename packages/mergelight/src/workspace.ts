@@ -240,7 +240,7 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
     // A job could change the file a link leads to, unless it sits where no job may write.
     if (f.target && !refusedPath(f.target)) problems.push({ source: f.path, problem: `is a link to ${f.target}, a file a job could change. Keep job files in .mergelight` });
     // A link to a file in .mergelight/jobs that isn't read as a job itself would run what is named as not read.
-    else if (f.target && f.target.toLowerCase().startsWith(".mergelight/jobs/") && !readPaths.has(f.target)) problems.push({ source: f.path, problem: `is a link to ${f.target}, which isn't a job file that is read` });
+    else if (f.target && /^\.mergelight\/jobs(?:\/|\.|$)/i.test(f.target) && !readPaths.has(f.target)) problems.push({ source: f.path, problem: `is a link to ${f.target}, which isn't a job file that is read` });
     else if (first) problems.push({ source: f.path, problem: `is the same file as ${first.path}, so its job counts once` });
     else kept.set(f.target ?? f.path, f);
   }
