@@ -1,9 +1,10 @@
+import { createHash } from "node:crypto";
 import { appendFileSync, readFileSync } from "node:fs";
 import { fetchPullRequest, type PrRef } from "./github.js";
 import { jobsToRun, mayChange, type Job } from "./jobs.js";
 import { GitHub } from "./publish/api.js";
 import { isBinary, isJobCommit, JOBS_TRAILER, MAX_CHANGE_BYTES, MAX_CHANGED_FILES, mirrorGit, newSecret, textOf, withoutSecrets, type JobsResult } from "./run-jobs.js";
-import { fetchMirror, jobFilesFor } from "./workspace.js";
+import { fetchMirror, headGuarded, jobFilesFor } from "./workspace.js";
 
 /**
  * Pushes what the jobs changed (run-jobs.ts) as one commit to the pull request's branch. This runs in a
@@ -106,12 +107,16 @@ export function checkPush(result: unknown, jobs: Job[], head: string, modes: Map
   }
   // A new file whose name differs from another only in letter case is one file on macOS and Windows: the
   // jobs step refuses that, and so does this one, against what the head keeps and the other new files.
+  // A file and a folder whose names differ only in letter case clash the same way.
   const fresh = additions.filter((a) => modes.get(a.path) === null || modes.get(a.path) === "040000").map((a) => a.path);
   if (fresh.length) {
+    const kept = [...files.filter((f) => !deleting.has(f)), ...fresh];
     const count = new Map<string, number>();
-    for (const f of [...files.filter((f) => !deleting.has(f)), ...fresh]) count.set(folded(f), (count.get(folded(f)) ?? 0) + 1);
-    const clash = fresh.find((f) => (count.get(folded(f)) ?? 0) > 1);
-    if (clash) return { why: `${clash} differs from another file only in letter case.` };
+    for (const f of kept) count.set(folded(f), (count.get(folded(f)) ?? 0) + 1);
+    const parents = (f: string) => f.split("/").slice(0, -1).map((_, i, all) => all.slice(0, i + 1).join("/"));
+    const folders = new Set(kept.flatMap(parents).map(folded));
+    const clash = fresh.find((f) => (count.get(folded(f)) ?? 0) > 1 || folders.has(folded(f)) || parents(f).some((p) => count.has(folded(p))));
+    if (clash) return { why: `${clash} differs from another file or folder only in letter case.` };
   }
   const names = new Set([...additions.map((a) => a.path), ...deletions].flatMap((p) => changed.filter((o) => o.files.includes(p)).map((o) => o.name)));
   // Cut by characters, not UTF-16 units, so an emoji is never split in half. The jobs step took secrets
@@ -156,15 +161,29 @@ async function headTree(mirror: string, head: string, paths: string[]): Promise<
  * Read from the branch itself, which moves at once, not the pull request's head, which GitHub updates a
  * little later. Null when it isn't, or can't be read.
  */
-async function landedCommit(api: GitHub, branch: string, parent: string, message: string, paths: string[]): Promise<string | null> {
+async function landedCommit(api: GitHub, branch: string, parent: string, message: string, plan: PushPlan): Promise<string | null> {
   const ref = await api.get<{ object: { sha: string } }>(`git/ref/heads/${branch.split("/").map(encodeURIComponent).join("/")}`).catch(() => null);
   if (!ref) return null;
-  const tip = await api.get<{ sha: string; parents: { sha: string }[]; commit: { message: string }; files?: { filename: string }[] }>(`commits/${ref.object.sha}`).catch(() => null);
+  type File = { filename: string; previous_filename?: string; status: string; sha?: string };
+  const tip = await api.get<{ sha: string; parents: { sha: string }[]; commit: { message: string }; files?: File[] }>(`commits/${ref.object.sha}`).catch(() => null);
+  if (!tip || tip.parents.length !== 1 || tip.parents[0]?.sha !== parent) return null;
   const same = (text: string) => text.replace(/\r\n/g, "\n").trim();
-  // And it changed exactly the files this push would: another run with the same message changed others.
-  const changedFiles = (tip?.files ?? []).map((f) => f.filename).sort();
-  const sameFiles = changedFiles.length === paths.length && [...paths].sort().every((p, i) => p === changedFiles[i]);
-  return tip && tip.parents.length === 1 && tip.parents[0]?.sha === parent && same(tip.commit.message) === same(message) && sameFiles ? tip.sha : null;
+  if (same(tip.commit.message) !== same(message)) return null;
+  // And it changed exactly these files, to these contents: another run with the same message did other
+  // things. GitHub shows a deleted file and an added one with the same contents as one rename.
+  const changed = new Map<string, File>();
+  for (const f of tip.files ?? []) {
+    changed.set(f.filename, f);
+    if (f.previous_filename) changed.set(f.previous_filename, { filename: f.previous_filename, status: "removed" });
+  }
+  const paths = [...plan.additions.map((a) => a.path), ...plan.deletions];
+  if (changed.size !== paths.length || !paths.every((p) => changed.has(p))) return null;
+  return plan.additions.every((a) => changed.get(a.path)?.sha === blobSha(a.bytes)) ? tip.sha : null;
+}
+
+/** The id git gives a file's contents. */
+export function blobSha(bytes: Buffer): string {
+  return createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
 }
 
 /**
@@ -212,7 +231,7 @@ export async function pushJobs(ref: PrRef, o: PushJobsOptions): Promise<number> 
     const pr = await fetchPullRequest(ref);
     // GitHub gives a fork's pull request no token that can push to it, and Mergelight never asks for one.
     // GitHub ignores letter case in a repository's name. A fork's pull request is no failure: nothing can be pushed to it.
-    if (pr.headRepo?.toLowerCase() !== `${pr.owner}/${pr.repo}`.toLowerCase() || !pr.headRef) return refuse("The pull request comes from another repository, and nothing is pushed to one.", 0);
+    if (!pr.sameRepo || !pr.headRef) return refuse("The pull request comes from another repository, and nothing is pushed to one.", 0);
     // Closed or merged while the jobs ran: a commit on its branch would go nowhere.
     if (pr.state && pr.state !== "open") return refuse("The pull request is closed.", 0);
     const api = new GitHub(pr.owner, pr.repo, { dryRun: o.dryRun, log: o.log });
@@ -226,9 +245,13 @@ export async function pushJobs(ref: PrRef, o: PushJobsOptions): Promise<number> 
     const git = mirrorGit(mirror);
     // The jobs step runs no job on a commit jobs made, so a result for one is not its own.
     if (await isJobCommit(git, pr.headSha)) return refuse("The newest commit is one that jobs made, and no job runs on it.", 1);
-    const { jobs: all, guarded, incomplete } = await jobFilesFor(mirror, teamBase);
+    const { jobs: all, guarded: baseGuard, incomplete } = await jobFilesFor(mirror, teamBase);
     // The guard on the base branch couldn't be worked out in full: what the jobs step ran on is not checked.
     if (incomplete) return refuse(incomplete.replace(/so no job runs/g, "so nothing is pushed"), 0);
+    // The head's own links and imports are guarded too, as in the jobs step.
+    const headGuard = await headGuarded(mirror, pr.headSha, all);
+    if ("why" in headGuard) return refuse(headGuard.why.replace(/so no job runs/g, "so nothing is pushed"), 0);
+    const guarded = [...new Set([...baseGuard, ...headGuard.guarded])];
     // Only the jobs this pull request starts, worked out again the way the jobs step does: a job whose
     // files it doesn't change may change nothing, whatever the result file says.
     const mergeBase = await git.run(["merge-base", teamBase, pr.headSha]);
@@ -275,7 +298,7 @@ export async function pushJobs(ref: PrRef, o: PushJobsOptions): Promise<number> 
       const why = answer?.errors?.map((e) => e.message).join(" ") ?? "GitHub gave no commit back.";
       // An earlier try may have landed with its answer lost, and a later one then fails, saying the branch
       // moved or with a server error: if the branch now has our commit, it was pushed.
-      const ours = await landedCommit(api, pr.headRef, pr.headSha, `${message.headline}\n\n${message.body}`, [...plan.additions.map((a) => a.path), ...plan.deletions]);
+      const ours = await landedCommit(api, pr.headRef, pr.headSha, `${message.headline}\n\n${message.body}`, plan);
       if (ours) {
         o.log(`Pushed ${ours.slice(0, 7)}: ${message.headline}.`);
         output({ pushed: "true", commit: ours });

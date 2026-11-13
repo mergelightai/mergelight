@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { guardedFolders, JOB_FILE, jobsToRun, MAX_JOB_FILES, MAX_JOB_TASK_CHARS, MAX_JOBS, mayChange, parseJobFile, readJobs, refusedPath } from "../dist/jobs.js";
-import { jobFilesFor } from "../dist/workspace.js";
+import { headGuarded, jobFilesFor } from "../dist/workspace.js";
 
 const TRANSLATIONS = "---\nname: translations\non: locales/en.json\nmay-change: locales/*.json\n---\nWhen en.json gets new keys, add each one to every other file in locales/, translated.\n";
 
@@ -511,4 +511,25 @@ test("a large file that isn't Markdown, named with @, is guarded but doesn't tur
   git("add", "-A");
   git("commit", "-q", "-m", "big markdown");
   assert.match((await jobFilesFor(dir, "main")).incomplete, /big\.md is too large to check what it imports/);
+});
+
+test("the pull request's own links into protected places are guarded too, and its jobs never count", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-jobs-headguard-"));
+  const git = (...args) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t.test", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
+  git("init", "-q", "-b", "main");
+  mkdirSync(join(dir, "docs"), { recursive: true });
+  writeFileSync(join(dir, "docs/guide.md"), "Guide\n");
+  writeFileSync(join(dir, "AGENTS.md"), "Be kind.\n");
+  git("add", "-A");
+  git("commit", "-q", "-m", "base");
+  // The pull request makes AGENTS.md a link to a file a docs job may change.
+  rmSync(join(dir, "AGENTS.md"));
+  symlinkSync("docs/guide.md", join(dir, "AGENTS.md"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "head");
+  const docs = parseJobFile(".mergelight/jobs/docs.md", "---\non: src\nmay-change: docs\n---\nWrite docs.").job;
+  const head = await headGuarded(dir, "HEAD", [docs]);
+  assert.ok(head.guarded.includes("docs/guide.md"), JSON.stringify(head));
+  assert.ok(!(await jobFilesFor(dir, "HEAD~1", [docs])).guarded.includes("docs/guide.md"), "the base branch alone doesn't guard it");
+  assert.deepEqual((await jobFilesFor(dir, "HEAD")).jobs, [], "the head's own jobs never count");
 });

@@ -81,6 +81,8 @@ export interface PullRequest {
   state?: string;
   /** The repository's default branch, such as main. */
   defaultBranch?: string;
+  /** Whether the head branch is in this repository, by GitHub's own id: a name can change. */
+  sameRepo?: boolean;
   additions: number;
   deletions: number;
   changedFiles: number;

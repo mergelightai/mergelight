@@ -234,7 +234,7 @@ async function baseTree(mirror: string, base: string): Promise<{ paths: string[]
  * The repository's jobs, as the base branch has them, and every job file that was left out with the
  * reason. A pull request can't add a job or widen one for itself: its own copies don't count.
  */
-export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs: Job[]; problems: JobProblem[]; guarded: string[]; incomplete?: string }> {
+export async function jobFilesFor(mirror: string, base: string, guardFor?: Job[]): Promise<{ jobs: Job[]; problems: JobProblem[]; guarded: string[]; incomplete?: string }> {
   const tree = await baseTree(mirror, base);
   if (!tree) return { jobs: [], problems: [], guarded: [], incomplete: "The base branch couldn't be read this time, so no job runs. The next push tries again." };
   const problems: JobProblem[] = [];
@@ -304,9 +304,11 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
   // followed in turn, until nothing new turns up. If that can't be worked out in full, no job runs: the
   // guard is never quietly smaller than it should be.
   const sorted = [...parsed.problems, ...problems, ...unread, ...past].map(({ source, problem }) => ({ source, problem })).sort((a, b) => a.source.localeCompare(b.source));
-  if (!parsed.jobs.length) return { jobs: [], problems: sorted, guarded: [] };
+  // guardFor: the guard of this tree for those jobs, the base branch's, whatever jobs the tree itself has.
+  const guarding = guardFor ?? parsed.jobs;
+  if (!guarding.length) return { jobs: [], problems: sorted, guarded: [] };
   const targets = new Set<string>();
-  const folders = guardedFolders(tree.paths, parsed.jobs);
+  const folders = guardedFolders(tree.paths, guarding);
   const inGuard = (p: string) => refusedPath(p) || [...folders, ...targets].some((t) => p === t || p.startsWith(`${t}/`));
   /**
    * A path with every link in it and in its folders followed, part by part, the way the file system does:
@@ -464,6 +466,17 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
   return incomplete ? { jobs: [], problems: sorted, guarded, incomplete } : { jobs: parsed.jobs, problems: sorted, guarded };
 }
 
+/**
+ * What the head guards: the files its own links and instruction files lead to, worked out the way the
+ * base branch's are. A pull request can only add to the guard this way, never take from it, and the
+ * jobs on the head never count. A head that can't be worked out in full says why.
+ */
+export async function headGuarded(mirror: string, head: string, jobs: Job[]): Promise<{ guarded: string[] } | { why: string }> {
+  const { guarded, incomplete } = await jobFilesFor(mirror, head, jobs);
+  if (incomplete) return { why: `The pull request's own links and instruction files couldn't be checked in full: ${incomplete.replace(/^The base branch/, "The pull request")}` };
+  return { guarded };
+}
+
 /** The largest SKILL.md the skill copy takes (skills.ts). */
 const MAX_SKILL_FILE_BYTES = 60_000;
 
@@ -617,9 +630,12 @@ export async function fetchMirror(pr: PullRequest): Promise<{ mirror: string; te
     const fetch = (...refspecs: string[]) => git(["fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "origin", ...refspecs], mirror);
     await fetch(`+refs/pull/${pr.number}/head:refs/mergelight/pull/${pr.number}`);
     if (!(await hasCommit(mirror, pr.headSha))) await fetch(pr.headSha);
-    await fetch(`+refs/heads/${pr.baseRef}:refs/mergelight/base/${pr.baseRef}`);
+    // Into a ref of this pull request's own: a cached ref of an older branch, such as base/release when
+    // the base is now release/2, can't block it.
+    const ref = `refs/mergelight/push/${pr.number}/base`;
+    await fetch(`+refs/heads/${pr.baseRef}:${ref}`);
     // Pinned to one commit under the lock, as the jobs step does, so a later fetch can't move it.
-    const pinned = (await git(["rev-parse", "--verify", `refs/mergelight/base/${pr.baseRef}^{commit}`], mirror)).stdout.trim();
+    const pinned = (await git(["rev-parse", "--verify", `${ref}^{commit}`], mirror)).stdout.trim();
     return { mirror, teamBase: pinned };
   });
 }

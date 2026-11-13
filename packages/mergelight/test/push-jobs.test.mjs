@@ -119,8 +119,8 @@ test("the push takes a file swapped for a folder, or a folder for a file, only w
 test("the push refuses a new file that differs from another only in letter case, and contents cut short", () => {
   const all = parseJobFile(".mergelight/jobs/all.md", '---\non: src\nmay-change: "**"\n---\nTask.').job;
   const plan = (changes, m, files) => checkPush(result(changes, [{ name: "all", source: ".mergelight/jobs/all.md", status: "changed", files: changes.map((c) => c.path), summary: "" }]), [all], HEAD, modes(m), [], files);
-  assert.match(plan([{ path: "locales/DA.json", contents: b64("{}\n") }], { locales: "040000", "locales/DA.json": null }, ["locales/da.json"]).why, /locales\/DA\.json differs from another file only in letter case/);
-  assert.match(plan([{ path: "a/x.md", contents: b64("1\n") }, { path: "a/X.md", contents: b64("2\n") }], { a: "040000", "a/x.md": null, "a/X.md": null }, []).why, /differs from another file only in letter case/);
+  assert.match(plan([{ path: "locales/DA.json", contents: b64("{}\n") }], { locales: "040000", "locales/DA.json": null }, ["locales/da.json"]).why, /locales\/DA\.json differs from another file or folder only in letter case/);
+  assert.match(plan([{ path: "a/x.md", contents: b64("1\n") }, { path: "a/X.md", contents: b64("2\n") }], { a: "040000", "a/x.md": null, "a/X.md": null }, []).why, /differs from another file or folder only in letter case/);
   // Renaming by letter case is fine: the old name goes in the same push.
   assert.equal(plan([{ path: "locales/da.json", deleted: true }, { path: "locales/DA.json", contents: b64("{}\n") }], { locales: "040000", "locales/da.json": "100644", "locales/DA.json": null }, ["locales/da.json"]).why, undefined);
   assert.match(plan([{ path: "docs/x.md", contents: "YWJj" + "ZA" }], { docs: "040000", "docs/x.md": null }, []).why, /can't be read/);
@@ -129,4 +129,18 @@ test("the push refuses a new file that differs from another only in letter case,
 test("a job this pull request doesn't start may change nothing", () => {
   const plan = checkPush(result([{ path: "locales/da.json", contents: b64("{}\n") }]), [], HEAD, modes({ "locales/da.json": "100644" }));
   assert.match(plan.why, /The job "translations" isn't on the base branch, or this pull request doesn't start it/);
+});
+
+test("a new file clashes with a folder whose name differs only in letter case, and the other way round", () => {
+  const all = parseJobFile(".mergelight/jobs/all.md", '---\non: src\nmay-change: "**"\n---\nTask.').job;
+  const plan = (changes, m, files) => checkPush(result(changes, [{ name: "all", source: ".mergelight/jobs/all.md", status: "changed", files: changes.map((c) => c.path), summary: "" }]), [all], HEAD, modes(m), [], files);
+  assert.match(plan([{ path: "Docs", contents: b64("x\n") }], { Docs: null }, ["docs/a.md"]).why, /Docs differs from another file or folder only in letter case/);
+  assert.match(plan([{ path: "readme/x.md", contents: b64("x\n") }], { readme: null, "readme/x.md": null }, ["README"]).why, /differs from another file or folder only in letter case/);
+  assert.equal(plan([{ path: "docs/b.md", contents: b64("x\n") }], { docs: "040000", "docs/b.md": null }, ["docs/a.md"]).why, undefined, "a new file in an existing folder is fine");
+});
+
+test("a landed commit is matched by what git calls its contents", async () => {
+  const { blobSha } = await import("../dist/push-jobs.js");
+  assert.equal(blobSha(Buffer.alloc(0)), "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391");
+  assert.equal(blobSha(Buffer.from("hello\n")), "ce013625030ba8dba906f756967f9e9ca394464a");
 });

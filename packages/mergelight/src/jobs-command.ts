@@ -6,7 +6,7 @@ import { fetchPullRequest, type PrRef } from "./github.js";
 import { jobsToRun } from "./jobs.js";
 import { runModel, TOOLING, type ProviderName } from "./providers/index.js";
 import { buildJobPrompt, caseBlindDisk, caseClashes, isJobCommit, JOB_SCHEMA, mirrorGit, runJobs, type JobsResult } from "./run-jobs.js";
-import { cacheDir, jobFilesFor, prepareWorkspace, skillsFor } from "./workspace.js";
+import { cacheDir, headGuarded, jobFilesFor, prepareWorkspace, skillsFor } from "./workspace.js";
 
 export interface JobsCommandOptions {
   provider?: ProviderName;
@@ -80,8 +80,7 @@ export async function jobsCommand(ref: PrRef, o: JobsCommandOptions): Promise<nu
   const pr = await fetchPullRequest(ref);
   // Nothing a job does could be pushed to the default branch (push-jobs.ts), so no AI time is spent on it.
   // Only the repository's own default branch: a fork's branch can have the same name.
-  const sameRepo = (pr.headRepo ?? "").toLowerCase() === `${pr.owner}/${pr.repo}`.toLowerCase();
-  if (pr.defaultBranch && sameRepo && pr.headRef === pr.defaultBranch) {
+  if (pr.defaultBranch && pr.sameRepo && pr.headRef === pr.defaultBranch) {
     return finish({ head: pr.headSha, outcomes: [], problems: [], changes: [], skipped: `The pull request comes from ${pr.headRef}, the repository's default branch, so no job runs.` });
   }
   progress("Checking out the code");
@@ -93,7 +92,7 @@ export async function jobsCommand(ref: PrRef, o: JobsCommandOptions): Promise<nu
     if (await isJobCommit(git, ws.headSha)) return finish({ ...empty, skipped: "The newest commit is one that jobs made, so no job runs on it." });
     // One commit for the whole run, pinned while the workspace was prepared.
     const teamBase = ws.teamBase;
-    const { jobs, problems, guarded, incomplete } = await jobFilesFor(ws.mirror, teamBase);
+    const { jobs, problems, guarded: baseGuard, incomplete } = await jobFilesFor(ws.mirror, teamBase);
     // The guard couldn't be worked out in full: no job runs rather than one with a smaller guard.
     if (incomplete) return finish({ ...empty, problems, skipped: incomplete });
     if (!jobs.length) return finish({ ...empty, problems, skipped: `There are no jobs in .mergelight/jobs on ${pr.baseRef}.` });
@@ -104,6 +103,11 @@ export async function jobsCommand(ref: PrRef, o: JobsCommandOptions): Promise<nu
     }
     const toRun = jobsToRun(jobs, ws.touchedPaths);
     if (!toRun.length) return finish({ ...empty, problems, skipped: "This pull request changes none of the files that start a job." });
+    // The pull request's own links and imports are guarded too: one that makes AGENTS.md a link to a
+    // file a job may change would carry the job's change into what agents read. Its jobs never count.
+    const headGuard = await headGuarded(ws.mirror, ws.headSha, jobs);
+    if ("why" in headGuard) return finish({ ...empty, problems, skipped: headGuard.why });
+    const guarded = [...new Set([...baseGuard, ...headGuard.guarded])].sort();
 
     const provider = o.provider ?? "codex";
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
