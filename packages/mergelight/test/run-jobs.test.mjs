@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { parseJobFile } from "../dist/jobs.js";
 import { buildJobPrompt, caseClashes, isJobCommit, JOBS_TRAILER, MAX_CHANGED_FILES, mirrorGit, newSecret, runJobs } from "../dist/run-jobs.js";
-import { jobHidden, runnerInstall, sandboxArgs } from "../dist/providers/codex.js";
+import { codexInstall, jobHidden, runnerInstall, sandboxArgs } from "../dist/providers/codex.js";
 
 /** A repository with one commit: an English file, a Danish one, a script that can run, a link and a workflow. */
 function repo() {
@@ -445,4 +445,15 @@ test("every job failing fails the run, and an AI program that isn't there stops 
   const { head, jobGit } = repo();
   const missing = Object.assign(new Error("spawn codex ENOENT"), { code: "ENOENT" });
   await assert.rejects(runJobs({ git: jobGit, head, jobs: [job("translations", "locales/*.json")], ask: async () => { throw missing; } }), /ENOENT/);
+});
+
+test("a job's sandbox may read the folder Codex is installed in, found from the codex on PATH", () => {
+  const root = mkdtempSync(join(tmpdir(), "mergelight-codex-install-"));
+  mkdirSync(join(root, "lib/node_modules/@openai/codex/bin"), { recursive: true });
+  writeFileSync(join(root, "lib/node_modules/@openai/codex/bin/codex.js"), "");
+  mkdirSync(join(root, "bin"));
+  symlinkSync("../lib/node_modules/@openai/codex/bin/codex.js", join(root, "bin/codex"));
+  const [found] = codexInstall(`/nowhere:${join(root, "bin")}`);
+  assert.ok(found.endsWith("/lib/node_modules/@openai/codex"), found);
+  assert.deepEqual(codexInstall("/nowhere"), []);
 });

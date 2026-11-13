@@ -91,6 +91,24 @@ function mcpServers(config: string): string[] {
  * steer them, so the folder with the login is taken out of what they can read. Codex itself still reads it.
  * For a job, they may also write in the one folder the job works in, and nowhere else.
  */
+/**
+ * Where Codex is installed: its sandbox runs Codex's own program, and its bundled tools such as rg, from
+ * there. On a runner that is Node's tool folder, which the Linux rules don't otherwise read. It holds
+ * code, never a secret. Found from the codex on PATH; nothing when there is none.
+ */
+export function codexInstall(path = process.env.PATH ?? ""): string[] {
+  for (const dir of path.split(":").filter(Boolean)) {
+    try {
+      const real = realpathSync(join(dir, "codex"));
+      // The npm package: <root>/bin/codex.js, with the native program in <root>/node_modules.
+      return [/\/bin\/codex(?:\.js)?$/.test(real) ? dirname(dirname(real)) : dirname(real)];
+    } catch {
+      // Not in this folder.
+    }
+  }
+  return [];
+}
+
 /** What a shell and its tools need on Linux, and nothing more: no home folders, no runner, no temp folder, no /proc. */
 export const LINUX_SYSTEM = ["/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/etc", "/dev"];
 
@@ -236,7 +254,7 @@ export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
 
   const args = [
     "exec",
-    ...sandboxArgs(codexHome(), opts.edit ? opts.cwd : undefined, opts.edit ? jobHidden() : [], opts.edit ? (opts.readDirs ?? []) : []),
+    ...sandboxArgs(codexHome(), opts.edit ? opts.cwd : undefined, opts.edit ? jobHidden() : [], opts.edit ? [...(opts.readDirs ?? []), ...codexInstall()] : []),
     // A job's commands get only the core variables (PATH, HOME and the like), never the runner's own,
     // such as a database password: what they print can end up in a file that gets pushed.
     ...(opts.edit ? ["-c", 'shell_environment_policy.inherit="core"'] : []),
