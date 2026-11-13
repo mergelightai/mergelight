@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { fetchPullRequest, type PrRef } from "./github.js";
 import { jobsToRun } from "./jobs.js";
 import { runModel, TOOLING, type ProviderName } from "./providers/index.js";
-import { buildJobPrompt, isJobCommit, JOB_SCHEMA, mirrorGit, runJobs, type JobsResult } from "./run-jobs.js";
+import { buildJobPrompt, caseBlindDisk, caseClashes, isJobCommit, JOB_SCHEMA, mirrorGit, runJobs, type JobsResult } from "./run-jobs.js";
 import { cacheDir, jobFilesFor, prepareWorkspace, skillsFor } from "./workspace.js";
 
 export interface JobsCommandOptions {
@@ -56,7 +56,8 @@ export async function jobsCommand(ref: PrRef, o: JobsCommandOptions): Promise<nu
   // A run that stops early never leaves an older result in place.
   rmSync(out, { force: true });
   const finish = (result: JobsResult): number => {
-    writeFileSync(out, `${JSON.stringify(result, null, 2)}\n`);
+    // Only for this account: outside the Action it may sit in a shared temp folder.
+    writeFileSync(out, `${JSON.stringify(result, null, 2)}\n`, { mode: 0o600 });
     for (const line of describeJobs(result)) o.log(line);
     // The workflow pushes only when there is something to push.
     if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `changes=${result.changes.length}\nresult=${out}\n`);
@@ -84,6 +85,11 @@ export async function jobsCommand(ref: PrRef, o: JobsCommandOptions): Promise<nu
     // The guard couldn't be worked out in full: no job runs rather than one with a smaller guard.
     if (incomplete) return finish({ ...empty, problems, skipped: incomplete });
     if (!jobs.length) return finish({ ...empty, problems, skipped: `There are no jobs in .mergelight/jobs on ${pr.baseRef}.` });
+    // On a disk that ignores letter case, two files that differ only in it would be written as one.
+    if (caseBlindDisk()) {
+      const clashes = await caseClashes(git, ws.headSha);
+      if (clashes.length) return finish({ ...empty, problems, skipped: `This disk ignores letter case, and ${clashes.slice(0, 3).join(", ")} would be one file here, so no job runs.` });
+    }
     const toRun = jobsToRun(jobs, ws.touchedPaths);
     if (!toRun.length) return finish({ ...empty, problems, skipped: "This pull request changes none of the files that start a job." });
 

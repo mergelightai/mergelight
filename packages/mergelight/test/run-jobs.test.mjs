@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { parseJobFile } from "../dist/jobs.js";
-import { buildJobPrompt, isJobCommit, JOBS_TRAILER, MAX_CHANGED_FILES, mirrorGit, newSecret, runJobs } from "../dist/run-jobs.js";
+import { buildJobPrompt, caseClashes, isJobCommit, JOBS_TRAILER, MAX_CHANGED_FILES, mirrorGit, newSecret, runJobs } from "../dist/run-jobs.js";
 import { jobHidden, sandboxArgs } from "../dist/providers/codex.js";
 
 /** A repository with one commit: an English file, a Danish one, a script that can run, a link and a workflow. */
@@ -228,6 +228,9 @@ test("a job's Codex sandbox may write in the job's folder only, and can't read w
   const selfHosted = jobHidden({ RUNNER_WORKSPACE: "/opt/actions-runner/_work/app" });
   assert.ok(selfHosted.includes("/opt/actions-runner/_work") && selfHosted.includes("/opt/actions-runner"));
   assert.ok(!jobHidden({ RUNNER_WORKSPACE: "/work/app" }).includes("/"), "never the whole disk");
+  assert.ok(jobHidden({ RUNNER_WORKSPACE: "/work/app" }).includes("/work"));
+  const shallow = jobHidden({ RUNNER_WORKSPACE: "/runner/_work/app" });
+  assert.ok(shallow.includes("/runner/_work") && shallow.includes("/runner"), "an install folder right under the root");
 });
 
 test("a job that writes a secret is dropped, and one the file already had doesn't count", async () => {
@@ -366,4 +369,16 @@ test("a link the AI makes in its copy never leads Mergelight outside it", async 
   assert.deepEqual(result.changes, []);
   assert.equal(readFileSync(join(outside, "skills/keep/SKILL.md"), "utf8"), "Mine.\n", "the folder the link leads to is untouched");
   assert.ok(!existsSync(join(outside, "skills/x")), "nothing was moved into it");
+});
+
+test("the result names the full commit, and files that differ only in letter case are found", async () => {
+  const { dir, git, head, jobGit } = repo();
+  const result = await runJobs({ git: jobGit, head: head.slice(0, 7), jobs: [], ask: async () => ({}) });
+  assert.equal(result.head, head);
+  assert.deepEqual(await caseClashes(jobGit, head), []);
+  const blob = execFileSync("git", ["-C", dir, "hash-object", "-w", "--stdin"], { input: "{}\n", encoding: "utf8" }).trim();
+  git("update-index", "--add", "--cacheinfo", `100644,${blob},locales/PT.json`);
+  git("update-index", "--add", "--cacheinfo", `100644,${blob},locales/pt.json`);
+  git("commit", "-q", "-m", "two cases");
+  assert.deepEqual(await caseClashes(jobGit, git("rev-parse", "HEAD")), ["locales/PT.json and locales/pt.json"]);
 });

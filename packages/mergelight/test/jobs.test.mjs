@@ -455,3 +455,15 @@ test("an instruction file reached through an ordinary folder link has its import
   assert.ok(guarded.includes("apps/shared/ai.md"), "as read from apps/web");
   assert.ok(!guarded.includes("apps/web"), "an ordinary folder link isn't guarded for it");
 });
+
+test("an ordinary link to the repository's root doesn't turn jobs off", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-jobs-rootlink-"));
+  const git = (...args) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t.test", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
+  git("init", "-q", "-b", "main");
+  mkdirSync(join(dir, "examples"), { recursive: true });
+  symlinkSync("..", join(dir, "examples/lib"));
+  writeFileSync(join(dir, "README.md"), "Hi\n");
+  git("add", "-A");
+  git("commit", "-q", "-m", "base");
+  assert.equal((await jobFilesFor(dir, "main")).incomplete, undefined);
+});

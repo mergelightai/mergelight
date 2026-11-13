@@ -391,11 +391,13 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
     for (const link of tree.paths.filter((p) => tree.mode(p) === "120000")) {
       const guardedLink = inGuard(link);
       const end = guardedLink ? await follow(link) : await resolve(link, false);
-      if (end === "unread" || end === "deep") {
-        incomplete ??= `${link} couldn't be followed in full this time, so no job runs. The next push tries again.`;
+      // An ordinary link to the root, or one too deep, holds no instruction file of its own that isn't
+      // read already; only one git couldn't read this time leaves the guard unsure.
+      if (end === "unread") {
+        incomplete ??= `${link} couldn't be read this time, so no job runs. The next push tries again.`;
         break;
       }
-      if (typeof end !== "string") continue;
+      if (typeof end !== "string" || end === "deep") continue;
       for (const p of tree.paths) {
         if (!p.startsWith(`${end}/`) || !/\.mdc?$/i.test(p)) continue;
         const through = `${link}/${p.slice(end.length + 1)}`;

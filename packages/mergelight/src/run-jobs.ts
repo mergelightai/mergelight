@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { mayChange, type Job, type JobProblem } from "./jobs.js";
@@ -109,6 +109,34 @@ export function newSecret(next: string, before = "", env: NodeJS.ProcessEnv = pr
   }
   for (const m of next.matchAll(SECRET)) if (!before.includes(m[0])) return "a key or token";
   return null;
+}
+
+/**
+ * Paths at the commit that are one file on a disk that ignores letter case, such as macOS's: written out
+ * there, one would overwrite the other, and the job's result would carry the wrong text.
+ */
+export async function caseClashes(git: JobGit, commit: string): Promise<string[]> {
+  const listed = await must(git, ["ls-tree", "-r", "-z", "--name-only", "--full-tree", commit]);
+  const seen = new Map<string, string>();
+  const clashes: string[] = [];
+  for (const path of listed.split("\0").filter(Boolean)) {
+    const key = path.normalize("NFC").toUpperCase().toLowerCase();
+    const first = seen.get(key);
+    if (first) clashes.push(`${first} and ${path}`);
+    else seen.set(key, path);
+  }
+  return clashes;
+}
+
+/** Whether this machine's temp folder ignores letter case. */
+export function caseBlindDisk(root = tmpdir()): boolean {
+  const probe = mkdtempSync(join(root, "mergelight-case-"));
+  try {
+    writeFileSync(join(probe, "a"), "");
+    return existsSync(join(probe, "A"));
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
 }
 
 /** Text cut to a number of characters, never in the middle of one. */
@@ -236,7 +264,9 @@ export async function runJobs(o: RunJobsOptions): Promise<JobsResult> {
   const progress = o.onProgress ?? (() => {});
   const limits = o.limits ?? { each: JOB_TIMEOUT_MS, all: ALL_JOBS_TIMEOUT_MS };
   const root = o.workRoot ?? tmpdir();
-  const headTree = (await must(git, ["rev-parse", `${o.head}^{tree}`])).trim();
+  // The full commit, whatever form it was given in: the push compares it with the branch.
+  const head = (await must(git, ["rev-parse", "--verify", `${o.head}^{commit}`])).trim();
+  const headTree = (await must(git, ["rev-parse", `${head}^{tree}`])).trim();
   // The pull request's own links, which the base branch's guard doesn't know: no job writes at or through one.
   const headLinks = new Set(
     (await must(git, ["ls-tree", "-r", "-z", "--full-tree", headTree]))
@@ -304,8 +334,14 @@ export async function runJobs(o: RunJobsOptions): Promise<JobsResult> {
     } catch (err) {
       outcome("failed", `This job couldn't run: ${(err instanceof Error ? err.message : String(err)).slice(0, 300)}`);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
-      rmSync(scratch, { recursive: true, force: true });
+      // A folder the AI made read-only mustn't sink the run: a leftover is only a leftover.
+      for (const folder of [dir, scratch]) {
+        try {
+          rmSync(folder, { recursive: true, force: true });
+        } catch {
+          // Left behind in the temp folder.
+        }
+      }
     }
   }
 
@@ -319,7 +355,7 @@ export async function runJobs(o: RunJobsOptions): Promise<JobsResult> {
     if (!bytes) throw new Error(`Couldn't read what a job wrote in ${e.path}.`);
     changes.push({ path: e.path, contents: bytes.toString("base64") });
   }
-  return { head: o.head, outcomes, problems: o.problems ?? [], changes };
+  return { head, outcomes, problems: o.problems ?? [], changes };
 }
 
 /** The AI answers with one line for the team. What it changed is read from the folder, never from its answer. */

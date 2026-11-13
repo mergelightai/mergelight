@@ -111,7 +111,8 @@ export function jobHidden(env: NodeJS.ProcessEnv = process.env): string[] {
   // next to this one in _work: RUNNER_WORKSPACE is <install>/_work/<repository>.
   const work = env.RUNNER_WORKSPACE ? dirname(env.RUNNER_WORKSPACE) : undefined;
   const install = work ? dirname(work) : undefined;
-  const deepEnough = (p: string | undefined) => (p && p.split("/").filter(Boolean).length >= 2 ? p : undefined);
+  // Anything but the disk's root itself: /runner and /_work are common install and work folders.
+  const deepEnough = (p: string | undefined) => (p && p.split("/").filter(Boolean).length >= 1 ? p : undefined);
   const places = [homedir(), env.MERGELIGHT_CACHE, env.RUNNER_TEMP, env.GITHUB_WORKSPACE, deepEnough(work), deepEnough(install), tmpdir(), "/tmp"].filter((p): p is string => Boolean(p));
   const real = places.map((p) => {
     try {
