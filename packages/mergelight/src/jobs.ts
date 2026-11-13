@@ -32,10 +32,11 @@ const NAME = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
 
 /**
  * Paths a job can never change, whatever its file says, wherever they sit: workflows and Mergelight's own
- * files decide what runs and what a job may do, CODEOWNERS decides who must approve, and git's own files
- * change how it reads the rest.
+ * files decide what runs and what a job may do, CODEOWNERS decides who must approve, the files and
+ * folders AI agents take instructions from would carry a planted text into every later agent and
+ * review, and git's own files change how it reads the rest.
  */
-export const REFUSED_PATHS = [".github", ".mergelight", "CODEOWNERS", ".gitmodules", ".gitattributes", ".git"];
+export const REFUSED_PATHS = [".github", ".mergelight", "CODEOWNERS", "AGENTS.md", "CLAUDE.md", ".claude", ".agents", ".codex", ".cursor", ".gitmodules", ".gitattributes", ".git"];
 
 export interface Job {
   name: string;
@@ -67,6 +68,9 @@ function badPattern(pattern: string): boolean {
 export function parseJobFile(path: string, text: string): { job: Job } | { problem: string } {
   const block = frontMatterBlock(withoutHidden(text));
   if (!block) return { problem: "starts with no front matter, so it names no on and may-change paths" };
+  // A key written twice: readers disagree on which one counts, and these decide what a job may write.
+  const twice = ["name", "on", "may-change", "skill"].find((key) => (block.fm.match(new RegExp(`^${key}[ \\t]*:`, "gm")) ?? []).length > 1);
+  if (twice) return { problem: `its front matter has ${twice} more than once` };
   const named = scalarValue(block.fm, "name");
   const name = named || path.slice(path.lastIndexOf("/") + 1).replace(/\.md$/, "");
   if (!NAME.test(name)) return { problem: `its name "${name.slice(0, 60)}" must be lowercase letters, digits and dashes, start and end with a letter or digit, and be 40 long at most` };
@@ -82,9 +86,10 @@ export function parseJobFile(path: string, text: string): { job: Job } | { probl
   if (mayChange.every(refusedPath)) {
     return { problem: "its may-change paths only name files a job can never change, like .github and .mergelight" };
   }
-  const written = scalarValue(block.fm, "skill") || undefined;
-  // Written the way the paths above may be: "./.claude/skills/x/" is ".claude/skills/x".
-  const skill = written?.replace(/^(\.\/)+/, "").replace(/\/+$/, "");
+  const written = scalarValue(block.fm, "skill") ?? undefined;
+  // Written the way the paths above may be: "./.claude/skills/x/" and "/.claude/skills/x" are ".claude/skills/x".
+  const skill = written?.replace(/^(\.\/|\/)+/, "").replace(/\/+$/, "");
+  if (written === "") return { problem: "its skill line names no folder: write one folder on the same line, like skill: .claude/skills/write-docs" };
   if (written !== undefined && !isSkillPath(skill)) return { problem: `its skill "${written.slice(0, 100)}" isn't a folder in the repository, like .claude/skills/write-docs` };
   // HTML comments are what a team turned off, as in rule files.
   const task = withoutComments(block.body).trim();

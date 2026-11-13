@@ -210,7 +210,7 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
   const problems: JobProblem[] = [];
   // A file that looks meant as a job but sits deeper or ends in .MD is named, never skipped without a word.
   for (const p of tree.paths) {
-    if (p.startsWith(".mergelight/jobs/") && /\.md$/i.test(p) && !JOB_FILE.test(p)) problems.push({ source: p, problem: "isn't read: a job file sits right in .mergelight/jobs and ends in .md" });
+    if (p.toLowerCase().startsWith(".mergelight/jobs/") && /\.md$/i.test(p) && !JOB_FILE.test(p)) problems.push({ source: p, problem: "isn't read: a job file sits right in .mergelight/jobs and ends in .md" });
   }
   const all = tree.paths.filter((p) => JOB_FILE.test(p)).sort();
   const files = await Promise.all(all.slice(0, MAX_JOB_FILES).map(tree.read));

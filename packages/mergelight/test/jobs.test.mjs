@@ -58,6 +58,11 @@ test("a job file that can't be a job says why", () => {
   assert.match(problem("---\non: x\nmay-change: y\nskill: ../skills\n---\nTask."), /isn't a folder in the repository/);
   assert.match(problem("---\non: x\nmay-change: y\nskill: .claude/skills/*\n---\nTask."), /isn't a folder in the repository/);
   assert.match(problem(`---\non: x\nmay-change: y\n---\n${"a".repeat(MAX_JOB_TASK_CHARS + 1)}`), /longer than 8,000 characters/);
+  assert.match(problem("---\non: x\nmay-change: y\nskill:\n---\nTask."), /its skill line names no folder/);
+  assert.match(problem("---\non: x\nmay-change: y\nskill:\n  - .claude/skills/write-docs\n---\nTask."), /its skill line names no folder: write one folder on the same line/);
+  assert.match(problem('---\non: x\nmay-change: "**"\nmay-change: CHANGELOG.md\n---\nTask.'), /its front matter has may-change more than once/);
+  assert.match(problem("---\nname: a\nname: b\non: x\nmay-change: y\n---\nTask."), /has name more than once/);
+  assert.equal(parseJobFile(".mergelight/jobs/x.md", "---\non: x\nmay-change: y\nskill: /.claude/skills/write-docs\n---\nTask.").job.skill, ".claude/skills/write-docs", "a leading slash, as in the paths");
 });
 
 test("a job that may only change workflows or Mergelight's own files is no job", () => {
@@ -100,7 +105,7 @@ test("a job runs only when a pull request changed one of its on files", () => {
 
 test("a job may change only its own paths, and never workflows, Mergelight's files or git's files", () => {
   const { job } = parseJobFile(".mergelight/jobs/x.md", '---\non: src\nmay-change: "**"\n---\nTask.');
-  for (const p of [".github/workflows/ci.yml", "packages/web/.github/x.yml", ".mergelight/jobs/x.md", ".mergelight/rules.md", ".gitmodules", "src/.gitattributes", ".git/config", ".GITHUB/workflows/ci.yml", "docs/.GitAttributes", ".GitModules", "CODEOWNERS", "docs/CODEOWNERS"]) {
+  for (const p of [".github/workflows/ci.yml", "packages/web/.github/x.yml", ".mergelight/jobs/x.md", ".mergelight/rules.md", ".gitmodules", "src/.gitattributes", ".git/config", ".GITHUB/workflows/ci.yml", "docs/.GitAttributes", ".GitModules", "CODEOWNERS", "docs/CODEOWNERS", "AGENTS.md", "packages/web/CLAUDE.md", ".claude/settings.json", ".agents/skills/x/SKILL.md", ".codex/config.toml", ".cursor/rules/style.mdc"]) {
     assert.ok(refusedPath(p), p);
     assert.ok(!mayChange(job, p), p);
   }
@@ -136,7 +141,11 @@ test("jobs are read from the base branch, never from the pull request", async ()
   write(".mergelight/jobs/typo.md", "---\non: src\nmay-change: guide\nskill: .claude/skills/write-doc\n---\nWrite the guide.\n");
   write(".mergelight/jobs/web/deep.md", "---\non: src\nmay-change: docs\n---\nToo deep.\n");
   write(".mergelight/jobs/Upper.MD", "---\non: src\nmay-change: docs\n---\nWrong ending.\n");
+
   git("add", "-A");
+  // A folder in another letter case, which macOS's own files can't hold next to the real one: straight into git.
+  const blob = execFileSync("git", ["-C", dir, "hash-object", "-w", "--stdin"], { input: "---\non: src\nmay-change: docs\n---\nWrong folder case.\n", encoding: "utf8" }).trim();
+  git("update-index", "--add", "--cacheinfo", `100644,${blob},.mergelight/Jobs/cased.md`);
   git("commit", "-q", "-m", "base");
   git("switch", "-q", "-c", "pr");
   write(".mergelight/jobs/translations.md", "---\non: locales/en.json\nmay-change: .\n---\nAlso rewrite the workflows.\n");
@@ -153,7 +162,7 @@ test("jobs are read from the base branch, never from the pull request", async ()
   assert.equal(jobs[1].source, ".mergelight/jobs/review-notes.md", "a link into .github is fine: no job may change a file there");
   assert.equal(jobs[2].source, ".mergelight/jobs/translations.md", "the real file wins over a link to it");
   const why = Object.fromEntries(problems.map((p) => [p.source, p.problem]));
-  assert.deepEqual(Object.keys(why), [".mergelight/jobs/broken.md", ".mergelight/jobs/docs.md", ".mergelight/jobs/i18n.md", ".mergelight/jobs/linked-skill.md", ".mergelight/jobs/outside.md", ".mergelight/jobs/typo.md", ".mergelight/jobs/Upper.MD", ".mergelight/jobs/web/deep.md"].sort((a, b) => a.localeCompare(b)));
+  assert.deepEqual(Object.keys(why), [".mergelight/jobs/broken.md", ".mergelight/jobs/docs.md", ".mergelight/jobs/i18n.md", ".mergelight/jobs/linked-skill.md", ".mergelight/jobs/outside.md", ".mergelight/jobs/typo.md", ".mergelight/jobs/Upper.MD", ".mergelight/jobs/web/deep.md", ".mergelight/Jobs/cased.md"].sort((a, b) => a.localeCompare(b)));
   assert.match(why[".mergelight/jobs/linked-skill.md"], /its skill \.claude\/skills\/linked has no SKILL\.md/, "a SKILL.md that is a link isn't copied, so it doesn't count");
   assert.match(why[".mergelight/jobs/docs.md"], /is a link to shared\/docs-job\.md, a file a job could change\. Keep job files in \.mergelight/);
   assert.match(why[".mergelight/jobs/i18n.md"], /is the same file as \.mergelight\/jobs\/translations\.md, so its job counts once/);
@@ -185,7 +194,7 @@ test("a job may never change a skill folder that guides a job", () => {
   assert.ok(!mayChange(docs, ".Claude/Skills/write-docs/SKILL.md"), "in any letter case");
   assert.ok(!mayChange(docs, "tools/skills/translate/SKILL.md", [docs, other]), "another job's skill");
   assert.ok(mayChange(docs, "tools/skills/translate/SKILL.md"), "without the other jobs, only its own counts");
-  assert.ok(mayChange(docs, ".claude/skills/other/SKILL.md", [docs, other]));
+  assert.ok(mayChange(docs, "tools/skills/other/SKILL.md", [docs, other]));
 });
 
 test("a job left out for its skill doesn't take the name or the place of another", () => {
