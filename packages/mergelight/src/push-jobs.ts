@@ -2,8 +2,7 @@ import { appendFileSync, readFileSync } from "node:fs";
 import { fetchPullRequest, type PrRef } from "./github.js";
 import { mayChange, type Job } from "./jobs.js";
 import { GitHub } from "./publish/api.js";
-import { run } from "./run.js";
-import { isBinary, JOBS_TRAILER, MAX_CHANGE_BYTES, MAX_CHANGED_FILES, newSecret, withoutSecrets, type JobsResult } from "./run-jobs.js";
+import { isBinary, JOBS_TRAILER, MAX_CHANGE_BYTES, MAX_CHANGED_FILES, mirrorGit, newSecret, withoutSecrets, type JobsResult } from "./run-jobs.js";
 import { fetchMirror, jobFilesFor } from "./workspace.js";
 
 /**
@@ -113,7 +112,8 @@ async function modesAt(mirror: string, head: string, paths: string[]): Promise<M
   const modes = new Map<string, string | null>([...folders.map((f): [string, string | null] => [f, null]), ...paths.map((p): [string, string | null] => [p, null])]);
   if (!paths.length) return modes;
   // The whole tree: ls-tree reads paths as patterns, and a path must only ever match itself.
-  const listed = await run("git", ["--git-dir", mirror, "ls-tree", "-r", "-t", "-z", "--full-tree", head]);
+  // With the login, as everything read from the mirror: it fetches what it doesn't have yet from GitHub.
+  const listed = await mirrorGit(mirror).run(["ls-tree", "-r", "-t", "-z", "--full-tree", head]);
   if (listed.code !== 0) throw new Error(`Couldn't read the file modes at ${head.slice(0, 7)}.`);
   for (const entry of listed.stdout.split("\0")) {
     const m = /^(\d{6}) \w+ [0-9a-f]+\t([\s\S]+)$/.exec(entry);
@@ -182,7 +182,8 @@ export async function pushJobs(ref: PrRef, o: PushJobsOptions): Promise<number> 
     if ("why" in plan) return refuse(plan.why, 1);
     // The jobs step drops a job that writes a secret the file didn't have. The file it hands over is checked again.
     for (const a of plan.additions) {
-      const old = modes.get(a.path) ? await run("git", ["--git-dir", mirror, "cat-file", "blob", `${pr.headSha}:${a.path}`]) : null;
+      // The mirror holds no file contents until they are asked for, so this fetches them, with the login a private repository needs.
+      const old = modes.get(a.path) ? await mirrorGit(mirror).run(["cat-file", "blob", `${pr.headSha}:${a.path}`]) : null;
       if (old && old.code !== 0) throw new Error(`Couldn't read ${a.path} at ${pr.headSha.slice(0, 7)}.`);
       const before = old?.stdout ?? "";
       const secret = newSecret(a.bytes.toString("utf8"), before);

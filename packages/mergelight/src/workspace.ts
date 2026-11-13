@@ -598,9 +598,10 @@ export interface Workspace {
 }
 
 /**
- * The mirror with the pull request's head and its base branch fetched, for a step that reads the
+ * The mirror with the pull request's head and its base branch fetched, for the push step, which reads the
  * team's files and the head's file modes but checks nothing out. The team's files come from the base
- * branch as it is now, or from the commit the pull request names when that branch is gone.
+ * branch as it is now. When it can't be fetched, this throws: an older commit could hold jobs the team
+ * has since taken out, so the push never falls back to one.
  */
 export async function fetchMirror(pr: PullRequest): Promise<{ mirror: string; teamBase: string }> {
   const mirror = join(cacheDir(), "repos", pr.owner, `${pr.repo}.git`);
@@ -612,13 +613,10 @@ export async function fetchMirror(pr: PullRequest): Promise<{ mirror: string; te
     const fetch = (...refspecs: string[]) => git(["fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "origin", ...refspecs], mirror);
     await fetch(`+refs/pull/${pr.number}/head:refs/mergelight/pull/${pr.number}`);
     if (!(await hasCommit(mirror, pr.headSha))) await fetch(pr.headSha);
-    try {
-      await fetch(`+refs/heads/${pr.baseRef}:refs/mergelight/base/${pr.baseRef}`);
-      return { mirror, teamBase: `refs/mergelight/base/${pr.baseRef}` };
-    } catch {
-      if (!(await hasCommit(mirror, pr.baseSha))) await fetch(pr.baseSha);
-      return { mirror, teamBase: pr.baseSha };
-    }
+    await fetch(`+refs/heads/${pr.baseRef}:refs/mergelight/base/${pr.baseRef}`);
+    // Pinned to one commit under the lock, as the jobs step does, so a later fetch can't move it.
+    const pinned = (await git(["rev-parse", "--verify", `refs/mergelight/base/${pr.baseRef}^{commit}`], mirror)).stdout.trim();
+    return { mirror, teamBase: pinned };
   });
 }
 
