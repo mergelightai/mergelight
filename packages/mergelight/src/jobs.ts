@@ -33,24 +33,16 @@ const NAME = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
 const JOB_KEYS = ["name", "on", "may-change", "skill"];
 
 /**
- * Paths a job can never change, whatever its file says, wherever they sit: workflows and Mergelight's own
- * files decide what runs and what a job may do, CODEOWNERS decides who must approve, the files and
- * folders AI agents take instructions from would carry a planted text into every later agent and
- * review, and git's own files change how it reads the rest.
+ * Folders a job can never change anything in, whatever its file says, wherever they sit: workflows and
+ * CI settings decide what runs, Mergelight's own files what a job may do, the folders AI agents take
+ * instructions from would carry a planted text into every later agent and review, and git's own folder
+ * is git's.
  */
-export const REFUSED_PATHS = [
+export const REFUSED_FOLDERS = [
   ".github",
   ".mergelight",
-  "CODEOWNERS",
-  // What AI agents and the review take instructions from. CONTRIBUTING.md is one of the review's conventions.
-  "AGENTS.md",
-  "CLAUDE.md",
-  "GEMINI.md",
-  "CONTRIBUTING.md",
-  "SKILL.md",
-  "CLAUDE.local.md",
-  "AGENTS.override.md",
-  ".mcp.json",
+  ".git",
+  // AI agents.
   ".claude",
   ".agents",
   ".codex",
@@ -62,45 +54,80 @@ export const REFUSED_PATHS = [
   ".roo",
   ".kiro",
   ".amazonq",
-  ".cursorrules",
-  ".windsurfrules",
-  ".clinerules",
-  "CONVENTIONS.md",
-  "WARP.md",
-  "airules.md",
-  "opencode.json",
-  "crush.json",
-  ".crush.json",
-  ".opencode",
-  ".aiassistant",
-  ".qwen",
-  ".factory",
-  "AGENT.md",
-  "QWEN.md",
-  "CRUSH.md",
-  ".augment-guidelines",
+  ".continue",
   ".augment",
   ".kilocode",
   ".trae",
   ".openhands",
-  ".continue",
-  ".rules",
+  ".opencode",
+  ".aiassistant",
+  ".qwen",
+  ".factory",
+  // CI services, git hooks and dev containers.
+  ".gitlab",
+  ".circleci",
+  ".woodpecker",
+  ".gitea",
+  ".forgejo",
+  ".buildkite",
+  ".husky",
+  ".devcontainer",
+  ".semaphore",
+  ".githooks",
+  ".mergify",
+];
+
+/**
+ * Files a job can never change, whatever its file says, in any folder. Only the file's own name counts,
+ * so a folder that happens to be called owners is ordinary.
+ */
+export const REFUSED_FILES = [
+  // Who must approve, and what merges by itself.
+  "CODEOWNERS",
+  "OWNERS",
+  "OWNERS_ALIASES",
+  ".policy.yml",
+  ".pullapprove.yml",
+  ".mergify.yml",
+  "renovate.json",
+  "renovate.json5",
+  ".renovaterc",
+  ".renovaterc.json",
+  ".kodiak.toml",
+  "bors.toml",
+  // What AI agents and the review take instructions from. CONTRIBUTING.md is one of the review's conventions.
+  "AGENTS.md",
+  "AGENTS.override.md",
+  "AGENT.md",
+  "CLAUDE.md",
+  "CLAUDE.local.md",
+  "GEMINI.md",
+  "QWEN.md",
+  "CRUSH.md",
+  "WARP.md",
+  "CONTRIBUTING.md",
+  "CONVENTIONS.md",
+  "SKILL.md",
+  "airules.md",
+  ".mcp.json",
+  "opencode.json",
+  "crush.json",
+  ".crush.json",
+  ".augment-guidelines",
   ".goosehints",
   ".roorules",
   ".roomodes",
   ".continuerules",
+  ".rules",
   ".aider.conf.yml",
-  ".gitmodules",
-  ".gitattributes",
-  ".lfsconfig",
-  // Other places that decide what runs: CI services, git hooks and dev containers.
+  ".cursorrules",
+  ".windsurfrules",
+  ".clinerules",
+  // What runs: CI services and git hooks.
   ".gitlab-ci.yml",
   ".travis.yml",
   ".drone.yml",
   ".woodpecker.yml",
-  ".woodpecker",
-  ".gitea",
-  ".forgejo",
   ".pre-commit-config.yaml",
   "lefthook.yml",
   ".lefthook.yml",
@@ -109,36 +136,22 @@ export const REFUSED_PATHS = [
   ".cirrus.yml",
   "appveyor.yml",
   ".appveyor.yml",
-  ".semaphore",
   "cloudbuild.yaml",
   "cloudbuild.yml",
   "buildspec.yml",
   "bitrise.yml",
   "codemagic.yaml",
-  ".githooks",
-  // Who must approve, and what merges by itself.
-  "OWNERS",
-  "OWNERS_ALIASES",
-  ".policy.yml",
-  ".pullapprove.yml",
-  ".mergify.yml",
-  ".mergify",
-  "renovate.json",
-  "renovate.json5",
-  ".renovaterc",
-  ".renovaterc.json",
-  ".kodiak.toml",
-  "bors.toml",
-  ".gitlab",
-  ".circleci",
   "Jenkinsfile",
   "azure-pipelines.yml",
   "bitbucket-pipelines.yml",
-  ".buildkite",
-  ".husky",
-  ".devcontainer",
-  ".git",
+  // How git reads the rest.
+  ".gitmodules",
+  ".gitattributes",
+  ".lfsconfig",
 ];
+
+/** Both lists, for anyone who wants the whole of what a job may never change. */
+export const REFUSED_PATHS = [...REFUSED_FOLDERS, ...REFUSED_FILES];
 
 export interface Job {
   name: string;
@@ -227,15 +240,15 @@ export function parseJobFile(path: string, text: string): { job: Job } | { probl
   let list: string | null = null;
   for (const line of block.fm.split(/\r?\n/)) {
     if (/^[ \t]*(?:#.*)?$/.test(line)) continue;
-    const keyLine = /^([^\s:#][^:]*?)[ \t]*:[ \t]*(.*)$/.exec(line);
+    // YAML allows the items at the key's own indent too, and an item can hold a colon.
+    if (list && /^[ \t]*-[ \t]*\S/.test(line)) continue;
+    const keyLine = /^([^\s:#-][^:]*?)[ \t]*:[ \t]*(.*)$/.exec(line);
     if (keyLine) {
       const key = keyLine[1]!;
       if (!JOB_KEYS.includes(key)) return { problem: `its front matter has a key a job doesn't know: ${key.slice(0, 40)}. A job knows name, on, may-change and skill` };
       list = (key === "on" || key === "may-change") && /^(?:#.*)?$/.test(keyLine[2]!.trim()) ? key : null;
       continue;
     }
-    // YAML allows the items at the key's own indent too.
-    if (list && /^[ \t]*-[ \t]*\S/.test(line)) continue;
     return { problem: `its front matter has a line that isn't read: "${line.trim().slice(0, 60)}". Write each key on a line of its own, and list items under on or may-change with nothing after the colon` };
   }
   // HTML comments are what a team turned off, as in rule files.
@@ -281,7 +294,8 @@ export function folded(path: string): string {
 /** A path no job may change, whatever its file says. In any letter case: on macOS and Windows, .GitAttributes is .gitattributes. */
 export function refusedPath(path: string): boolean {
   const lower = folded(path);
-  return REFUSED_PATHS.some((refused) => matchesPath(folded(refused), lower));
+  const name = lower.replace(/\/+$/, "").split("/").pop() ?? "";
+  return REFUSED_FOLDERS.some((refused) => matchesPath(folded(refused), lower)) || REFUSED_FILES.some((refused) => folded(refused) === name);
 }
 
 /**

@@ -76,6 +76,7 @@ test("a job file that can't be a job says why", () => {
   assert.match(problem("---\non:\r\n\r\n  locales/en.json\r\nmay-change: y\n---\nTask."), /isn't read/, "Windows line endings and a blank line in between");
   assert.equal(problem('---\non: src\nmay-change: docs/**/\n---\nTask.'), undefined, "docs/**/ is all of docs");
   assert.equal(problem("---\non:\n- locales/en.json\nmay-change:\n- locales/*.json\n---\nTask."), undefined, "YAML items at the key's own indent");
+  assert.equal(problem("---\non: src\nmay-change:\n- locales/*.json # format: ICU\n- docs/12:00.md\n---\nTask."), undefined, "an item can hold a colon");
   assert.match(problem("---\non: src\nmay-change: locales/*/\n---\nTask."), /ends in a slash after a wildcard/);
   for (const value of ["|", ">-", "|2", ">2-", "~", "null"]) assert.match(problem(`---\non: ${value}\n  locales/en.json\nmay-change: y\n---\nTask.`), /is a YAML block or an empty value/, value);
   assert.match(problem("---\non: src\nmay-change: tools/write-docs/**\nskill: tools/write-docs\n---\nTask."), /only name files a job can never change, or its own skill folder, tools\/write-docs/);
@@ -89,6 +90,10 @@ test("a job file that can't be a job says why", () => {
   assert.match(problem('---\non: x\nmay-change: "**"\nmay-change: CHANGELOG.md\n---\nTask.'), /its front matter has may-change more than once/);
   assert.match(problem("---\nname: a\nname: b\non: x\nmay-change: y\n---\nTask."), /has name more than once/);
   assert.equal(parseJobFile(".mergelight/jobs/x.md", "---\non: x\nmay-change: y\nskill: /.claude/skills/write-docs\n---\nTask.").job.skill, ".claude/skills/write-docs", "a leading slash, as in the paths");
+});
+
+test("a job may change files in a folder named like a refused file", () => {
+  assert.equal(parseJobFile(".mergelight/jobs/x.md", "---\non: src\nmay-change: app/views/owners/**\n---\nTask.").problem, undefined);
 });
 
 test("a job that may only change workflows or Mergelight's own files is no job", () => {
@@ -138,6 +143,8 @@ test("a job may change only its own paths, and never workflows, Mergelight's fil
     assert.ok(!mayChange(job, p), p);
   }
   assert.ok(mayChange(job, "src/index.ts"));
+  // A refused file name is only the file itself: a folder with that name is ordinary.
+  for (const p of ["src/main/resources/templates/owners/ownerDetails.html", "app/views/agent.md/x.md", "docs/codeowners-guide/a.md"]) assert.ok(mayChange(job, p), p);
   for (const p of ["src/../package.json", "src/./index.ts", "src//index.ts"]) assert.ok(!mayChange(job, p), p);
   const { job: translations } = parseJobFile(".mergelight/jobs/translations.md", TRANSLATIONS);
   assert.ok(mayChange(translations, "locales/da.json"));
