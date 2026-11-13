@@ -1,4 +1,5 @@
 /** What the setup page reads from GitHub, in the browser, with the person's own token. */
+import { aiName, defaultReviewer, loginsFrom, withInputs, type Logins, type Roles } from './roles';
 
 const API = 'https://api.github.com';
 /** Mergelight Setup. It has no private key anywhere, so it only ever acts for the person signed in here. */
@@ -57,6 +58,8 @@ export interface RepoDetails {
   /** Long-lived branches, whose PRs usually don't need a review. */
   skip: string[];
   hasLogin: boolean;
+  /** Which AIs have a login. */
+  logins: Logins;
   /** An API key or a Claude login needs no refreshing, so such a repo doesn't need the refresh workflow. */
   hasApiKey: boolean;
   /** What's on the base branch already, if anything. */
@@ -73,6 +76,38 @@ export interface RepoDetails {
 export interface WorkflowFile {
   name: string;
   content: string;
+  /**
+   * For a change to a file that's there already. The pull request gets this change made to what its branch holds,
+   * so nothing else on that branch is lost. Null when the change can't be made there.
+   */
+  edit?: (current: string) => string | null;
+}
+
+/** What a pull request from this page is for. */
+export type Change = { kind: 'setup' } | { kind: 'update'; release: Release } | { kind: 'roles'; roles: Roles };
+
+/** The workflow wasn't there to change, or its Mergelight step couldn't be found in it. Nothing was written. */
+export class WorkflowEditError extends Error {
+  reason: 'no-file' | 'no-step';
+  constructor(reason: 'no-file' | 'no-step') {
+    super(reason === 'no-file' ? 'The workflow file is missing.' : "The workflow's Mergelight step can't be found.");
+    this.reason = reason;
+  }
+}
+
+/** What a file should hold on a branch that holds `current` now. */
+function wanted(file: WorkflowFile, current: string | null): string {
+  if (!file.edit) return file.content;
+  if (current === null) throw new WorkflowEditError('no-file');
+  const next = file.edit(current);
+  if (next === null) throw new WorkflowEditError('no-step');
+  return next;
+}
+
+/** The file a new repo gets. It names the AI that reviews when there's a login to tell, so adding a second login later can't move reviews to the other AI. */
+export function withReviewer(content: string, logins: Logins): string {
+  if (!logins.claude && !logins.codex) return content;
+  return withInputs(content, [['provider', defaultReviewer(logins)]]) ?? content;
 }
 
 /** Only a real step counts, so a pin line someone left in a comment isn't mistaken for what runs. */
@@ -171,13 +206,14 @@ export interface GitHubClient {
   /**
    * Opens a pull request that adds or updates the workflow. A setup pull request that's open already gets
    * brought up to date instead of a second one. Null if the branch already has exactly this file.
-   * `update` is the release a pinned repo is moving to, when that's what this is.
+   * `change` says what it's for, which sets its title.
    */
-  proposeWorkflows(repo: Repo, branch: string, files: WorkflowFile[], update: Release | null): Promise<SetupPr | null>;
+  proposeWorkflows(repo: Repo, branch: string, files: WorkflowFile[], change: Change): Promise<SetupPr | null>;
   /** The open pull request that adds the workflow, once someone has made it. */
   findSetupPr(repo: Repo): Promise<SetupPr | null>;
   hasWorkflow(repo: Repo, branch: string): Promise<boolean>;
-  hasLogin(repo: Repo): Promise<boolean>;
+  /** Which AIs have a login saved, from the secrets' names. The values can't be read. */
+  logins(repo: Repo): Promise<Logins>;
   /** The Mergelight check on this commit, if a review has started. */
   checkStatus(repo: Repo, sha: string): Promise<CheckStatus | null>;
   /** The code for connecting ChatGPT and the link for Claude, while the pull request is waiting for someone to use them. */
@@ -207,6 +243,16 @@ const SETUP_CHANGED = 'Update the Mergelight workflow';
 const updateTitle = (release: Release) => `Update Mergelight to ${release.tag}`;
 const updateBody = (release: Release, addsRefresh: boolean) =>
   `Moves the workflow to [${release.tag}](https://github.com/mergelightai/mergelight/releases/tag/${release.tag}), pinned to its exact commit. Only that line changes.${addsRefresh ? ' It also adds a small job that keeps a ChatGPT login fresh.' : ''} This pull request reviews itself with the new version.`;
+/** Says nothing about which AI, so it stays true when a second change lands on the same pull request. */
+const ROLES_TITLE = 'Set who reviews and who checks in Mergelight';
+const ROLES_BODY = [
+  'Sets which AI reviews your pull requests in [Mergelight](https://mergelight.dev), and which AI checks what the review found. Only the `provider` and `verify-with` lines in the workflow change.',
+  '',
+  'This pull request is reviewed the new way, so you can see it work. Merge it to keep it.',
+].join('\n');
+/** The commit says which AI, since each change is its own commit. */
+const rolesCommit = (roles: Roles) => (roles.reviewer === roles.checker ? `Review and check with ${aiName(roles.reviewer)}` : `Review with ${aiName(roles.reviewer)}, check with ${aiName(roles.checker)}`);
+const commitFor = (change: Change) => (change.kind === 'update' ? updateTitle(change.release) : change.kind === 'roles' ? rolesCommit(change.roles) : SETUP_CHANGED);
 
 const toBase64 = (text: string) => btoa(String.fromCharCode(...new TextEncoder().encode(text)));
 const fromBase64 = (text: string) => new TextDecoder().decode(Uint8Array.from(atob(text.replace(/\s/g, '')), (c) => c.charCodeAt(0)));
@@ -401,9 +447,7 @@ export function realClient(token: string): GitHubClient {
     const { secrets } = await get<{ secrets: { name: string }[] }>(`/repos/${repo.fullName}/actions/secrets?per_page=100`).catch(() => ({ secrets: [] as { name: string }[] }));
     return secrets.map((s) => s.name);
   };
-  const hasLogin = async (repo: Repo) => {
-    return (await secretNames(repo)).some((n) => LOGIN_SECRETS.includes(n));
-  };
+  const logins = async (repo: Repo) => loginsFrom(await secretNames(repo));
 
   return {
     repos: async () => {
@@ -434,6 +478,7 @@ export function realClient(token: string): GitHubClient {
         base,
         skip: pickSkip(names),
         hasLogin: secrets.some((n) => LOGIN_SECRETS.includes(n)),
+        logins: loginsFrom(secrets),
         hasApiKey: secrets.some((n) => NO_REFRESH_SECRETS.includes(n)),
         installed: onBase && readInstalled(onBase.content),
         refresh: refresh?.content ?? null,
@@ -441,17 +486,19 @@ export function realClient(token: string): GitHubClient {
         reviewApp,
       };
     },
-    proposeWorkflows: async (repo, branch, files, update) => {
+    proposeWorkflows: async (repo, branch, files, change) => {
       const r = `/repos/${repo.fullName}`;
+      const update = change.kind === 'update' ? change.release : null;
       /** Writes the files that differ on this branch. Returns the last commit, if anything changed. */
       const write = async (head: string, message: string): Promise<string | null> => {
         let commit: string | null = null;
         for (const file of files) {
           const current = await workflowOn(repo, head, file.name);
-          if (current?.content === file.content) continue;
+          const content = wanted(file, current?.content ?? null);
+          if (current?.content === content) continue;
           const done = await call<{ commit: { sha: string } }>('PUT', `${r}/contents/${WORKFLOWS}/${file.name}`, {
             message,
-            content: toBase64(file.content),
+            content: toBase64(content),
             branch: head,
             ...(current ? { sha: current.sha } : {}),
           });
@@ -463,19 +510,21 @@ export function realClient(token: string): GitHubClient {
       // One that's open already gets brought up to date, however old the version it was opened with.
       const open = await openSetupPull(repo);
       if (open) {
-        const commit = await write(open.head.ref, update ? updateTitle(update) : SETUP_CHANGED);
+        const commit = await write(open.head.ref, commitFor(change));
         return { number: open.number, url: open.html_url, headSha: commit ?? open.head.sha };
       }
 
       const onBranch = await Promise.all(files.map((f) => workflowOn(repo, branch, f.name)));
-      if (onBranch.every((current, i) => current?.content === files[i]!.content)) return null;
-      const title = update ? updateTitle(update) : SETUP_TITLE;
+      // A change that can't be made stops here, before there's a branch to clean up.
+      if (onBranch.every((current, i) => current?.content === wanted(files[i]!, current?.content ?? null))) return null;
+      const title = update ? updateTitle(update) : change.kind === 'roles' ? ROLES_TITLE : SETUP_TITLE;
       const base = await get<{ object: { sha: string } }>(`${r}/git/ref/heads/${branch.split('/').map(encodeURIComponent).join('/')}`);
       const head = `mergelight-setup-${Date.now().toString(36)}`;
       await call('POST', `${r}/git/refs`, { ref: `refs/heads/${head}`, sha: base.object.sha });
       try {
-        await write(head, title);
-        const pull = await call<{ number: number; html_url: string; head: { sha: string } }>('POST', `${r}/pulls`, { title, head, base: branch, body: update ? updateBody(update, onBranch.some((current) => !current)) : SETUP_BODY });
+        await write(head, change.kind === 'roles' ? commitFor(change) : title);
+        const body = update ? updateBody(update, onBranch.some((current) => !current)) : change.kind === 'roles' ? ROLES_BODY : SETUP_BODY;
+        const pull = await call<{ number: number; html_url: string; head: { sha: string } }>('POST', `${r}/pulls`, { title, head, base: branch, body });
         return { number: pull.number, url: pull.html_url, headSha: pull.head.sha };
       } catch (err) {
         // Don't leave an empty branch behind in their repo.
@@ -485,7 +534,7 @@ export function realClient(token: string): GitHubClient {
     },
     findSetupPr,
     hasWorkflow,
-    hasLogin,
+    logins,
     checkStatus: async (repo, sha) => {
       const { check_runs } = await get<{ check_runs: { status: string; conclusion: string | null; output: { title: string | null } }[] }>(`/repos/${repo.fullName}/commits/${sha}/check-runs?check_name=Mergelight`);
       const latest = check_runs[0];
@@ -522,30 +571,35 @@ export function mockClient(): GitHubClient {
   let checks = 0;
   const later = <T,>(value: T) => new Promise<T>((r) => setTimeout(() => r(value), 300));
   const release: Release = { tag: 'v0.2.0', sha: 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0' };
-  const workflowWith = (use: string) => `name: Mergelight\n\njobs:\n  review:\n    steps:\n      - uses: mergelightai/mergelight@${use}\n`;
+  const workflowWith = (use: string, inputs = '') => `name: Mergelight\n\njobs:\n  review:\n    steps:\n      - uses: mergelightai/mergelight@${use}\n        with:\n          claude-code-oauth-token: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n${inputs}`;
   const installedFor = (name: string): Installed | null =>
     name === 'acme/app'
       ? readInstalled(workflowWith(`${release.sha} # ${release.tag}`))
-      : name === 'acme/old'
+      : name === 'acme/old' || name === 'acme/claude'
         ? readInstalled(workflowWith('v0'))
-        : name === 'acme/behind'
-          ? readInstalled(workflowWith('0123456789012345678901234567890123456789 # v0.1.0'))
-          : null;
+        : name === 'acme/both'
+          ? readInstalled(workflowWith('v0', '          provider: claude\n'))
+          : name === 'acme/behind'
+            ? readInstalled(workflowWith('0123456789012345678901234567890123456789 # v0.1.0'))
+            : null;
+  // acme/claude is live with only a Claude login, and acme/both is live with both.
+  const loginsOf = (name: string): Logins => ({ claude: name === 'acme/claude' || name === 'acme/both', codex: ['acme/platform', 'acme/old', 'acme/behind', 'acme/both'].includes(name) });
   return {
-    repos: () => later([repo('api'), repo('app'), repo('behind'), repo('docs', false), repo('old'), repo('platform'), repo('site')]),
+    repos: () => later([repo('api'), repo('app'), repo('behind'), repo('both'), repo('claude'), repo('docs', false), repo('old'), repo('platform'), repo('site')]),
     // acme/docs plays a repo that has only the setup app so far.
     details: (r) =>
       later<RepoDetails>({ reviewApp: r.fullName !== 'acme/docs', ...(
         r.fullName === 'acme/docs'
-          ? { branches: ['main'], base: 'main', skip: ['main'], hasLogin: false, hasApiKey: false, installed: null, refresh: null, release }
+          ? { branches: ['main'], base: 'main', skip: ['main'], hasLogin: false, logins: loginsOf(r.fullName), hasApiKey: false, installed: null, refresh: null, release }
           : r.fullName === 'acme/site'
-          ? { branches: ['main', 'feat/new-landing'], base: 'main', skip: ['main'], hasLogin: false, hasApiKey: false, installed: null, refresh: null, release }
+          ? { branches: ['main', 'feat/new-landing'], base: 'main', skip: ['main'], hasLogin: false, logins: loginsOf(r.fullName), hasApiKey: false, installed: null, refresh: null, release }
           : {
               branches: ['main', 'staging', 'development', 'feat/billing-export', 'fix/invoice-rounding'],
               base: 'staging',
               skip: ['main', 'staging', 'development'],
-              hasLogin: r.fullName === 'acme/platform' || r.fullName === 'acme/old' || r.fullName === 'acme/behind',
-              hasApiKey: false,
+              hasLogin: loginsOf(r.fullName).claude || loginsOf(r.fullName).codex,
+              hasApiKey: loginsOf(r.fullName).claude,
+              logins: loginsOf(r.fullName),
               installed: installedFor(r.fullName),
               refresh: null,
               release,
@@ -554,7 +608,8 @@ export function mockClient(): GitHubClient {
     proposeWorkflows: (r) => (r.fullName === 'acme/site' ? Promise.reject(new GitHubError(403)) : new Promise((done) => setTimeout(() => done({ number: 128, url: 'https://github.com/acme/api/pull/128', headSha: 'abc' }), 900))),
     findSetupPr: () => later(++finds > 1 ? { number: 128, url: 'https://github.com/acme/api/pull/128', headSha: 'abc' } : null),
     hasWorkflow: () => later(false),
-    hasLogin: (r) => later(r.fullName === 'acme/platform'),
+    // ChatGPT shows up on acme/claude once its code has been used, like a run saving the login.
+    logins: (r) => later({ ...loginsOf(r.fullName), codex: loginsOf(r.fullName).codex || (r.fullName === 'acme/claude' && checks >= 4) }),
     checkStatus: () => {
       checks += 1;
       if (checks < 2) return later(null);

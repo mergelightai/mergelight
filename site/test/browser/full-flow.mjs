@@ -20,7 +20,7 @@ const customized = (use) => `# Our own note, keep this\nname: Mergelight\njobs:\
 let failures = 0;
 const expect = (ok, what) => { console.log(`  ${ok ? 'ok ' : 'FAIL'} ${what}`); if (!ok) failures++; };
 
-async function run(name, { login = false, apiKey = false, refuse = null, onBase = null, prFile = null, prRefresh = null, baseRefresh = null, noRelease = false, reviewDone = false, scope = 'new', button = 'Add to api' } = {}, check = () => {}) {
+async function run(name, { login = false, apiKey = false, claude = false, refuse = null, onBase = null, prFile = null, prRefresh = null, baseRefresh = null, noRelease = false, reviewDone = false, scope = 'new', button = 'Add to api' } = {}, check = () => {}) {
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 860, deviceScaleFactor: 2 });
   const errors = [];
@@ -61,7 +61,7 @@ async function run(name, { login = false, apiKey = false, refuse = null, onBase 
       if (p === '/pulls/5') return json(req, { merged: false, head: { sha: writes.some((w) => w.m === 'PUT') ? 'newsha' : 'oldsha' } });
       if (p === '/pulls/7') return json(req, { merged: false, head: { sha: 'headsha' } });
       if (p === '/issues/5/comments' || p === '/issues/7/comments') return json(req, []);
-      if (p === '/actions/secrets') return json(req, { secrets: [...(login ? [{ name: 'CODEX_AUTH_JSON' }] : []), ...(apiKey ? [{ name: 'OPENAI_API_KEY' }] : [])] });
+      if (p === '/actions/secrets') return json(req, { secrets: [...(login ? [{ name: 'CODEX_AUTH_JSON' }] : []), ...(apiKey ? [{ name: 'OPENAI_API_KEY' }] : []), ...(claude ? [{ name: 'CLAUDE_CODE_OAUTH_TOKEN' }] : [])] });
       if (p.startsWith('/contents/')) {
         // A new branch starts with whatever the branch it came from has.
         const raw = u.searchParams.get('ref');
@@ -134,7 +134,7 @@ async function run(name, { login = false, apiKey = false, refuse = null, onBase 
 }
 
 const pinnedUse = `mergelightai/mergelight@${RELEASE.sha} # ${RELEASE.tag}`;
-const fresh = await run('new-repo', {}, ({ writes, file, refresh, pull, after }) => {
+await run('new-repo', {}, ({ writes, file, refresh, pull, after }) => {
   expect(refresh?.includes(`uses: ${pinnedUse}\n`), 'the refresh job comes along, pinned too');
   expect(file?.includes(`uses: ${pinnedUse}\n`), 'the file is pinned to the latest release');
   expect(!/Not pinned/.test(file ?? '') && !/Not pinned/.test(refresh ?? ''), 'neither says it is not pinned');
@@ -142,8 +142,11 @@ const fresh = await run('new-repo', {}, ({ writes, file, refresh, pull, after })
   expect(writes.map((w) => w.m).join() === 'POST,PUT,PUT,POST', 'branch, two files, pull request');
   expect(pull?.body.title === 'Add Mergelight code review', 'titled as an add');
   expect(/Connect your AI/.test(after), 'moves on to connecting');
+  // Which AI they connect comes after the pull request, from its run, so the file can't name one yet.
+  expect(!/provider:/.test(file ?? ''), "with no login yet, it doesn't name a reviewer");
 });
-await run('has-login', { login: true }, ({ after }) => {
+const withLogin = await run('has-login', { login: true }, ({ after, file }) => {
+  expect(file?.includes('          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}\n          provider: codex\n'), 'names ChatGPT as the reviewer, so a second login later changes nothing');
   expect(/Your PR is open/.test(after) && /First review running/.test(after), 'goes straight to the timeline');
   expect(/reviewing this same PR/.test(after), 'explains what it is reviewing');
   expect(/You can close this page/.test(after), 'says the page can be closed');
@@ -152,6 +155,11 @@ await run('has-login', { login: true }, ({ after }) => {
 await run('update-review-done', { onBase: customized(`${OLD_SHA} # v0.1.0`), login: true, reviewDone: true, button: 'Update to v0.2.0' }, ({ after }) => {
   expect(/Review done/.test(after) && /It reviewed this PR with v0\.2\.0/.test(after), 'says the review is done, with the new version');
   expect(!/First review/.test(after), "doesn't call it the first review");
+});
+await run('claude-login', { claude: true }, ({ puts, file, after }) => {
+  expect(file?.includes('          provider: claude\n') && !/verify-with/.test(file ?? ''), 'names Claude as the reviewer, and leaves the checker to the default');
+  expect(puts.length === 1, 'a Claude login needs no refresh job');
+  expect(/Your PR is open/.test(after), 'goes straight to the timeline');
 });
 await run('review-done', { login: true, reviewDone: true }, ({ after }) => {
   expect(/First review done/.test(after), 'shows the review as done');
@@ -166,7 +174,7 @@ await run('open-pr-on-old-version', { prFile: customized('v0'), login: true }, (
   expect(put?.body.branch === 'mergelight-setup-old' && put?.body.sha === 'prblob', 'on its own branch, with the right blob');
   expect(/PR #5 opened/.test(after), 'keeps the same pull request');
 });
-await run('open-pr-already-current', { prFile: fresh.file, prRefresh: fresh.refresh, login: true }, ({ writes, after }) => {
+await run('open-pr-already-current', { prFile: withLogin.file, prRefresh: withLogin.refresh, login: true }, ({ writes, after }) => {
   expect(writes.length === 0, 'writes nothing');
   expect(/PR #5 opened/.test(after), 'reuses it');
 });
