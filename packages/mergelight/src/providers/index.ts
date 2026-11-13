@@ -5,7 +5,7 @@ import { runCodex } from "./codex.js";
 export type ProviderName = "codex" | "claude";
 
 export interface ModelOptions {
-  /** Read-only working directory for the agent. */
+  /** Working directory for the agent. Read-only, unless edit is set. */
   cwd: string;
   prompt: string;
   schema: object;
@@ -21,6 +21,15 @@ export interface ModelOptions {
    * conventions reach the prompt from the base branch instead.
    */
   projectDocs?: boolean;
+  /**
+   * True for a job: the agent may change files in cwd, and nowhere else. Off, it can only read. The
+   * caller checks every change afterwards; this only keeps the agent's hands inside the folder.
+   */
+  edit?: boolean;
+  /** When the run must end, as a time: worked out into a timeout right before the program starts. */
+  deadline?: number;
+  /** Folders outside cwd the agent may read, such as a job's skill (Claude only: Codex reads the whole disk). */
+  readDirs?: string[];
   /** Called whenever the agent starts a shell command (Codex only). */
   onCommand?: (command: string) => void;
 }

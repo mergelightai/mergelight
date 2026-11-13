@@ -145,7 +145,7 @@ test("a job runs only when a pull request changed one of its on files", () => {
 
 test("a job may change only its own paths, and never workflows, Mergelight's files or git's files", () => {
   const { job } = parseJobFile(".mergelight/jobs/x.md", '---\non: src\nmay-change: "**"\n---\nTask.');
-  for (const p of [".github/workflows/ci.yml", "packages/web/.github/x.yml", ".huſky/pre-commit", ".gıtattributes", ".mergelight/jobs/x.md", ".mergelight/rules.md", ".gitmodules", "src/.gitattributes", ".git/config", ".GITHUB/workflows/ci.yml", "docs/.GitAttributes", ".GitModules", "CODEOWNERS", "docs/CODEOWNERS", "AGENTS.md", "packages/web/CLAUDE.md", ".claude/settings.json", ".agents/skills/x/SKILL.md", ".codex/config.toml", ".cursor/rules/style.mdc", "CONTRIBUTING.md", "docs/CONTRIBUTING.md", "GEMINI.md", ".cursorrules", "tools/x/SKILL.md", ".mcp.json", "CLAUDE.local.md", "AGENTS.override.md", ".vscode/tasks.json", ".roo/rules.md", ".kiro/steering/x.md", ".lfsconfig", "CONVENTIONS.md", ".continue/rules/x.md", ".goosehints", "AGENT.md", "QWEN.md", "CRUSH.md", ".kilocode/rules/x.md", ".trae/rules/x.md", ".augment-guidelines", ".openhands/microagents/x.md", ".gitlab-ci.yml", ".circleci/config.yml", "Jenkinsfile", "azure-pipelines.yml", ".husky/pre-commit", ".devcontainer/devcontainer.json", "WARP.md", "opencode.json", ".idx/airules.md", ".travis.yml", ".gitea/workflows/ci.yml", ".pre-commit-config.yaml", "lefthook.yml", ".devcontainer.json", ".roomodes", "appveyor.yml", ".semaphore/semaphore.yml", "cloudbuild.yaml", ".githooks/pre-push", "OWNERS", ".mergify.yml", "renovate.json", ".renovaterc", "bors.toml", "lefthook.yaml", ".woodpecker.yaml", ".tekton/pipeline.yaml", ".clinerules/security.md", ".clinerules", ".roorules-code", ".coderabbit.yaml", ".tabnine/x.json", ".idx/dev.nix", ".zed/settings.json", "buildkite.yml", "buildkite/pipeline.yml", "cloudbuild.json", "codefresh.yml", "lefthook-local.yaml", ".lefthook/pre-commit/x.sh", ".prow/config.yaml", ".teamcity/settings.kts", ".builds/deploy.yml", ".build.yml", ".simple-git-hooks.json", ".lintstagedrc.json", "lint-staged.config.js", "replit.md", ".replit", "greptile.json"]) {
+  for (const p of [".github/workflows/ci.yml", "packages/web/.github/x.yml", ".huſky/pre-commit", ".gıtattributes", ".mergelight/jobs/x.md", ".mergelight/rules.md", ".gitmodules", "src/.gitattributes", ".git/config", ".GITHUB/workflows/ci.yml", "docs/.GitAttributes", ".GitModules", "CODEOWNERS", "docs/CODEOWNERS", "AGENTS.md", "packages/web/CLAUDE.md", ".claude/settings.json", ".agents/skills/x/SKILL.md", ".codex/config.toml", ".cursor/rules/style.mdc", "CONTRIBUTING.md", "docs/CONTRIBUTING.md", "GEMINI.md", ".cursorrules", "tools/x/SKILL.md", ".mcp.json", "CLAUDE.local.md", "AGENTS.override.md", ".vscode/tasks.json", ".roo/rules.md", ".kiro/steering/x.md", ".lfsconfig", "CONVENTIONS.md", ".continue/rules/x.md", ".goosehints", "AGENT.md", "QWEN.md", "CRUSH.md", ".kilocode/rules/x.md", ".trae/rules/x.md", ".augment-guidelines", ".openhands/microagents/x.md", ".gitlab-ci.yml", ".circleci/config.yml", "Jenkinsfile", "azure-pipelines.yml", ".husky/pre-commit", ".devcontainer/devcontainer.json", "WARP.md", "opencode.json", ".idx/airules.md", ".travis.yml", ".gitea/workflows/ci.yml", ".pre-commit-config.yaml", "lefthook.yml", ".devcontainer.json", ".roomodes", "appveyor.yml", ".semaphore/semaphore.yml", "cloudbuild.yaml", ".githooks/pre-push", "OWNERS", ".mergify.yml", "renovate.json", ".renovaterc", "bors.toml", "lefthook.yaml", ".woodpecker.yaml", ".tekton/pipeline.yaml", ".clinerules/security.md", ".clinerules", ".roorules-code", ".coderabbit.yaml", ".tabnine/x.json", ".idx/dev.nix", ".zed/settings.json", "buildkite.yml", "buildkite/pipeline.yml", "cloudbuild.json", "codefresh.yml", "lefthook-local.yaml", ".lefthook/pre-commit/x.sh", ".prow/config.yaml", "netlify.toml", "vercel.json", "amplify.yml", ".teamcity/settings.kts", ".builds/deploy.yml", ".build.yml", ".simple-git-hooks.json", ".lintstagedrc.json", "lint-staged.config.js", "replit.md", ".replit", "greptile.json"]) {
     assert.ok(refusedPath(p), p);
     assert.ok(!mayChange(job, p), p);
   }
@@ -190,6 +190,8 @@ test("jobs are read from the base branch, never from the pull request", async ()
   mkdirSync(join(dir, ".claude/skills/linked"), { recursive: true });
   symlinkSync("../real/SKILL.md", join(dir, ".claude/skills/linked/SKILL.md"));
   write(".mergelight/jobs/linked-skill.md", "---\non: src\nmay-change: guide\nskill: .claude/skills/linked\n---\nUse the linked skill.\n");
+  write("tools/empty-skill/SKILL.md", "");
+  write(".mergelight/jobs/empty-skill.md", "---\non: src\nmay-change: guide\nskill: tools/empty-skill\n---\nUse an empty skill.\n");
   write(".claude/skills/write-docs/SKILL.md", "---\nname: write-docs\n---\nHow we write docs.\n");
   write(".mergelight/jobs/guide.md", "---\non: src\nmay-change: guide\nskill: .claude/skills/write-docs\n---\nWrite the guide.\n");
   write(".mergelight/jobs/typo.md", "---\non: src\nmay-change: guide\nskill: .claude/skills/write-doc\n---\nWrite the guide.\n");
@@ -236,9 +238,10 @@ test("jobs are read from the base branch, never from the pull request", async ()
   assert.equal(jobs[2].source, ".mergelight/jobs/review-notes.md", "a link into .github is fine: no job may change a file there");
   assert.equal(jobs[3].source, ".mergelight/jobs/translations.md", "the real file wins over a link to it");
   const why = Object.fromEntries(problems.map((p) => [p.source, p.problem]));
-  assert.deepEqual(Object.keys(why), [".mergelight/jobs/broken.md", ".mergelight/jobs/docs.md", ".mergelight/jobs/i18n.md", ".mergelight/jobs/linked-skill.md", ".mergelight/jobs/outside.md", ".mergelight/jobs/typo.md", ".mergelight/jobs/Upper.MD", ".mergelight/jobs/web/deep.md", ".mergelight/Jobs/cased.md", ".mergelight/jobs/notes.markdown", ".mergelight/jobs/deep-link.md", ".mergelight/jobs.md", ".mergelight/jobs/Copy Job.md", ".mergelight/jobs/via-link.md", ".mergelight/jobs/extra.md", ".mergelight/jobs/README.md", ".mergelight/jobs/copy-link.md"].sort((a, b) => a.localeCompare(b)));
+  assert.deepEqual(Object.keys(why), [".mergelight/jobs/broken.md", ".mergelight/jobs/docs.md", ".mergelight/jobs/i18n.md", ".mergelight/jobs/linked-skill.md", ".mergelight/jobs/outside.md", ".mergelight/jobs/typo.md", ".mergelight/jobs/Upper.MD", ".mergelight/jobs/web/deep.md", ".mergelight/Jobs/cased.md", ".mergelight/jobs/notes.markdown", ".mergelight/jobs/deep-link.md", ".mergelight/jobs.md", ".mergelight/jobs/Copy Job.md", ".mergelight/jobs/via-link.md", ".mergelight/jobs/extra.md", ".mergelight/jobs/README.md", ".mergelight/jobs/copy-link.md", ".mergelight/jobs/empty-skill.md"].sort((a, b) => a.localeCompare(b)));
   assert.match(why[".mergelight/jobs.md"], /jobs are files right in the \.mergelight\/jobs folder/);
   assert.match(why[".mergelight/jobs/README.md"], /is the folder's notes, never read as a job/);
+  assert.match(why[".mergelight/jobs/empty-skill.md"], /its skill's SKILL\.md is empty, so the skill can't be used/);
   assert.match(why[".mergelight/jobs/extra.md"], /is a link to \.mergelight\/jobs\.md, which isn't a job file that is read/);
   assert.match(why[".mergelight/jobs/copy-link.md"], /is a link to \.mergelight\/jobs\/Copy Job\.md, which doesn't run as a job: see/);
   assert.match(why[".mergelight/jobs/Copy Job.md"], /must be lowercase/);
@@ -310,6 +313,9 @@ test("the guard follows links the way the file system does, and runs no job when
     symlinkSync(target, join(dir, path));
   };
   git("init", "-q", "-b", "main");
+  // A job, so the guard is worked out at all.
+  mkdirSync(join(dir, ".mergelight/jobs"), { recursive: true });
+  writeFileSync(join(dir, ".mergelight/jobs/x.md"), "---\non: src\nmay-change: src\n---\nTask.\n");
   // AGENTS.md leads to a file through a folder that is itself a link.
   write("vendor/ai/guide.md", "Guide.\n");
   link("../vendor/ai", "shared/ai");
@@ -357,6 +363,9 @@ test("a protected link to the repository's root runs no job", async () => {
   const dir = mkdtempSync(join(tmpdir(), "mergelight-jobs-root-"));
   const git = (...args) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t.test", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
   git("init", "-q", "-b", "main");
+  // A job, so the guard is worked out at all.
+  mkdirSync(join(dir, ".mergelight/jobs"), { recursive: true });
+  writeFileSync(join(dir, ".mergelight/jobs/x.md"), "---\non: src\nmay-change: src\n---\nTask.\n");
   mkdirSync(join(dir, ".cursor"));
   symlinkSync("../", join(dir, ".cursor/everything"));
   writeFileSync(join(dir, "README.md"), "Hi\n");
@@ -373,6 +382,9 @@ test("files an instruction file imports with @ are guarded, as deep as Claude Co
     writeFileSync(join(dir, path), text);
   };
   git("init", "-q", "-b", "main");
+  // A job, so the guard is worked out at all.
+  mkdirSync(join(dir, ".mergelight/jobs"), { recursive: true });
+  writeFileSync(join(dir, ".mergelight/jobs/x.md"), "---\non: src\nmay-change: src\n---\nTask.\n");
   write("CLAUDE.md", "# Team notes\nSee @docs/ai-guide.md and @./style.md. Mail us at team@example.com.\n");
   write("docs/ai-guide.md", "More in @deeper/one.md\n");
   write("docs/deeper/one.md", "Done.\n");
@@ -393,6 +405,86 @@ test("files an instruction file imports with @ are guarded, as deep as Claude Co
   git("commit", "-q", "-m", "base");
   const { guarded, incomplete } = await jobFilesFor(dir, "main");
   assert.equal(incomplete, undefined);
-  for (const p of ["docs/ai-guide.md", "docs/deeper/one.md", "style.md", "shared/web.md", "handbook/guide.md", "docs/more.md", "docs/style-guide.md", ".ai/guidelines.md", "docs/guía.md", "docs/c++-style.md"]) assert.ok(guarded.includes(p), p);
+  for (const p of ["docs/ai-guide.md", "docs/deeper/one.md", "style.md", "shared/web.md", "handbook/guide.md", "docs/more.md", "docs/style-guide.md", ".ai/guidelines.md", "docs/guía.md", "docs/c++-style.md", "packages/api/more.md"]) assert.ok(guarded.includes(p), p);
   assert.ok(!guarded.some((p) => p.includes("example.com")), "an e-mail address isn't an import");
+});
+
+test("rules in a folder a protected link leads to, and a large instruction file, are read for imports", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-jobs-imports2-"));
+  const git = (...args) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t.test", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
+  const write = (path, text) => {
+    mkdirSync(join(dir, path, ".."), { recursive: true });
+    writeFileSync(join(dir, path), text);
+  };
+  git("init", "-q", "-b", "main");
+  // A job, so the guard is worked out at all.
+  mkdirSync(join(dir, ".mergelight/jobs"), { recursive: true });
+  writeFileSync(join(dir, ".mergelight/jobs/x.md"), "---\non: src\nmay-change: src\n---\nTask.\n");
+  write("config/cursor/rules/style.mdc", "Follow @../../../docs/style-guide.md\n");
+  write("docs/style-guide.md", "Style.\n");
+  symlinkSync("config/cursor", join(dir, ".cursor"));
+  write("CLAUDE.md", `${"x".repeat(300_000)}\nAlso @docs/late.md\n`);
+  write("docs/late.md", "Late.\n");
+  git("add", "-A");
+  git("commit", "-q", "-m", "base");
+  const { guarded, incomplete } = await jobFilesFor(dir, "main");
+  assert.equal(incomplete, undefined);
+  assert.ok(guarded.includes("docs/style-guide.md"), "a rule in the folder .cursor links to");
+  assert.ok(guarded.includes("docs/late.md"), "an import far down a large CLAUDE.md");
+});
+
+test("instruction files in a guarded folder that is a link are read for imports from the link's path too", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-jobs-imports3-"));
+  const git = (...args) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t.test", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
+  const write = (path, text) => {
+    mkdirSync(join(dir, path, ".."), { recursive: true });
+    writeFileSync(join(dir, path), text);
+  };
+  git("init", "-q", "-b", "main");
+  // A job, so the guard is worked out at all.
+  mkdirSync(join(dir, ".mergelight/jobs"), { recursive: true });
+  writeFileSync(join(dir, ".mergelight/jobs/x.md"), "---\non: src\nmay-change: src\n---\nTask.\n");
+  write("config/claude/CLAUDE.md", "See @../docs/guide.md\n");
+  write("docs/guide.md", "Guide.\n");
+  symlinkSync("config/claude", join(dir, ".claude"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "base");
+  const { guarded, incomplete } = await jobFilesFor(dir, "main");
+  assert.equal(incomplete, undefined);
+  assert.ok(guarded.includes("docs/guide.md"), "read as .claude/CLAUDE.md, ../docs is the root's docs");
+});
+
+test("an instruction file reached through an ordinary folder link has its imports read from the link's path", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-jobs-imports4-"));
+  const git = (...args) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t.test", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
+  const write = (path, text) => {
+    mkdirSync(join(dir, path, ".."), { recursive: true });
+    writeFileSync(join(dir, path), text);
+  };
+  git("init", "-q", "-b", "main");
+  // A job, so the guard is worked out at all.
+  mkdirSync(join(dir, ".mergelight/jobs"), { recursive: true });
+  writeFileSync(join(dir, ".mergelight/jobs/x.md"), "---\non: src\nmay-change: src\n---\nTask.\n");
+  write("apps/web/CLAUDE.md", "See @../shared/ai.md\n");
+  write("packages/shared/ai.md", "Through the link.\n");
+  write("apps/shared/ai.md", "Through the real folder.\n");
+  symlinkSync("../apps/web", join(dir, "packages/web"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "base");
+  const { guarded } = await jobFilesFor(dir, "main");
+  assert.ok(guarded.includes("packages/shared/ai.md"), "as read through packages/web");
+  assert.ok(guarded.includes("apps/shared/ai.md"), "as read from apps/web");
+  assert.ok(!guarded.includes("apps/web"), "an ordinary folder link isn't guarded for it");
+});
+
+test("an ordinary link to the repository's root doesn't turn jobs off", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-jobs-rootlink-"));
+  const git = (...args) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t.test", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
+  git("init", "-q", "-b", "main");
+  mkdirSync(join(dir, "examples"), { recursive: true });
+  symlinkSync("..", join(dir, "examples/lib"));
+  writeFileSync(join(dir, "README.md"), "Hi\n");
+  git("add", "-A");
+  git("commit", "-q", "-m", "base");
+  assert.equal((await jobFilesFor(dir, "main")).incomplete, undefined);
 });

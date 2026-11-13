@@ -43,16 +43,23 @@ export async function claudeAvailable(): Promise<boolean> {
 
 /**
  * Runs the user's own logged-in Claude Code CLI, headless.
- * Only Read, Grep and Glob are available, confined to the checkout (--restricted).
+ * Only Read, Grep and Glob are available, confined to the checkout (--restricted). A job also gets Edit
+ * and Write, confined the same way.
  * Plugins, hooks, MCP servers, skills and CLAUDE.md auto-loading are off (--safe-mode),
  * and anything that would ask for permission is denied. Login and plan are the user's own.
  */
 export async function runClaude(opts: ModelOptions): Promise<ModelResult> {
+  // A run whose time is up never starts: its kill timer would only fire after the job was given up.
+  if (opts.deadline && opts.deadline <= Date.now()) throw new Error("there was no time left to start the AI");
   const args = [
     "-p",
     "--output-format", "json",
     "--json-schema", JSON.stringify(opts.schema),
-    "--tools", TOOLS,
+    // A job may edit files in its folder: --restricted keeps the file tools inside it, and acceptEdits lets
+    // them write there without a prompt that nobody could answer.
+    "--tools", opts.edit ? `${TOOLS},Edit,Write` : TOOLS,
+    ...(opts.edit ? ["--permission-mode", "acceptEdits"] : []),
+    ...(opts.readDirs ?? []).flatMap((dir) => ["--add-dir", dir]),
     "--restricted",
     "--safe-mode",
     "--strict-mcp-config",
@@ -65,7 +72,7 @@ export async function runClaude(opts: ModelOptions): Promise<ModelResult> {
   const result = await run("claude", args, {
     cwd: opts.cwd,
     input: opts.prompt,
-    timeoutMs: opts.timeoutMs ?? 25 * 60_000,
+    timeoutMs: opts.deadline ? Math.max(1, opts.deadline - Date.now()) : (opts.timeoutMs ?? 25 * 60_000),
     env: claudeEnv(),
   });
   const checkLogin = (text: string) => {
