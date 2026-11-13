@@ -25,6 +25,8 @@ const expect = (ok, what) => { console.log(`  ${ok ? 'ok ' : 'FAIL'} ${what}`); 
 
 // What a repo set up from this page has: the real template, on the moving tag.
 const TEMPLATE = readFileSync(`${root}/examples/mergelight.yml`, 'utf8');
+const REFRESH = readFileSync(`${root}/examples/mergelight-refresh.yml`, 'utf8');
+const SHA = 'a'.repeat(40);
 const LAST_INPUT = '          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}\n';
 const BOT = 'mergelight-ai[bot]';
 const CODE = '2ZYY-TEST1';
@@ -38,7 +40,7 @@ async function scenario(name, start, body) {
   await page.setViewport({ width: 1280, height: 900, deviceScaleFactor: 2 });
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
-  const world = { file: TEMPLATE, secrets: [], comments: [], checks: {}, head: 'rolesha', merged: false, open: null, branchFile: null, fileGone: false, writes: [], ...start };
+  const world = { file: TEMPLATE, refresh: null, secrets: [], comments: [], checks: {}, head: 'rolesha', merged: false, open: null, branchFile: null, branchRefresh: null, fileGone: false, writes: [], ...start };
   const json = (req, data, code = 200) => req.respond({ status: code, contentType: 'application/json', headers: cors, body: JSON.stringify(data) });
   await page.setRequestInterception(true);
   page.on('request', (req) => {
@@ -60,7 +62,8 @@ async function scenario(name, start, body) {
         world.writes.push({ m, p, body: data });
         if (m === 'POST' && p === '/git/refs') return json(req, { ref: data.ref }, 201);
         if (m === 'PUT' && p.startsWith('/contents/')) {
-          world.branchFile = unb64(data.content);
+          if (p.endsWith('/mergelight.yml')) world.branchFile = unb64(data.content);
+          else world.branchRefresh = unb64(data.content);
           return json(req, { content: {}, commit: { sha: world.head } }, 201);
         }
         if (m === 'POST' && p === '/pulls') {
@@ -86,6 +89,11 @@ async function scenario(name, start, body) {
         if (ref === world.open?.ref && world.branchFile) return json(req, { sha: 'prblob', content: b64(world.branchFile) });
         // A new branch starts with what main has.
         return json(req, { sha: 'baseblob', content: b64(world.file) });
+      }
+      if (p === '/contents/.github/workflows/mergelight-refresh.yml') {
+        const ref = u.searchParams.get('ref');
+        const body = ref === world.open?.ref && world.branchRefresh ? world.branchRefresh : world.refresh;
+        return body ? json(req, { sha: 'refreshblob', content: b64(body) }) : json(req, {}, 404);
       }
       if (p.startsWith('/contents/')) return json(req, {}, 404);
       if (p === '/git/ref/heads/main') return json(req, { object: { sha: 'basesha' } });
@@ -176,18 +184,21 @@ await scenario('claude-only-adds-chatgpt', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'
   expect((await picked('Checks what it finds'))?.startsWith('ChatGPT'), 'ChatGPT checks, by default');
   expect(/ChatGPTRecommended|ChatGPT Recommended/.test(t), 'and that pick is the recommended one');
   expect(/ChatGPT isn't connected yet/.test(t), 'says ChatGPT still needs connecting');
+  expect(/Adds the small job that keeps a ChatGPT login fresh/.test(t), 'says it adds the job that keeps that login fresh');
   await shot('roles-choice', true);
 
   await click('button', 'Open PR');
   t = await until((x) => /Connect your AI/.test(x), 'the connect step');
   const puts = world.writes.filter((w) => w.m === 'PUT');
   const file = puts[0] && unb64(puts[0].body.content);
-  expect(puts.length === 1 && puts[0].p === '/contents/.github/workflows/mergelight.yml', 'changes only the workflow');
+  expect(puts.length === 2 && puts[0].p === '/contents/.github/workflows/mergelight.yml' && puts[1].p === '/contents/.github/workflows/mergelight-refresh.yml', 'changes the workflow, and adds the refresh job');
+  expect(puts[1] && unb64(puts[1].body.content) === REFRESH && !puts[1].body.sha, 'the job is the same one a setup adds, on the same version as the review');
   expect(file === TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n          verify-with: codex\n`), 'adds the two lines, and every other byte stays');
   expect(puts[0]?.body.sha === 'baseblob' && puts[0]?.body.message === 'Review with Claude, check with ChatGPT', 'one commit that says what it does');
   const pull = world.writes.find((w) => w.m === 'POST' && w.p === '/pulls');
   expect(pull?.body.title === 'Set who reviews and who checks in Mergelight' && pull?.body.base === 'main', 'a pull request into the branch it runs from');
   expect(/Only the `provider` and `verify-with` lines/.test(pull?.body.body ?? ''), 'whose text says only those lines change');
+  expect(/also adds a small job that keeps a ChatGPT login fresh/.test(pull?.body.body ?? ''), 'and that it adds the job');
   expect((await picked('Which AI')) === 'ChatGPT', 'the connect step is on ChatGPT');
 
   world.checks.rolesha = WAITING;
@@ -226,6 +237,7 @@ await scenario('both-change-roles', { secrets: ['CODEX_AUTH_JSON', 'CLAUDE_CODE_
   expect((await picked('Checks what it finds'))?.startsWith('ChatGPT'), 'a new reviewer gets the other AI as checker');
   const t0 = await until((x) => /Open PR/.test(x), 'the button');
   expect(!/isn't connected yet/.test(t0), 'nothing to connect');
+  expect(!/Adds the small job/.test(t0), 'and no job to add');
   await shot('roles-change');
 
   await click('button', 'Open PR');
@@ -235,6 +247,7 @@ await scenario('both-change-roles', { secrets: ['CODEX_AUTH_JSON', 'CLAUDE_CODE_
   expect(href === PR.html_url, 'links to the pull request');
   const put = world.writes.find((w) => w.m === 'PUT');
   expect(unb64(put.body.content) === TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude # we chose this\n          verify-with: codex\n`), 'replaces provider in place, keeps its comment, and adds verify-with right after');
+  expect(world.writes.filter((w) => w.m === 'PUT').length === 1, 'ChatGPT has a login already, so no refresh job comes along');
   await shot('live-after-change');
 });
 
@@ -255,6 +268,27 @@ await scenario('open-pr-gets-the-change', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN']
   const put = world.writes.find((w) => w.m === 'PUT');
   expect(world.writes.every((w) => w.m === 'PUT') && put?.body.branch === 'mergelight-setup-old' && put?.body.sha === 'prblob', 'adds to the pull request that changes the workflow already');
   expect(unb64(put.body.content).includes(`mergelight@${'a'.repeat(40)} # v0.2.0`) && unb64(put.body.content).includes('verify-with: codex'), 'keeps what that pull request changed, and makes this change on top');
+});
+
+await scenario('pinned-repo-gets-a-pinned-job', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], file: TEMPLATE.replace('mergelightai/mergelight@v0', `mergelightai/mergelight@${SHA} # v0.2.0`) }, async ({ world, until, click, reachLive, choose }) => {
+  await reachLive();
+  await choose('Add ChatGPT');
+  await click('button', 'Open PR');
+  await until((x) => /Connect your AI/.test(x), 'the connect step');
+  const job = world.writes.find((w) => w.m === 'PUT' && w.p.endsWith('/mergelight-refresh.yml'));
+  const content = job && unb64(job.body.content);
+  expect(content?.includes(`uses: mergelightai/mergelight@${SHA} # v0.2.0\n`), 'the job is pinned to the same release as the review');
+  expect(!/Not pinned/.test(content ?? '') && /# Pinned to a release/.test(content ?? ''), 'and says why, like a pinned setup');
+});
+
+await scenario('refresh-job-already-there', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], refresh: `# Ours, keep it\n${REFRESH}` }, async ({ world, until, click, reachLive, choose }) => {
+  await reachLive();
+  const t = await choose('Add ChatGPT');
+  expect(!/Adds the small job/.test(t), "doesn't offer a job that's there");
+  await click('button', 'Open PR');
+  await until((x) => /Connect your AI/.test(x), 'the connect step');
+  const puts = world.writes.filter((w) => w.m === 'PUT');
+  expect(puts.length === 1 && puts[0].p.endsWith('/mergelight.yml'), 'changes only the workflow, and leaves their job alone');
 });
 
 await scenario('step-cant-be-found', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], file: `${TEMPLATE}  again:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: mergelightai/mergelight@v0\n` }, async ({ world, reachLive }) => {

@@ -81,6 +81,8 @@ export interface WorkflowFile {
    * so nothing else on that branch is lost. Null when the change can't be made there.
    */
   edit?: (current: string) => string | null;
+  /** Only added where it's missing. One that's there already stays exactly as it is. */
+  keep?: boolean;
 }
 
 /** What a pull request from this page is for. */
@@ -97,6 +99,7 @@ export class WorkflowEditError extends Error {
 
 /** What a file should hold on a branch that holds `current` now. */
 function wanted(file: WorkflowFile, current: string | null): string {
+  if (file.keep && current !== null) return current;
   if (!file.edit) return file.content;
   if (current === null) throw new WorkflowEditError('no-file');
   const next = file.edit(current);
@@ -245,11 +248,12 @@ const updateBody = (release: Release, addsRefresh: boolean) =>
   `Moves the workflow to [${release.tag}](https://github.com/mergelightai/mergelight/releases/tag/${release.tag}), pinned to its exact commit. Only that line changes.${addsRefresh ? ' It also adds a small job that keeps a ChatGPT login fresh.' : ''} This pull request reviews itself with the new version.`;
 /** Says nothing about which AI, so it stays true when a second change lands on the same pull request. */
 const ROLES_TITLE = 'Set who reviews and who checks in Mergelight';
-const ROLES_BODY = [
-  'Sets which AI reviews your pull requests in [Mergelight](https://mergelight.dev), and which AI checks what the review found. Only the `provider` and `verify-with` lines in the workflow change.',
-  '',
-  'This pull request is reviewed the new way, so you can see it work. Merge it to keep it.',
-].join('\n');
+const rolesBody = (addsRefresh: boolean) =>
+  [
+    `Sets which AI reviews your pull requests in [Mergelight](https://mergelight.dev), and which AI checks what the review found. Only the \`provider\` and \`verify-with\` lines in the workflow change.${addsRefresh ? ' It also adds a small job that keeps a ChatGPT login fresh.' : ''}`,
+    '',
+    'This pull request is reviewed the new way, so you can see it work. Merge it to keep it.',
+  ].join('\n');
 /** The commit says which AI, since each change is its own commit. */
 const rolesCommit = (roles: Roles) => (roles.reviewer === roles.checker ? `Review and check with ${aiName(roles.reviewer)}` : `Review with ${aiName(roles.reviewer)}, check with ${aiName(roles.checker)}`);
 const commitFor = (change: Change) => (change.kind === 'update' ? updateTitle(change.release) : change.kind === 'roles' ? rolesCommit(change.roles) : SETUP_CHANGED);
@@ -523,7 +527,9 @@ export function realClient(token: string): GitHubClient {
       await call('POST', `${r}/git/refs`, { ref: `refs/heads/${head}`, sha: base.object.sha });
       try {
         await write(head, change.kind === 'roles' ? commitFor(change) : title);
-        const body = update ? updateBody(update, onBranch.some((current) => !current)) : change.kind === 'roles' ? ROLES_BODY : SETUP_BODY;
+        // A file the branch doesn't have yet is one this pull request adds.
+        const adds = onBranch.some((current) => !current);
+        const body = update ? updateBody(update, adds) : change.kind === 'roles' ? rolesBody(adds) : SETUP_BODY;
         const pull = await call<{ number: number; html_url: string; head: { sha: string } }>('POST', `${r}/pulls`, { title, head, base: branch, body });
         return { number: pull.number, url: pull.html_url, headSha: pull.head.sha };
       } catch (err) {

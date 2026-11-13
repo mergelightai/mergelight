@@ -9,7 +9,7 @@ import { OPENAI_PATH } from '../brandIcons';
 import Ambient from '../sections/Ambient';
 import { Check, GitHubIcon, SURFACE, WELL } from '../ui';
 import type { ConnectLink } from './github';
-import { cleanUrl, finishSignIn, GitHubError, INSTALL_URL, readConnectLink, rememberConnect, rememberRepo, reviewAppUrl, takeRememberedConnect, takeRememberedRepo, isPinned, mockClient, pinned, realClient, REFRESH_FILE, signInUrl, wakeTokenServer, withReviewer, WorkflowEditError, type CheckStatus, type ConnectCode, type GitHubClient, type Release, type Repo, type RepoDetails, type SetupPr, type WorkflowFile } from './github';
+import { cleanUrl, finishSignIn, GitHubError, INSTALL_URL, readConnectLink, readInstalled, rememberConnect, rememberRepo, reviewAppUrl, takeRememberedConnect, takeRememberedRepo, isPinned, mockClient, pinned, realClient, REFRESH_FILE, signInUrl, wakeTokenServer, withReviewer, WorkflowEditError, type CheckStatus, type ConnectCode, type GitHubClient, type Release, type Repo, type RepoDetails, type SetupPr, type WorkflowFile } from './github';
 import { aiName, otherAi, readRoles, rolesFor, withRoles, type Ai, type Logins, type Roles } from './roles';
 
 const CHATGPT_SECURITY = 'https://chatgpt.com/settings/security';
@@ -32,6 +32,9 @@ function workflowFor(scope: Scope, branch: string, longLived: string[]): string 
   if (!skip.length) return scoped;
   return scoped.replace(SKIP_MARKER, () => `${SKIP_MARKER} &&\n      !contains(fromJSON('${JSON.stringify(skip)}'), github.head_ref)`);
 }
+
+/** The job that keeps a ChatGPT login fresh, on the same version of the Action as the review. */
+const refreshJob = (pin: Release | null) => (pin ? pinned(refreshFile, pin) : refreshFile);
 
 /** GitHub's own editor, already filled in. Nothing is written until the person commits it there. */
 function newFileUrl(repo: string, branch: string, content: string): string {
@@ -64,6 +67,8 @@ interface RolesChange {
   roles: Roles;
   content: string;
   need: Ai | null;
+  /** It adds the job that keeps a ChatGPT login fresh. */
+  addsRefresh: boolean;
 }
 
 export default function Setup() {
@@ -98,6 +103,8 @@ export default function Setup() {
   const [rolesFrom, setRolesFrom] = useState<View>('live');
   const [changingRoles, setChangingRoles] = useState(false);
   const [rolesFailed, setRolesFailed] = useState<RolesFailure | null>(null);
+  /** Whether the branch it runs from has the job that keeps a ChatGPT login fresh. */
+  const [refreshLive, setRefreshLive] = useState(false);
   const wide = useWide();
 
   const previous = useRef(view);
@@ -177,6 +184,7 @@ export default function Setup() {
     setHasLogin(false);
     setLogins({ claude: false, codex: false });
     setLiveFile(null);
+    setRefreshLive(false);
     setRolesChange(null);
     setRolesFailed(null);
     setMerged(false);
@@ -190,6 +198,7 @@ export default function Setup() {
       setHasLogin(d.hasLogin);
       setLogins(d.logins);
       setLiveFile(d.installed?.content ?? null);
+      setRefreshLive(Boolean(d.refresh));
       const next = d.reviewApp === false ? 'review-app' : 'add';
       if (!waitingPr) {
         setView(next);
@@ -254,7 +263,7 @@ export default function Setup() {
     if (!details || !repo) return list;
     const version = (content: string) => (pinTo ? pinned(content, pinTo) : content);
     if (details.refresh) list.push({ name: REFRESH_FILE, content: version(details.refresh) });
-    else if (!details.hasApiKey) list.push({ name: REFRESH_FILE, content: version(refreshFile) });
+    else if (!details.hasApiKey) list.push({ name: REFRESH_FILE, content: refreshJob(pinTo) });
     return list;
   }, [workflow, details, repo, pinTo]);
   const fileUrl = repo ? newFileUrl(repo.fullName, branch, workflow) : '#';
@@ -316,8 +325,13 @@ export default function Setup() {
       if (seen) setLogins(seen);
       setMerged(done);
       // Once it's merged, the branch has the file this page proposed.
-      if (done && rolesChange) setLiveFile(rolesChange.content);
-      else if (done && !startOnClaude) setLiveFile((known) => known ?? workflow);
+      if (done && rolesChange) {
+        setLiveFile(rolesChange.content);
+        if (rolesChange.addsRefresh) setRefreshLive(true);
+      } else if (done && !startOnClaude) {
+        setLiveFile((known) => known ?? workflow);
+        if (files.some((f) => f.name === REFRESH_FILE)) setRefreshLive(true);
+      }
       // A run that's still asking comes first, even if the repo has some other login saved. Someone sent here by a
       // pull request is connecting that run, so only that run going ahead ends this step, not a login from before.
       const movedOn = isReviewing(check) && !couldntFinish(check);
@@ -331,7 +345,7 @@ export default function Setup() {
       }
       return view === 'live' && (done || !pr);
     });
-  }, [view, client, repo, pr, startOnClaude, rolesChange, workflow]);
+  }, [view, client, repo, pr, startOnClaude, rolesChange, workflow, files]);
 
   // A pull request's link can be any pull request. Only one on a repo without the workflow is the one that sets it up.
   // A change of AI is on a repo that's already on, so it never shows as a setup either.
@@ -355,10 +369,16 @@ export default function Setup() {
       setRolesFailed('no-step');
       return;
     }
+    // ChatGPT needs a login now, and its login needs refreshing: the same job a setup adds, on the same version as the review.
+    const addsRefresh = !refreshLive && !logins.codex && (want.reviewer === 'codex' || want.checker === 'codex');
+    const live = readInstalled(liveFile);
+    const pin = live && isPinned(live) ? { sha: live.ref, tag: live.version ?? live.ref.slice(0, 7) } : null;
+    const list: WorkflowFile[] = [{ name: 'mergelight.yml', content, edit: (current) => withRoles(current, want) }];
+    if (addsRefresh) list.push({ name: REFRESH_FILE, content: refreshJob(pin), keep: true });
     setChangingRoles(true);
     setRolesFailed(null);
     try {
-      const opened = await client.proposeWorkflows(repo, branch, [{ name: 'mergelight.yml', content, edit: (current) => withRoles(current, want) }], { kind: 'roles', roles: want });
+      const opened = await client.proposeWorkflows(repo, branch, list, { kind: 'roles', roles: want });
       // Null means the branch already says exactly this, so there's nothing to merge or connect.
       const need = opened ? ([want.reviewer, want.checker].find((ai) => !logins[ai]) ?? null) : null;
       if (opened) {
@@ -367,7 +387,7 @@ export default function Setup() {
         setConnectCode(null);
         setMerged(false);
         setPr(opened);
-        setRolesChange({ roles: want, content, need });
+        setRolesChange({ roles: want, content, need, addsRefresh });
       }
       setView(need ? 'connect' : 'live');
     } catch (err) {
@@ -426,7 +446,7 @@ export default function Setup() {
               {view === 'finish' && repo && <FinishStep repo={repo} branch={branch} fileUrl={fileUrl} pr={pr} onBack={back.finish!} />}
               {view === 'connect' && repo && <ConnectStep repo={repo} pr={pr} status={status} code={connectCode} ended={rolesRunEnded} onBack={back.connect!} onSkip={() => setView('live')} startOnClaude={startOnClaude || rolesChange?.need === 'claude'} onClaudeCode={(url, c) => client!.sendClaudeCode(repo, url, c)} />}
               {view === 'live' && repo && <LiveStep repo={repo} pr={shownPr} backTo={startOnClaude ? pr : null} status={status} hasLogin={hasLogin} merged={merged} updatedTo={startOnClaude ? null : (update?.tag ?? null)} ai={yourAi} onAnother={anotherRepo} />}
-              {view === 'roles' && repo && liveFile && currentRoles && <RolesStep current={currentRoles} logins={logins} file={liveFile} branch={branch} changing={changingRoles} failed={rolesFailed} accessUrl={repo.accessUrl} onBack={back.roles!} onConfirm={(r) => void changeRoles(r)} />}
+              {view === 'roles' && repo && liveFile && currentRoles && <RolesStep current={currentRoles} logins={logins} refreshMissing={!refreshLive} file={liveFile} branch={branch} changing={changingRoles} failed={rolesFailed} accessUrl={repo.accessUrl} onBack={back.roles!} onConfirm={(r) => void changeRoles(r)} />}
             </Stage>
             <p className="mt-6 flex items-center justify-center gap-1.5 text-center text-[13px] text-faint">
               <LockIcon className="size-3.5 shrink-0" />
@@ -1603,8 +1623,8 @@ function YourAi({ roles, logins, pending, onChange }: { roles: Roles | null; log
 }
 
 /** Picks who reviews and who checks. Two different AIs is the default, since the second one catches more. */
-function RolesStep(props: { current: Roles; logins: Logins; file: string; branch: string; changing: boolean; failed: RolesFailure | null; accessUrl: string; onBack: () => void; onConfirm: (roles: Roles) => void }) {
-  const { current, logins, file, branch, changing, failed, accessUrl, onBack, onConfirm } = props;
+function RolesStep(props: { current: Roles; logins: Logins; refreshMissing: boolean; file: string; branch: string; changing: boolean; failed: RolesFailure | null; accessUrl: string; onBack: () => void; onConfirm: (roles: Roles) => void }) {
+  const { current, logins, refreshMissing, file, branch, changing, failed, accessUrl, onBack, onConfirm } = props;
   const [reviewer, setReviewer] = useState<Ai>(current.reviewer);
   const [checker, setChecker] = useState<Ai>(otherAi(current.reviewer));
   const pick = { reviewer, checker };
@@ -1639,6 +1659,7 @@ function RolesStep(props: { current: Roles; logins: Logins; file: string; branch
             {aiName(ai)} isn't connected yet. You connect it next.
           </Fact>
         ))}
+        {refreshMissing && need.includes('codex') && <Fact icon={<Check className="size-4" />}>Adds the small job that keeps a ChatGPT login fresh</Fact>}
         <Fact icon={<LockIcon className="size-4" />}>Opens a PR that changes only this in your workflow, and you decide whether to merge.</Fact>
       </ul>
       <button type="button" onClick={() => onConfirm(pick)} disabled={changing || same || edited === null} className={`${PRIMARY} mt-5 ${changing ? 'pointer-events-none opacity-70' : same || edited === null ? 'pointer-events-none opacity-40' : ''}`}>
