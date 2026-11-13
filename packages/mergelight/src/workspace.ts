@@ -87,7 +87,7 @@ export function removeAgentSkills(checkout: string): void {
  * contents of its own, so reading a skill the pull request changed asks GitHub for it: with the
  * same login as every other git call here, never with a prompt, and never for long.
  */
-async function skillsFor(mirror: string, base: string, checkout: string, folders: string[]): Promise<TeamSkill[]> {
+export async function skillsFor(mirror: string, base: string, checkout: string, folders: string[]): Promise<TeamSkill[]> {
   if (!folders.length) return [];
   const gitInMirror = (args: string[]) =>
     run("git", ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential", "-C", mirror, ...args], {
@@ -499,6 +499,10 @@ async function withLock<T>(dir: string, fn: () => Promise<T>): Promise<T> {
 export interface Workspace {
   /** Read-only checkout of the commit under review. */
   dir: string;
+  /** The bare mirror the checkout comes from. */
+  mirror: string;
+  /** Where the team's files are read from: the base branch as it is now, or the commit the pull request names. */
+  teamBase: string;
   mergeBase: string;
   headSha: string;
   diff: string;
@@ -613,6 +617,8 @@ export async function prepareWorkspace(pr: PullRequest, at?: string, skillFolder
 
     return {
       dir,
+      mirror,
+      teamBase,
       mergeBase,
       headSha,
       diff,

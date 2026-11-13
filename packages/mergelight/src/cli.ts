@@ -12,6 +12,7 @@ import { configuredModel, LimitError, LoginError, loginFailureMessage } from "./
 import { limitNotice, loginNotice } from "./publish/markdown.js";
 import { renderRejected, renderTerminal } from "./render.js";
 import { reviewPullRequest } from "./review.js";
+import { jobsCommand } from "./jobs-command.js";
 import { askForApp, connect, githubConnect } from "./connect.js";
 import { init, realInitDeps } from "./init.js";
 import { realDeps, setup } from "./setup.js";
@@ -27,6 +28,8 @@ Usage
   mergelight mcp                         Run the MCP server, so your coding agent can read findings
   mergelight setup <owner/repo>          Set up the GitHub Action on a repository
   mergelight connect <pr>                In the Action: connect ChatGPT from the pull request
+  mergelight jobs <pr> [--out <file>]    Run the team's jobs from .mergelight/jobs on a pull request, and
+                                         write what they changed to a file. Nothing is pushed or posted
 
   <pr> is a pull request URL, owner/repo#123, or a number inside a clone.
 
@@ -161,7 +164,7 @@ async function main(): Promise<number> {
     await serve();
     return 0;
   }
-  if (!["review", "post", "approve", "connect"].includes(command) || !target) {
+  if (!["review", "post", "approve", "connect", "jobs"].includes(command) || !target) {
     process.stderr.write(HELP);
     return 1;
   }
@@ -186,6 +189,18 @@ async function main(): Promise<number> {
   }
 
   const ref = parsePrRef(target, values.repo ?? (await currentRepo()));
+
+  if (command === "jobs") {
+    const progress = progressPrinter();
+    try {
+      return await jobsCommand(ref, { provider, model: values.model, effort: values.effort, out: values.out, at: values.at, keep: values.keep, log, onProgress: progress.onProgress });
+    } catch (err) {
+      log(`mergelight: ${err instanceof Error ? err.message : String(err)}`);
+      return 1;
+    } finally {
+      progress.stop();
+    }
+  }
 
   if (command === "connect") {
     try {

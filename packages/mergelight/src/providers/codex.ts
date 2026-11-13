@@ -88,8 +88,12 @@ function mcpServers(config: string): string[] {
 /**
  * Commands Codex runs can read the whole disk but not write or reach the network. Code under review can try to
  * steer them, so the folder with the login is taken out of what they can read. Codex itself still reads it.
+ * For a job, they may also write in the one folder the job works in, and nowhere else.
  */
-export function sandboxArgs(home = codexHome()): string[] {
+export function sandboxArgs(home = codexHome(), writable?: string): string[] {
+  if (writable) {
+    return ["-c", 'default_permissions="mergelight_job"', "-c", `permissions.mergelight_job.filesystem={":root"="read",${JSON.stringify(writable)}="write",${JSON.stringify(home)}="none"}`];
+  }
   return ["-c", 'default_permissions="mergelight_review"', "-c", `permissions.mergelight_review.filesystem={":root"="read",${JSON.stringify(home)}="none"}`];
 }
 
@@ -164,7 +168,7 @@ export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
 
   const args = [
     "exec",
-    ...sandboxArgs(),
+    ...sandboxArgs(codexHome(), opts.edit ? opts.cwd : undefined),
     "--ephemeral",
     "--skip-git-repo-check",
     "--json",
