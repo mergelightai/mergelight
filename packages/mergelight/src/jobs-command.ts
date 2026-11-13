@@ -62,7 +62,9 @@ export async function jobsCommand(ref: PrRef, o: JobsCommandOptions): Promise<nu
     const empty = { head: ws.headSha, outcomes: [], problems: [], changes: [] };
     // A commit jobs made runs no jobs, so a job can't start itself again.
     if (await isJobCommit(git, ws.headSha)) return finish({ ...empty, skipped: "The newest commit is one that jobs made, so no job runs on it." });
-    const { jobs, problems, guarded, incomplete } = await jobFilesFor(ws.mirror, ws.teamBase);
+    // One commit for the whole run: another run on this cache can move the base ref while jobs run.
+    const teamBase = (await git.run(["rev-parse", "--verify", `${ws.teamBase}^{commit}`])).stdout.trim() || ws.teamBase;
+    const { jobs, problems, guarded, incomplete } = await jobFilesFor(ws.mirror, teamBase);
     // The guard couldn't be worked out in full: no job runs rather than one with a smaller guard.
     if (incomplete) return finish({ ...empty, problems, skipped: incomplete });
     if (!jobs.length) return finish({ ...empty, problems, skipped: `There are no jobs in .mergelight/jobs on ${pr.baseRef}.` });
@@ -78,11 +80,11 @@ export async function jobsCommand(ref: PrRef, o: JobsCommandOptions): Promise<nu
       guarded,
       problems,
       onProgress: progress,
-      ask: async (job, dir, earlier, timeLeftMs) => {
+      ask: async (job, dir, earlier, deadline) => {
         // The skill comes from the base branch, into a folder of its own next to the job's copy.
         const skillDir = job.skill ? mkdtempSync(join(tmpdir(), `mergelight-job-skill-${job.name}-`)) : null;
         try {
-          const [found] = skillDir && job.skill ? await skillsFor(ws.mirror, ws.teamBase, skillDir, [job.skill]) : [];
+          const [found] = skillDir && job.skill ? await skillsFor(ws.mirror, teamBase, skillDir, [job.skill]) : [];
           // A job without the skill it names would do something else than the team wrote.
           if (job.skill && !found) throw new Error(`its skill ${job.skill} couldn't be copied from ${pr.baseRef}`);
           const prompt = buildJobPrompt({
@@ -105,7 +107,8 @@ export async function jobsCommand(ref: PrRef, o: JobsCommandOptions): Promise<nu
             readDirs: skillDir ? [skillDir] : [],
             model: o.model,
             effort: o.effort,
-            timeoutMs: timeLeftMs,
+            // Worked out right before the run starts, so copying the skill doesn't take from its time.
+            timeoutMs: Math.max(1_000, deadline - Date.now()),
             logFile: join(cacheDir(), "logs", `${pr.owner}-${pr.repo}-${pr.number}-${stamp}-job-${job.name}.log`),
           });
           return answer.output;

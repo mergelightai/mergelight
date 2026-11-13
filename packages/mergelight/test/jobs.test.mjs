@@ -435,3 +435,23 @@ test("instruction files in a guarded folder that is a link are read for imports 
   assert.equal(incomplete, undefined);
   assert.ok(guarded.includes("docs/guide.md"), "read as .claude/CLAUDE.md, ../docs is the root's docs");
 });
+
+test("an instruction file reached through an ordinary folder link has its imports read from the link's path", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-jobs-imports4-"));
+  const git = (...args) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t.test", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
+  const write = (path, text) => {
+    mkdirSync(join(dir, path, ".."), { recursive: true });
+    writeFileSync(join(dir, path), text);
+  };
+  git("init", "-q", "-b", "main");
+  write("apps/web/CLAUDE.md", "See @../shared/ai.md\n");
+  write("packages/shared/ai.md", "Through the link.\n");
+  write("apps/shared/ai.md", "Through the real folder.\n");
+  symlinkSync("../apps/web", join(dir, "packages/web"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "base");
+  const { guarded } = await jobFilesFor(dir, "main");
+  assert.ok(guarded.includes("packages/shared/ai.md"), "as read through packages/web");
+  assert.ok(guarded.includes("apps/shared/ai.md"), "as read from apps/web");
+  assert.ok(!guarded.includes("apps/web"), "an ordinary folder link isn't guarded for it");
+});

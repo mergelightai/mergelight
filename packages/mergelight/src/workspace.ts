@@ -299,7 +299,7 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
    * a link is followed before a ".." after it is applied. Where it ends is guarded. Null when it leaves
    * the repository; "deep" past the limit of links, or at the repository's root.
    */
-  const resolve = async (path: string): Promise<string | null | "unread" | "deep"> => {
+  const resolve = async (path: string, guard = true): Promise<string | null | "unread" | "deep"> => {
     const done: string[] = [];
     let rest = path.split("/");
     let hops = 0;
@@ -327,7 +327,7 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
     if (!done.length) return "deep";
     const end = done.join("/");
     // Guarded even when its own name is refused: a folder named like a refused file isn't refused inside.
-    targets.add(end);
+    if (guard) targets.add(end);
     return end;
   };
   const followed = new Set<string>();
@@ -384,13 +384,18 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
       const at = tree.mode(p) === "120000" ? await follow(p) : p;
       if (at) enqueue(at, [posix.dirname(p)], 0);
     }
-    // A guarded folder that is a link, like .claude to config/claude: its instruction files are opened
-    // through the link too, so their imports are read from the folder they have there as well.
-    for (const link of tree.paths.filter((p) => tree.mode(p) === "120000" && inGuard(p))) {
-      const end = await follow(link);
-      if (!end) continue;
+    // A folder that is a link, like .claude to config/claude or packages/web to apps/web: the instruction
+    // files in it are opened through the link too, so their imports are read from the folder they have
+    // there as well. Through a guarded link every Markdown file counts; through any other, only
+    // instruction files, and the folder itself isn't guarded for it.
+    for (const link of tree.paths.filter((p) => tree.mode(p) === "120000")) {
+      const guardedLink = inGuard(link);
+      const end = guardedLink ? await follow(link) : await resolve(link, false);
+      if (typeof end !== "string") continue;
       for (const p of tree.paths) {
-        if (p.startsWith(`${end}/`) && /\.mdc?$/i.test(p)) enqueue(p, [posix.dirname(`${link}/${p.slice(end.length + 1)}`)], 0);
+        if (!p.startsWith(`${end}/`) || !/\.mdc?$/i.test(p)) continue;
+        const through = `${link}/${p.slice(end.length + 1)}`;
+        if (guardedLink || isInstructions(p) || refusedPath(through)) enqueue(p, [posix.dirname(through)], 0);
       }
     }
     const imported = new Set<string>();

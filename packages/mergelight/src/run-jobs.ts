@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync } from "node:fs";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { mayChange, type Job, type JobProblem } from "./jobs.js";
@@ -15,6 +15,11 @@ import type { PullRequest } from "./types.js";
  * another, each on the changes of the ones before it. Nothing here writes to GitHub: the result is the
  * list of changed files, for a separate step with no AI to check again and push.
  */
+
+/** Skill folders older Codex versions offer the model from the folder it works in. */
+const AGENT_SKILL_FOLDERS = [".agents/skills", ".codex/skills"];
+/** How much of the pull request's diff a job's prompt holds. The files are there for the rest. */
+const MAX_JOB_DIFF = 200_000;
 
 /** One job gets this long, and all of them together this long. */
 export const JOB_TIMEOUT_MS = 10 * 60_000;
@@ -125,7 +130,8 @@ async function writeOut(git: JobGit, tree: string, dir: string, index: string): 
 
 /** What dir holds now, as a tree. */
 async function readBack(git: JobGit, dir: string, index: string): Promise<string> {
-  await must(git, ["--work-tree", dir, "add", "-A"], { GIT_INDEX_FILE: index });
+  // --force: a file the job wrote counts even where a .gitignore in the copy would leave it out.
+  await must(git, ["--work-tree", dir, "add", "-A", "--force"], { GIT_INDEX_FILE: index });
   return (await must(git, ["write-tree"], { GIT_INDEX_FILE: index })).trim();
 }
 
@@ -213,7 +219,7 @@ export interface RunJobsOptions {
    * Has the AI do one job in dir, and resolves with its answer. What it changed is read from dir afterwards.
    * earlier names the jobs before it whose changes are already in dir.
    */
-  ask: (job: Job, dir: string, earlier: string[], timeLeftMs: number) => Promise<unknown>;
+  ask: (job: Job, dir: string, earlier: string[], deadline: number) => Promise<unknown>;
   onProgress?: (message: string) => void;
   limits?: { each: number; all: number };
   /** Where the job's folders are made. */
@@ -251,6 +257,15 @@ export async function runJobs(o: RunJobsOptions): Promise<JobsResult> {
     const index = join(scratch, "index");
     try {
       await writeOut(git, current, dir, index);
+      // The pull request's own Codex skill folders: an older Codex offers them to the model, so they are
+      // kept out of its sight while the job runs, and put back before the files are read back.
+      const aside = join(scratch, "aside");
+      for (const folder of AGENT_SKILL_FOLDERS) {
+        if (existsSync(join(dir, folder))) {
+          mkdirSync(join(aside, folder, ".."), { recursive: true });
+          renameSync(join(dir, folder), join(aside, folder));
+        }
+      }
       let answer: unknown;
       let timer: NodeJS.Timeout | undefined;
       try {
@@ -259,14 +274,20 @@ export async function runJobs(o: RunJobsOptions): Promise<JobsResult> {
           timer = setTimeout(() => reject(new Error("it took too long")), Math.min(limits.each, left));
         });
         const earlier = outcomes.filter((x) => x.status === "changed").map((x) => x.name);
-        // The AI run gets the same time as the race, so its process is stopped when the job is given up.
-        answer = await Promise.race([o.ask(job, dir, earlier, Math.min(limits.each, left)), late]);
+        // The AI run ends at the same moment as the race, so its process is stopped when the job is given up.
+        answer = await Promise.race([o.ask(job, dir, earlier, Date.now() + Math.min(limits.each, left)), late]);
       } catch (err) {
         const reason = cut((err instanceof Error ? err.message : String(err)).replace(/\s+/g, " ").trim(), 300);
         outcome("failed", `The AI run for this job failed${reason ? `: ${/[.!?]$/.test(reason) ? reason : `${reason}.`}` : "."} Its changes were dropped.`);
         continue;
       } finally {
         clearTimeout(timer);
+      }
+      for (const folder of AGENT_SKILL_FOLDERS) {
+        if (!existsSync(join(aside, folder))) continue;
+        rmSync(join(dir, folder), { recursive: true, force: true });
+        mkdirSync(join(dir, folder, ".."), { recursive: true });
+        renameSync(join(aside, folder), join(dir, folder));
       }
       const tree = await readBack(git, dir, index);
       const mine = await changed(git, current, tree);
@@ -370,8 +391,8 @@ export function buildJobPrompt(input: JobPromptInput): string {
     "",
     `Changed files: ${input.changedPaths.slice(0, 200).join(", ")}${input.changedPaths.length > 200 ? ` and ${input.changedPaths.length - 200} more` : ""}`,
     "",
-    `The diff${input.diffTruncated ? " (cut short: read the files themselves for the rest)" : ""}:`,
-    fenced(input.diff),
+    `The diff${input.diffTruncated || input.diff.length > MAX_JOB_DIFF ? " (cut short: read the files themselves for the rest)" : ""}:`,
+    fenced(input.diff.length > MAX_JOB_DIFF ? cut(input.diff, MAX_JOB_DIFF) : input.diff),
   ];
   if (input.skill) {
     lines.push("", "## The team's skill for this job", "", `The team's skill "${input.skill.name}" is at ${input.skill.path}, as the ${pr.baseRef} branch has it. Read it first and follow it.`);
