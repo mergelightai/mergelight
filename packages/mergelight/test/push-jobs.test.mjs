@@ -80,3 +80,12 @@ test("the push keeps UTF-16 text with its byte-order mark, as the jobs step does
   const binary = checkPush(result([{ path: "locales/da.json", contents: Buffer.from([0x50, 0x4b, 0x00, 0x01]).toString("base64") }]), [translations], HEAD, modes({ "locales/da.json": "100644" }));
   assert.match(binary.why, /would be a binary file/);
 });
+
+test("a job's summary is cut by characters in the commit, never in the middle of an emoji, and keys are taken out", () => {
+  const long = `${"a".repeat(299)}🎉 and more`;
+  const plan = checkPush(result([{ path: "locales/da.json", contents: b64("{}\n") }], [{ name: "translations", source: ".mergelight/jobs/translations.md", status: "changed", files: ["locales/da.json"], summary: long }]), [translations], HEAD, modes({ "locales/da.json": "100644" }));
+  assert.equal(plan.jobs[0].summary, `${"a".repeat(299)}🎉`);
+  const key = `ghp_${"A".repeat(36)}`;
+  const scrubbed = checkPush(result([{ path: "locales/da.json", contents: b64("{}\n") }], [{ name: "translations", source: ".mergelight/jobs/translations.md", status: "changed", files: ["locales/da.json"], summary: `Used ${key}.` }]), [translations], HEAD, modes({ "locales/da.json": "100644" }));
+  assert.doesNotMatch(scrubbed.jobs[0].summary, /ghp_/);
+});

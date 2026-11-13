@@ -77,6 +77,8 @@ export interface PullRequest {
   /** The branch the PR comes from, and its repository: owner/name, or null when that repository is gone. */
   headRef?: string;
   headRepo?: string | null;
+  /** "open" or "closed". */
+  state?: string;
   additions: number;
   deletions: number;
   changedFiles: number;

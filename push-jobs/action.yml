@@ -18,8 +18,10 @@ inputs:
   github-token:
     description: >
       A token that can push to the pull request's branch and read the pull request. The workflow's own
-      token with "contents: write" and "pull-requests: read" is enough. A push made with it starts the repository's other workflows only
-      after a person with write access approves them in the pull request.
+      token with "contents: write" and "pull-requests: read" is enough. A push made with it starts the
+      repository's other pull_request workflows only after a person with write access approves them
+      in the pull request ("Approve workflows to run"). GitHub's docs, "Triggering a workflow", say so,
+      and a test pull request showed it.
     default: ${{ github.token }}
 
 outputs:

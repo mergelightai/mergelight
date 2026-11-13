@@ -3,7 +3,7 @@ import { fetchPullRequest, type PrRef } from "./github.js";
 import { mayChange, type Job } from "./jobs.js";
 import { GitHub } from "./publish/api.js";
 import { run } from "./run.js";
-import { isBinary, JOBS_TRAILER, MAX_CHANGE_BYTES, MAX_CHANGED_FILES, type JobsResult } from "./run-jobs.js";
+import { isBinary, JOBS_TRAILER, MAX_CHANGE_BYTES, MAX_CHANGED_FILES, withoutSecrets, type JobsResult } from "./run-jobs.js";
 import { fetchMirror, jobFilesFor } from "./workspace.js";
 
 /**
@@ -88,7 +88,10 @@ export function checkPush(result: unknown, jobs: Job[], head: string, modes: Map
     additions.push({ path, bytes: decoded });
   }
   const names = new Set([...additions.map((a) => a.path), ...deletions].flatMap((p) => changed.filter((o) => o.files.includes(p)).map((o) => o.name)));
-  const pushed = changed.filter((o) => names.has(o.name)).map((o) => ({ name: o.name, summary: typeof o.summary === "string" ? o.summary.replace(/\s+/g, " ").slice(0, 300) : "" }));
+  // Cut by characters, not UTF-16 units, so an emoji is never split in half. The jobs step took secrets
+  // out already; this step does it again with what it can see, as it trusts nothing in the file.
+  const summaryOf = (text: unknown) => (typeof text === "string" ? Array.from(withoutSecrets(text).replace(/\s+/g, " ")).slice(0, 300).join("") : "");
+  const pushed = changed.filter((o) => names.has(o.name)).map((o) => ({ name: o.name, summary: summaryOf(o.summary) }));
   return { additions, deletions, jobs: pushed };
 }
 
@@ -113,6 +116,19 @@ async function modesAt(mirror: string, head: string, paths: string[]): Promise<M
     if (m && modes.has(m[2]!)) modes.set(m[2]!, m[1]!);
   }
   return modes;
+}
+
+/**
+ * The commit on the branch now, when it is ours: right on the commit we checked, with this very message.
+ * Read from the branch itself, which moves at once, not the pull request's head, which GitHub updates a
+ * little later. Null when it isn't, or can't be read.
+ */
+async function landedCommit(api: GitHub, branch: string, parent: string, message: string): Promise<string | null> {
+  const ref = await api.get<{ object: { sha: string } }>(`git/ref/heads/${branch.split("/").map(encodeURIComponent).join("/")}`).catch(() => null);
+  if (!ref) return null;
+  const tip = await api.get<{ sha: string; parents: { sha: string }[]; commit: { message: string } }>(`commits/${ref.object.sha}`).catch(() => null);
+  const same = (text: string) => text.replace(/\r\n/g, "\n").trim();
+  return tip && tip.parents.length === 1 && tip.parents[0]?.sha === parent && same(tip.commit.message) === same(message) ? tip.sha : null;
 }
 
 const CREATE_COMMIT = `mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid url } } }`;
@@ -144,8 +160,10 @@ export async function pushJobs(ref: PrRef, o: PushJobsOptions): Promise<number> 
 
   const pr = await fetchPullRequest(ref);
   // GitHub gives a fork's pull request no token that can push to it, and Mergelight never asks for one.
-  // GitHub ignores letter case in a repository's name.
-  if (pr.headRepo?.toLowerCase() !== `${pr.owner}/${pr.repo}`.toLowerCase() || !pr.headRef) return refuse("The pull request comes from another repository.", 1);
+  // GitHub ignores letter case in a repository's name. A fork's pull request is no failure: nothing can be pushed to it.
+  if (pr.headRepo?.toLowerCase() !== `${pr.owner}/${pr.repo}`.toLowerCase() || !pr.headRef) return refuse("The pull request comes from another repository, and nothing is pushed to one.", 0);
+  // Closed or merged while the jobs ran: a commit on its branch would go nowhere.
+  if (pr.state && pr.state !== "open") return refuse("The pull request is closed.", 0);
   if ((result as JobsResult).head !== pr.headSha) return refuse(`The jobs ran on ${String((result as JobsResult).head).slice(0, 7)}, but the branch is at ${pr.headSha.slice(0, 7)} now. The next push runs them again.`, 0);
 
   const { mirror, teamBase } = await fetchMirror(pr);
@@ -179,19 +197,13 @@ export async function pushJobs(ref: PrRef, o: PushJobsOptions): Promise<number> 
   const commit = answer?.data?.createCommitOnBranch?.commit;
   if (!commit) {
     const why = answer?.errors?.map((e) => e.message).join(" ") ?? "GitHub gave no commit back.";
-    // The branch moved between the check and the push.
-    if (/STALE_DATA|expected branch to point to/i.test(why)) {
-      // A retry after a push whose answer got lost is refused the same way: the branch now has our commit.
-      // Read from the branch itself, which moves at once, not the pull request's head, which GitHub
-      // updates a little later. Ours is the one on the commit we checked, with this very message.
-      const branch = await api.get<{ object: { sha: string } }>(`git/ref/heads/${pr.headRef.split("/").map(encodeURIComponent).join("/")}`).catch(() => null);
-      const ours = branch && (await api.get<{ sha: string; parents: { sha: string }[]; commit: { message: string } }>(`commits/${branch.object.sha}`).catch(() => null));
-      const same = (text: string) => text.replace(/\r\n/g, "\n").trim();
-      if (ours && ours.parents.length === 1 && ours.parents[0]?.sha === pr.headSha && same(ours.commit.message) === same(`${message.headline}\n\n${message.body}`)) {
-        o.log(`Pushed ${ours.sha.slice(0, 7)}: ${message.headline}.`);
-        output({ pushed: "true", commit: ours.sha });
-        return 0;
-      }
+    // An earlier try may have landed with its answer lost, and a later one then fails, saying the branch
+    // moved or with a server error: if the branch now has our commit, it was pushed.
+    const ours = await landedCommit(api, pr.headRef, pr.headSha, `${message.headline}\n\n${message.body}`);
+    if (ours) {
+      o.log(`Pushed ${ours.slice(0, 7)}: ${message.headline}.`);
+      output({ pushed: "true", commit: ours });
+      return 0;
     }
     if (/STALE_DATA|expected branch to point to/i.test(why)) return refuse(`The branch moved while the jobs ran. The next push runs them again. (${why.slice(0, 200)})`, 0);
     return refuse(`GitHub refused the commit: ${why.slice(0, 300)}`, 1);
