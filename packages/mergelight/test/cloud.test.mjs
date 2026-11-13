@@ -472,3 +472,9 @@ test("reasons given in threads go first, so marks can't crowd them out of a repo
   const sent = declinesOf([prior(mark(), { id: "aaaaaa0001" }), prior(mark({ from: "reply", remember: true }), { id: "bbbbbb0002" })]);
   assert.deepEqual(sent.map((d) => d.finding_id), ["bbbbbb0002", "aaaaaa0001"]);
 });
+
+test("only the server's own yes says the org's plan includes Jobs", async () => {
+  assert.equal((await fetchContext(setup(json(200, { connected: true, jobs: true })).deps)).jobs, true);
+  for (const jobs of [false, "true", 1, undefined]) assert.equal((await fetchContext(setup(json(200, { connected: true, jobs })).deps)).jobs, false, String(jobs));
+  assert.equal((await fetchContext(setup(json(200, { connected: false, jobs: true })).deps)).jobs, undefined, "an org that isn't connected has no plan");
+});

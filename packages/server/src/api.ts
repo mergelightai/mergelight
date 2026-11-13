@@ -118,6 +118,8 @@ export interface ApiOptions {
   origins?: string[];
   /** The GitHub App people sign in to the dashboard with. */
   signInApp?: string;
+  /** Orgs whose plan includes Jobs, by GitHub's number for the account. It stands in until payments exist. */
+  jobsOrgs?: ReadonlySet<number>;
   fetchImpl?: typeof fetch;
   now?: () => number;
 }
@@ -199,7 +201,7 @@ export function parseUsedMemories(value: unknown): number[] {
   });
 }
 
-export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"], signInApp, fetchImpl = fetch, now = () => Date.now() }: ApiOptions): (request: Request) => Promise<Response> {
+export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"], signInApp, jobsOrgs = new Set(), fetchImpl = fetch, now = () => Date.now() }: ApiOptions): (request: Request) => Promise<Response> {
   const audience = audienceOf(publicUrl);
   /** The dashboard's side: signed-in people. Runs and people never share a route or a kind of token. */
   const people = createPeopleApi({ pool, origins, signInApp, fetchImpl, now });
@@ -296,7 +298,8 @@ export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"
     const checks = found.checks.map((c) => ({ id: `K${c.id}`, name: c.name, text: c.text, paths: c.paths }));
     // Skills the team wrote on the dashboard. "skills" stays the list of folders: an older review program reads only that.
     const written_skills = found.written.map((s) => ({ id: `S${s.id}`, name: s.name, description: s.description, text: s.body }));
-    return respond(200, { connected: true, memories, rules, skills: found.skills, checks, written_skills });
+    // Whether the org's plan includes Jobs. A run asks before it runs any: the answer is the gate.
+    return respond(200, { connected: true, memories, rules, skills: found.skills, checks, written_skills, jobs: jobsOrgs.has(who.orgId) });
   }
 
   async function saveReview(who: Caller, request: Request): Promise<Response> {

@@ -6,7 +6,7 @@ import { after, before, beforeEach, test } from "node:test";
 import pg from "pg";
 import { handle as tokenServer, resetJwksCache } from "../../token-server/dist/token.js";
 import { audienceOf, createApi, MAX_BODY, parseDeclines, parseReview, parseUsedMemories, RATE_MAX } from "../dist/api.js";
-import { assertRowRulesHold, connectOrg, createPool, deleteOrg, migrate, parseConnectOrgs, purgeExpiredMemories, withOrg } from "../dist/db.js";
+import { assertRowRulesHold, connectOrg, createPool, deleteOrg, migrate, parseConnectOrgs, parseJobsOrgs, purgeExpiredMemories, withOrg } from "../dist/db.js";
 import { createDataServer } from "../dist/server.js";
 import { startPostgres } from "./postgres.mjs";
 
@@ -127,7 +127,7 @@ test("an org that hasn't turned the dashboard on gets connected: false, and noth
 
 test("a connected org's review is stored with the repository and run from the signed token", async () => {
   await connectOrg(pool, ACME.id, ACME.login);
-  assert.deepEqual(await (await get(makeToken())).json(), { connected: true, memories: [], rules: [], skills: [], checks: [], written_skills: [] });
+  assert.deepEqual(await (await get(makeToken())).json(), { connected: true, memories: [], rules: [], skills: [], checks: [], written_skills: [], jobs: false });
 
   const res = await post(makeToken());
   assert.equal(res.status, 201);
@@ -199,7 +199,7 @@ const context = async (claims) => (await get(makeToken(claims))).json();
 
 test("a decision the team made is remembered for that repository, and handed to its later reviews", async () => {
   await connectOrg(pool, ACME.id, ACME.login);
-  assert.deepEqual(await context(), { connected: true, memories: [], rules: [], skills: [], checks: [], written_skills: [] });
+  assert.deepEqual(await context(), { connected: true, memories: [], rules: [], skills: [], checks: [], written_skills: [], jobs: false });
   assert.equal((await post(makeToken(), { ...REVIEW, declines: [DECLINE] })).status, 201);
 
   const { memories } = await context();
@@ -620,6 +620,20 @@ test("a server mounted under a path answers there, and only takes tokens made fo
   assert.equal((await ask("/mergelight/v1/context", "https://server.test")).status, 401);
   assert.equal((await ask("/mergelight/v1/context", "https://server.test/other")).status, 401);
   assert.equal((await ask("/mergelightx/v1/context", "https://server.test/mergelight")).status, 404);
+});
+
+test("only an org in JOBS_ORGS is told its plan includes Jobs", async () => {
+  await connectOrg(pool, ACME.id, ACME.login);
+  await connectOrg(pool, OTHER.id, OTHER.login);
+  api = createApi({ pool, publicUrl: PUBLIC_URL, fetchImpl, now: () => clock, jobsOrgs: new Set([ACME.id]) });
+  assert.equal((await (await get(makeToken())).json()).jobs, true);
+  assert.equal((await (await get(makeToken({ repository_owner_id: String(OTHER.id), repository_owner: OTHER.login }))).json()).jobs, false);
+});
+
+test("JOBS_ORGS names orgs by GitHub's number, and a typo stops the start instead of meaning no orgs", () => {
+  assert.deepEqual([...parseJobsOrgs(undefined)], []);
+  assert.deepEqual([...parseJobsOrgs("1001, 2002 ,")], [1001, 2002]);
+  for (const bad of ["acme", "1001:acme", "0", "1001 2002"]) assert.throws(() => parseJobsOrgs(bad), /JOBS_ORGS has an entry/, bad);
 });
 
 test("CONNECT_ORGS names orgs by GitHub's number, and a typo stops the start instead of meaning no orgs", () => {

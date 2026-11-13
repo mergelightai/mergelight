@@ -45,6 +45,10 @@ jobs:
         id: jobs
         with:
           run: jobs
+          # Jobs is part of a paid plan. Mergelight's server says whether your org's plan includes it.
+          # It is shown GitHub's signed pass for the run, which names the repository, branch, workflow
+          # and who started it. Nothing about your code is sent.
+          server: https://mergelight-server.onrender.com
           codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

@@ -257,6 +257,7 @@ export function jobsLines(j: JobsReport): string[] {
     else out.push(`- ⚠️ ${name} couldn't finish: ${said}`);
   }
   if (j.skipped) out.push(`- ⚠️ No job ran: ${clean(j.skipped)}`);
+  if (j.notRun) out.push(`- ⚠️ No job ran: ${clean(j.notRun)}`);
   if (j.notPushed) out.push(`- ⚠️ Nothing was pushed: ${clean(j.notPushed)}`);
   for (const p of j.problems) out.push(`- ⚠️ \`${clean(p.source).replace(/`/g, "")}\` is left out: ${clean(p.problem)}.`);
   if (j.moreProblems) out.push(`- ⚠️ ${j.moreProblems} more job file${j.moreProblems === 1 ? " is" : "s are"} left out. The jobs step's log lists ${j.moreProblems === 1 ? "it" : "them"}.`);

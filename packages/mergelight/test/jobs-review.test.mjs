@@ -89,3 +89,13 @@ test("a failed review never says it read the jobs' commit", () => {
   assert.ok(jobsLines({ ...report, reviewed: true }).some((l) => /this review read it like the rest/.test(l)));
 });
 
+test("jobs run only when the org's plan includes them, and the summary says why they didn't", async () => {
+  const { jobsGate } = await import("../dist/jobs-command.js");
+  const base = { memories: [], rules: [], skills: [], checks: [], writtenSkills: [] };
+  assert.equal(jobsGate({ ...base, connected: true, jobs: true }), null);
+  assert.match(jobsGate({ ...base, connected: true, jobs: false }), /Your org's plan doesn't include Jobs, so no job ran\. https:\/\/mergelight\.dev\/dashboard\//);
+  assert.match(jobsGate({ ...base, connected: false }), /Jobs is part of a paid plan, and needs your org's Mergelight server: set server in the workflow/);
+  assert.match(jobsGate({ ...base, connected: false, failed: true }), /couldn't be asked whether your plan includes Jobs, so no job ran\. The next push asks again/);
+  const report = jobsReport({ head: "x", outcomes: [], problems: [], changes: [], notRun: "Your org's plan doesn't include Jobs, so no job ran." });
+  assert.deepEqual(jobsLines(report), ["#### Jobs", "- ⚠️ No job ran: Your org's plan doesn't include Jobs, so no job ran."]);
+});
