@@ -71,6 +71,9 @@ test("a job file that can't be a job says why", () => {
   assert.match(problem("---\non: x\nmay-change: y\nskill: .claude\n  /skills/write-docs\n---\nTask."), /write the skill folder on the skill line itself/);
   assert.match(problem('---\non: src\nmay-change: "build #2/**\n---\nTask.'), /a path opens with a quote that never closes/);
   assert.match(problem("---\non: src\nmay-change:\n  - 'docs/**\n---\nTask."), /a path opens with a quote that never closes/);
+  assert.match(problem(`---\non: src\nmay-change: "build #2/**", 'reports/**\n---\nTask.`), /a path opens with a quote that never closes/, "the second quote on the line");
+  assert.equal(problem("---\non: src\nmay-change: docs/** # 'old notes\n---\nTask."), undefined, "a quote in a comment doesn't count");
+  assert.equal(problem("---\non: src\nmay-change: src/main/resources/templates/owners\n---\nTask."), undefined, "a folder named like a refused file");
   assert.match(problem("---\non:\n  locales/en.json\nmay-change: y\n---\nTask."), /its on value goes on to an indented line, which isn't read/, "an empty key line too");
   // Every front matter line is one that is read, or the file says which isn't.
   assert.match(problem("---\non: locales/en.json\n  - locales/en-GB.json\nmay-change: y\n---\nTask."), /has a line that isn't read: "- locales\/en-GB\.json"/);
@@ -141,7 +144,7 @@ test("a job runs only when a pull request changed one of its on files", () => {
 
 test("a job may change only its own paths, and never workflows, Mergelight's files or git's files", () => {
   const { job } = parseJobFile(".mergelight/jobs/x.md", '---\non: src\nmay-change: "**"\n---\nTask.');
-  for (const p of [".github/workflows/ci.yml", "packages/web/.github/x.yml", ".huſky/pre-commit", ".gıtattributes", ".mergelight/jobs/x.md", ".mergelight/rules.md", ".gitmodules", "src/.gitattributes", ".git/config", ".GITHUB/workflows/ci.yml", "docs/.GitAttributes", ".GitModules", "CODEOWNERS", "docs/CODEOWNERS", "AGENTS.md", "packages/web/CLAUDE.md", ".claude/settings.json", ".agents/skills/x/SKILL.md", ".codex/config.toml", ".cursor/rules/style.mdc", "CONTRIBUTING.md", "docs/CONTRIBUTING.md", "GEMINI.md", ".cursorrules", "tools/x/SKILL.md", ".mcp.json", "CLAUDE.local.md", "AGENTS.override.md", ".vscode/tasks.json", ".roo/rules.md", ".kiro/steering/x.md", ".lfsconfig", "CONVENTIONS.md", ".continue/rules/x.md", ".goosehints", "AGENT.md", "QWEN.md", "CRUSH.md", ".kilocode/rules/x.md", ".trae/rules/x.md", ".augment-guidelines", ".openhands/microagents/x.md", ".gitlab-ci.yml", ".circleci/config.yml", "Jenkinsfile", "azure-pipelines.yml", ".husky/pre-commit", ".devcontainer/devcontainer.json", "WARP.md", "opencode.json", ".idx/airules.md", ".travis.yml", ".gitea/workflows/ci.yml", ".pre-commit-config.yaml", "lefthook.yml", ".devcontainer.json", ".roomodes", "appveyor.yml", ".semaphore/semaphore.yml", "cloudbuild.yaml", ".githooks/pre-push", "OWNERS", ".mergify.yml", "renovate.json", ".renovaterc", "bors.toml", "lefthook.yaml", ".woodpecker.yaml", ".tekton/pipeline.yaml", ".clinerules/security.md", ".clinerules", ".roorules-code", ".coderabbit.yaml", ".tabnine/x.json", ".idx/dev.nix", ".zed/settings.json", "buildkite.yml", "buildkite/pipeline.yml", "cloudbuild.json", "codefresh.yml", "lefthook-local.yaml", ".lefthook/pre-commit/x.sh", ".prow/config.yaml"]) {
+  for (const p of [".github/workflows/ci.yml", "packages/web/.github/x.yml", ".huſky/pre-commit", ".gıtattributes", ".mergelight/jobs/x.md", ".mergelight/rules.md", ".gitmodules", "src/.gitattributes", ".git/config", ".GITHUB/workflows/ci.yml", "docs/.GitAttributes", ".GitModules", "CODEOWNERS", "docs/CODEOWNERS", "AGENTS.md", "packages/web/CLAUDE.md", ".claude/settings.json", ".agents/skills/x/SKILL.md", ".codex/config.toml", ".cursor/rules/style.mdc", "CONTRIBUTING.md", "docs/CONTRIBUTING.md", "GEMINI.md", ".cursorrules", "tools/x/SKILL.md", ".mcp.json", "CLAUDE.local.md", "AGENTS.override.md", ".vscode/tasks.json", ".roo/rules.md", ".kiro/steering/x.md", ".lfsconfig", "CONVENTIONS.md", ".continue/rules/x.md", ".goosehints", "AGENT.md", "QWEN.md", "CRUSH.md", ".kilocode/rules/x.md", ".trae/rules/x.md", ".augment-guidelines", ".openhands/microagents/x.md", ".gitlab-ci.yml", ".circleci/config.yml", "Jenkinsfile", "azure-pipelines.yml", ".husky/pre-commit", ".devcontainer/devcontainer.json", "WARP.md", "opencode.json", ".idx/airules.md", ".travis.yml", ".gitea/workflows/ci.yml", ".pre-commit-config.yaml", "lefthook.yml", ".devcontainer.json", ".roomodes", "appveyor.yml", ".semaphore/semaphore.yml", "cloudbuild.yaml", ".githooks/pre-push", "OWNERS", ".mergify.yml", "renovate.json", ".renovaterc", "bors.toml", "lefthook.yaml", ".woodpecker.yaml", ".tekton/pipeline.yaml", ".clinerules/security.md", ".clinerules", ".roorules-code", ".coderabbit.yaml", ".tabnine/x.json", ".idx/dev.nix", ".zed/settings.json", "buildkite.yml", "buildkite/pipeline.yml", "cloudbuild.json", "codefresh.yml", "lefthook-local.yaml", ".lefthook/pre-commit/x.sh", ".prow/config.yaml", ".teamcity/settings.kts", ".builds/deploy.yml", ".build.yml", ".simple-git-hooks.json", ".lintstagedrc.json", "lint-staged.config.js", "replit.md", ".replit", "greptile.json"]) {
     assert.ok(refusedPath(p), p);
     assert.ok(!mayChange(job, p), p);
   }
@@ -236,7 +239,7 @@ test("jobs are read from the base branch, never from the pull request", async ()
   assert.match(why[".mergelight/jobs.md"], /jobs are files right in the \.mergelight\/jobs folder/);
   assert.match(why[".mergelight/jobs/README.md"], /is the folder's notes, never read as a job/);
   assert.match(why[".mergelight/jobs/extra.md"], /is a link to \.mergelight\/jobs\.md, which isn't a job file that is read/);
-  assert.match(why[".mergelight/jobs/copy-link.md"], /is a link to \.mergelight\/jobs\/Copy Job\.md, which can't be a job: see/);
+  assert.match(why[".mergelight/jobs/copy-link.md"], /is a link to \.mergelight\/jobs\/Copy Job\.md, which doesn't run as a job: see/);
   assert.match(why[".mergelight/jobs/Copy Job.md"], /must be lowercase/);
   assert.match(why[".mergelight/jobs/via-link.md"], /its skill \.agents\/skills\/real is reached through \.agents\/skills, which is a link: name the skill by its real folder/);
   assert.match(why[".mergelight/jobs/deep-link.md"], /is a link to \.mergelight\/jobs\/web\/deep\.md, which isn't a job file that is read/);
@@ -359,4 +362,26 @@ test("a protected link to the repository's root runs no job", async () => {
   git("add", "-A");
   git("commit", "-q", "-m", "base");
   assert.match((await jobFilesFor(dir, "main")).incomplete, /\.cursor\/everything leads through more than 10 links, or to the repository's root/);
+});
+
+test("files an instruction file imports with @ are guarded, as deep as Claude Code follows them", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-jobs-imports-"));
+  const git = (...args) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t.test", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
+  const write = (path, text) => {
+    mkdirSync(join(dir, path, ".."), { recursive: true });
+    writeFileSync(join(dir, path), text);
+  };
+  git("init", "-q", "-b", "main");
+  write("CLAUDE.md", "# Team notes\nSee @docs/ai-guide.md and @./style.md. Mail us at team@example.com.\n");
+  write("docs/ai-guide.md", "More in @deeper/one.md\n");
+  write("docs/deeper/one.md", "Done.\n");
+  write("style.md", "Style.\n");
+  write("packages/web/AGENTS.md", "Read @../../shared/web.md\n");
+  write("shared/web.md", "Web.\n");
+  git("add", "-A");
+  git("commit", "-q", "-m", "base");
+  const { guarded, incomplete } = await jobFilesFor(dir, "main");
+  assert.equal(incomplete, undefined);
+  for (const p of ["docs/ai-guide.md", "docs/deeper/one.md", "style.md", "shared/web.md"]) assert.ok(guarded.includes(p), p);
+  assert.ok(!guarded.some((p) => p.includes("example.com")), "an e-mail address isn't an import");
 });

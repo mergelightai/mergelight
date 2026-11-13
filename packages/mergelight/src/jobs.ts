@@ -78,6 +78,9 @@ export const REFUSED_FOLDERS = [
   ".lefthook",
   ".prow",
   ".harness",
+  ".teamcity",
+  // Only at the root, where SourceHut reads it.
+  "/.builds",
   ".husky",
   ".devcontainer",
   ".semaphore",
@@ -91,9 +94,6 @@ export const REFUSED_FOLDERS = [
 ];
 
 /**
- * A file an instruction file only names, such as one CLAUDE.md imports with @, isn't guarded: that is out
- * of scope, and docs/jobs.md tells teams to keep such files in a folder no job may change.
- *
  * Files a job can never change, whatever its file says, in any folder. Only the file's own name counts,
  * so a folder that happens to be called owners is ordinary.
  */
@@ -174,6 +174,17 @@ export const REFUSED_FILES = [
   "codefresh.yml",
   "codefresh.yaml",
   "lefthook.json",
+  ".build.yml",
+  ".simple-git-hooks.json",
+  ".simple-git-hooks.js",
+  "simple-git-hooks.json",
+  "simple-git-hooks.js",
+  // Agents and bots that read their own settings.
+  "replit.md",
+  ".replit",
+  "replit.nix",
+  ".sourcery.yaml",
+  "greptile.json",
   ".lefthook.json",
   ".lefthook.toml",
   "buildkite.yml",
@@ -257,7 +268,9 @@ export function parseJobFile(path: string, text: string): { job: Job } | { probl
   // A path on an indented line under the key's own value is part of it in YAML, but only the key's line is read.
   const goesOn = ["on", "may-change", "skill"].find((key) => new RegExp(`^${key}[ \\t]*:[ \\t]*[^\\s#][^\\n]*\\n[ \\t]+[^\\s#-]`, "m").test(block.fm));
   if (goesOn) return { problem: goesOn === "skill" ? "its skill value goes on to an indented line, which isn't read: write the skill folder on the skill line itself" : `its ${goesOn} value goes on to an indented line, which isn't read: write the paths as a list` };
-  if (mayChange.every(refusedPath)) {
+  // A pattern is refused when what is in it is too: "owners" names a folder of ordinary files, not OWNERS.
+  const refusedPattern = (p: string) => refusedPath(p) && refusedPath(`${p.replace(/\/+$/, "")}/x`);
+  if (mayChange.every(refusedPattern)) {
     return { problem: "its may-change paths only name files a job can never change, like .github and .mergelight" };
   }
   const written = scalarValue(block.fm, "skill") ?? undefined;
@@ -267,7 +280,7 @@ export function parseJobFile(path: string, text: string): { job: Job } | { probl
   if (written !== undefined && !isSkillPath(skill)) return { problem: `its skill "${written.slice(0, 100)}" isn't a folder in the repository, like .claude/skills/write-docs` };
   // No job may change a skill folder, its own included, so one that may only change its own skill can do nothing.
   // A pattern in no man's land: only files a job can never change, or only its own skill folder, which no job may change.
-  if (skill && mayChange.every((p) => refusedPath(p) || matchesPath(`/${skill}`.toLowerCase(), p.replace(/^(\.\/|\/)+/, "").toLowerCase()))) {
+  if (skill && mayChange.every((p) => refusedPattern(p) || matchesPath(`/${skill}`.toLowerCase(), p.replace(/^(\.\/|\/)+/, "").toLowerCase()))) {
     return { problem: `its may-change paths only name files a job can never change, or its own skill folder, ${skill}` };
   }
   // Every line of the front matter must be one that is read: a job's own key, a list item under on or
@@ -289,8 +302,17 @@ export function parseJobFile(path: string, text: string): { job: Job } | { probl
   }
   // A quote that opens and never closes would let a comment or a typo widen what the job names.
   for (const line of block.fm.split(/\r?\n/)) {
-    const value = /^(?:(?:on|may-change)[ \t]*:|[ \t]*-)[ \t]*(["'])(.*)$/.exec(line);
-    if (value && !value[2]!.includes(value[1]!)) return { problem: `a path opens with a quote that never closes: ${line.trim().slice(0, 60)}` };
+    const value = /^(?:(?:on|may-change)[ \t]*:|[ \t]*-)[ \t]*(.*)$/.exec(line)?.[1] ?? "";
+    // A quote opens where a value or item starts, as in YAML, and must close before the line ends.
+    let quote: string | null = null;
+    for (let i = 0; i < value.length; i++) {
+      const ch = value[i]!;
+      if (quote) {
+        if (ch === quote) quote = null;
+      } else if ((ch === '"' || ch === "'") && (i === 0 || /[\s,[]/.test(value[i - 1]!))) quote = ch;
+      else if (ch === "#" && (i === 0 || /\s/.test(value[i - 1]!))) break;
+    }
+    if (quote) return { problem: `a path opens with a quote that never closes: ${line.trim().slice(0, 60)}` };
   }
   // HTML comments are what a team turned off, as in rule files.
   const task = withoutComments(block.body).trim();
@@ -337,7 +359,7 @@ export function refusedPath(path: string): boolean {
   const lower = folded(path);
   const name = lower.replace(/\/+$/, "").split("/").pop() ?? "";
   // Roo reads .roorules-<mode> for each mode, and lefthook reads lefthook-local.<any>.
-  if (/^lefthook-local\./.test(name)) return true;
+  if (/^lefthook-local\./.test(name) || /^\.lintstagedrc/.test(name) || /^lint-staged\.config\./.test(name)) return true;
   return REFUSED_FOLDERS.some((refused) => matchesPath(folded(refused), lower)) || REFUSED_FILES.some((refused) => folded(refused) === name) || name.startsWith(".roorules-");
 }
 

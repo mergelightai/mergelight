@@ -267,7 +267,7 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
   const refusedSources = new Set(parsed.problems.map((p) => p.source));
   for (const p of problems) {
     const same = /is the same file as (.+?), so its job counts once/.exec(p.problem)?.[1];
-    if (same && refusedSources.has(same)) p.problem = `is a link to ${same}, which can't be a job: see ${same}`;
+    if (same && refusedSources.has(same)) p.problem = `is a link to ${same}, which doesn't run as a job: see ${same}`;
   }
   // A skill named through a linked folder: the copy only takes the real folder, so say that, not "no SKILL.md".
   for (const p of parsed.problems) {
@@ -277,7 +277,7 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
     if (linked) p.problem = `its skill ${skill} is reached through ${linked}, which is a link: name the skill by its real folder`;
     else if (skill && tree.mode(`${skill}/SKILL.md`) === "120000") p.problem = `its skill ${skill} has a SKILL.md that is a link: it must be a real file`;
   }
-  const unread = all.slice(0, MAX_JOB_FILES).filter((_, i) => files[i] === null).map((source) => ({ source, problem: "couldn't be read: it is empty, too large, a link to something that isn't a file in the repository, or git couldn't read it this time" }));
+  const unread = all.slice(0, MAX_JOB_FILES).filter((_, i) => files[i] === null).map((source) => ({ source, problem: "couldn't be read: it is empty, too large, or a link to something that isn't a file in the repository" }));
   const past = all.slice(MAX_JOB_FILES).map((source) => ({ source, problem: `only ${MAX_JOB_FILES} job files are read` }));
   // A file no job may change can be a link to one it could, like AGENTS.md to docs/ai-guide.md. Every link
   // from a protected file or folder is followed the way the file system would, through links in its
@@ -347,6 +347,34 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
     }
     if (incomplete) break;
   }
+  // Instruction files can pull other files in, like "@docs/ai-guide.md" in CLAUDE.md, which Claude Code
+  // and Gemini CLI read as instructions too, up to 5 levels deep. Those files are guarded as well. A name
+  // that only looks like an import is guarded too: guarding too much is safe.
+  if (!incomplete) {
+    const instructions = tree.paths.filter((p) => tree.mode(p) !== "120000" && /\.md$/i.test(p) && refusedPath(p));
+    const queue = instructions.map((path) => ({ path, depth: 0 }));
+    const seenImports = new Set(instructions);
+    while (queue.length && !incomplete) {
+      if (seenImports.size > MAX_GUARDED_LINKS) {
+        incomplete = `The base branch's instruction files import more than ${MAX_GUARDED_LINKS} files, so no job runs.`;
+        break;
+      }
+      const { path, depth } = queue.shift()!;
+      const file = await tree.readOrFail(path);
+      if (file === FAILED) {
+        incomplete = `${path} couldn't be read this time, so no job runs. The next push tries again.`;
+        break;
+      }
+      for (const m of file?.text.matchAll(/(?:^|\s)@((?:\.{1,2}\/)*[\w-][\w./-]*)/g) ?? []) {
+        // A full stop or comma after it ends the sentence, not the path.
+        const imported = posix.normalize(posix.join(posix.dirname(path), m[1]!.replace(/[.,;:]+$/, ""))).replace(/\/+$/, "");
+        if (!imported || imported === "." || imported.startsWith("..") || seenImports.has(imported)) continue;
+        seenImports.add(imported);
+        targets.add(imported);
+        if (depth + 1 < MAX_IMPORT_DEPTH && tree.mode(imported)) queue.push({ path: imported, depth: depth + 1 });
+      }
+    }
+  }
   // Every link is guarded too, whatever folder it sits in: a job never writes at or through a link, so a
   // link like docs/ci to .github/workflows can't carry a change into a protected place.
   const links = tree.paths.filter((p) => tree.mode(p) === "120000");
@@ -358,6 +386,8 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
 /** How many links from files no job may change are followed, to guard what they lead to, and how far each. */
 const MAX_GUARDED_LINKS = 1000;
 const MAX_LINK_HOPS = 10;
+/** How deep instruction files' @ imports are followed, as Claude Code does. */
+const MAX_IMPORT_DEPTH = 5;
 
 /** How many rule files are read at most. */
 const MAX_RULE_FILES = 100;
