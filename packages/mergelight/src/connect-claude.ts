@@ -62,6 +62,12 @@ type SpawnLike = (command: string, args: string[], options: object) => {
   kill: (signal?: NodeJS.Signals) => unknown;
 };
 
+/** How `script` runs the sign-in in a terminal of its own: Linux has util-linux's script, and macOS the BSD one, whose options differ. */
+export function scriptArgs(platform: NodeJS.Platform = process.platform): string[] {
+  const command = "stty cols 3000 rows 50; exec claude setup-token";
+  return platform === "darwin" || platform === "freebsd" ? ["-qF", "/dev/null", "sh", "-c", command] : ["-qfc", command, "/dev/null"];
+}
+
 /**
  * Starts the sign-in. It needs a terminal, so `script` gives it one, wide enough that the link and the token
  * stay on one line. Nothing it prints is logged, because the token is in there. Null if no link appears.
@@ -73,7 +79,7 @@ export function startClaudeSignIn(spawnImpl: SpawnLike = spawn as unknown as Spa
     let onOutput = () => {};
     let child: ReturnType<SpawnLike>;
     try {
-      child = spawnImpl("script", ["-qfc", "stty cols 3000 rows 50; exec claude setup-token", "/dev/null"], { stdio: ["pipe", "pipe", "ignore"], env: { ...agentEnv(), TERM: "xterm-256color", BROWSER: "true" } });
+      child = spawnImpl("script", scriptArgs(), { stdio: ["pipe", "pipe", "ignore"], env: { ...agentEnv(), TERM: "xterm-256color", BROWSER: "true" } });
     } catch {
       resolve(null);
       return;

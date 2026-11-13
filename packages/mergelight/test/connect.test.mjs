@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { checkWaitingTitle, claudeSetupLink, connect, connectBody, connectCheckBody, connectedAccount, connectedBody, connectFailedBody, githubConnect, installAppBody, parseDeviceLogin, withState } from "../dist/connect.js";
-import { claudeCodeRef, parseClaudeLink, parseClaudeToken, readCodeRef, readPastedCode, shareClaudeToken, startClaudeSignIn, waitForPastedCode } from "../dist/connect-claude.js";
+import { claudeCodeRef, parseClaudeLink, parseClaudeToken, readCodeRef, readPastedCode, scriptArgs, shareClaudeToken, startClaudeSignIn, waitForPastedCode } from "../dist/connect-claude.js";
 import { isPendingSummary, PENDING_MARKER, SUMMARY_MARKER } from "../dist/publish/markdown.js";
 import { ownSummary } from "../dist/publish/publish.js";
 import { decodeState, encodeState } from "../dist/publish/state.js";
@@ -336,7 +336,7 @@ test("the sign-in gives its link, sends the code, and ends with the token", asyn
   const s = await signIn;
   assert.equal(s.url, LINK);
   assert.equal(spawned[0], "script");
-  assert.match(spawned[2], /claude setup-token/);
+  assert.match(spawned.join(" "), /claude setup-token/);
   assert.equal(await s.finish("abcdef123456"), TOKEN);
   assert.deepEqual(written, ["abcdef123456", "\r"]);
   assert.ok(child.killed, "nothing is left running");
@@ -443,7 +443,9 @@ test("connecting a checker that nobody finishes holds nothing up, and leaves the
   const deps = githubConnect(api, 7, "abc", (l) => logs.push(l), env, { purpose: "check", ai: "codex", reviewer: "claude" });
   assert.equal(await deps.startClaude(), null, "only ChatGPT is offered");
   await deps.failed("The code ran out.");
-  assert.ok(!api.writes.some((w) => w.path.startsWith("issues/")), "the review's summary replaces the connect comment");
+  const prompt = api.writes.find((w) => w.path === "issues/comments/5");
+  assert.ok(prompt && isPendingSummary(prompt.body.body), "the dead code gives way to the review that is starting");
+  assert.doesNotMatch(prompt.body.body, /couldn't connect/);
   const check = api.writes.find((w) => w.path === "check-runs");
   assert.equal(check.body.output.title, "ChatGPT wasn't connected");
   assert.match(check.body.output.summary, /The review goes on, checked by Claude\./);
@@ -478,4 +480,9 @@ test("Claude set to review with no login yet: only Claude's link is offered, and
   assert.match(installAppBody(), /saves your ChatGPT login/);
   const body = connectBody(null, "https://github.com/run", LINK, claudeSetupLink("acme/api", 7));
   assert.match(body, /^### 🔌 Connect Claude to start reviews$/m);
+});
+
+test("the sign-in gets a terminal from script, in the form each system's script takes", () => {
+  assert.deepEqual(scriptArgs("linux"), ["-qfc", "stty cols 3000 rows 50; exec claude setup-token", "/dev/null"]);
+  assert.deepEqual(scriptArgs("darwin"), ["-qF", "/dev/null", "sh", "-c", "stty cols 3000 rows 50; exec claude setup-token"]);
 });

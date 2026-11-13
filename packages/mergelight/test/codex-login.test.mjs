@@ -188,3 +188,11 @@ test("Codex never reads AGENTS.md from the checkout unless a run asks for it", a
   assert.doesNotMatch(allowed, /project_doc_max_bytes/);
 });
 
+
+test("a review's commands can't read the runner's command files, where a step can leave a new login", async () => {
+  const { runnerCommandFiles, sandboxArgs: rules } = await import("../dist/providers/codex.js");
+  const dirs = runnerCommandFiles({ GITHUB_ENV: "/rt/_runner_file_commands/set_env_1", GITHUB_OUTPUT: "/rt/_runner_file_commands/set_output_1" });
+  assert.deepEqual(dirs, ["/rt/_runner_file_commands"]);
+  assert.equal(rules("/h/.codex", undefined, dirs)[3], 'permissions.mergelight_review.filesystem={":root"="read","/h/.codex"="none","/rt/_runner_file_commands"="none"}');
+  assert.deepEqual(runnerCommandFiles({}), []);
+});

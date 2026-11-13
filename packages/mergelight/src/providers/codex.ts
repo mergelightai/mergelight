@@ -180,7 +180,26 @@ export function sandboxArgs(home = codexHome(), writable?: string, hidden: strin
     const rules = new Map(paths);
     return ["-c", 'default_permissions="mergelight_job"', "-c", `permissions.mergelight_job.filesystem={${[...rules].map(([path, access]) => `${JSON.stringify(path)}="${access}"`).join(",")}}`];
   }
-  return ["-c", 'default_permissions="mergelight_review"', "-c", `permissions.mergelight_review.filesystem={":root"="read",${JSON.stringify(home)}="none"}`];
+  // A review reads the disk but not the login, nor the hidden places it is given, such as the runner's
+  // command files, where an earlier step can leave a login it just connected for later steps.
+  const rules = new Map<string, string>([[":root", "read"], [home, "none"], ...hidden.map((h): [string, string] => [h, "none"])]);
+  return ["-c", 'default_permissions="mergelight_review"', "-c", `permissions.mergelight_review.filesystem={${[...rules].map(([path, access]) => `${JSON.stringify(path)}="${access}"`).join(",")}}`];
+}
+
+/**
+ * The folders of the runner's command files: GITHUB_ENV and the others. Steps pass values on to later
+ * ones through them, such as a Claude login just connected, and GitHub keeps the files until the job ends.
+ */
+export function runnerCommandFiles(env: NodeJS.ProcessEnv = process.env): string[] {
+  const dirs = [env.GITHUB_ENV, env.GITHUB_OUTPUT, env.GITHUB_STATE, env.GITHUB_PATH, env.GITHUB_STEP_SUMMARY].filter((p): p is string => Boolean(p)).map(dirname);
+  const real = dirs.map((d) => {
+    try {
+      return realpathSync(d);
+    } catch {
+      return d;
+    }
+  });
+  return [...new Set([...dirs, ...real])].filter((d) => d !== "/" && d !== ".");
 }
 
 /**
@@ -309,7 +328,7 @@ export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
 
   const args = [
     "exec",
-    ...sandboxArgs(codexHome(), opts.edit ? opts.cwd : undefined, opts.edit ? jobHidden() : [], opts.edit ? [...(opts.readDirs ?? []), ...codexInstall()] : []),
+    ...sandboxArgs(codexHome(), opts.edit ? opts.cwd : undefined, opts.edit ? jobHidden() : runnerCommandFiles(), opts.edit ? [...(opts.readDirs ?? []), ...codexInstall()] : []),
     // A job's commands get only the core variables (PATH, HOME and the like), never the runner's own,
     // such as a database password: what they print can end up in a file that gets pushed.
     ...(opts.edit ? ["-c", 'shell_environment_policy.inherit="core"'] : []),

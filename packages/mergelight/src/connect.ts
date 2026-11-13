@@ -18,6 +18,8 @@ import { claudeCodeRef, readCodeRef, shareClaudeToken, startClaudeSignIn, waitFo
 
 /** Codex says the code lasts 15 minutes. */
 export const LOGIN_TIMEOUT_MS = 16 * 60_000;
+/** How long a checker's prompt waits for Claude's code: the 15 minutes the comment promises. */
+const CHECK_WAIT_MS = 15 * 60_000;
 
 export const INSTALL_URL = "https://github.com/apps/mergelight-ai/installations/new";
 export const CHATGPT_SECURITY_URL = "https://chatgpt.com/settings/security";
@@ -325,7 +327,9 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
     startClaude: async () => {
       // Connecting ChatGPT to check a Claude review offers only ChatGPT: Claude already has a login.
       if (checker === "codex") return null;
-      if (!(await workflowHasClaude(api, env))) return null;
+      // Beside ChatGPT, Claude is offered only where the workflow passes its login on. Asked for by name,
+      // the run already knows it wants Claude, and a reusable workflow passes it on where this can't see.
+      if (!onlyClaude && !(await workflowHasClaude(api, env))) return null;
       const signIn = await startClaudeSignIn();
       if (!signIn) {
         log("Claude's sign-in didn't start, so only ChatGPT is offered.");
@@ -346,7 +350,8 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
           signIn.stop();
         },
         wait: async () => {
-          const code = await waitForPastedCode({ read: () => readCodeRef((path) => api.get(path), ref), stopped: () => over });
+          // As long as the comment says: a checker's prompt promises the review starts after 15 minutes.
+          const code = await waitForPastedCode({ read: () => readCodeRef((path) => api.get(path), ref), stopped: () => over }, checker ? CHECK_WAIT_MS : undefined);
           if (!code) return false;
           const token = await signIn.finish(code);
           if (!token) {
@@ -431,6 +436,8 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
       // A checker that wasn't connected holds nothing up: the review starts, checked by the reviewer's AI,
       // and its summary says so. The comment it replaces is the connect one, so it is left for the review.
       if (checker) {
+        // The prompt's code or link is dead now, and the review is about to start: the summary says that.
+        await updateSummary(pendingSummaryBody()).catch((err) => log(`Couldn't update the comment: ${err instanceof Error ? err.message : String(err)}`));
         await finish(`${loginName(checker)} wasn't connected`, `${reason} The review goes on, checked by ${aiName(reviewer)}.`).catch((err) => log(`Couldn't finish the check: ${err instanceof Error ? err.message : String(err)}`));
         log(`${reason} The review goes on, checked by ${aiName(reviewer)}.`);
         return;
