@@ -166,7 +166,7 @@ interface BaseFile {
  * to a file inside the repository. A file that is missing, too large or can't be read is null. Null as a
  * whole when the branch can't be listed.
  */
-async function baseTree(mirror: string, base: string): Promise<{ paths: string[]; mode: (path: string) => string | undefined; read: (path: string) => Promise<BaseFile | null>; readOrFail: (path: string) => Promise<BaseFile | null | typeof FAILED>; linkContent: (path: string) => Promise<string | null | "unread"> } | null> {
+async function baseTree(mirror: string, base: string): Promise<{ paths: string[]; mode: (path: string) => string | undefined; read: (path: string) => Promise<BaseFile | null>; readOrFail: (path: string, max?: number) => Promise<BaseFile | null | typeof FAILED>; size: (path: string) => Promise<number | null>; linkContent: (path: string) => Promise<string | null | "unread"> } | null> {
   const git = (args: string[]) =>
     run("git", ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential", "-C", mirror, ...args], {
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
@@ -180,10 +180,10 @@ async function baseTree(mirror: string, base: string): Promise<{ paths: string[]
     if (m) tree.set(m[3]!, { mode: m[1]!, sha: m[2]! });
   }
   /** A file's text, null when it is too large, or FAILED when git couldn't read it this time. */
-  const blob = async (sha: string): Promise<string | null | typeof FAILED> => {
+  const blob = async (sha: string, max = MAX_CONVENTION_BYTES): Promise<string | null | typeof FAILED> => {
     const sized = await git(["cat-file", "-s", sha]);
     if (sized?.code !== 0) return FAILED;
-    if (!(Number(sized.stdout.trim()) <= MAX_CONVENTION_BYTES)) return null;
+    if (!(Number(sized.stdout.trim()) <= max)) return null;
     const read = await git(["cat-file", "blob", sha]);
     return read?.code === 0 ? read.stdout : FAILED;
   };
@@ -195,7 +195,7 @@ async function baseTree(mirror: string, base: string): Promise<{ paths: string[]
     return content === FAILED || content === null ? "unread" : content;
   };
   /** A file, null when there is none to read, or FAILED when git couldn't read it this time. */
-  const readOrFail = async (path: string): Promise<BaseFile | null | typeof FAILED> => {
+  const readOrFail = async (path: string, max = MAX_CONVENTION_BYTES): Promise<BaseFile | null | typeof FAILED> => {
     let file = tree.get(path);
     const link = file?.mode === "120000";
     let resolved: string | undefined;
@@ -209,7 +209,7 @@ async function baseTree(mirror: string, base: string): Promise<{ paths: string[]
       file = tree.get(resolved);
     }
     if (!file || (file.mode !== "100644" && file.mode !== "100755")) return null;
-    const content = await blob(file.sha);
+    const content = await blob(file.sha, max);
     if (content === FAILED) return FAILED;
     const text = content?.trim();
     return text ? { path, sha: file.sha, text, link, ...(resolved ? { target: resolved } : {}) } : null;
@@ -218,7 +218,13 @@ async function baseTree(mirror: string, base: string): Promise<{ paths: string[]
     const file = await readOrFail(path);
     return file === FAILED ? null : file;
   };
-  return { paths: [...tree.keys()], mode: (path) => tree.get(path)?.mode, read, readOrFail, linkContent };
+  /** A file's size in bytes, or null when git can't say. */
+  const size = async (path: string): Promise<number | null> => {
+    const file = tree.get(path);
+    const sized = file ? await git(["cat-file", "-s", file.sha]) : null;
+    return sized?.code === 0 ? Number(sized.stdout.trim()) : null;
+  };
+  return { paths: [...tree.keys()], mode: (path) => tree.get(path)?.mode, read, readOrFail, linkContent, size };
 }
 
 /**
@@ -241,7 +247,7 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
     else if (/^\.mergelight(?:\/jobs)?$/i.test(p) || p.toLowerCase().startsWith(".mergelight/jobs.")) problems.push({ source: p, problem: "isn't read: jobs are files right in the .mergelight/jobs folder, which can't be a link" });
   }
   const all = tree.paths.filter((p) => JOB_FILE.test(p) && !/\/readme\.md$/i.test(p)).sort();
-  const tries = await Promise.all(all.slice(0, MAX_JOB_FILES).map(tree.readOrFail));
+  const tries = await Promise.all(all.slice(0, MAX_JOB_FILES).map((p) => tree.readOrFail(p)));
   // A job file git couldn't read this time would let another job take its place: no job runs instead.
   const failedRead = all.find((_, i) => tries[i] === FAILED);
   if (failedRead) return { jobs: [], problems: [], guarded: [], incomplete: `${failedRead} couldn't be read this time, so no job runs. The next push tries again.` };
@@ -351,13 +357,20 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
   // and Gemini CLI read as instructions too, up to 5 levels deep. Those files are guarded as well, through
   // any links on the way. A name that only looks like an import is guarded too: guarding too much is safe.
   if (!incomplete) {
-    const isInstructions = (p: string) => /\.mdc?$/i.test(p) && refusedPath(p);
-    const queue: { path: string; depth: number }[] = [];
+    // Instruction files wherever a job may not write: refused names, and those inside guarded folders
+    // and link targets, such as the rules in a folder .cursor links to.
+    const isInstructions = (p: string) => /\.mdc?$/i.test(p) && inGuard(p);
+    /** A file to scan, and the folders its imports are read from: its own, and the link's when it was reached through one. */
+    const queue: { path: string; dirs: string[]; depth: number }[] = [];
     const queued = new Set<string>();
-    const enqueue = (path: string, depth: number) => {
-      if (queued.has(path) || depth >= MAX_IMPORT_DEPTH || !tree.mode(path)) return;
-      queued.add(path);
-      queue.push({ path, depth });
+    // Once for each folder a file's imports are read from: one reached again through a link is read from
+    // that link's folder too.
+    const enqueue = (path: string, dirs: string[], depth: number) => {
+      if (depth >= MAX_IMPORT_DEPTH || !tree.mode(path)) return;
+      const fresh = [...new Set([posix.dirname(path), ...dirs])].filter((dir) => !queued.has(`${path}\0${dir}`));
+      if (!fresh.length) return;
+      for (const dir of fresh) queued.add(`${path}\0${dir}`);
+      queue.push({ path, dirs: fresh, depth });
     };
     const follow = async (path: string): Promise<string | null> => {
       const end = await resolve(path);
@@ -365,33 +378,43 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
       if (end === "deep") incomplete ??= `${path} leads through more than ${MAX_LINK_HOPS} links, or to the repository's root, so no job runs.`;
       return typeof end === "string" ? end : null;
     };
-    // Each instruction file, and where a linked one really leads.
+    // Each instruction file, and where a linked one really leads: a tool that opens it by the link's
+    // path reads its imports from the link's folder.
     for (const p of tree.paths.filter(isInstructions)) {
       const at = tree.mode(p) === "120000" ? await follow(p) : p;
-      if (at) enqueue(at, 0);
+      if (at) enqueue(at, [posix.dirname(p)], 0);
     }
     const imported = new Set<string>();
     while (queue.length && !incomplete) {
-      const { path, depth } = queue.shift()!;
-      const file = await tree.readOrFail(path);
+      const { path, dirs, depth } = queue.shift()!;
+      const file = await tree.readOrFail(path, MAX_INSTRUCTIONS_BYTES);
       if (file === FAILED) {
         incomplete = `${path} couldn't be read this time, so no job runs. The next push tries again.`;
+        break;
+      }
+      // Too large to read for its imports: no job runs rather than one with a smaller guard.
+      if (file === null && ((await tree.size(path)) ?? 0) > MAX_INSTRUCTIONS_BYTES) {
+        incomplete = `${path} is too large to check what it imports, so no job runs.`;
         break;
       }
       for (const m of file?.text.matchAll(/(?:^|\s)@(\S+)/g) ?? []) {
         // A full stop, comma or bracket after it ends the sentence, not the path. A home or absolute path is outside the repository.
         const raw = m[1]!.replace(/[.,;:)\]]+$/, "");
         if (!raw || raw.startsWith("~") || raw.startsWith("/")) continue;
-        const joined = posix.normalize(posix.join(posix.dirname(path), raw)).replace(/\/+$/, "");
-        if (!joined || joined === "." || joined.startsWith("..") || imported.has(joined)) continue;
-        imported.add(joined);
-        if (imported.size > MAX_GUARDED_LINKS) {
-          incomplete = `The base branch's instruction files import more than ${MAX_GUARDED_LINKS} files, so no job runs.`;
-          break;
+        for (const dir of dirs) {
+          const joined = posix.normalize(posix.join(dir, raw)).replace(/\/+$/, "");
+          if (!joined || joined === "." || joined.startsWith("..") || imported.has(joined)) continue;
+          imported.add(joined);
+          // Guarding a name is cheap, so the limit is high: it only stops a run that would take too long.
+          if (imported.size > MAX_IMPORTS) {
+            incomplete = `The base branch's instruction files name more than ${MAX_IMPORTS} files, so no job runs.`;
+            break;
+          }
+          targets.add(joined);
+          const at = await follow(joined);
+          if (at) enqueue(at, [posix.dirname(joined)], depth + 1);
         }
-        targets.add(joined);
-        const at = await follow(joined);
-        if (at) enqueue(at, depth + 1);
+        if (incomplete) break;
       }
     }
   }
@@ -406,8 +429,10 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
 /** How many links from files no job may change are followed, to guard what they lead to, and how far each. */
 const MAX_GUARDED_LINKS = 1000;
 const MAX_LINK_HOPS = 10;
-/** How deep instruction files' @ imports are followed, as Claude Code does. */
+/** How deep instruction files' @ imports are followed, as Claude Code does, how many names are guarded at most, and how large a file is read for them. */
 const MAX_IMPORT_DEPTH = 5;
+const MAX_IMPORTS = 20_000;
+const MAX_INSTRUCTIONS_BYTES = 4_000_000;
 
 /** How many rule files are read at most. */
 const MAX_RULE_FILES = 100;

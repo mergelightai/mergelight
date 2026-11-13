@@ -145,7 +145,7 @@ test("a job runs only when a pull request changed one of its on files", () => {
 
 test("a job may change only its own paths, and never workflows, Mergelight's files or git's files", () => {
   const { job } = parseJobFile(".mergelight/jobs/x.md", '---\non: src\nmay-change: "**"\n---\nTask.');
-  for (const p of [".github/workflows/ci.yml", "packages/web/.github/x.yml", ".huſky/pre-commit", ".gıtattributes", ".mergelight/jobs/x.md", ".mergelight/rules.md", ".gitmodules", "src/.gitattributes", ".git/config", ".GITHUB/workflows/ci.yml", "docs/.GitAttributes", ".GitModules", "CODEOWNERS", "docs/CODEOWNERS", "AGENTS.md", "packages/web/CLAUDE.md", ".claude/settings.json", ".agents/skills/x/SKILL.md", ".codex/config.toml", ".cursor/rules/style.mdc", "CONTRIBUTING.md", "docs/CONTRIBUTING.md", "GEMINI.md", ".cursorrules", "tools/x/SKILL.md", ".mcp.json", "CLAUDE.local.md", "AGENTS.override.md", ".vscode/tasks.json", ".roo/rules.md", ".kiro/steering/x.md", ".lfsconfig", "CONVENTIONS.md", ".continue/rules/x.md", ".goosehints", "AGENT.md", "QWEN.md", "CRUSH.md", ".kilocode/rules/x.md", ".trae/rules/x.md", ".augment-guidelines", ".openhands/microagents/x.md", ".gitlab-ci.yml", ".circleci/config.yml", "Jenkinsfile", "azure-pipelines.yml", ".husky/pre-commit", ".devcontainer/devcontainer.json", "WARP.md", "opencode.json", ".idx/airules.md", ".travis.yml", ".gitea/workflows/ci.yml", ".pre-commit-config.yaml", "lefthook.yml", ".devcontainer.json", ".roomodes", "appveyor.yml", ".semaphore/semaphore.yml", "cloudbuild.yaml", ".githooks/pre-push", "OWNERS", ".mergify.yml", "renovate.json", ".renovaterc", "bors.toml", "lefthook.yaml", ".woodpecker.yaml", ".tekton/pipeline.yaml", ".clinerules/security.md", ".clinerules", ".roorules-code", ".coderabbit.yaml", ".tabnine/x.json", ".idx/dev.nix", ".zed/settings.json", "buildkite.yml", "buildkite/pipeline.yml", "cloudbuild.json", "codefresh.yml", "lefthook-local.yaml", ".lefthook/pre-commit/x.sh", ".prow/config.yaml", ".teamcity/settings.kts", ".builds/deploy.yml", ".build.yml", ".simple-git-hooks.json", ".lintstagedrc.json", "lint-staged.config.js", "replit.md", ".replit", "greptile.json"]) {
+  for (const p of [".github/workflows/ci.yml", "packages/web/.github/x.yml", ".huſky/pre-commit", ".gıtattributes", ".mergelight/jobs/x.md", ".mergelight/rules.md", ".gitmodules", "src/.gitattributes", ".git/config", ".GITHUB/workflows/ci.yml", "docs/.GitAttributes", ".GitModules", "CODEOWNERS", "docs/CODEOWNERS", "AGENTS.md", "packages/web/CLAUDE.md", ".claude/settings.json", ".agents/skills/x/SKILL.md", ".codex/config.toml", ".cursor/rules/style.mdc", "CONTRIBUTING.md", "docs/CONTRIBUTING.md", "GEMINI.md", ".cursorrules", "tools/x/SKILL.md", ".mcp.json", "CLAUDE.local.md", "AGENTS.override.md", ".vscode/tasks.json", ".roo/rules.md", ".kiro/steering/x.md", ".lfsconfig", "CONVENTIONS.md", ".continue/rules/x.md", ".goosehints", "AGENT.md", "QWEN.md", "CRUSH.md", ".kilocode/rules/x.md", ".trae/rules/x.md", ".augment-guidelines", ".openhands/microagents/x.md", ".gitlab-ci.yml", ".circleci/config.yml", "Jenkinsfile", "azure-pipelines.yml", ".husky/pre-commit", ".devcontainer/devcontainer.json", "WARP.md", "opencode.json", ".idx/airules.md", ".travis.yml", ".gitea/workflows/ci.yml", ".pre-commit-config.yaml", "lefthook.yml", ".devcontainer.json", ".roomodes", "appveyor.yml", ".semaphore/semaphore.yml", "cloudbuild.yaml", ".githooks/pre-push", "OWNERS", ".mergify.yml", "renovate.json", ".renovaterc", "bors.toml", "lefthook.yaml", ".woodpecker.yaml", ".tekton/pipeline.yaml", ".clinerules/security.md", ".clinerules", ".roorules-code", ".coderabbit.yaml", ".tabnine/x.json", ".idx/dev.nix", ".zed/settings.json", "buildkite.yml", "buildkite/pipeline.yml", "cloudbuild.json", "codefresh.yml", "lefthook-local.yaml", ".lefthook/pre-commit/x.sh", ".prow/config.yaml", "netlify.toml", "vercel.json", "amplify.yml", ".teamcity/settings.kts", ".builds/deploy.yml", ".build.yml", ".simple-git-hooks.json", ".lintstagedrc.json", "lint-staged.config.js", "replit.md", ".replit", "greptile.json"]) {
     assert.ok(refusedPath(p), p);
     assert.ok(!mayChange(job, p), p);
   }
@@ -393,6 +393,27 @@ test("files an instruction file imports with @ are guarded, as deep as Claude Co
   git("commit", "-q", "-m", "base");
   const { guarded, incomplete } = await jobFilesFor(dir, "main");
   assert.equal(incomplete, undefined);
-  for (const p of ["docs/ai-guide.md", "docs/deeper/one.md", "style.md", "shared/web.md", "handbook/guide.md", "docs/more.md", "docs/style-guide.md", ".ai/guidelines.md", "docs/guía.md", "docs/c++-style.md"]) assert.ok(guarded.includes(p), p);
+  for (const p of ["docs/ai-guide.md", "docs/deeper/one.md", "style.md", "shared/web.md", "handbook/guide.md", "docs/more.md", "docs/style-guide.md", ".ai/guidelines.md", "docs/guía.md", "docs/c++-style.md", "packages/api/more.md"]) assert.ok(guarded.includes(p), p);
   assert.ok(!guarded.some((p) => p.includes("example.com")), "an e-mail address isn't an import");
+});
+
+test("rules in a folder a protected link leads to, and a large instruction file, are read for imports", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-jobs-imports2-"));
+  const git = (...args) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t.test", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
+  const write = (path, text) => {
+    mkdirSync(join(dir, path, ".."), { recursive: true });
+    writeFileSync(join(dir, path), text);
+  };
+  git("init", "-q", "-b", "main");
+  write("config/cursor/rules/style.mdc", "Follow @../../../docs/style-guide.md\n");
+  write("docs/style-guide.md", "Style.\n");
+  symlinkSync("config/cursor", join(dir, ".cursor"));
+  write("CLAUDE.md", `${"x".repeat(300_000)}\nAlso @docs/late.md\n`);
+  write("docs/late.md", "Late.\n");
+  git("add", "-A");
+  git("commit", "-q", "-m", "base");
+  const { guarded, incomplete } = await jobFilesFor(dir, "main");
+  assert.equal(incomplete, undefined);
+  assert.ok(guarded.includes("docs/style-guide.md"), "a rule in the folder .cursor links to");
+  assert.ok(guarded.includes("docs/late.md"), "an import far down a large CLAUDE.md");
 });

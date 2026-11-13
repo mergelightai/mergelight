@@ -170,6 +170,11 @@ export const REFUSED_FILES = [
   "codemagic.yaml",
   "Jenkinsfile",
   "azure-pipelines.yml",
+  // Build services that run a build command from the repository.
+  "netlify.toml",
+  "amplify.yml",
+  "amplify.yaml",
+  "vercel.json",
   "cloudbuild.json",
   "codefresh.yml",
   "codefresh.yaml",
