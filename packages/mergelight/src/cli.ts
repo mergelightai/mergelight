@@ -197,6 +197,7 @@ async function main(): Promise<number> {
       const clearing = (line: string) => log(process.stderr.isTTY ? `\r\x1b[2K${line}` : line);
       return await jobsCommand(ref, { provider, model: values.model, effort: values.effort, out: values.out, at: values.at, keep: values.keep, log: clearing, onProgress: progress.onProgress });
     } catch (err) {
+      progress.stop();
       log(`mergelight: ${err instanceof Error ? err.message : String(err)}`);
       return 1;
     } finally {

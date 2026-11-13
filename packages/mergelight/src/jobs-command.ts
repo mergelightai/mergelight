@@ -21,10 +21,13 @@ export interface JobsCommandOptions {
   onProgress?: (message: string) => void;
 }
 
-/** Where the result goes when no --out is given: the runner's temp folder in the Action, one file for each pull request elsewhere. */
-export function defaultJobsOut(ref?: PrRef): string {
+/**
+ * Where the result goes when no --out is given: the runner's own temp folder in the Action, and a new
+ * private folder elsewhere, so no one else on the machine can know the path or plant a file there.
+ */
+export function defaultJobsOut(): string {
   if (process.env.RUNNER_TEMP) return join(process.env.RUNNER_TEMP, "mergelight-jobs.json");
-  return join(tmpdir(), ref ? `mergelight-jobs-${ref.owner}-${ref.repo}-${ref.number}.json` : "mergelight-jobs.json");
+  return join(mkdtempSync(join(tmpdir(), "mergelight-jobs-")), "result.json");
 }
 
 /** git's version, as [major, minor], or null when it can't be told. */
@@ -52,13 +55,15 @@ export function describeJobs(result: JobsResult): string[] {
  */
 export async function jobsCommand(ref: PrRef, o: JobsCommandOptions): Promise<number> {
   const progress = o.onProgress ?? (() => {});
-  const out = o.out ?? defaultJobsOut(ref);
-  // A run that stops early never leaves an older result in place.
-  rmSync(out, { force: true });
+  const out = o.out ?? defaultJobsOut();
+  // A run that stops early never leaves an older result in place, and a path that can't be written
+  // fails now, before any AI time is spent.
+  writeFileSync(out, "", { mode: 0o600 });
   const finish = (result: JobsResult): number => {
     // Only for this account: outside the Action it may sit in a shared temp folder.
     writeFileSync(out, `${JSON.stringify(result, null, 2)}\n`, { mode: 0o600 });
     for (const line of describeJobs(result)) o.log(line);
+    if (!o.out && !process.env.RUNNER_TEMP) o.log(`The result is in ${out}.`);
     // The workflow pushes only when there is something to push.
     if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `changes=${result.changes.length}\nresult=${out}\n`);
     return 0;

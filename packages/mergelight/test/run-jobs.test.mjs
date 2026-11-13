@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { parseJobFile } from "../dist/jobs.js";
 import { buildJobPrompt, caseClashes, isJobCommit, JOBS_TRAILER, MAX_CHANGED_FILES, mirrorGit, newSecret, runJobs } from "../dist/run-jobs.js";
-import { jobHidden, sandboxArgs } from "../dist/providers/codex.js";
+import { jobHidden, runnerInstall, sandboxArgs } from "../dist/providers/codex.js";
 
 /** A repository with one commit: an English file, a Danish one, a script that can run, a link and a workflow. */
 function repo() {
@@ -231,6 +231,11 @@ test("a job's Codex sandbox may write in the job's folder only, and can't read w
   assert.ok(jobHidden({ RUNNER_WORKSPACE: "/work/app" }).includes("/work"));
   const shallow = jobHidden({ RUNNER_WORKSPACE: "/runner/_work/app" });
   assert.ok(shallow.includes("/runner/_work") && shallow.includes("/runner"), "an install folder right under the root");
+  // A runner set up with its own work folder: the install folder comes from the running processes.
+  assert.ok(jobHidden({ RUNNER_WORKSPACE: "/srv/gh-work/app" }, "/opt/actions-runner").includes("/opt/actions-runner"));
+  const lines = { 300: "200 node /tmp/mergelight/dist/cli.js jobs", 200: "100 /opt/actions-runner/bin/Runner.Worker spawnclient 1 2", 100: "1 /opt/actions-runner/bin/Runner.Listener run" };
+  assert.equal(runnerInstall((pid) => lines[pid] ?? null, 300), "/opt/actions-runner");
+  assert.equal(runnerInstall(() => null, 300), null, "outside a runner");
 });
 
 test("a job that writes a secret is dropped, and one the file already had doesn't count", async () => {
@@ -381,4 +386,26 @@ test("the result names the full commit, and files that differ only in letter cas
   git("update-index", "--add", "--cacheinfo", `100644,${blob},locales/pt.json`);
   git("commit", "-q", "-m", "two cases");
   assert.deepEqual(await caseClashes(jobGit, git("rev-parse", "HEAD")), ["locales/PT.json and locales/pt.json"]);
+});
+
+test("a job runs on a bare mirror, as the command uses, with the pull request's skills set aside", async () => {
+  const { dir, git } = repo();
+  mkdirSync(join(dir, ".agents/skills/x"), { recursive: true });
+  writeFileSync(join(dir, ".agents/skills/x/SKILL.md"), "From the pull request.\n");
+  git("add", "-A");
+  git("commit", "-q", "-m", "a skill");
+  const bare = mkdtempSync(join(tmpdir(), "mergelight-bare-"));
+  execFileSync("git", ["clone", "-q", "--bare", dir, bare]);
+  const head = git("rev-parse", "HEAD");
+  const result = await runJobs({
+    git: mirrorGit(bare),
+    head,
+    jobs: [job("translations", "locales/*.json")],
+    ask: async (j, d) => {
+      writeFileSync(join(d, "locales/da.json"), "{}\n");
+      return { summary: "Done." };
+    },
+  });
+  assert.equal(result.outcomes[0].status, "changed", result.outcomes[0].summary);
+  assert.deepEqual(result.changes.map((c) => c.path), ["locales/da.json"]);
 });

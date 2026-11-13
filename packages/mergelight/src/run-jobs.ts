@@ -163,7 +163,8 @@ async function writeOut(git: JobGit, tree: string, dir: string, index: string): 
 async function readBack(git: JobGit, dir: string, index: string, from: string, keep: string[] = []): Promise<string> {
   // --force: a file the job wrote counts even where a .gitignore in the copy would leave it out.
   await must(git, ["--work-tree", dir, "add", "-A", "--force"], { GIT_INDEX_FILE: index });
-  if (keep.length) await must(git, ["reset", "-q", from, "--", ...keep], { GIT_INDEX_FILE: index });
+  // The mirror is bare: a path reset needs a work tree named, though it only touches the index.
+  if (keep.length) await must(git, ["--work-tree", dir, "reset", "-q", from, "--", ...keep], { GIT_INDEX_FILE: index });
   return (await must(git, ["write-tree"], { GIT_INDEX_FILE: index })).trim();
 }
 
@@ -198,6 +199,9 @@ function some(paths: string[]): string {
  * this job's changes included. guarded holds the skill folders no job may change.
  */
 async function whyRefused(git: JobGit, job: Job, guarded: string[], headLinks: Set<string>, mine: Entry[], sinceHead: Entry[]): Promise<string | null> {
+  // A name git couldn't spell as text would be checked and pushed as another name.
+  const garbled = mine.filter((e) => e.path.includes("\uFFFD")).map((e) => e.path);
+  if (garbled.length) return `It changed files whose names aren't valid text: ${some(garbled)}.`;
   const outside = mine.filter((e) => !mayChange(job, e.path, guarded, (p) => headLinks.has(p))).map((e) => e.path);
   if (outside.length) return `It changed files it may not: ${some(outside)}. A job may only change its may-change paths, never .github, .mergelight, a skill, a link, the files AI agents read, or git's own files.`;
   // 120000 is a link and 160000 a submodule; 100755 is a file that can run.
@@ -303,13 +307,16 @@ export async function runJobs(o: RunJobsOptions): Promise<JobsResult> {
       let answer: unknown;
       let timer: NodeJS.Timeout | undefined;
       try {
+        // The time left counts from now: writing the copy took some of it.
+        const now = Math.min(limits.each, deadline - Date.now());
+        if (now <= 0) throw new Error("there was no time left for it");
         const late = new Promise<never>((_, reject) => {
           // Not unref'd: while a job runs, its time limit is what keeps the run going.
-          timer = setTimeout(() => reject(new Error("it took too long")), Math.min(limits.each, left));
+          timer = setTimeout(() => reject(new Error("it took too long")), now);
         });
         const earlier = outcomes.filter((x) => x.status === "changed").map((x) => x.name);
         // The AI run ends at the same moment as the race, so its process is stopped when the job is given up.
-        answer = await Promise.race([o.ask(job, dir, earlier, Date.now() + Math.min(limits.each, left)), late]);
+        answer = await Promise.race([o.ask(job, dir, earlier, Date.now() + now), late]);
       } catch (err) {
         const reason = cut((err instanceof Error ? err.message : String(err)).replace(/\s+/g, " ").trim(), 300);
         outcome("failed", `The AI run for this job failed${reason ? `: ${/[.!?]$/.test(reason) ? reason : `${reason}.`}` : "."} Its changes were dropped.`);

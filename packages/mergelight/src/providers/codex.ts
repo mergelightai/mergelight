@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -106,14 +107,14 @@ export function sandboxArgs(home = codexHome(), writable?: string, hidden: strin
  * checkouts in the temp folder. Each is hidden even when the job's folder sits inside it: the job's own
  * folder gets a more specific rule. Both the path and where it really is, as macOS links /tmp.
  */
-export function jobHidden(env: NodeJS.ProcessEnv = process.env): string[] {
+export function jobHidden(env: NodeJS.ProcessEnv = process.env, install: string | null = runnerInstall()): string[] {
   // A self-hosted runner keeps its credentials in its install folder and other repositories' checkouts
   // next to this one in _work: RUNNER_WORKSPACE is <install>/_work/<repository>.
   const work = env.RUNNER_WORKSPACE ? dirname(env.RUNNER_WORKSPACE) : undefined;
-  const install = work ? dirname(work) : undefined;
+  const workParent = work ? dirname(work) : undefined;
   // Anything but the disk's root itself: /runner and /_work are common install and work folders.
   const deepEnough = (p: string | undefined) => (p && p.split("/").filter(Boolean).length >= 1 ? p : undefined);
-  const places = [homedir(), env.MERGELIGHT_CACHE, env.RUNNER_TEMP, env.GITHUB_WORKSPACE, deepEnough(work), deepEnough(install), tmpdir(), "/tmp"].filter((p): p is string => Boolean(p));
+  const places = [homedir(), env.MERGELIGHT_CACHE, env.RUNNER_TEMP, env.GITHUB_WORKSPACE, deepEnough(work), deepEnough(workParent), deepEnough(install ?? undefined), tmpdir(), "/tmp"].filter((p): p is string => Boolean(p));
   const real = places.map((p) => {
     try {
       return realpathSync(p);
@@ -122,6 +123,31 @@ export function jobHidden(env: NodeJS.ProcessEnv = process.env): string[] {
     }
   });
   return [...new Set([...places, ...real])];
+}
+
+/**
+ * The folder the GitHub runner is installed in, found from the running processes: one above this one is
+ * <install>/bin/Runner.Worker. Its credentials are there, wherever its work folder was set. Null outside
+ * a runner, or when the processes can't be read.
+ */
+export function runnerInstall(ps: (pid: number) => string | null = psLine, start = process.ppid): string | null {
+  let pid = start;
+  for (let i = 0; i < 30 && pid > 1; i++) {
+    const m = /^\s*(\d+)\s+(\S+)/.exec(ps(pid) ?? "");
+    if (!m) return null;
+    if (/\/bin\/Runner\.(?:Worker|Listener)$/.test(m[2]!)) return dirname(dirname(m[2]!));
+    pid = Number(m[1]);
+  }
+  return null;
+}
+
+/** One process's parent and command line, as ps prints them. */
+function psLine(pid: number): string | null {
+  try {
+    return execFileSync("ps", ["-o", "ppid=,command=", "-p", String(pid)], { encoding: "utf8", timeout: 5_000 }).trim();
+  } catch {
+    return null;
+  }
 }
 
 /** Tokens the runner holds that a reviewing agent has no use for. It only needs its own login. */
