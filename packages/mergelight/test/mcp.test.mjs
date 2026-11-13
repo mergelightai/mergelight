@@ -72,7 +72,14 @@ if (args[0] === "pr") { if (!s.branchPr) fail("no pull requests found"); process
 if (args[0] === "repo") fail("not a git repository");
 if (args[1] === "graphql") {
   const query = args[args.indexOf("-f") + 1];
-  if (query.includes("mutation")) { log({ graphql: "resolve", args }); out({ data: {} }); process.exit(0); }
+  if (query.includes("mutation")) {
+    const kind = query.includes("unminimizeComment") ? "unfold" : query.includes("minimizeComment") ? "fold" : query.includes("unresolveReviewThread") ? "unresolve" : "resolve";
+    if (kind === "resolve" && s.resolveRefused) fail("Resource not accessible by integration");
+    if (kind === "resolve" && s.resolveError) fail(s.resolveError);
+    log({ graphql: kind, args });
+    out({ data: {} });
+    process.exit(0);
+  }
   out({ data: { repository: { pullRequest: { reviewThreads: { nodes: s.threads || [] } } } } });
   process.exit(0);
 }
@@ -100,6 +107,7 @@ if (path === "repos/o/r") out({ permissions: { push: s.push !== false } });
 else if (path === "pulls/7") out({ number: 7, title: "PR title", body: "", html_url: "https://github.com/o/r/pull/7", user: { login: "a" }, base: { ref: "main", sha: "b" }, head: { sha: s.head || "${REVIEWED}" }, additions: 1, deletions: 0, changed_files: 1 });
 else if (path.startsWith("commits/")) out({ check_runs: s.checkRuns || [] });
 else if (path.startsWith("compare/")) { if (!s.compare) fail("HTTP 404"); out(s.compare); }
+else if (path === "user") { if (!s.viewer) fail("HTTP 403"); out({ login: s.viewer }); }
 else if (path.startsWith("collaborators/")) { const p = ({ teammate: "write", ...s.permissions })[path.split("/")[1]]; if (!p) fail("HTTP 404"); out({ permission: p }); }
 else fail("unexpected get " + path);
 `,
@@ -855,4 +863,100 @@ test("a Reviewing comment left by an earlier run says this run's plan, and keeps
   const done = useScenario({ issueComments: [summaryComment(stateOf([finding()]))] });
   await withFakeGh(done.env, () => startSummary(new GitHub("o", "r"), 7, { reviewer: { name: "claude", model: "opus" } }));
   assert.deepEqual(done.writes(), []);
+});
+
+test("a fixed finding's comment is folded away as resolved when GitHub won't let Mergelight resolve the thread, and unfolds if the finding comes back", async () => {
+  const state = stateOf([finding({ id: "aaaaaaaaaa" })], new Map([["aaaaaaaaaa", THREAD_URL]]));
+  const findingComment = (body, minimized = false, reason = "resolved") => ({ id: "C1", isMinimized: minimized, minimizedReason: minimized ? reason : null, databaseId: 501, body, author: { __typename: "Bot", login: "github-actions" } });
+  const review = (findings) => ({ pr: { owner: "o", repo: "r", number: 7, head_sha: PUSHED }, provider: { name: "codex", model: null }, light: "green", summary: "S", findings, stats: { duration_ms: 1 } });
+
+  const fixed = useScenario({
+    issueComments: [summaryComment(state)],
+    head: PUSHED,
+    resolveRefused: true,
+    threads: [{ id: "T1", isResolved: false, isOutdated: true, comments: { nodes: [findingComment("<!-- mergelight:finding id=aaaaaaaaaa -->\nFinding")] } }],
+  });
+  await withFakeGh(fixed.env, () => publishReview(review([])));
+  const kinds = fixed.writes().filter((w) => w.graphql).map((w) => w.graphql);
+  assert.deepEqual(kinds, ["fold"], "resolving was refused, so the comment is folded instead");
+  assert.ok(fixed.writes().find((w) => w.graphql === "fold").args.includes("id=C1"));
+  assert.match(fixed.writes().find((w) => w.path === "pulls/comments/501").body, /Handled/);
+  const order = fixed.writes().map((w) => w.graphql ?? w.path);
+  assert.ok(order.indexOf("pulls/comments/501") < order.indexOf("fold"), "folded only after it says Handled");
+
+  // Any other error isn't a missing permission: nothing is folded, and the next review tries again.
+  const outage = useScenario({
+    issueComments: [summaryComment(state)],
+    head: PUSHED,
+    resolveError: "HTTP 502: Bad Gateway",
+    threads: [{ id: "T1", isResolved: false, isOutdated: true, comments: { nodes: [findingComment("<!-- mergelight:finding id=aaaaaaaaaa -->\nFinding")] } }],
+  });
+  await withFakeGh(outage.env, () => publishReview(review([])));
+  assert.ok(!outage.writes().some((w) => w.graphql === "fold"));
+  assert.ok(!outage.writes().some((w) => w.path === "pulls/comments/501"), "not marked Handled, so the next review tries again");
+  // A dropped connection, in gh's words, is passing too.
+  const offline = useScenario({
+    issueComments: [summaryComment(state)],
+    head: PUSHED,
+    resolveError: "error connecting to api.github.com",
+    threads: [{ id: "T1", isResolved: false, isOutdated: true, comments: { nodes: [findingComment("<!-- mergelight:finding id=aaaaaaaaaa -->\nFinding")] } }],
+  });
+  await withFakeGh(offline.env, () => publishReview(review([])));
+  assert.ok(!offline.writes().some((w) => w.graphql === "fold" || w.path === "pulls/comments/501"));
+  // A comment someone already hid keeps their reason: it says Handled, but isn't folded again as resolved.
+  const hiddenFirst = useScenario({
+    issueComments: [summaryComment(state)],
+    head: PUSHED,
+    resolveRefused: true,
+    threads: [{ id: "T1", isResolved: false, isOutdated: true, comments: { nodes: [findingComment("<!-- mergelight:finding id=aaaaaaaaaa -->\nFinding", true, "off_topic")] } }],
+  });
+  await withFakeGh(hiddenFirst.env, () => publishReview(review([])));
+  assert.ok(hiddenFirst.writes().some((w) => w.path === "pulls/comments/501"));
+  assert.ok(!hiddenFirst.writes().some((w) => w.graphql === "fold"));
+  // A personal token is refused in other words: it still folds.
+  const pat = useScenario({
+    issueComments: [summaryComment(state)],
+    head: PUSHED,
+    resolveError: "Resource not accessible by personal access token",
+    threads: [{ id: "T1", isResolved: false, isOutdated: true, comments: { nodes: [findingComment("<!-- mergelight:finding id=aaaaaaaaaa -->\nFinding")] } }],
+  });
+  await withFakeGh(pat.env, () => publishReview(review([])));
+  assert.ok(pat.writes().some((w) => w.graphql === "fold"));
+  // With a personal token the comment is the person's own: folded too, and the refusal is logged.
+  const own = useScenario({
+    issueComments: [summaryComment(state)],
+    head: PUSHED,
+    viewer: "tommy",
+    resolveError: "Resource not accessible by personal access token",
+    threads: [{ id: "T1", isResolved: false, isOutdated: true, comments: { nodes: [{ ...findingComment("<!-- mergelight:finding id=aaaaaaaaaa -->\nFinding"), author: { __typename: "User", login: "tommy" }, authorAssociation: "OWNER" }] } }],
+  });
+  const lines = [];
+  await withFakeGh(own.env, () => publishReview(review([]), { log: (l) => lines.push(l) }));
+  assert.ok(own.writes().some((w) => w.graphql === "fold"));
+  assert.ok(lines.some((l) => /Couldn't mark a fixed thread resolved: .*Resource not accessible by personal access token/.test(l)));
+
+  // The finding comes back: its folded comment shows again.
+  const back = useScenario({
+    issueComments: [summaryComment(state)],
+    head: PUSHED,
+    threads: [{ id: "T1", isResolved: false, isOutdated: true, comments: { nodes: [findingComment("<!-- mergelight:finding id=aaaaaaaaaa -->\n<!-- mergelight:closed how=fixed resolved=0 sha=2222222 -->\n✅ **Handled.** x", true)] } }],
+  });
+  await withFakeGh(back.env, () => publishReview(review([finding({ id: "aaaaaaaaaa", tier: "post" })])));
+  assert.ok(back.writes().some((w) => w.graphql === "unfold" && w.args.includes("id=C1")));
+  // A comment on a thread a person resolved and then reopened was hidden by them: it stays hidden.
+  const person = useScenario({
+    issueComments: [summaryComment(state)],
+    head: PUSHED,
+    threads: [{ id: "T1", isResolved: false, isOutdated: true, comments: { nodes: [findingComment("<!-- mergelight:finding id=aaaaaaaaaa -->\n<!-- mergelight:closed how=resolved resolved=1 -->\n✅ **Handled.** x", true)] } }],
+  });
+  await withFakeGh(person.env, () => publishReview(review([finding({ id: "aaaaaaaaaa", tier: "post" })])));
+  assert.ok(!person.writes().some((w) => w.graphql === "unfold"));
+  // A comment a person hid as off-topic stays hidden.
+  const hidden = useScenario({
+    issueComments: [summaryComment(state)],
+    head: PUSHED,
+    threads: [{ id: "T1", isResolved: false, isOutdated: true, comments: { nodes: [findingComment("<!-- mergelight:finding id=aaaaaaaaaa -->\n<!-- mergelight:closed how=fixed resolved=0 sha=2222222 -->\n✅ **Handled.** x", true, "off_topic")] } }],
+  });
+  await withFakeGh(hidden.env, () => publishReview(review([finding({ id: "aaaaaaaaaa", tier: "post" })])));
+  assert.ok(!hidden.writes().some((w) => w.graphql === "unfold"));
 });

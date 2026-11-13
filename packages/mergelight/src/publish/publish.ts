@@ -1,6 +1,6 @@
 import type { Finding, Light, Review } from "../types.js";
 import { RESOLVED_ONLY, type PriorFinding } from "../prompt.js";
-import { GitHub, type ApiOptions } from "./api.js";
+import { GitHub, TRANSIENT, type ApiOptions } from "./api.js";
 import { commentableLines, place } from "./diff-lines.js";
 import { answeredRemembered, closedBody, patchTouches, readClosed, REMEMBERED_MARKER, reopenedBody, resolvedByPeople, resolverReplies, threadAction, threadFinding, type Handled, type ReviewThread } from "./closed.js";
 import type { FailureNotice } from "./markdown.js";
@@ -505,7 +505,7 @@ export async function reviewThreads(api: GitHub, number: number): Promise<Review
       repository(owner: $owner, name: $repo) {
         pullRequest(number: $number) {
           reviewThreads(first: 100) {
-            nodes { id isResolved isOutdated resolvedBy { login } comments(first: 50) { nodes { databaseId body authorAssociation createdAt lastEditedAt author { __typename login } } } }
+            nodes { id isResolved isOutdated resolvedBy { login } comments(first: 50) { nodes { id isMinimized minimizedReason databaseId body authorAssociation createdAt lastEditedAt author { __typename login } } } }
           }
         }
       }
@@ -514,6 +514,14 @@ export async function reviewThreads(api: GitHub, number: number): Promise<Review
   );
   return data?.repository.pullRequest.reviewThreads.nodes ?? [];
 }
+
+/** Folds a comment away as resolved. Needs only the right to write pull request comments. */
+const minimizeComment = (api: GitHub, id: string) =>
+  api.graphql(`mutation($id: ID!) { minimizeComment(input: { subjectId: $id, classifier: RESOLVED }) { minimizedComment { isMinimized } } }`, { id }, true);
+
+/** Shows a folded comment again. */
+const unminimizeComment = (api: GitHub, id: string) =>
+  api.graphql(`mutation($id: ID!) { unminimizeComment(input: { subjectId: $id }) { unminimizedComment { isMinimized } } }`, { id }, true);
 
 export const resolveThread = (api: GitHub, id: string) =>
   api.graphql(`mutation($id: ID!) { resolveReviewThread(input: { threadId: $id }) { thread { id } } }`, { id }, true);
@@ -539,8 +547,17 @@ async function settleThreads(api: GitHub, review: Review, log: (s: string) => vo
   const open = new Set(review.findings.map((f) => f.id));
   const sha = review.pr.head_sha.slice(0, 7);
   const canWrite = writeAccess(api);
-  const edit = (commentId: number, body: string) =>
-    api.write("PATCH", `pulls/comments/${commentId}`, { body }).catch((err) => log(`Couldn't update a comment: ${(err as Error).message}`));
+  /** Who this token belongs to, asked once if needed. Null for an app or a workflow token. */
+  let viewer: string | null | undefined;
+  /** True when the comment was changed. */
+  const edit = (commentId: number, body: string): Promise<boolean> =>
+    api.write("PATCH", `pulls/comments/${commentId}`, { body }).then(
+      () => true,
+      (err) => {
+        log(`Couldn't update a comment: ${(err as Error).message}`);
+        return false;
+      },
+    );
 
   for (const t of threads) {
     const found = threadFinding(t);
@@ -554,19 +571,47 @@ async function settleThreads(api: GitHub, review: Review, log: (s: string) => vo
     }
     if (action.kind === "fixed") {
       let isResolved = !action.resolve;
+      let fold = false;
       if (action.resolve) {
         try {
           await resolveThread(api, t.id);
           isResolved = true;
           resolved++;
         } catch (err) {
-          // GitHub only lets a workflow token resolve threads with contents: write. The comment still says it's handled.
-          const hint = /not accessible by integration/i.test((err as Error).message) ? "the workflow needs contents: write for that" : (err as Error).message;
-          log(`Couldn't mark a fixed thread resolved: ${hint}`);
+          const message = (err as Error).message;
+          // GitHub only lets a token resolve a thread when it may also write code, which Mergelight's may
+          // not, and says so in different words for an app and for a personal token. Then the fixed comment
+          // is folded away as resolved instead, if Mergelight wrote it. Only a passing error (GitHub down, a
+          // timeout, a rate limit) leaves the thread for the next review to try again.
+          const passing = TRANSIENT.test(message);
+          if (!passing) {
+            log(`Couldn't mark a fixed thread resolved: ${message}`);
+            // Mergelight's own comment: the app's bot, or the login of a personal token.
+            const author = t.comments.nodes[0]?.author;
+            let own = author?.__typename === "Bot";
+            if (!own && author?.login) {
+              if (viewer === undefined) viewer = await api.viewer();
+              own = author.login === viewer;
+            }
+            // A comment someone already hid keeps their reason.
+            fold = Boolean(found.nodeId) && own && !t.comments.nodes[0]?.isMinimized;
+          } else {
+            // Left as it was, not marked Handled: a marked thread isn't tried again, and this one should be.
+            log(`Couldn't mark a fixed thread resolved: ${message}. The next review tries again.`);
+            continue;
+          }
         }
       }
       handled.set(found.id, { how: "fixed", sha });
-      await edit(found.commentId, closedBody(found.body, { how: "fixed", resolved: isResolved, sha }));
+      const edited = await edit(found.commentId, closedBody(found.body, { how: "fixed", resolved: isResolved, sha }));
+      // Only once it says Handled: a finding that comes back unfolds by that mark, so without it the
+      // comment would stay hidden.
+      if (fold && edited) {
+        await minimizeComment(api, found.nodeId!).then(
+          () => log("Folded a fixed finding's comment away as resolved."),
+          (e) => log(`Couldn't fold a fixed finding's comment away: ${(e as Error).message}`),
+        );
+      }
     } else if (action.kind === "resolved") {
       // A workflow token sees a private org member as CONTRIBUTOR, so ask who can write instead of trusting the association.
       if (!by || !(await canWrite(by))) continue;
@@ -575,6 +620,22 @@ async function settleThreads(api: GitHub, review: Review, log: (s: string) => vo
     } else {
       if (action.kind === "regressed" && action.unresolve) {
         await unresolveThread(api, t.id).catch((err) => log(`Couldn't reopen a thread: ${(err as Error).message}`));
+      }
+      // A finding that came back shows its comment again if Mergelight folded it: Mergelight only folds a
+      // comment marked fixed and not resolved, so one a person hid, or folded on a thread they resolved,
+      // stays hidden. If unfolding fails, the marker stays, so the next review tries again.
+      const first = t.comments.nodes[0];
+      const closed = readClosed(found.body);
+      const folded = closed?.how === "fixed" && !closed.resolved && first?.isMinimized && /^resolved$/i.test(first.minimizedReason ?? "");
+      if (folded && found.nodeId) {
+        const shown = await unminimizeComment(api, found.nodeId).then(
+          () => true,
+          (err) => {
+            log(`Couldn't unfold a comment: ${(err as Error).message}`);
+            return false;
+          },
+        );
+        if (!shown) continue;
       }
       await edit(found.commentId, reopenedBody(found.body, action.kind === "reopened"));
     }
