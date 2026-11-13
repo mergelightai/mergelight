@@ -234,7 +234,8 @@ export function parseJobFile(path: string, text: string): { job: Job } | { probl
       list = (key === "on" || key === "may-change") && /^(?:#.*)?$/.test(keyLine[2]!.trim()) ? key : null;
       continue;
     }
-    if (list && /^[ \t]+-[ \t]*\S/.test(line)) continue;
+    // YAML allows the items at the key's own indent too.
+    if (list && /^[ \t]*-[ \t]*\S/.test(line)) continue;
     return { problem: `its front matter has a line that isn't read: "${line.trim().slice(0, 60)}". Write each key on a line of its own, and list items under on or may-change with nothing after the colon` };
   }
   // HTML comments are what a team turned off, as in rule files.
@@ -269,10 +270,18 @@ export function jobsToRun(jobs: Job[], changedPaths: string[]): Job[] {
   return jobs.filter((job) => changedPaths.some((file) => job.on.some((pattern) => matchesPath(pattern, file, false))));
 }
 
+/**
+ * A name in the form macOS and Windows compare names in: any letter case, and look-alike letters that
+ * fold to plain ones, like ſ to s and ı to i. Upper case first, so those fold too.
+ */
+export function folded(path: string): string {
+  return path.toUpperCase().toLowerCase();
+}
+
 /** A path no job may change, whatever its file says. In any letter case: on macOS and Windows, .GitAttributes is .gitattributes. */
 export function refusedPath(path: string): boolean {
-  const lower = path.toLowerCase();
-  return REFUSED_PATHS.some((refused) => matchesPath(refused.toLowerCase(), lower));
+  const lower = folded(path);
+  return REFUSED_PATHS.some((refused) => matchesPath(folded(refused), lower));
 }
 
 /**
@@ -289,8 +298,8 @@ export function mayChange(job: Job, path: string, guarded: string[] = [], isLink
   // at or through one would land wherever it leads.
   if (parts.some((_, i) => isLink(parts.slice(0, i + 1).join("/")))) return false;
   if (refusedPath(path)) return false;
-  const lower = path.toLowerCase();
-  if ([...(job.skill ? [job.skill] : []), ...guarded].some((folder) => matchesPath(`/${folder}`.toLowerCase(), lower))) return false;
+  const lower = folded(path);
+  if ([...(job.skill ? [job.skill] : []), ...guarded].some((folder) => matchesPath(folded(`/${folder}`), lower))) return false;
   // Strictly: "locales/*" is the files right in locales, not a subfolder and all inside it.
   return job.mayChange.some((pattern) => matchesPath(pattern, path, false));
 }

@@ -163,7 +163,7 @@ interface BaseFile {
  * to a file inside the repository. A file that is missing, too large or can't be read is null. Null as a
  * whole when the branch can't be listed.
  */
-async function baseTree(mirror: string, base: string): Promise<{ paths: string[]; mode: (path: string) => string | undefined; read: (path: string) => Promise<BaseFile | null>; linkTarget: (path: string) => Promise<string | null | "unread"> } | null> {
+async function baseTree(mirror: string, base: string): Promise<{ paths: string[]; mode: (path: string) => string | undefined; read: (path: string) => Promise<BaseFile | null>; linkContent: (path: string) => Promise<string | null | "unread"> } | null> {
   const git = (args: string[]) =>
     run("git", ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential", "-C", mirror, ...args], {
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
@@ -182,19 +182,11 @@ async function baseTree(mirror: string, base: string): Promise<{ paths: string[]
     const read = await git(["cat-file", "blob", sha]);
     return read?.code === 0 ? read.stdout : null;
   };
-  /**
-   * Where a link leads, file or folder: the path inside the repository, null when it leads out of it or
-   * nowhere, or "unread" when git couldn't read it this time.
-   */
-  const linkTarget = async (path: string): Promise<string | null | "unread"> => {
+  /** What a link holds, as git keeps it: its target, as written. Null for no link, "unread" when git couldn't read it this time. */
+  const linkContent = async (path: string): Promise<string | null | "unread"> => {
     const file = tree.get(path);
     if (file?.mode !== "120000") return null;
-    const content = await blob(file.sha);
-    if (content === null) return "unread";
-    const target = content.trim();
-    // "folder/" and "folder" are one place, and "./" is the root, ".".
-    const resolved = posix.normalize(posix.join(posix.dirname(path), target)).replace(/\/+$/, "") || ".";
-    return !target || target.startsWith("/") || resolved === ".." || resolved.startsWith("../") ? null : resolved;
+    return (await blob(file.sha)) ?? "unread";
   };
   const read = async (path: string): Promise<BaseFile | null> => {
     let file = tree.get(path);
@@ -211,7 +203,7 @@ async function baseTree(mirror: string, base: string): Promise<{ paths: string[]
     const text = (await blob(file.sha))?.trim();
     return text ? { path, sha: file.sha, text, link, ...(resolved ? { target: resolved } : {}) } : null;
   };
-  return { paths: [...tree.keys()], mode: (path) => tree.get(path)?.mode, read, linkTarget };
+  return { paths: [...tree.keys()], mode: (path) => tree.get(path)?.mode, read, linkContent };
 }
 
 /**
@@ -224,8 +216,11 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
   const problems: JobProblem[] = [];
   // A file that looks meant as a job but sits deeper or ends in .MD is named, never skipped without a word.
   for (const p of tree.paths) {
-    // A README or a .gitkeep explains or keeps the folder: neither is a job, and neither needs a word.
-    if (/^\.mergelight\/jobs\/(?:readme\.md|\.gitkeep)$/i.test(p)) continue;
+    // A README or a .gitkeep explains or keeps the folder: neither is a job. A README written like a job is named.
+    if (/^\.mergelight\/jobs\/(?:readme\.md|\.gitkeep)$/i.test(p)) {
+      if (/readme\.md$/i.test(p) && (await tree.read(p))?.text.startsWith("---")) problems.push({ source: p, problem: "is the folder's notes, never read as a job: give the job a file name of its own" });
+      continue;
+    }
     if (p.toLowerCase().startsWith(".mergelight/jobs/") && !JOB_FILE.test(p)) problems.push({ source: p, problem: "isn't read: a job file sits right in .mergelight/jobs and ends in .md" });
     // A link in place of the folder, or a file next to it, holds no job either.
     else if (/^\.mergelight(?:\/jobs)?$/i.test(p) || p.toLowerCase().startsWith(".mergelight/jobs.")) problems.push({ source: p, problem: "isn't read: jobs are files right in the .mergelight/jobs folder, which can't be a link" });
@@ -268,23 +263,40 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
   const targets = new Set<string>();
   const folders = guardedFolders(tree.paths, parsed.jobs);
   const inGuard = (p: string) => refusedPath(p) || [...folders, ...targets].some((t) => p === t || p.startsWith(`${t}/`));
-  /** A path with every link in it and in its folders followed. Each place a link leads to is guarded. */
+  /**
+   * A path with every link in it and in its folders followed, part by part, the way the file system does:
+   * a link is followed before a ".." after it is applied. Where it ends is guarded. Null when it leaves
+   * the repository; "deep" past the limit of links, or at the repository's root.
+   */
   const resolve = async (path: string): Promise<string | null | "unread" | "deep"> => {
-    let parts = path.split("/");
+    const done: string[] = [];
+    let rest = path.split("/");
     let hops = 0;
-    for (let i = 1; i <= parts.length; i++) {
-      const at = parts.slice(0, i).join("/");
-      if (tree.mode(at) !== "120000") continue;
+    while (rest.length) {
+      const part = rest.shift()!;
+      if (part === "" || part === ".") continue;
+      if (part === "..") {
+        if (!done.length) return null;
+        done.pop();
+        continue;
+      }
+      const at = [...done, part].join("/");
+      if (tree.mode(at) !== "120000") {
+        done.push(part);
+        continue;
+      }
       if (++hops > MAX_LINK_HOPS) return "deep";
-      const next = await tree.linkTarget(at);
-      if (next === "unread" || next === null) return next;
-      // A link to the repository's root would guard every file: that can't be told apart from a mistake.
-      if (next === "." || next === "") return "deep";
-      if (!refusedPath(next)) targets.add(next);
-      parts = [...next.split("/"), ...parts.slice(i)];
-      i = 0;
+      const content = await tree.linkContent(at);
+      if (content === "unread") return "unread";
+      // A link to an absolute path leads out of the repository. One to another link goes on from where it sits.
+      if (content === null || content.startsWith("/")) return null;
+      rest = [...content.split("/"), ...rest];
     }
-    return parts.join("/");
+    // A link to the repository's root would guard every file: that can't be told apart from a mistake.
+    if (!done.length) return "deep";
+    const end = done.join("/");
+    if (!refusedPath(end)) targets.add(end);
+    return end;
   };
   const followed = new Set<string>();
   let incomplete: string | undefined;
