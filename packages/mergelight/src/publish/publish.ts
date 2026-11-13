@@ -1,6 +1,6 @@
 import type { Finding, Light, Review } from "../types.js";
 import { RESOLVED_ONLY, type PriorFinding } from "../prompt.js";
-import { GitHub, type ApiOptions } from "./api.js";
+import { GitHub, TRANSIENT, type ApiOptions } from "./api.js";
 import { commentableLines, place } from "./diff-lines.js";
 import { answeredRemembered, closedBody, patchTouches, readClosed, REMEMBERED_MARKER, reopenedBody, resolvedByPeople, resolverReplies, threadAction, threadFinding, type Handled, type ReviewThread } from "./closed.js";
 import type { FailureNotice } from "./markdown.js";
@@ -583,7 +583,7 @@ async function settleThreads(api: GitHub, review: Review, log: (s: string) => vo
           // not, and says so in different words for an app and for a personal token. Then the fixed comment
           // is folded away as resolved instead, if Mergelight wrote it. Only a passing error (GitHub down, a
           // timeout, a rate limit) leaves the thread for the next review to try again.
-          const passing = /\b5\d\d\b|timed? ?out|ETIMEDOUT|ECONNRESET|EAI_AGAIN|rate limit|something went wrong|try again/i.test(message);
+          const passing = TRANSIENT.test(message);
           if (!passing) {
             log(`Couldn't mark a fixed thread resolved: ${message}`);
             // Mergelight's own comment: the app's bot, or the login of a personal token.
@@ -593,7 +593,8 @@ async function settleThreads(api: GitHub, review: Review, log: (s: string) => vo
               if (viewer === undefined) viewer = await api.viewer();
               own = author.login === viewer;
             }
-            fold = Boolean(found.nodeId) && own;
+            // A comment someone already hid keeps their reason.
+            fold = Boolean(found.nodeId) && own && !t.comments.nodes[0]?.isMinimized;
           } else {
             // Left as it was, not marked Handled: a marked thread isn't tried again, and this one should be.
             log(`Couldn't mark a fixed thread resolved: ${message}. The next review tries again.`);

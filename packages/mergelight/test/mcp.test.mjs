@@ -894,6 +894,25 @@ test("a fixed finding's comment is folded away as resolved when GitHub won't let
   await withFakeGh(outage.env, () => publishReview(review([])));
   assert.ok(!outage.writes().some((w) => w.graphql === "fold"));
   assert.ok(!outage.writes().some((w) => w.path === "pulls/comments/501"), "not marked Handled, so the next review tries again");
+  // A dropped connection, in gh's words, is passing too.
+  const offline = useScenario({
+    issueComments: [summaryComment(state)],
+    head: PUSHED,
+    resolveError: "error connecting to api.github.com",
+    threads: [{ id: "T1", isResolved: false, isOutdated: true, comments: { nodes: [findingComment("<!-- mergelight:finding id=aaaaaaaaaa -->\nFinding")] } }],
+  });
+  await withFakeGh(offline.env, () => publishReview(review([])));
+  assert.ok(!offline.writes().some((w) => w.graphql === "fold" || w.path === "pulls/comments/501"));
+  // A comment someone already hid keeps their reason: it says Handled, but isn't folded again as resolved.
+  const hiddenFirst = useScenario({
+    issueComments: [summaryComment(state)],
+    head: PUSHED,
+    resolveRefused: true,
+    threads: [{ id: "T1", isResolved: false, isOutdated: true, comments: { nodes: [findingComment("<!-- mergelight:finding id=aaaaaaaaaa -->\nFinding", true, "off_topic")] } }],
+  });
+  await withFakeGh(hiddenFirst.env, () => publishReview(review([])));
+  assert.ok(hiddenFirst.writes().some((w) => w.path === "pulls/comments/501"));
+  assert.ok(!hiddenFirst.writes().some((w) => w.graphql === "fold"));
   // A personal token is refused in other words: it still folds.
   const pat = useScenario({
     issueComments: [summaryComment(state)],

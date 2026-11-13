@@ -12,7 +12,9 @@ export interface ApiOptions {
   log?: (line: string) => void;
 }
 
-const TRANSIENT = /HTTP 5\d\d|HTTP 429|timed? ?out|ECONNRESET|EAI_AGAIN|connection reset|secondary rate limit/i;
+/** Errors that pass on their own: GitHub down or slow, a dropped connection, a rate limit. Worth another try. */
+export const TRANSIENT =
+  /HTTP 5\d\d|HTTP 429|timed? ?out|deadline exceeded|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|connection reset|connection refused|error connecting|no such host|unexpected EOF|socket hang up|rate limit|something went wrong|try again/i;
 
 async function gh(args: string[], input?: string): Promise<string> {
   let lastError = "";
