@@ -64,6 +64,15 @@ export const REFUSED_PATHS = [
   ".windsurfrules",
   ".clinerules",
   "CONVENTIONS.md",
+  "WARP.md",
+  "airules.md",
+  "opencode.json",
+  "crush.json",
+  ".crush.json",
+  ".opencode",
+  ".aiassistant",
+  ".qwen",
+  ".factory",
   "AGENT.md",
   "QWEN.md",
   "CRUSH.md",
@@ -79,6 +88,16 @@ export const REFUSED_PATHS = [
   ".gitmodules",
   ".gitattributes",
   ".lfsconfig",
+  // Other places that decide what runs: CI services, git hooks and dev containers.
+  ".gitlab-ci.yml",
+  ".gitlab",
+  ".circleci",
+  "Jenkinsfile",
+  "azure-pipelines.yml",
+  "bitbucket-pipelines.yml",
+  ".buildkite",
+  ".husky",
+  ".devcontainer",
   ".git",
 ];
 
@@ -119,11 +138,15 @@ export function parseJobFile(path: string, text: string): { job: Job } | { probl
   const name = named || path.slice(path.lastIndexOf("/") + 1).replace(/\.md$/, "");
   if (!NAME.test(name)) return { problem: `its name "${name.slice(0, 60)}" must be lowercase letters, digits and dashes, start and end with a letter or digit, and be 40 long at most` };
   // A list that goes on past a trailing comma on the next line: only the key's own line is read.
-  const cut = ["on", "may-change"].find((key) => scalarValue(block.fm, key)?.endsWith(","));
+  // A YAML list item that ends with a comma goes on past it the same way.
+  const cut = ["on", "may-change"].find((key) => scalarValue(block.fm, key)?.endsWith(",")) ?? (/^[ \t]*-[^\n#]*,[ \t]*(?:#.*)?$/m.test(block.fm) ? "list" : undefined);
+  if (cut === "list") return { problem: "a list item in its front matter ends with a comma: write each path as an item of its own" };
   if (cut) return { problem: `its ${cut} line ends with a comma: write the whole list on one line, or as a YAML list` };
-  const on = listValue(block.fm, "on");
+  // "./name" means the root, as "/name" does: without that it would be "name" in any folder.
+  const rooted = (paths: string[] | null) => paths?.map((p) => p.replace(/^\.\//, "/"));
+  const on = rooted(listValue(block.fm, "on"));
   if (!on?.length) return { problem: "names no on paths, the files whose change starts the job" };
-  const mayChange = listValue(block.fm, "may-change");
+  const mayChange = rooted(listValue(block.fm, "may-change"));
   if (!mayChange?.length) return { problem: "names no may-change paths, the only files the job may change" };
   // "!" excludes files in GitHub's path filters, but here it would be part of a name and exclude nothing.
   const negated = [...on, ...mayChange].find((p) => p.startsWith("!"));
@@ -179,7 +202,8 @@ export function readJobs(files: { path: string; text: string }[], hasSkill?: (fo
 
 /** The jobs that one of the changed files starts. */
 export function jobsToRun(jobs: Job[], changedPaths: string[]): Job[] {
-  return jobs.filter((job) => changedPaths.some((file) => job.on.some((pattern) => matchesPath(pattern, file))));
+  // As strictly as may-change, so a job never starts for files it may not change.
+  return jobs.filter((job) => changedPaths.some((file) => job.on.some((pattern) => matchesPath(pattern, file, false))));
 }
 
 /** A path no job may change, whatever its file says. In any letter case: on macOS and Windows, .GitAttributes is .gitattributes. */

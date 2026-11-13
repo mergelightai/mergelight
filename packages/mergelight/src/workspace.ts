@@ -224,11 +224,13 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
   const problems: JobProblem[] = [];
   // A file that looks meant as a job but sits deeper or ends in .MD is named, never skipped without a word.
   for (const p of tree.paths) {
+    // A README or a .gitkeep explains or keeps the folder: neither is a job, and neither needs a word.
+    if (/^\.mergelight\/jobs\/(?:readme\.md|\.gitkeep)$/i.test(p)) continue;
     if (p.toLowerCase().startsWith(".mergelight/jobs/") && !JOB_FILE.test(p)) problems.push({ source: p, problem: "isn't read: a job file sits right in .mergelight/jobs and ends in .md" });
     // A link in place of the folder, or a file next to it, holds no job either.
     else if (/^\.mergelight(?:\/jobs)?$/i.test(p) || p.toLowerCase().startsWith(".mergelight/jobs.")) problems.push({ source: p, problem: "isn't read: jobs are files right in the .mergelight/jobs folder, which can't be a link" });
   }
-  const all = tree.paths.filter((p) => JOB_FILE.test(p)).sort();
+  const all = tree.paths.filter((p) => JOB_FILE.test(p) && !/\/readme\.md$/i.test(p)).sort();
   const files = await Promise.all(all.slice(0, MAX_JOB_FILES).map(tree.read));
   // A job file and a link to it, or two copies of one file, are one job. The real file wins over a link.
   const kept = new Map<string, BaseFile>();
@@ -253,6 +255,7 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
     const parts = skill?.split("/") ?? [];
     const linked = parts.map((_, i) => parts.slice(0, i + 1).join("/")).find((at) => tree.mode(at) === "120000");
     if (linked) p.problem = `its skill ${skill} is reached through ${linked}, which is a link: name the skill by its real folder`;
+    else if (skill && tree.mode(`${skill}/SKILL.md`) === "120000") p.problem = `its skill ${skill} has a SKILL.md that is a link: it must be a real file`;
   }
   const unread = all.slice(0, MAX_JOB_FILES).filter((_, i) => files[i] === null).map((source) => ({ source, problem: "couldn't be read: it is empty, too large, a link to something that isn't a file in the repository, or git couldn't read it this time" }));
   const past = all.slice(MAX_JOB_FILES).map((source) => ({ source, problem: `only ${MAX_JOB_FILES} job files are read` }));
