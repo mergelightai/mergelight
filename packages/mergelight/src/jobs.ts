@@ -32,9 +32,10 @@ const NAME = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
 
 /**
  * Paths a job can never change, whatever its file says, wherever they sit: workflows and Mergelight's own
- * files decide what runs and what a job may do, and git's own files change how it reads the rest.
+ * files decide what runs and what a job may do, CODEOWNERS decides who must approve, and git's own files
+ * change how it reads the rest.
  */
-export const REFUSED_PATHS = [".github", ".mergelight", ".gitmodules", ".gitattributes", ".git"];
+export const REFUSED_PATHS = [".github", ".mergelight", "CODEOWNERS", ".gitmodules", ".gitattributes", ".git"];
 
 export interface Job {
   name: string;
@@ -78,25 +79,29 @@ export function parseJobFile(path: string, text: string): { job: Job } | { probl
   if (mayChange.every(refusedPath)) {
     return { problem: "its may-change paths only name files a job can never change, like .github and .mergelight" };
   }
-  const skill = scalarValue(block.fm, "skill") || undefined;
-  if (skill !== undefined && !isSkillPath(skill.replace(/\/+$/, ""))) return { problem: `its skill "${skill.slice(0, 100)}" isn't a folder in the repository, like .claude/skills/write-docs` };
+  const written = scalarValue(block.fm, "skill") || undefined;
+  // Written the way the paths above may be: "./.claude/skills/x/" is ".claude/skills/x".
+  const skill = written?.replace(/^(\.\/)+/, "").replace(/\/+$/, "");
+  if (written !== undefined && !isSkillPath(skill)) return { problem: `its skill "${written.slice(0, 100)}" isn't a folder in the repository, like .claude/skills/write-docs` };
   // HTML comments are what a team turned off, as in rule files.
   const task = withoutComments(block.body).trim();
   if (!task) return { problem: "has no task under its front matter" };
   if (task.length > MAX_JOB_TASK_CHARS) return { problem: `its task is longer than ${MAX_JOB_TASK_CHARS.toLocaleString("en-US")} characters` };
-  return { job: { name, on, mayChange, ...(skill ? { skill: skill.replace(/\/+$/, "") } : {}), task, source: path } };
+  return { job: { name, on, mayChange, ...(skill ? { skill } : {}), task, source: path } };
 }
 
 /**
  * The repository's jobs, within the limits, and every job file that was left out with the reason. Files
  * are taken by path, so which ones count past a limit doesn't change from run to run.
  */
-export function readJobs(files: { path: string; text: string }[]): { jobs: Job[]; problems: JobProblem[] } {
+export function readJobs(files: { path: string; text: string }[], hasSkill?: (folder: string) => boolean): { jobs: Job[]; problems: JobProblem[] } {
   const jobs: Job[] = [];
   const problems: JobProblem[] = [];
   for (const f of [...files].sort((a, b) => a.path.localeCompare(b.path))) {
     const parsed = parseJobFile(f.path, f.text);
     if ("problem" in parsed) problems.push({ source: f.path, problem: parsed.problem });
+    // Before the limits: a job that is left out mustn't take the place or the name of one that isn't.
+    else if (parsed.job.skill && hasSkill && !hasSkill(parsed.job.skill)) problems.push({ source: f.path, problem: `its skill ${parsed.job.skill} has no SKILL.md on the base branch` });
     else if (jobs.some((j) => j.name === parsed.job.name)) problems.push({ source: f.path, problem: `${jobs.find((j) => j.name === parsed.job.name)!.source} already has a job named ${parsed.job.name}` });
     else if (jobs.length >= MAX_JOBS) problems.push({ source: f.path, problem: `only ${MAX_JOBS} jobs run in a repository` });
     else jobs.push(parsed.job);
@@ -112,10 +117,15 @@ export function jobsToRun(jobs: Job[], changedPaths: string[]): Job[] {
 /** A path no job may change, whatever its file says. In any letter case: on macOS and Windows, .GitAttributes is .gitattributes. */
 export function refusedPath(path: string): boolean {
   const lower = path.toLowerCase();
-  return REFUSED_PATHS.some((refused) => matchesPath(refused, lower));
+  return REFUSED_PATHS.some((refused) => matchesPath(refused.toLowerCase(), lower));
 }
 
-/** Whether this job may change, add or delete the file. */
-export function mayChange(job: Job, path: string): boolean {
-  return !refusedPath(path) && job.mayChange.some((pattern) => matchesPath(pattern, path));
+/**
+ * Whether this job may change, add or delete the file. Never a skill folder that guides a job, its own or
+ * another's: jobs holds the repository's jobs, so a job can't rewrite what tells it or another job what to do.
+ */
+export function mayChange(job: Job, path: string, jobs: Job[] = []): boolean {
+  if (refusedPath(path)) return false;
+  if ([job, ...jobs].some((j) => j.skill && matchesPath(`/${j.skill}`, path))) return false;
+  return job.mayChange.some((pattern) => matchesPath(pattern, path));
 }

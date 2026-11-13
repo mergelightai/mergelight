@@ -59,9 +59,11 @@ export function scalarValue(fm: string, key: string): string | null {
 export function listValue(fm: string, keys: string): string[] | null {
   const line = new RegExp(`^(?:${keys})[ \\t]*:[ \\t]*(.*)$`, "m").exec(fm);
   if (!line) return null;
-  let value = withoutYamlComment(line[1] ?? "");
+  const unquote = (p: string) => p.trim().replace(/^["']|["']$/g, "").trim();
+  const value = withoutYamlComment(line[1] ?? "");
   if (!value) {
-    // A YAML list on the lines below the key: "applyTo:" then "  - src/billing/**".
+    // A YAML list on the lines below the key: "applyTo:" then "  - src/billing/**". Each item is one
+    // pattern, commas and all.
     const after = fm.slice(line.index + line[0].length).split(/\r?\n/).slice(1);
     const items: string[] = [];
     for (const l of after) {
@@ -71,10 +73,10 @@ export function listValue(fm: string, keys: string): string[] | null {
       if (!item) break;
       items.push(withoutYamlComment(item[1]!));
     }
-    value = items.join(",");
+    return items.map(unquote).flatMap(expandBraces).filter(Boolean);
   }
   return splitOutsideBraces(value.trim().replace(/^\[([\s\S]*)\]$/, "$1").replace(/^["']|["']$/g, ""))
-    .map((p) => p.trim().replace(/^["']|["']$/g, "").trim())
+    .map(unquote)
     .flatMap(expandBraces)
     .filter(Boolean);
 }

@@ -28,10 +28,10 @@ test("a job file gives its name, the files that start it, the files it may chang
 });
 
 test("a job's paths can be written the ways rule files write them", () => {
-  const md = '---\non:\n  - src/**/*.{ts,tsx} # code\n  - "api/**"\nmay-change: [docs/**, README.md]\nskill: .claude/skills/write-docs/\n---\nUpdate the docs.\n';
+  const md = '---\non:\n  - src/**/*.{ts,tsx} # code\n  - "api/**"\n  - "docs/guides,old"\nmay-change: [docs/**, README.md]\nskill: ./.claude/skills/write-docs/\n---\nUpdate the docs.\n';
   const { job } = parseJobFile(".mergelight/jobs/docs.md", md);
   assert.equal(job.name, "docs", "the file's name, when the job names none");
-  assert.deepEqual(job.on, ["src/**/*.ts", "src/**/*.tsx", "api/**"]);
+  assert.deepEqual(job.on, ["src/**/*.ts", "src/**/*.tsx", "api/**", "docs/guides,old"], "a YAML item is one pattern, commas and all");
   assert.deepEqual(job.mayChange, ["docs/**", "README.md"]);
   assert.equal(job.skill, ".claude/skills/write-docs");
 });
@@ -99,7 +99,7 @@ test("a job runs only when a pull request changed one of its on files", () => {
 
 test("a job may change only its own paths, and never workflows, Mergelight's files or git's files", () => {
   const { job } = parseJobFile(".mergelight/jobs/x.md", '---\non: src\nmay-change: "**"\n---\nTask.');
-  for (const p of [".github/workflows/ci.yml", "packages/web/.github/x.yml", ".mergelight/jobs/x.md", ".mergelight/rules.md", ".gitmodules", "src/.gitattributes", ".git/config", ".GITHUB/workflows/ci.yml", "docs/.GitAttributes", ".GitModules"]) {
+  for (const p of [".github/workflows/ci.yml", "packages/web/.github/x.yml", ".mergelight/jobs/x.md", ".mergelight/rules.md", ".gitmodules", "src/.gitattributes", ".git/config", ".GITHUB/workflows/ci.yml", "docs/.GitAttributes", ".GitModules", "CODEOWNERS", "docs/CODEOWNERS"]) {
     assert.ok(refusedPath(p), p);
     assert.ok(!mayChange(job, p), p);
   }
@@ -127,6 +127,8 @@ test("jobs are read from the base branch, never from the pull request", async ()
   write(".claude/skills/write-docs/SKILL.md", "---\nname: write-docs\n---\nHow we write docs.\n");
   write(".mergelight/jobs/guide.md", "---\non: src\nmay-change: guide\nskill: .claude/skills/write-docs\n---\nWrite the guide.\n");
   write(".mergelight/jobs/typo.md", "---\non: src\nmay-change: guide\nskill: .claude/skills/write-doc\n---\nWrite the guide.\n");
+  write(".mergelight/jobs/web/deep.md", "---\non: src\nmay-change: docs\n---\nToo deep.\n");
+  write(".mergelight/jobs/Upper.MD", "---\non: src\nmay-change: docs\n---\nWrong ending.\n");
   git("add", "-A");
   git("commit", "-q", "-m", "base");
   git("switch", "-q", "-c", "pr");
@@ -137,16 +139,18 @@ test("jobs are read from the base branch, never from the pull request", async ()
 
   const { jobs, problems } = await jobFilesFor(dir, "main");
   assert.deepEqual(jobs.map((j) => [j.name, j.mayChange, j.task]), [
-    ["docs", ["docs"], "Update the docs."],
     ["guide", ["guide"], "Write the guide."],
     ["translations", ["locales/*.json"], "When en.json gets new keys, add each one to every other file in locales/, translated."],
   ]);
-  assert.equal(jobs[0].source, ".mergelight/jobs/docs.md", "a link inside the repository is followed");
-  assert.equal(jobs[2].source, ".mergelight/jobs/translations.md", "the real file wins over a link to it");
-  assert.deepEqual(problems.map((p) => p.source), [".mergelight/jobs/broken.md", ".mergelight/jobs/i18n.md", ".mergelight/jobs/outside.md", ".mergelight/jobs/typo.md"]);
-  assert.match(problems[1].problem, /is the same file as \.mergelight\/jobs\/translations\.md, so its job counts once/);
-  assert.match(problems[2].problem, /a link to something that isn't a file in the repository/);
-  assert.match(problems[3].problem, /its skill \.claude\/skills\/write-doc has no SKILL\.md on the main branch/);
+  assert.equal(jobs[1].source, ".mergelight/jobs/translations.md", "the real file wins over a link to it");
+  const why = Object.fromEntries(problems.map((p) => [p.source, p.problem]));
+  assert.deepEqual(Object.keys(why), [".mergelight/jobs/broken.md", ".mergelight/jobs/docs.md", ".mergelight/jobs/i18n.md", ".mergelight/jobs/outside.md", ".mergelight/jobs/typo.md", ".mergelight/jobs/Upper.MD", ".mergelight/jobs/web/deep.md"].sort((a, b) => a.localeCompare(b)));
+  assert.match(why[".mergelight/jobs/docs.md"], /is a link to shared\/docs-job\.md, outside \.mergelight, where a job could change it/);
+  assert.match(why[".mergelight/jobs/i18n.md"], /is the same file as \.mergelight\/jobs\/translations\.md, so its job counts once/);
+  assert.match(why[".mergelight/jobs/outside.md"], /a link to something that isn't a file in the repository/);
+  assert.match(why[".mergelight/jobs/typo.md"], /its skill \.claude\/skills\/write-doc has no SKILL\.md on the base branch/);
+  assert.match(why[".mergelight/jobs/web/deep.md"], /a job file sits right in \.mergelight\/jobs and ends in \.md/);
+  assert.match(why[".mergelight/jobs/Upper.MD"], /a job file sits right in \.mergelight\/jobs and ends in \.md/);
   assert.deepEqual(await jobFilesFor(dir, "no-such-branch"), { jobs: [], problems: [] });
 });
 
@@ -162,4 +166,26 @@ test("past the limit, job files are named, never read", async () => {
   assert.equal(jobs.length, MAX_JOBS);
   const past = problems.filter((p) => /only 20 job files are read/.test(p.problem)).map((p) => p.source);
   assert.deepEqual(past, [".mergelight/jobs/j20.md", ".mergelight/jobs/j21.md"]);
+});
+
+test("a job may never change a skill folder that guides a job", () => {
+  const { job: docs } = parseJobFile(".mergelight/jobs/docs.md", '---\non: src\nmay-change: "**"\nskill: .claude/skills/write-docs\n---\nTask.');
+  const { job: other } = parseJobFile(".mergelight/jobs/other.md", "---\non: src\nmay-change: x\nskill: tools/skills/translate\n---\nTask.");
+  assert.ok(!mayChange(docs, ".claude/skills/write-docs/SKILL.md"), "its own skill");
+  assert.ok(!mayChange(docs, "tools/skills/translate/SKILL.md", [docs, other]), "another job's skill");
+  assert.ok(mayChange(docs, "tools/skills/translate/SKILL.md"), "without the other jobs, only its own counts");
+  assert.ok(mayChange(docs, ".claude/skills/other/SKILL.md", [docs, other]));
+});
+
+test("a job left out for its skill doesn't take the name or the place of another", () => {
+  const job = (name, skill) => `---\nname: ${name}\non: x\nmay-change: y\n${skill ? `skill: ${skill}\n` : ""}---\nTask.`;
+  const { jobs, problems } = readJobs(
+    [
+      { path: ".mergelight/jobs/a.md", text: job("same", "missing/skill") },
+      { path: ".mergelight/jobs/b.md", text: job("same") },
+    ],
+    () => false,
+  );
+  assert.deepEqual(jobs.map((j) => j.source), [".mergelight/jobs/b.md"]);
+  assert.match(problems[0].problem, /its skill missing\/skill has no SKILL\.md/);
 });

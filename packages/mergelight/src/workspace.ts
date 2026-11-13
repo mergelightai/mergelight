@@ -154,6 +154,8 @@ interface BaseFile {
   text: string;
   /** True when the path is a link, and text is what it leads to. */
   link: boolean;
+  /** For a link, the file it leads to. */
+  target?: string;
 }
 
 /**
@@ -183,16 +185,17 @@ async function baseTree(mirror: string, base: string): Promise<{ paths: string[]
   const read = async (path: string): Promise<BaseFile | null> => {
     let file = tree.get(path);
     const link = file?.mode === "120000";
+    let resolved: string | undefined;
     if (file && link) {
       // A link: git keeps the target's path as its content.
       const target = (await blob(file.sha))?.trim() ?? "";
-      const resolved = posix.normalize(posix.join(posix.dirname(path), target));
+      resolved = posix.normalize(posix.join(posix.dirname(path), target));
       if (!target || target.startsWith("/") || resolved === ".." || resolved.startsWith("../")) return null;
       file = tree.get(resolved);
     }
     if (!file || (file.mode !== "100644" && file.mode !== "100755")) return null;
     const text = (await blob(file.sha))?.trim();
-    return text ? { path, sha: file.sha, text, link } : null;
+    return text ? { path, sha: file.sha, text, link, ...(resolved ? { target: resolved } : {}) } : null;
   };
   return { paths: [...tree.keys()], read };
 }
@@ -204,28 +207,29 @@ async function baseTree(mirror: string, base: string): Promise<{ paths: string[]
 export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs: Job[]; problems: JobProblem[] }> {
   const tree = await baseTree(mirror, base);
   if (!tree) return { jobs: [], problems: [] };
+  const problems: JobProblem[] = [];
+  // A file that looks meant as a job but sits deeper or ends in .MD is named, never skipped without a word.
+  for (const p of tree.paths) {
+    if (p.startsWith(".mergelight/jobs/") && /\.md$/i.test(p) && !JOB_FILE.test(p)) problems.push({ source: p, problem: "isn't read: a job file sits right in .mergelight/jobs and ends in .md" });
+  }
   const all = tree.paths.filter((p) => JOB_FILE.test(p)).sort();
   const files = await Promise.all(all.slice(0, MAX_JOB_FILES).map(tree.read));
-  const problems: JobProblem[] = [];
   // A job file and a link to it, or two copies of one file, are one job. The real file wins over a link.
   const kept = new Map<string, BaseFile>();
   const read = files.filter((f): f is BaseFile => f !== null).sort((a, b) => Number(a.link) - Number(b.link) || a.path.localeCompare(b.path));
   for (const f of read) {
     const first = kept.get(f.sha);
-    if (first) problems.push({ source: f.path, problem: `is the same file as ${first.path}, so its job counts once` });
+    // A job could change the file a link leads to, unless it sits where no job may write.
+    if (f.target && !f.target.startsWith(".mergelight/")) problems.push({ source: f.path, problem: `is a link to ${f.target}, outside .mergelight, where a job could change it` });
+    else if (first) problems.push({ source: f.path, problem: `is the same file as ${first.path}, so its job counts once` });
     else kept.set(f.sha, f);
   }
-  const parsed = readJobs([...kept.values()]);
   // A skill that isn't on the base branch: the job would run without what the team meant it to follow.
   const present = new Set(tree.paths);
-  const jobs = parsed.jobs.filter((job) => {
-    if (!job.skill || present.has(`${job.skill}/SKILL.md`)) return true;
-    problems.push({ source: job.source, problem: `its skill ${job.skill} has no SKILL.md on the ${base.replace(/^refs\/mergelight\/base\//, "")} branch` });
-    return false;
-  });
-  const unread = all.slice(0, MAX_JOB_FILES).filter((_, i) => files[i] === null).map((source) => ({ source, problem: "couldn't be read: it is empty, too large, or a link to something that isn't a file in the repository" }));
+  const parsed = readJobs([...kept.values()], (folder) => present.has(`${folder}/SKILL.md`));
+  const unread = all.slice(0, MAX_JOB_FILES).filter((_, i) => files[i] === null).map((source) => ({ source, problem: "couldn't be read: it is empty, too large, a link to something that isn't a file in the repository, or git couldn't read it this time" }));
   const past = all.slice(MAX_JOB_FILES).map((source) => ({ source, problem: `only ${MAX_JOB_FILES} job files are read` }));
-  return { jobs, problems: [...parsed.problems, ...problems, ...unread, ...past].sort((a, b) => a.source.localeCompare(b.source)) };
+  return { jobs: parsed.jobs, problems: [...parsed.problems, ...problems, ...unread, ...past].sort((a, b) => a.source.localeCompare(b.source)) };
 }
 
 /** How many rule files are read at most. */
