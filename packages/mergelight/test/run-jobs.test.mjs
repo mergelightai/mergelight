@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { parseJobFile } from "../dist/jobs.js";
 import { buildJobPrompt, caseClashes, isJobCommit, JOBS_TRAILER, MAX_CHANGED_FILES, mirrorGit, newSecret, runJobs } from "../dist/run-jobs.js";
-import { codexInstall, jobHidden, runnerInstall, sandboxArgs } from "../dist/providers/codex.js";
+import { besides, codexInstall, jobHidden, runnerInstall, sandboxArgs } from "../dist/providers/codex.js";
 
 /** A repository with one commit: an English file, a Danish one, a script that can run, a link and a workflow. */
 function repo() {
@@ -218,10 +218,12 @@ test("the job's prompt gives the team's task as the instruction, and the pull re
 
 test("a job's Codex sandbox may write in the job's folder only, and can't read where secrets live", () => {
   // On Linux, where runners are: every top-level folder but the system's is hidden, whatever the layout.
-  // A rule inside a hidden folder is left out, as Linux's sandbox can't make one; the job's own rules stay.
-  const linux = sandboxArgs("/home/runner/.codex", "/tmp/job", ["/home/runner", "/srv/kube/config"], ["/opt/hostedtoolcache/node/x64/lib/node_modules/@openai/codex"], "linux", ["/home", "/opt", "/tmp", "/usr", "/etc", "/dev", "/proc", "/var", "/runner", "/srv"])[3];
-  assert.equal(linux, 'permissions.mergelight_job.filesystem={":root"="read","/home"="none","/opt"="none","/tmp"="none","/var"="none","/runner"="none","/srv"="none","/opt/hostedtoolcache/node/x64/lib/node_modules/@openai/codex"="read","/tmp/job"="write"}');
+  // Codex's own folder in /opt stays readable by hiding everything beside its path, level by level.
+  const tree = { "/opt": ["hostedtoolcache", "actions-runner"], "/opt/hostedtoolcache": ["node", "Python"], "/opt/hostedtoolcache/node": ["codex"] };
+  const linux = sandboxArgs("/home/runner/.codex", "/tmp/job", ["/home/runner"], ["/opt/hostedtoolcache/node/codex"], "linux", ["/home", "/opt", "/tmp", "/usr", "/etc", "/dev", "/proc", "/var", "/runner"], (dir) => tree[dir] ?? [])[3];
+  assert.equal(linux, 'permissions.mergelight_job.filesystem={":root"="read","/home"="none","/tmp"="none","/var"="none","/runner"="none","/opt/actions-runner"="none","/opt/hostedtoolcache/Python"="none","/tmp/job"="write"}');
   assert.match(sandboxArgs("/x/.codex", "/tmp/job", ["/etc/kube/config"], [], "linux", ["/tmp", "/etc"])[3], /"\/etc\/kube\/config"="none"/, "a secret inside a readable system folder is still hidden");
+  assert.deepEqual(besides("/opt/a/b", (dir) => ({ "/opt": ["a", "z"], "/opt/a": ["b", "y"] })[dir] ?? []), ["/opt/z", "/opt/a/y"]);
   const args = sandboxArgs("/home/.codex", "/tmp/job dir", ["/home/runner", "/tmp"], ["/tmp/skill"], "darwin");
   assert.deepEqual(args.slice(0, 2), ["-c", 'default_permissions="mergelight_job"']);
   assert.equal(args[3], 'permissions.mergelight_job.filesystem={":root"="read","/home/runner"="none","/tmp"="none","/home/.codex"="none","/tmp/skill"="read","/tmp/job dir"="write"}');

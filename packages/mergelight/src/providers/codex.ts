@@ -123,7 +123,28 @@ function topFolders(): string[] {
   }
 }
 
-export function sandboxArgs(home = codexHome(), writable?: string, hidden: string[] = [], readable: string[] = [], platform: NodeJS.Platform = process.platform, top: string[] = platform === "linux" ? topFolders() : []): string[] {
+/**
+ * The folders beside a path, at each level below its top folder, to hide so that only the path itself
+ * stays readable: Linux's sandbox can't open a folder again inside one it hid, so the rest around it is
+ * hidden instead.
+ */
+export function besides(path: string, list: (dir: string) => string[] = (dir) => readdirSync(dir)): string[] {
+  const parts = path.split("/").filter(Boolean);
+  const out: string[] = [];
+  for (let i = 1; i < parts.length; i++) {
+    const parent = `/${parts.slice(0, i).join("/")}`;
+    let names: string[];
+    try {
+      names = list(parent);
+    } catch {
+      continue;
+    }
+    for (const name of names) if (name !== parts[i]) out.push(`${parent}/${name}`);
+  }
+  return out;
+}
+
+export function sandboxArgs(home = codexHome(), writable?: string, hidden: string[] = [], readable: string[] = [], platform: NodeJS.Platform = process.platform, top: string[] = platform === "linux" ? topFolders() : [], list?: (dir: string) => string[]): string[] {
   if (writable) {
     // A job's files get pushed, so its commands mustn't reach secrets or other code. On Linux, where
     // runners are, every top-level folder but the system's is hidden, whatever the runner's layout: home
@@ -131,14 +152,21 @@ export function sandboxArgs(home = codexHome(), writable?: string, hidden: strin
     // stay and lead into /usr. On a Mac, whose system needs more, the disk stays readable but the places
     // secrets live are hidden. Either way the job's folder is the one place it can write, and the more
     // specific rule wins. A rule inside a hidden folder is left out, as Linux's sandbox can't make one.
-    const off = platform === "linux" ? top.filter((t) => !LINUX_KEEP.includes(t)) : [];
+    // On Linux a folder that must stay readable, such as Codex's own in /opt, keeps its top folder: the
+    // folders beside its path are hidden instead, level by level.
+    const tops = (p: string) => `/${p.split("/").filter(Boolean)[0] ?? ""}`;
+    const keepTops = new Set(readable.map(tops));
+    const off = platform === "linux" ? top.filter((t) => !LINUX_KEEP.includes(t) && !keepTops.has(t)) : [];
+    const carved = platform === "linux" ? readable.filter((r) => !LINUX_KEEP.includes(tops(r))).flatMap((r) => besides(r, list)) : [];
     const inside = (p: string) => off.some((t) => p === t || p.startsWith(`${t}/`));
     const paths: [string, string][] = [
       [":root", "read"],
       ...off.map((t): [string, string] => [t, "none"]),
-      ...hidden.filter((h) => !inside(h)).map((h): [string, string] => [h, "none"]),
+      ...carved.map((c): [string, string] => [c, "none"]),
+      // On Linux a hidden folder can't hold a readable one, so one that does is opened up and carved instead.
+      ...hidden.filter((h) => !inside(h) && (platform !== "linux" || !readable.some((r) => r === h || r.startsWith(`${h}/`)))).map((h): [string, string] => [h, "none"]),
       ...(inside(home) ? [] : [[home, "none"] as [string, string]]),
-      ...readable.map((r): [string, string] => [r, "read"]),
+      ...(platform === "linux" ? [] : readable.map((r): [string, string] => [r, "read"])),
       [writable, "write"],
     ];
     return ["-c", 'default_permissions="mergelight_job"', "-c", `permissions.mergelight_job.filesystem={${paths.map(([path, access]) => `${JSON.stringify(path)}="${access}"`).join(",")}}`];
