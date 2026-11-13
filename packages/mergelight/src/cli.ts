@@ -234,6 +234,11 @@ async function main(): Promise<number> {
       log("mergelight: connect --for check needs --ai and --reviewer, each codex or claude, and not the same.");
       return 1;
     }
+    // For a review, --ai claude offers only Claude's link: the workflow says Claude reviews, and it has no login yet.
+    if (!check && ai !== undefined && ai !== "claude") {
+      log(`mergelight: for a review, --ai can only be claude, not "${ai}"`);
+      return 1;
+    }
     try {
       const api = new GitHub(ref.owner, ref.repo, { log });
       const { headSha } = await fetchPullRequest(ref);
@@ -245,12 +250,13 @@ async function main(): Promise<number> {
         await connect(githubConnect(api, ref.number, headSha, log, process.env, { purpose: "check", ai: ai as "codex" | "claude", reviewer: reviewer as "codex" | "claude" }));
         return 0;
       }
+      const login = ai === "claude" ? "Claude" : "ChatGPT";
       if (values["no-save"]) {
-        await askForApp(api, ref.number, headSha);
-        log("Install the Mergelight AI app: without it there's nowhere to save the ChatGPT login.");
+        await askForApp(api, ref.number, headSha, login);
+        log(`Install the Mergelight AI app: without it there's nowhere to save the ${login} login.`);
         return 1;
       }
-      return await connect(githubConnect(api, ref.number, headSha, log));
+      return await connect(githubConnect(api, ref.number, headSha, log, process.env, ai === "claude" ? { purpose: "review", ai: "claude" } : { purpose: "review" }));
     } catch (err) {
       log(`mergelight: ${err instanceof Error ? err.message : String(err)}`);
       return 1;

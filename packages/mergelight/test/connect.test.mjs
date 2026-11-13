@@ -464,3 +464,18 @@ test("a Claude login connected to check leaves the reviewer as it is", () => {
   shareClaudeToken(TOKEN, { GITHUB_ENV: file }, () => {}, false);
   assert.equal(readFileSync(file, "utf8"), `MERGELIGHT_CLAUDE_TOKEN=${TOKEN}\n`);
 });
+
+test("Claude set to review with no login yet: only Claude's link is offered, and a miss says Claude", async () => {
+  const api = fakeApi(() => false);
+  const deps = githubConnect(api, 7, "abc", () => {}, { GH_TOKEN: "app" }, { purpose: "review", ai: "claude" });
+  assert.equal(deps.only, "claude");
+  assert.equal(await deps.startLogin(() => {}), 1, "no ChatGPT code");
+  await deps.failed("The Claude link ran out before anyone finished signing in.");
+  const comment = api.writes.find((w) => w.path === "issues/comments/5");
+  assert.match(comment.body.body, /couldn't connect to Claude/);
+  assert.match(comment.body.body, /Push a new commit to get a new link\./);
+  assert.match(installAppBody("Claude"), /saves your Claude login/);
+  assert.match(installAppBody(), /saves your ChatGPT login/);
+  const body = connectBody(null, "https://github.com/run", LINK, claudeSetupLink("acme/api", 7));
+  assert.match(body, /^### 🔌 Connect Claude to start reviews$/m);
+});

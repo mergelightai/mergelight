@@ -27,6 +27,8 @@ If the review itself can't run, for example because the login expired, the check
 - **Who reviews:** Claude when the repository has only a Claude login, and Codex otherwise.
 - **Who checks:** when both AIs have a login, the one that doesn't review, so two AIs look at every finding. With one login, the reviewer checks its own findings.
 
+When `provider: claude` is set and there's no Claude login yet, a pull request from the repository itself shows the Claude link to mergelight.dev, the same way a missing ChatGPT login shows a code.
+
 When the checker has no login yet, a pull request from the repository itself asks to connect it, the same way as the reviewer's login: a ChatGPT code, or a Claude link to mergelight.dev. The review waits for it at most 15 minutes. If nobody connects it, or it can't be asked (a fork, Dependabot, or no app to save the login), the reviewer checks instead and the summary says so. The summary's last line names both AIs.
 
 Pull requests from forks and from Dependabot aren't reviewed, because GitHub gives their runs no secrets. On a public repository everyone can see the pull request, so the comment that connects a plan names the account that connected.

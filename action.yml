@@ -143,9 +143,24 @@ runs:
           echo "::error::provider must be claude or codex, not \"$provider\"."
           exit 1
         fi
+        # Only a pull request from this repository may ask for a login: forks and Dependabot get no
+        # secrets, so nothing could be saved for them, and a stranger must never start a sign-in.
+        can_ask=""
+        if { [ "$GITHUB_EVENT_NAME" = pull_request ] || [ "$GITHUB_EVENT_NAME" = pull_request_target ]; } &&
+          { [ -z "${HEAD_REPO:-}" ] || [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ]; } && [ "$GITHUB_ACTOR" != "dependabot[bot]" ]; then
+          can_ask=1
+        fi
+        # provider: claude with no Claude login yet, as the setup page writes when a ChatGPT repository
+        # picks Claude: the pull request asks to connect Claude, as a missing ChatGPT login does for Codex.
+        connect_claude=0
+        no_login=0
         if [ "$provider" = claude ] && [ -z "$HAS_CLAUDE" ]; then
-          echo "::error::The provider is claude, but there's no Claude login. Set claude-code-oauth-token or anthropic-api-key."
-          exit 1
+          if [ -n "$can_ask" ]; then
+            connect_claude=1
+          else
+            echo "::notice::Skipping the review: the provider is claude, but this run has no Claude login and can't ask for one."
+            no_login=1
+          fi
         fi
         # Who checks: with a login for both AIs, the one that doesn't review, so two AIs look at every
         # finding. Otherwise the reviewer checks its own findings.
@@ -168,13 +183,8 @@ runs:
         connect_check=""
         if [ "$checker" != "$provider" ]; then
           if [ "$checker" = claude ]; then has="$HAS_CLAUDE"; else has="$HAS_CODEX"; fi
-          from_here=""
-          if [ -z "${HEAD_REPO:-}" ] || [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ]; then from_here=1; fi
-          if [ -z "$has" ] && [ -n "$from_here" ] && [ "$GITHUB_ACTOR" != "dependabot[bot]" ] &&
-            { [ "$GITHUB_EVENT_NAME" = pull_request ] || [ "$GITHUB_EVENT_NAME" = pull_request_target ]; } &&
-            { [ "$provider" = claude ] || [ -n "$HAS_CODEX" ]; }; then
-            connect_check="$checker"
-          fi
+          if [ "$provider" = claude ]; then reviewer_has="$HAS_CLAUDE"; else reviewer_has="$HAS_CODEX"; fi
+          if [ -z "$has" ] && [ -n "$can_ask" ] && [ -n "$reviewer_has" ]; then connect_check="$checker"; fi
         fi
         # Left empty, a checker that is the reviewer stays the reviewer: connecting Claude in place of
         # ChatGPT further on makes Claude review, and then Claude checks too.
@@ -190,11 +200,12 @@ runs:
           echo "MERGELIGHT_VERIFY=$checker"
           echo "MERGELIGHT_VERIFY_FOLLOWS=$follows"
           echo "MERGELIGHT_CONNECT_CHECK=$connect_check"
+          echo "MERGELIGHT_CONNECT_CLAUDE=$connect_claude"
           echo "MERGELIGHT_USES_CODEX=$uses_codex"
           echo "MERGELIGHT_USES_CLAUDE=$uses_claude"
           echo "MERGELIGHT_CHATGPT=0"
           echo "MERGELIGHT_CONNECT=0"
-          echo "MERGELIGHT_NO_LOGIN=0"
+          echo "MERGELIGHT_NO_LOGIN=$no_login"
           echo "MERGELIGHT_LOGIN_LOST=0"
         } >> "$GITHUB_ENV"
 
@@ -297,7 +308,7 @@ runs:
     # update secrets. Find out before asking anyone to enter a code. Being able to post isn't enough.
     - name: Check the login can be saved
       id: saving
-      if: env.MERGELIGHT_CONNECT == '1' || env.MERGELIGHT_CONNECT_CHECK != ''
+      if: env.MERGELIGHT_CONNECT == '1' || env.MERGELIGHT_CONNECT_CLAUDE == '1' || env.MERGELIGHT_CONNECT_CHECK != ''
       shell: bash
       env:
         SECRETS_TOKEN: ${{ inputs.secrets-token }}
@@ -330,6 +341,21 @@ runs:
         SECRET_NAME: ${{ inputs.auth-secret-name }}
       run: |
         args=(connect "$GITHUB_REPOSITORY#$PR")
+        [ "$CAN_SAVE" = "true" ] || args+=(--no-save)
+        node "$GITHUB_ACTION_PATH/packages/mergelight/dist/cli.js" "${args[@]}"
+
+    # provider: claude with no Claude login yet: only Claude's link is offered, the one the setup page
+    # answers. Like a missing ChatGPT login, a sign-in that doesn't finish ends the run.
+    - name: Connect Claude
+      if: env.MERGELIGHT_CONNECT_CLAUDE == '1'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.app.outputs.token || inputs.github-token }}
+        PR: ${{ github.event.pull_request.number }}
+        GITHUB_WORKFLOW_TOKEN: ${{ inputs.github-token }}
+        CAN_SAVE: ${{ steps.saving.outputs.can_save }}
+      run: |
+        args=(connect "$GITHUB_REPOSITORY#$PR" --ai claude)
         [ "$CAN_SAVE" = "true" ] || args+=(--no-save)
         node "$GITHUB_ACTION_PATH/packages/mergelight/dist/cli.js" "${args[@]}"
 

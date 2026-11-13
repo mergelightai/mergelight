@@ -135,9 +135,22 @@ test("Codex stays the choice when it has a login, or when there's no login at al
 
 test("the provider input wins, and a wrong one says what's wrong", () => {
   assert.equal(choose({ wanted: "claude", claude: "1", codex: "1" }).env.MERGELIGHT_PROVIDER, "claude");
+  // provider: claude with no Claude login: the pull request asks to connect Claude, as a missing ChatGPT
+  // login does for Codex. Forks, Dependabot and other events skip the review instead of failing.
   const none = choose({ wanted: "claude", codex: "1" });
-  assert.equal(none.code, 1);
-  assert.match(none.out, /no Claude login/);
+  assert.equal(none.code, 0);
+  assert.equal(none.env.MERGELIGHT_PROVIDER, "claude");
+  assert.equal(none.env.MERGELIGHT_CONNECT_CLAUDE, "1");
+  assert.equal(none.env.MERGELIGHT_NO_LOGIN, "0");
+  assert.equal(none.env.MERGELIGHT_CONNECT_CHECK, "", "one sign-in a run");
+  assert.equal(none.env.MERGELIGHT_USES_CLAUDE, "1", "Claude Code is installed for the sign-in");
+  for (const other of [{ headRepo: "stranger/widgets" }, { actor: "dependabot[bot]" }, { event: "schedule" }]) {
+    const skip = choose({ wanted: "claude", codex: "1", ...other });
+    assert.equal(skip.code, 0, JSON.stringify(other));
+    assert.equal(skip.env.MERGELIGHT_CONNECT_CLAUDE, "0", JSON.stringify(other));
+    assert.equal(skip.env.MERGELIGHT_NO_LOGIN, "1", JSON.stringify(other));
+    assert.match(skip.out, /Skipping the review/);
+  }
   const typo = choose({ wanted: "gemini" });
   assert.equal(typo.code, 1);
   assert.match(typo.out, /provider must be claude or codex/);

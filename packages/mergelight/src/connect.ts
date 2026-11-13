@@ -101,7 +101,7 @@ export function connectBody(login: DeviceLogin | null, runUrl?: string, claudeUr
 /** Which sign-in a connect offers, and what for: the review, as before, or checking another AI's review. */
 export interface ConnectMode {
   purpose: "review" | "check";
-  /** For a check: the AI to connect. */
+  /** For a check: the AI to connect. For a review: claude offers only Claude's link, when Claude must review. */
   ai?: ProviderName;
   /** For a check: the AI that reviews, and checks instead when nobody connects. */
   reviewer?: ProviderName;
@@ -150,17 +150,20 @@ export function checkWaitingTitle(ai: ProviderName): string {
   return `Waiting for you to connect ${loginName(ai)} to check the review`;
 }
 
-export function installAppBody(): string {
+export function installAppBody(login = "ChatGPT"): string {
   return [
     SUMMARY_MARKER,
     PENDING_MARKER,
     "### 🔌 One step left: install the Mergelight AI app",
     "",
-    `[Install it on this repository](${INSTALL_URL}), or approve its updated permissions if it's already installed, then push a new commit. The app saves your ChatGPT login, so you only connect once.`,
+    `[Install it on this repository](${INSTALL_URL}), or approve its updated permissions if it's already installed, then push a new commit. The app saves your ${login} login, so you only connect once.`,
   ].join("\n");
 }
 
-export function connectFailedBody(reason: string, claudeOffered = false): string {
+export function connectFailedBody(reason: string, claudeOffered = false, onlyClaude = false): string {
+  if (onlyClaude) {
+    return [SUMMARY_MARKER, FAILED_MARKER, "### ⚠️ Mergelight couldn't connect to Claude", "", reason, "", "Push a new commit to get a new link. You can also use an Anthropic API key instead: https://mergelight.dev/setup"].join("\n");
+  }
   return [
     SUMMARY_MARKER,
     FAILED_MARKER,
@@ -258,8 +261,8 @@ export async function connect(deps: ConnectDeps): Promise<number> {
 }
 
 /** Tells the pull request the app has to be installed first. There's nowhere to save a login without it. */
-export async function askForApp(api: GitHub, number: number, headSha: string): Promise<void> {
-  await upsertSummary(api, number, installAppBody());
+export async function askForApp(api: GitHub, number: number, headSha: string, login = "ChatGPT"): Promise<void> {
+  await upsertSummary(api, number, installAppBody(login));
   await writeCheck(api, null, headSha, {
     status: "completed",
     conclusion: "neutral",
@@ -293,6 +296,8 @@ async function workflowHasClaude(api: GitHub, env: NodeJS.ProcessEnv): Promise<b
 export function githubConnect(api: GitHub, number: number, headSha: string, log: (line: string) => void, env = process.env, mode: ConnectMode = { purpose: "review" }): ConnectDeps {
   const checker = mode.purpose === "check" && mode.ai ? mode.ai : null;
   const reviewer = mode.reviewer ?? (checker === "codex" ? "claude" : "codex");
+  // Claude's link alone: Claude checks, or Claude must review and has no login yet.
+  const onlyClaude = mode.ai === "claude";
   const runUrl = env.GITHUB_RUN_ID ? `${env.GITHUB_SERVER_URL}/${env.GITHUB_REPOSITORY}/actions/runs/${env.GITHUB_RUN_ID}` : undefined;
   let checkId: number | null = null;
   let running: ChildProcess | null = null;
@@ -315,7 +320,7 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
   const finish = (title: string, summary: string) =>
     writeCheck(api, checkId, headSha, { status: "completed", conclusion: "neutral", completed_at: new Date().toISOString(), output: { title, summary } }, log);
   return {
-    ...(checker === "claude" ? { only: "claude" as const } : {}),
+    ...(onlyClaude ? { only: "claude" as const } : {}),
     stopLogin: () => running?.kill("SIGTERM"),
     startClaude: async () => {
       // Connecting ChatGPT to check a Claude review offers only ChatGPT: Claude already has a login.
@@ -354,8 +359,8 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
       };
     },
     startLogin: (onOutput) =>
-      // Connecting Claude to check a Codex review starts no ChatGPT sign-in.
-      checker === "claude" ? Promise.resolve(1) : new Promise((resolve, reject) => {
+      // Connecting Claude alone starts no ChatGPT sign-in.
+      onlyClaude ? Promise.resolve(1) : new Promise((resolve, reject) => {
         const child = spawn("codex", ["login", "--device-auth"], { stdio: ["ignore", "pipe", "pipe"] });
         running = child;
         const timer = setTimeout(() => child.kill("SIGTERM"), LOGIN_TIMEOUT_MS);
@@ -381,7 +386,7 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
           started_at: new Date().toISOString(),
           output: checker
             ? { title: checkWaitingTitle(checker), summary: `Follow the steps in the pull request's Mergelight comment. Without it, the review starts in 15 minutes, checked by ${aiName(reviewer)}.` }
-            : { title: claudeUrl ? "Waiting for you to connect your AI" : "Waiting for you to connect ChatGPT", summary: "Follow the steps in the pull request's Mergelight comment." },
+            : { title: onlyClaude ? "Waiting for you to connect Claude" : claudeUrl ? "Waiting for you to connect your AI" : "Waiting for you to connect ChatGPT", summary: "Follow the steps in the pull request's Mergelight comment." },
         }, log);
         checkId = run?.id ?? null;
       } catch (err) {
@@ -431,7 +436,7 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
         return;
       }
       // One failed write mustn't stop the other. Only the app that made a check can finish it.
-      await updateSummary(connectFailedBody(reason, claudeOffered)).catch((err) => log(`Couldn't update the comment: ${err instanceof Error ? err.message : String(err)}`));
+      await updateSummary(connectFailedBody(reason, claudeOffered, onlyClaude)).catch((err) => log(`Couldn't update the comment: ${err instanceof Error ? err.message : String(err)}`));
       await finish(CHECK_FAILED_TITLE, reason).catch((err) => log(`Couldn't finish the check: ${err instanceof Error ? err.message : String(err)}`));
       log(reason);
     },
