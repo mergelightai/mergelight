@@ -61,7 +61,7 @@ test("a job file that can't be a job says why", () => {
   assert.match(problem("---\non: x\nmay-change: ../other-repo/**\n---\nTask."), /"\.\.\/other-repo\/\*\*" leaves the repository/);
   assert.match(problem('---\non: x\nmay-change: ["**", "!config/secrets/**"]\n---\nTask.'), /"!config\/secrets\/\*\*" starts with !, but a job can't leave files out that way/);
   assert.match(problem("---\non: [locales/en.json,\n  locales/en-GB.json]\nmay-change: y\n---\nTask."), /its on line ends with a comma: write the whole list on one line/);
-  assert.match(problem("---\non: [locales/en.json, locales/en-GB.json\n  , locales/x.json]\nmay-change: y\n---\nTask."), /its on value goes on to an indented line/);
+  assert.match(problem("---\non: [locales/en.json, locales/en-GB.json\n  , locales/x.json]\nmay-change: y\n---\nTask."), /looks like part of a \[list\]/);
   assert.match(problem("---\non: [locales/en.json, locales/en-GB.json\nmay-change: y\n---\nTask."), /"\[locales\/en\.json" looks like part of a \[list\]: write the whole list on one line/);
   assert.equal(problem('---\non: app/[locale]/page.tsx\nmay-change: "[locale]/messages.json"\n---\nTask.'), undefined, "brackets that close are part of a name, as in Next.js");
   assert.match(problem("---\non: src\nmay-change: [locale]/messages.json, app/[locale]\n---\nTask."), /looks like part of a \[list\]/, "unquoted, the outer brackets are taken for a list and leave unpaired ones");

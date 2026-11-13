@@ -156,9 +156,6 @@ export function parseJobFile(path: string, text: string): { job: Job } | { probl
   const cut = ["on", "may-change"].find((key) => scalarValue(block.fm, key)?.endsWith(",")) ?? (/^[ \t]*-[^\n#]*,[ \t]*(?:#.*)?$/m.test(block.fm) ? "list" : undefined);
   if (cut === "list") return { problem: "a list item in its front matter ends with a comma: write each path as an item of its own" };
   if (cut) return { problem: `its ${cut} line ends with a comma: write the whole list on one line, or as a YAML list` };
-  // A path on an indented line under the key's own value is part of it in YAML, but only the key's line is read.
-  const goesOn = ["on", "may-change", "skill"].find((key) => new RegExp(`^${key}[ \\t]*:[ \\t]*[^\\s#][^\\n]*\\n[ \\t]+[^\\s#-]`, "m").test(block.fm));
-  if (goesOn) return { problem: `its ${goesOn} value goes on to an indented line, which isn't read: write the paths as a list` };
   // "./name" means the root, as "/name" does: without that it would be "name" in any folder.
   const rooted = (paths: string[] | null) => paths?.map((p) => p.replace(/^\.\//, "/"));
   const on = rooted(listValue(block.fm, "on"));
@@ -181,6 +178,9 @@ export function parseJobFile(path: string, text: string): { job: Job } | { probl
   // A YAML block or empty value ("|", ">-", "~") would be read as a path: only lists and one-line values are read.
   const yamlBlock = [...on, ...mayChange].find((p) => /^(?:[|>](?:[1-9][+-]?|[+-][1-9]?)?|~|null)$/i.test(p));
   if (yamlBlock !== undefined) return { problem: `the path "${yamlBlock}" is a YAML block or an empty value: write the paths as a list, or on the key's own line` };
+  // A path on an indented line under the key's own value is part of it in YAML, but only the key's line is read.
+  const goesOn = ["on", "may-change", "skill"].find((key) => new RegExp(`^${key}[ \\t]*:[ \\t]*[^\\s#][^\\n]*\\n[ \\t]+[^\\s#-]`, "m").test(block.fm));
+  if (goesOn) return { problem: `its ${goesOn} value goes on to an indented line, which isn't read: write the paths as a list` };
   if (mayChange.every(refusedPath)) {
     return { problem: "its may-change paths only name files a job can never change, like .github and .mergelight" };
   }
