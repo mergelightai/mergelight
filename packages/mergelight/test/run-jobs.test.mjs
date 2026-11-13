@@ -409,3 +409,28 @@ test("a job runs on a bare mirror, as the command uses, with the pull request's 
   assert.equal(result.outcomes[0].status, "changed", result.outcomes[0].summary);
   assert.deepEqual(result.changes.map((c) => c.path), ["locales/da.json"]);
 });
+
+test("a login that doesn't work stops the run instead of looking like nothing to do", async () => {
+  const { LoginError } = await import("../dist/providers/codex.js");
+  const { head, jobGit } = repo();
+  await assert.rejects(
+    runJobs({ git: jobGit, head, jobs: [job("translations", "locales/*.json")], ask: async () => { throw new LoginError("The ChatGPT login has expired."); } }),
+    /login has expired/,
+  );
+});
+
+test("a job that adds a file whose name differs from another only in letter case is dropped", async () => {
+  const { head, jobGit } = repo();
+  const result = await runJobs({
+    git: jobGit,
+    head,
+    jobs: [job("translations", "locales/*.json")],
+    ask: async (j, dir) => {
+      writeFileSync(join(dir, "locales/DA.json"), "{}\n");
+      return { summary: "Done." };
+    },
+  });
+  // On a disk that ignores case the write lands in da.json itself; elsewhere a second file appears.
+  if (result.outcomes[0].status === "refused") assert.match(result.outcomes[0].summary, /differ from others only in letter case: locales\/DA\.json/);
+  else assert.deepEqual(result.changes.map((c) => c.path), ["locales/da.json"]);
+});

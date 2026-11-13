@@ -84,8 +84,8 @@ export async function jobsCommand(ref: PrRef, o: JobsCommandOptions): Promise<nu
     const empty = { head: ws.headSha, outcomes: [], problems: [], changes: [] };
     // A commit jobs made runs no jobs, so a job can't start itself again.
     if (await isJobCommit(git, ws.headSha)) return finish({ ...empty, skipped: "The newest commit is one that jobs made, so no job runs on it." });
-    // One commit for the whole run: another run on this cache can move the base ref while jobs run.
-    const teamBase = (await git.run(["rev-parse", "--verify", `${ws.teamBase}^{commit}`])).stdout.trim() || ws.teamBase;
+    // One commit for the whole run, pinned while the workspace was prepared.
+    const teamBase = ws.teamBase;
     const { jobs, problems, guarded, incomplete } = await jobFilesFor(ws.mirror, teamBase);
     // The guard couldn't be worked out in full: no job runs rather than one with a smaller guard.
     if (incomplete) return finish({ ...empty, problems, skipped: incomplete });
@@ -134,8 +134,8 @@ export async function jobsCommand(ref: PrRef, o: JobsCommandOptions): Promise<nu
             readDirs: skillDir ? [skillDir] : [],
             model: o.model,
             effort: o.effort,
-            // Worked out right before the run starts, so copying the skill doesn't take from its time.
-            timeoutMs: Math.max(1_000, deadline - Date.now()),
+            // Worked out right before the program starts, so nothing before it takes from its time.
+            deadline,
             logFile: join(cacheDir(), "logs", `${pr.owner}-${pr.repo}-${pr.number}-${stamp}-job-${job.name}.log`),
           });
           return answer.output;

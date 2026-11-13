@@ -4,6 +4,7 @@ import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { mayChange, type Job, type JobProblem } from "./jobs.js";
 import type { Convention } from "./prompt.js";
+import { LimitError, LoginError } from "./providers/codex.js";
 import { run, type RunResult } from "./run.js";
 import type { PullRequest } from "./types.js";
 
@@ -73,7 +74,7 @@ export interface JobGit {
  * link in the repository can't lead the AI's edits out of the copy.
  */
 export function mirrorGit(mirror: string): JobGit {
-  const base = ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential", "-c", "core.symlinks=false", "-c", "core.autocrlf=false", "-c", "core.hooksPath=/dev/null", "-c", `core.excludesFile=${devNull}`, "-c", `core.attributesFile=${devNull}`, "--git-dir", mirror];
+  const base = ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential", "-c", "core.symlinks=false", "-c", "core.autocrlf=false", "-c", "core.hooksPath=/dev/null", "-c", `core.excludesFile=${devNull}`, "-c", `core.attributesFile=${devNull}`, "-c", "core.precomposeunicode=false", "--git-dir", mirror];
   // Attributes come from the empty tree, so files are written out and read back byte for byte: no line
   // ending or filter changes a file the AI never touched.
   const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: devNull, GIT_ATTR_SOURCE: EMPTY_TREE };
@@ -198,11 +199,20 @@ function some(paths: string[]): string {
  * Why this job's changes can't be kept, or null when they can. sinceHead is everything changed from head,
  * this job's changes included. guarded holds the skill folders no job may change.
  */
-async function whyRefused(git: JobGit, job: Job, guarded: string[], headLinks: Set<string>, mine: Entry[], sinceHead: Entry[]): Promise<string | null> {
+async function whyRefused(git: JobGit, job: Job, guarded: string[], headLinks: Set<string>, mine: Entry[], sinceHead: Entry[], tree: string): Promise<string | null> {
   // A name git couldn't spell as text would be checked and pushed as another name.
   const garbled = mine.filter((e) => e.path.includes("\uFFFD")).map((e) => e.path);
   if (garbled.length) return `It changed files whose names aren't valid text: ${some(garbled)}.`;
   const outside = mine.filter((e) => !mayChange(job, e.path, guarded, (p) => headLinks.has(p))).map((e) => e.path);
+  // A new file whose name differs from another only in letter case is one file on macOS and Windows.
+  const added = mine.filter((e) => e.status === "A");
+  if (added.length) {
+    const names = (await must(git, ["ls-tree", "-r", "-z", "--name-only", "--full-tree", tree])).split("\0").filter(Boolean);
+    const count = new Map<string, number>();
+    for (const n of names) count.set(n.normalize("NFC").toUpperCase().toLowerCase(), (count.get(n.normalize("NFC").toUpperCase().toLowerCase()) ?? 0) + 1);
+    const clash = added.filter((e) => (count.get(e.path.normalize("NFC").toUpperCase().toLowerCase()) ?? 0) > 1).map((e) => e.path);
+    if (clash.length) return `It added files whose names differ from others only in letter case: ${some(clash)}.`;
+  }
   if (outside.length) return `It changed files it may not: ${some(outside)}. A job may only change its may-change paths, never .github, .mergelight, a skill, a link, the files AI agents read, or git's own files.`;
   // 120000 is a link and 160000 a submodule; 100755 is a file that can run.
   const special = mine.filter((e) => [e.oldMode, e.newMode].some((m) => m === "120000" || m === "160000")).map((e) => e.path);
@@ -318,6 +328,8 @@ export async function runJobs(o: RunJobsOptions): Promise<JobsResult> {
         // The AI run ends at the same moment as the race, so its process is stopped when the job is given up.
         answer = await Promise.race([o.ask(job, dir, earlier, Date.now() + now), late]);
       } catch (err) {
+        // A login that doesn't work or a plan with no usage left stops every job: the run says so and fails.
+        if (err instanceof LoginError || err instanceof LimitError) throw err;
         const reason = cut((err instanceof Error ? err.message : String(err)).replace(/\s+/g, " ").trim(), 300);
         outcome("failed", `The AI run for this job failed${reason ? `: ${/[.!?]$/.test(reason) ? reason : `${reason}.`}` : "."} Its changes were dropped.`);
         continue;
@@ -331,7 +343,7 @@ export async function runJobs(o: RunJobsOptions): Promise<JobsResult> {
         outcome("nothing", summary || "It had nothing to change.");
         continue;
       }
-      const refused = await whyRefused(git, job, o.guarded ?? [], headLinks, mine, await changed(git, headTree, tree));
+      const refused = await whyRefused(git, job, o.guarded ?? [], headLinks, mine, await changed(git, headTree, tree), tree);
       if (refused) {
         outcome("refused", `${refused} All its changes were dropped.`, mine.map((e) => e.path));
         continue;
@@ -339,6 +351,7 @@ export async function runJobs(o: RunJobsOptions): Promise<JobsResult> {
       current = tree;
       outcome("changed", summary || `It changed ${mine.length} file${mine.length === 1 ? "" : "s"}.`, mine.map((e) => e.path));
     } catch (err) {
+      if (err instanceof LoginError || err instanceof LimitError) throw err;
       outcome("failed", `This job couldn't run: ${(err instanceof Error ? err.message : String(err)).slice(0, 300)}`);
     } finally {
       // A folder the AI made read-only mustn't sink the run: a leftover is only a leftover.

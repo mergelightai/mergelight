@@ -26,6 +26,8 @@ export interface ModelOptions {
    * caller checks every change afterwards; this only keeps the agent's hands inside the folder.
    */
   edit?: boolean;
+  /** When the run must end, as a time: worked out into a timeout right before the program starts. */
+  deadline?: number;
   /** Folders outside cwd the agent may read, such as a job's skill (Claude only: Codex reads the whole disk). */
   readDirs?: string[];
   /** Called whenever the agent starts a shell command (Codex only). */

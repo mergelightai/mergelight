@@ -70,7 +70,7 @@ export async function runClaude(opts: ModelOptions): Promise<ModelResult> {
   const result = await run("claude", args, {
     cwd: opts.cwd,
     input: opts.prompt,
-    timeoutMs: opts.timeoutMs ?? 25 * 60_000,
+    timeoutMs: opts.deadline ? Math.max(1_000, opts.deadline - Date.now()) : (opts.timeoutMs ?? 25 * 60_000),
     env: claudeEnv(),
   });
   const checkLogin = (text: string) => {

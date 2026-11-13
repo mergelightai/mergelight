@@ -222,6 +222,9 @@ export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
   const args = [
     "exec",
     ...sandboxArgs(codexHome(), opts.edit ? opts.cwd : undefined, opts.edit ? jobHidden() : [], opts.edit ? (opts.readDirs ?? []) : []),
+    // A job's commands get only the core variables (PATH, HOME and the like), never the runner's own,
+    // such as a database password: what they print can end up in a file that gets pushed.
+    ...(opts.edit ? ["-c", 'shell_environment_policy.inherit="core"'] : []),
     "--ephemeral",
     "--skip-git-repo-check",
     "--json",
@@ -290,7 +293,7 @@ export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
   try {
     const result = await run("codex", args, {
       input: opts.prompt,
-      timeoutMs: opts.timeoutMs ?? 25 * 60_000,
+      timeoutMs: opts.deadline ? Math.max(1_000, opts.deadline - Date.now()) : (opts.timeoutMs ?? 25 * 60_000),
       onStdout,
       env: codexEnv(),
     });

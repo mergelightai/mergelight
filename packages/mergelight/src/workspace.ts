@@ -649,7 +649,8 @@ export async function prepareWorkspace(pr: PullRequest, at?: string, skillFolder
     // the commit it branched from either. Its author picks that commit, and could pick one from
     // before a skill was written or tightened.
     // The same goes for the instruction files.
-    const teamBase = haveBaseBranch ? `refs/mergelight/base/${pr.baseRef}` : baseCandidate;
+    // As one commit, read while the mirror is locked: another run can move the branch's ref later.
+    const teamBase = (await git(["rev-parse", "--verify", `${haveBaseBranch ? `refs/mergelight/base/${pr.baseRef}` : baseCandidate}^{commit}`], mirror)).stdout.trim();
     const skills = await skillsFor(mirror, teamBase, dir, skillFolders);
     // The skills the team wrote on its dashboard go next to them. A skill that can't be written is one fewer, never a failed review.
     let written: TeamSkill[] = [];
