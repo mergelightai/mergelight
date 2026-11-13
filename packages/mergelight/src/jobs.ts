@@ -75,6 +75,11 @@ export const REFUSED_FOLDERS = [
   ".semaphore",
   ".githooks",
   ".mergify",
+  ".tekton",
+  // Names that are a file for some tools and a folder for others: either way, nothing in or of them.
+  ".clinerules",
+  ".rules",
+  ".tabnine",
 ];
 
 /**
@@ -93,6 +98,7 @@ export const REFUSED_FILES = [
   "renovate.json5",
   ".renovaterc",
   ".renovaterc.json",
+  ".renovaterc.json5",
   ".kodiak.toml",
   "bors.toml",
   // What AI agents and the review take instructions from. CONTRIBUTING.md is one of the review's conventions.
@@ -118,11 +124,14 @@ export const REFUSED_FILES = [
   ".roorules",
   ".roomodes",
   ".continuerules",
-  ".rules",
   ".aider.conf.yml",
   ".cursorrules",
   ".windsurfrules",
-  ".clinerules",
+  "opencode.jsonc",
+  // Other review bots' settings.
+  ".coderabbit.yaml",
+  ".coderabbit.yml",
+  ".pr_agent.toml",
   // What runs: CI services and git hooks.
   ".gitlab-ci.yml",
   ".travis.yml",
@@ -130,7 +139,14 @@ export const REFUSED_FILES = [
   ".woodpecker.yml",
   ".pre-commit-config.yaml",
   "lefthook.yml",
+  "lefthook.yaml",
+  "lefthook.toml",
+  "lefthook-local.yml",
   ".lefthook.yml",
+  ".lefthook.yaml",
+  ".woodpecker.yaml",
+  ".cirrus.star",
+  ".prow.yaml",
   ".gitpod.yml",
   ".devcontainer.json",
   ".cirrus.yml",
@@ -295,7 +311,8 @@ export function folded(path: string): string {
 export function refusedPath(path: string): boolean {
   const lower = folded(path);
   const name = lower.replace(/\/+$/, "").split("/").pop() ?? "";
-  return REFUSED_FOLDERS.some((refused) => matchesPath(folded(refused), lower)) || REFUSED_FILES.some((refused) => folded(refused) === name);
+  // Roo reads .roorules-<mode> for each mode.
+  return REFUSED_FOLDERS.some((refused) => matchesPath(folded(refused), lower)) || REFUSED_FILES.some((refused) => folded(refused) === name) || name.startsWith(".roorules-");
 }
 
 /**

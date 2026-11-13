@@ -309,6 +309,12 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
     }
     for (const link of todo) {
       followed.add(link);
+      // The review's own reader (read, above) joins a link's target as text, trimmed: guard that reading too.
+      const content = await tree.linkContent(link);
+      if (typeof content === "string" && content.trim() && !content.trim().startsWith("/")) {
+        const asRead = posix.normalize(posix.join(posix.dirname(link), content.trim())).replace(/\/+$/, "");
+        if (asRead && asRead !== "." && !asRead.startsWith("..") && !refusedPath(asRead)) targets.add(asRead);
+      }
       const end = await resolve(link);
       if (end === "unread") incomplete ??= `${link} couldn't be read this time, so no job runs. The next push tries again.`;
       if (end === "deep") incomplete ??= `${link} leads through more than ${MAX_LINK_HOPS} links, or to the repository's root, so no job runs.`;

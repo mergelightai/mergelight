@@ -138,7 +138,7 @@ test("a job runs only when a pull request changed one of its on files", () => {
 
 test("a job may change only its own paths, and never workflows, Mergelight's files or git's files", () => {
   const { job } = parseJobFile(".mergelight/jobs/x.md", '---\non: src\nmay-change: "**"\n---\nTask.');
-  for (const p of [".github/workflows/ci.yml", "packages/web/.github/x.yml", ".huſky/pre-commit", ".gıtattributes", ".mergelight/jobs/x.md", ".mergelight/rules.md", ".gitmodules", "src/.gitattributes", ".git/config", ".GITHUB/workflows/ci.yml", "docs/.GitAttributes", ".GitModules", "CODEOWNERS", "docs/CODEOWNERS", "AGENTS.md", "packages/web/CLAUDE.md", ".claude/settings.json", ".agents/skills/x/SKILL.md", ".codex/config.toml", ".cursor/rules/style.mdc", "CONTRIBUTING.md", "docs/CONTRIBUTING.md", "GEMINI.md", ".cursorrules", "tools/x/SKILL.md", ".mcp.json", "CLAUDE.local.md", "AGENTS.override.md", ".vscode/tasks.json", ".roo/rules.md", ".kiro/steering/x.md", ".lfsconfig", "CONVENTIONS.md", ".continue/rules/x.md", ".goosehints", "AGENT.md", "QWEN.md", "CRUSH.md", ".kilocode/rules/x.md", ".trae/rules/x.md", ".augment-guidelines", ".openhands/microagents/x.md", ".gitlab-ci.yml", ".circleci/config.yml", "Jenkinsfile", "azure-pipelines.yml", ".husky/pre-commit", ".devcontainer/devcontainer.json", "WARP.md", "opencode.json", ".idx/airules.md", ".travis.yml", ".gitea/workflows/ci.yml", ".pre-commit-config.yaml", "lefthook.yml", ".devcontainer.json", ".roomodes", "appveyor.yml", ".semaphore/semaphore.yml", "cloudbuild.yaml", ".githooks/pre-push", "OWNERS", ".mergify.yml", "renovate.json", ".renovaterc", "bors.toml"]) {
+  for (const p of [".github/workflows/ci.yml", "packages/web/.github/x.yml", ".huſky/pre-commit", ".gıtattributes", ".mergelight/jobs/x.md", ".mergelight/rules.md", ".gitmodules", "src/.gitattributes", ".git/config", ".GITHUB/workflows/ci.yml", "docs/.GitAttributes", ".GitModules", "CODEOWNERS", "docs/CODEOWNERS", "AGENTS.md", "packages/web/CLAUDE.md", ".claude/settings.json", ".agents/skills/x/SKILL.md", ".codex/config.toml", ".cursor/rules/style.mdc", "CONTRIBUTING.md", "docs/CONTRIBUTING.md", "GEMINI.md", ".cursorrules", "tools/x/SKILL.md", ".mcp.json", "CLAUDE.local.md", "AGENTS.override.md", ".vscode/tasks.json", ".roo/rules.md", ".kiro/steering/x.md", ".lfsconfig", "CONVENTIONS.md", ".continue/rules/x.md", ".goosehints", "AGENT.md", "QWEN.md", "CRUSH.md", ".kilocode/rules/x.md", ".trae/rules/x.md", ".augment-guidelines", ".openhands/microagents/x.md", ".gitlab-ci.yml", ".circleci/config.yml", "Jenkinsfile", "azure-pipelines.yml", ".husky/pre-commit", ".devcontainer/devcontainer.json", "WARP.md", "opencode.json", ".idx/airules.md", ".travis.yml", ".gitea/workflows/ci.yml", ".pre-commit-config.yaml", "lefthook.yml", ".devcontainer.json", ".roomodes", "appveyor.yml", ".semaphore/semaphore.yml", "cloudbuild.yaml", ".githooks/pre-push", "OWNERS", ".mergify.yml", "renovate.json", ".renovaterc", "bors.toml", "lefthook.yaml", ".woodpecker.yaml", ".tekton/pipeline.yaml", ".clinerules/security.md", ".clinerules", ".roorules-code", ".coderabbit.yaml", ".tabnine/x.json"]) {
     assert.ok(refusedPath(p), p);
     assert.ok(!mayChange(job, p), p);
   }
@@ -318,7 +318,7 @@ test("the guard follows links the way the file system does, and runs no job when
   git("commit", "-q", "-m", "base");
   const { guarded, incomplete } = await jobFilesFor(dir, "main");
   assert.equal(incomplete, undefined);
-  assert.deepEqual(guarded, [".cursor", "AGENTS.md", "config/cursor", "config/cursor/rules.md", "docs/rules-src.md", "docs/workflows", "shared/ai", "vendor/ai/guide.md"]);
+  assert.deepEqual(guarded, [".cursor", "AGENTS.md", "config/cursor", "config/cursor/rules.md", "docs/rules-src.md", "docs/workflows", "shared/ai", "shared/ai/guide.md", "vendor/ai/guide.md"]);
   const job = parseJobFile(".mergelight/jobs/x.md", '---\non: src\nmay-change: "**"\n---\nTask.').job;
   for (const p of ["vendor/ai/guide.md", "config/cursor/style.md", "docs/rules-src.md", "docs/workflows/deploy.yml", "shared/ai/guide.md"]) assert.ok(!mayChange(job, p, guarded), p);
 
@@ -328,7 +328,9 @@ test("the guard follows links the way the file system does, and runs no job when
   link("shared/ai/../guide.md", "AGENTS.md");
   git("add", "-A");
   git("commit", "-q", "-m", "dotdot");
-  assert.ok((await jobFilesFor(dir, "main")).guarded.includes("vendor/guide.md"));
+  const dotdot = (await jobFilesFor(dir, "main")).guarded;
+  assert.ok(dotdot.includes("vendor/guide.md"), "the file the file system opens");
+  assert.ok(dotdot.includes("shared/guide.md"), "and the file the review's own reader opens");
   assert.ok(mayChange(job, "src/index.ts", guarded));
 
   // A chain longer than the guard follows: no job runs.
