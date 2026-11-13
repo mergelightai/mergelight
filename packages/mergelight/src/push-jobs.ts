@@ -1,8 +1,8 @@
 import { appendFileSync, readFileSync } from "node:fs";
 import { fetchPullRequest, type PrRef } from "./github.js";
-import { mayChange, type Job } from "./jobs.js";
+import { jobsToRun, mayChange, type Job } from "./jobs.js";
 import { GitHub } from "./publish/api.js";
-import { isBinary, JOBS_TRAILER, MAX_CHANGE_BYTES, MAX_CHANGED_FILES, mirrorGit, newSecret, textOf, withoutSecrets, type JobsResult } from "./run-jobs.js";
+import { isBinary, isJobCommit, JOBS_TRAILER, MAX_CHANGE_BYTES, MAX_CHANGED_FILES, mirrorGit, newSecret, textOf, withoutSecrets, type JobsResult } from "./run-jobs.js";
 import { fetchMirror, jobFilesFor } from "./workspace.js";
 
 /**
@@ -37,17 +37,24 @@ function plainPath(path: unknown): path is string {
   );
 }
 
+/** A path as macOS and Windows compare it: letter case and Unicode composition don't count. As run-jobs.ts does. */
+const folded = (path: string) => path.normalize("NFC").toUpperCase().toLowerCase();
+
 /**
- * Checks a jobs result against the jobs on the base branch and the file modes at the head. Returns what
- * to push, or why nothing may be. modes holds each changed path's mode at the head, or null when the
- * head has no such file.
+ * Checks a jobs result against the jobs that this pull request starts on the base branch, and against
+ * the head. Returns what to push, or why nothing may be. modes holds each changed path's mode at the
+ * head, and each folder's on the way (040000 for a folder), or null when the head has nothing there.
+ * files holds every file at the head, for the checks a new file needs.
  */
-export function checkPush(result: unknown, jobs: Job[], head: string, modes: Map<string, string | null>, guarded: string[] = []): PushPlan | { why: string } {
+export function checkPush(result: unknown, jobs: Job[], head: string, modes: Map<string, string | null>, guarded: string[] = [], files: string[] = []): PushPlan | { why: string } {
   const r = result as Partial<JobsResult> | null;
   if (!r || typeof r !== "object" || !Array.isArray(r.changes) || !Array.isArray(r.outcomes)) return { why: "The jobs result can't be read." };
   if (r.head !== head) return { why: `The jobs ran on ${String(r.head).slice(0, 7)}, but the branch is at ${head.slice(0, 7)} now. The next push runs them again.` };
   if (r.changes.length > MAX_CHANGED_FILES) return { why: `The jobs changed ${r.changes.length} files, over the limit of ${MAX_CHANGED_FILES}.` };
   const changed = r.outcomes.filter((o) => o && o.status === "changed" && Array.isArray(o.files));
+  // What the result deletes: a deletion is checked like any change below, and the whole push is
+  // refused if one isn't allowed, so the checks that need them can count them already.
+  const deleting = new Set(r.changes.filter((c) => (c as { deleted?: unknown } | null)?.deleted === true).map((c) => (c as { path?: unknown }).path).filter(plainPath));
   const additions: Addition[] = [];
   const deletions: string[] = [];
   const seen = new Set<string>();
@@ -62,19 +69,25 @@ export function checkPush(result: unknown, jobs: Job[], head: string, modes: Map
     const folders = parts.slice(0, -1).map((_, i) => parts.slice(0, i + 1).join("/"));
     const through = folders.find((at) => modes.get(at) === "120000");
     if (through) return { why: `${path} is inside ${through}, which is a link at the head.` };
-    // A folder on the way that is a file or a submodule at the head can't hold it.
-    const blocked = folders.find((at) => modes.get(at) != null && modes.get(at) !== "040000");
+    // A folder on the way that is a file or a submodule at the head can't hold it, unless the same push
+    // deletes that file.
+    const blocked = folders.find((at) => modes.get(at) != null && modes.get(at) !== "040000" && !deleting.has(at));
     if (blocked) return { why: `${path} is inside ${blocked}, which isn't a folder at the head.` };
     // Only an ordinary file may change: the commit can't keep a link, a submodule or a file that can run as one.
-    const mode = modes.get(path);
+    let mode = modes.get(path);
     if (mode === undefined) return { why: `${path} wasn't looked up at the head.` };
+    // A folder at the head becomes a file only when the same push deletes everything in it.
+    if (mode === "040000") {
+      const inside = files.filter((f) => f.startsWith(`${path}/`));
+      if (inside.length && inside.every((f) => deleting.has(f))) mode = null;
+    }
     if (mode !== null && mode !== "100644") return { why: `${path} isn't an ordinary file at the head (mode ${mode}).` };
     // Every job that says it changed the file must be one the base branch has, and one that may change it.
     const by = changed.filter((o) => o.files.includes(path));
     if (!by.length) return { why: `No job says it changed ${path}.` };
     for (const o of by) {
       const job = jobs.find((j) => j.name === o.name);
-      if (!job) return { why: `The job "${String(o.name).slice(0, 60)}" isn't on the base branch.` };
+      if (!job) return { why: `The job "${String(o.name).slice(0, 60)}" isn't on the base branch, or this pull request doesn't start it.` };
       if (!mayChange(job, path, guarded, (p) => modes.get(p) === "120000")) return { why: `The job "${job.name}" may not change ${path}.` };
     }
     if ((change as { deleted?: unknown }).deleted === true) {
@@ -83,12 +96,22 @@ export function checkPush(result: unknown, jobs: Job[], head: string, modes: Map
       continue;
     }
     const contents = (change as { contents?: unknown }).contents;
-    if (typeof contents !== "string" || !/^[A-Za-z0-9+/]*={0,2}$/.test(contents)) return { why: `The new contents of ${path} can't be read.` };
+    // Whole base64 only: Node decodes a cut-off string without a word, and a file would lose its end.
+    if (typeof contents !== "string" || contents.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(contents)) return { why: `The new contents of ${path} can't be read.` };
     const decoded = Buffer.from(contents, "base64");
     if (isBinary(decoded)) return { why: `${path} would be a binary file.` };
     bytes += decoded.length;
     if (bytes > MAX_CHANGE_BYTES) return { why: `The jobs wrote more than ${MAX_CHANGE_BYTES / 1000} KB.` };
     additions.push({ path, bytes: decoded });
+  }
+  // A new file whose name differs from another only in letter case is one file on macOS and Windows: the
+  // jobs step refuses that, and so does this one, against what the head keeps and the other new files.
+  const fresh = additions.filter((a) => modes.get(a.path) === null || modes.get(a.path) === "040000").map((a) => a.path);
+  if (fresh.length) {
+    const count = new Map<string, number>();
+    for (const f of [...files.filter((f) => !deleting.has(f)), ...fresh]) count.set(folded(f), (count.get(folded(f)) ?? 0) + 1);
+    const clash = fresh.find((f) => (count.get(folded(f)) ?? 0) > 1);
+    if (clash) return { why: `${clash} differs from another file only in letter case.` };
   }
   const names = new Set([...additions.map((a) => a.path), ...deletions].flatMap((p) => changed.filter((o) => o.files.includes(p)).map((o) => o.name)));
   // Cut by characters, not UTF-16 units, so an emoji is never split in half. The jobs step took secrets
@@ -106,20 +129,26 @@ export function commitMessage(plan: PushPlan): { headline: string; body: string 
   return { headline: `Run the job${names.length === 1 ? "" : "s"} ${list}`, body: `${lines.join("\n")}\n\n${JOBS_TRAILER}: ${names.join(", ")}` };
 }
 
-/** Each changed path's mode at the head, or null when the head has nothing there, and the mode of each folder on the way: 040000 for a folder. */
-async function modesAt(mirror: string, head: string, paths: string[]): Promise<Map<string, string | null>> {
+/**
+ * Each changed path's mode at the head, or null when the head has nothing there, and the mode of each
+ * folder on the way: 040000 for a folder. And every file at the head.
+ */
+async function headTree(mirror: string, head: string, paths: string[]): Promise<{ modes: Map<string, string | null>; files: string[] }> {
   const folders = paths.flatMap((p) => p.split("/").slice(0, -1).map((_, i, all) => p.split("/").slice(0, i + 1).join("/")));
   const modes = new Map<string, string | null>([...folders.map((f): [string, string | null] => [f, null]), ...paths.map((p): [string, string | null] => [p, null])]);
-  if (!paths.length) return modes;
+  const files: string[] = [];
+  if (!paths.length) return { modes, files };
   // The whole tree: ls-tree reads paths as patterns, and a path must only ever match itself.
   // With the login, as everything read from the mirror: it fetches what it doesn't have yet from GitHub.
   const listed = await mirrorGit(mirror).run(["ls-tree", "-r", "-t", "-z", "--full-tree", head]);
   if (listed.code !== 0) throw new Error(`Couldn't read the file modes at ${head.slice(0, 7)}.`);
   for (const entry of listed.stdout.split("\0")) {
     const m = /^(\d{6}) \w+ [0-9a-f]+\t([\s\S]+)$/.exec(entry);
-    if (m && modes.has(m[2]!)) modes.set(m[2]!, m[1]!);
+    if (!m) continue;
+    if (modes.has(m[2]!)) modes.set(m[2]!, m[1]!);
+    if (m[1] !== "040000") files.push(m[2]!);
   }
-  return modes;
+  return { modes, files };
 }
 
 /**
@@ -127,12 +156,15 @@ async function modesAt(mirror: string, head: string, paths: string[]): Promise<M
  * Read from the branch itself, which moves at once, not the pull request's head, which GitHub updates a
  * little later. Null when it isn't, or can't be read.
  */
-async function landedCommit(api: GitHub, branch: string, parent: string, message: string): Promise<string | null> {
+async function landedCommit(api: GitHub, branch: string, parent: string, message: string, paths: string[]): Promise<string | null> {
   const ref = await api.get<{ object: { sha: string } }>(`git/ref/heads/${branch.split("/").map(encodeURIComponent).join("/")}`).catch(() => null);
   if (!ref) return null;
-  const tip = await api.get<{ sha: string; parents: { sha: string }[]; commit: { message: string } }>(`commits/${ref.object.sha}`).catch(() => null);
+  const tip = await api.get<{ sha: string; parents: { sha: string }[]; commit: { message: string }; files?: { filename: string }[] }>(`commits/${ref.object.sha}`).catch(() => null);
   const same = (text: string) => text.replace(/\r\n/g, "\n").trim();
-  return tip && tip.parents.length === 1 && tip.parents[0]?.sha === parent && same(tip.commit.message) === same(message) ? tip.sha : null;
+  // And it changed exactly the files this push would: another run with the same message changed others.
+  const changedFiles = (tip?.files ?? []).map((f) => f.filename).sort();
+  const sameFiles = changedFiles.length === paths.length && [...paths].sort().every((p, i) => p === changedFiles[i]);
+  return tip && tip.parents.length === 1 && tip.parents[0]?.sha === parent && same(tip.commit.message) === same(message) && sameFiles ? tip.sha : null;
 }
 
 /**
@@ -173,7 +205,9 @@ export async function pushJobs(ref: PrRef, o: PushJobsOptions): Promise<number> 
     } catch {
       return refuse(`The jobs result in ${o.from} can't be read.`, 1);
     }
-    if (!Array.isArray((result as JobsResult | null)?.changes) || !(result as JobsResult).changes.length) return refuse("The jobs changed nothing.", 0);
+    // A file with no list of changes is a broken one, not a run with nothing to push.
+    if (!Array.isArray((result as JobsResult | null)?.changes)) return refuse(`The jobs result in ${o.from} can't be read.`, 1);
+    if (!(result as JobsResult).changes.length) return refuse("The jobs changed nothing.", 0);
 
     const pr = await fetchPullRequest(ref);
     // GitHub gives a fork's pull request no token that can push to it, and Mergelight never asks for one.
@@ -189,17 +223,27 @@ export async function pushJobs(ref: PrRef, o: PushJobsOptions): Promise<number> 
     if ((result as JobsResult).head !== pr.headSha) return refuse(`The jobs ran on ${String((result as JobsResult).head).slice(0, 7)}, but the branch is at ${pr.headSha.slice(0, 7)} now. The next push runs them again.`, 0);
 
     const { mirror, teamBase } = await fetchMirror(pr);
-    const { jobs, guarded, incomplete } = await jobFilesFor(mirror, teamBase);
+    const git = mirrorGit(mirror);
+    // The jobs step runs no job on a commit jobs made, so a result for one is not its own.
+    if (await isJobCommit(git, pr.headSha)) return refuse("The newest commit is one that jobs made, and no job runs on it.", 1);
+    const { jobs: all, guarded, incomplete } = await jobFilesFor(mirror, teamBase);
     // The guard on the base branch couldn't be worked out in full: what the jobs step ran on is not checked.
     if (incomplete) return refuse(incomplete.replace(/so no job runs/g, "so nothing is pushed"), 0);
+    // Only the jobs this pull request starts, worked out again the way the jobs step does: a job whose
+    // files it doesn't change may change nothing, whatever the result file says.
+    const mergeBase = await git.run(["merge-base", teamBase, pr.headSha]);
+    if (mergeBase.code !== 0) throw new Error(`Couldn't find where ${pr.headRef} branched off ${pr.baseRef}.`);
+    const touched = await git.run(["diff", "--name-only", "-z", "--no-renames", "--no-color", "--no-ext-diff", `${mergeBase.stdout.trim()}...${pr.headSha}`]);
+    if (touched.code !== 0) throw new Error(`Couldn't read what the pull request changes.`);
+    const jobs = jobsToRun(all, touched.stdout.split("\0").filter(Boolean));
     const paths = (result as JobsResult).changes.map((c) => c?.path).filter(plainPath);
-    const modes = await modesAt(mirror, pr.headSha, paths);
-    const plan = checkPush(result, jobs, pr.headSha, modes, guarded);
+    const { modes, files } = await headTree(mirror, pr.headSha, paths);
+    const plan = checkPush(result, jobs, pr.headSha, modes, guarded, files);
     if ("why" in plan) return refuse(plan.why, 1);
     // The jobs step drops a job that writes a secret the file didn't have. The file it hands over is checked again.
     for (const a of plan.additions) {
       // The mirror holds no file contents until they are asked for, so this fetches them, with the login a private repository needs.
-      const old = modes.get(a.path) ? await mirrorGit(mirror).bytes(["cat-file", "blob", `${pr.headSha}:${a.path}`]) : Buffer.alloc(0);
+      const old = modes.get(a.path) && modes.get(a.path) !== "040000" ? await git.bytes(["cat-file", "blob", `${pr.headSha}:${a.path}`]) : Buffer.alloc(0);
       if (!old) throw new Error(`Couldn't read ${a.path} at ${pr.headSha.slice(0, 7)}.`);
       // Read as the text it is, so a key in a UTF-16 file is seen too.
       const secret = newSecret(textOf(a.bytes), textOf(old));
@@ -231,7 +275,7 @@ export async function pushJobs(ref: PrRef, o: PushJobsOptions): Promise<number> 
       const why = answer?.errors?.map((e) => e.message).join(" ") ?? "GitHub gave no commit back.";
       // An earlier try may have landed with its answer lost, and a later one then fails, saying the branch
       // moved or with a server error: if the branch now has our commit, it was pushed.
-      const ours = await landedCommit(api, pr.headRef, pr.headSha, `${message.headline}\n\n${message.body}`);
+      const ours = await landedCommit(api, pr.headRef, pr.headSha, `${message.headline}\n\n${message.body}`, [...plan.additions.map((a) => a.path), ...plan.deletions]);
       if (ours) {
         o.log(`Pushed ${ours.slice(0, 7)}: ${message.headline}.`);
         output({ pushed: "true", commit: ours });

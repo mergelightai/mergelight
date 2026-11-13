@@ -156,7 +156,7 @@ function topFolders(): string[] {
  * said), to hide so that only the path itself stays readable: Linux's sandbox can't open a folder again
  * inside one it hid, so the rest around it is hidden instead.
  */
-export function besides(path: string, list: (dir: string) => string[] = (dir) => readdirSync(dir), from?: string): string[] {
+export function besides(path: string, list: (dir: string) => string[] = (dir) => readdirSync(dir), from?: string): string[] | null {
   const parts = path.split("/").filter(Boolean);
   const out: string[] = [];
   for (let i = from ? from.split("/").filter(Boolean).length : 1; i < parts.length; i++) {
@@ -165,7 +165,8 @@ export function besides(path: string, list: (dir: string) => string[] = (dir) =>
     try {
       names = list(parent);
     } catch {
-      continue;
+      // What's beside the path there is unknown, so it can't be hidden: the path isn't made readable.
+      return null;
     }
     for (const name of names) if (name !== parts[i]) out.push(`${parent}/${name}`);
   }
@@ -190,23 +191,28 @@ export function sandboxArgs(home = codexHome(), writable?: string, hidden: strin
     const linux = platform === "linux";
     const holds = (outer: string, p: string) => p.startsWith(`${outer}/`);
     const secret = [...hidden, home];
-    // A readable folder that is, or holds, a place to hide would open that place up, so it isn't read at all.
-    const open = readable.filter((r) => !secret.some((h) => h === r || holds(r, h)));
     const tops = (p: string) => `/${p.split("/").filter(Boolean)[0] ?? ""}`;
-    const keepTops = new Set(open.map(tops));
-    const off = linux ? top.filter((t) => !LINUX_KEEP.includes(t) && !keepTops.has(t)) : [];
     // On Linux a folder that must stay readable, such as Codex's own in /opt, is carved from the highest
     // hidden folder that holds it: the folders beside its path are hidden instead, level by level. That is
     // its top folder, unless the top is the system's, or a place to hide above it, such as a self-hosted
-    // runner installed under /usr with Codex in its tool folder. Nothing that leads to a readable folder is hidden.
-    const carved = linux
-      ? open
-          .flatMap((r) => {
-            const from = [...(LINUX_KEEP.includes(tops(r)) ? [] : [tops(r)]), ...secret.filter((h) => holds(h, r))].sort((x, y) => x.length - y.length)[0];
-            return from ? besides(r, list, from) : [];
-          })
-          .filter((c) => !open.some((r) => r === c || holds(c, r)))
-      : [];
+    // runner installed under /usr with Codex in its tool folder. One whose surroundings can't be listed
+    // isn't readable at all. Nor is one that is, or holds, a place to hide: it would open that place up.
+    const carves = new Map<string, string[]>();
+    for (const r of readable) {
+      if (secret.some((h) => h === r || holds(r, h))) continue;
+      if (!linux) {
+        carves.set(r, []);
+        continue;
+      }
+      const from = [...(LINUX_KEEP.includes(tops(r)) ? [] : [tops(r)]), ...secret.filter((h) => holds(h, r))].sort((x, y) => x.length - y.length)[0];
+      const around = from ? besides(r, list, from) : [];
+      if (around) carves.set(r, around);
+    }
+    const open = [...carves.keys()];
+    const keepTops = new Set(open.map(tops));
+    const off = linux ? top.filter((t) => !LINUX_KEEP.includes(t) && !keepTops.has(t)) : [];
+    // Nothing that leads to a readable folder is hidden.
+    const carved = [...carves.values()].flat().filter((c) => !open.some((r) => r === c || holds(c, r)));
     const inside = (p: string) => [...off, ...carved].some((t) => p === t || holds(t, p));
     const paths: [string, string][] = [
       [":root", "read"],

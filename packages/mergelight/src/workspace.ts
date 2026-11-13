@@ -422,14 +422,16 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
     const imported = new Set<string>();
     while (queue.length && !incomplete) {
       const { path, dirs, depth } = queue.shift()!;
-      const file = await tree.readOrFail(path, MAX_INSTRUCTIONS_BYTES);
+      // A file that isn't Markdown, such as a package-lock.json named with @, is read up to a much higher
+      // limit: its imports count all the same, and it is often larger than any instruction file.
+      const limit = /\.mdc?$/i.test(path) ? MAX_INSTRUCTIONS_BYTES : MAX_IMPORTED_FILE_BYTES;
+      const file = await tree.readOrFail(path, limit);
       if (file === FAILED) {
         incomplete = `${path} couldn't be read this time, so no job runs. The next push tries again.`;
         break;
       }
-      // A Markdown file too large to read for its imports: no job runs rather than one with a smaller guard.
-      // Any other file named with @, such as a large package-lock.json, is guarded itself and read no further.
-      if (file === null && /\.mdc?$/i.test(path) && ((await tree.size(path)) ?? 0) > MAX_INSTRUCTIONS_BYTES) {
+      // Too large to read for its imports: no job runs rather than one with a smaller guard.
+      if (file === null && ((await tree.size(path)) ?? 0) > limit) {
         incomplete = `${path} is too large to check what it imports, so no job runs.`;
         break;
       }
@@ -472,6 +474,8 @@ const MAX_LINK_HOPS = 10;
 const MAX_IMPORT_DEPTH = 5;
 const MAX_IMPORTS = 20_000;
 const MAX_INSTRUCTIONS_BYTES = 4_000_000;
+/** How large any other file named with @ may be and still be read for its imports. */
+const MAX_IMPORTED_FILE_BYTES = 64_000_000;
 
 /** How many rule files are read at most. */
 const MAX_RULE_FILES = 100;

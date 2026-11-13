@@ -235,6 +235,13 @@ test("a job's Codex sandbox may write in the job's folder only, and can't read w
   const usr = { "/usr/local/runner": [".credentials", "bin", "_work"], "/usr/local/runner/_work": ["_tool", "_temp", "app"], "/usr/local/runner/_work/_tool": ["codex", "Python"] };
   const underUsr = sandboxArgs("/home/runner/.codex", "/tmp/job", ["/usr/local/runner", "/usr/local/runner/_work", "/usr/local/runner/_work/_temp", "/usr/local/runner/_work/app/app"], ["/usr/local/runner/_work/_tool/codex"], "linux", ["/home", "/tmp", "/usr"], (dir) => usr[dir] ?? [])[3];
   assert.equal(underUsr, 'permissions.mergelight_job.filesystem={":root"="read","/home"="none","/tmp"="none","/usr/local/runner/.credentials"="none","/usr/local/runner/bin"="none","/usr/local/runner/_work/_temp"="none","/usr/local/runner/_work/app"="none","/usr/local/runner/_work/_tool/Python"="none","/tmp/job"="write"}');
+  // A readable folder whose surroundings can't be listed is never read: what's beside it couldn't be hidden.
+  const unlistable = sandboxArgs("/home/runner/.codex", "/tmp/job", ["/home/runner"], ["/home/runner/.nvm/codex"], "linux", ["/home", "/tmp", "/usr"], (dir) => {
+    if (dir === "/home/runner") throw new Error("EACCES");
+    return ["runner"];
+  })[3];
+  assert.equal(unlistable, 'permissions.mergelight_job.filesystem={":root"="read","/home"="none","/tmp"="none","/tmp/job"="write"}');
+  assert.equal(besides("/opt/a/b", () => { throw new Error("EACCES"); }), null);
   // A readable folder that is, or holds, a place to hide is never read: it would open that place up.
   for (const install of ["/run", "/run/secrets", "/home/runner"]) {
     const rules = sandboxArgs("/home/runner/.codex", "/tmp/job", ["/run/secrets"], [install], "linux", ["/home", "/run", "/tmp", "/usr"], () => ["x"])[3];

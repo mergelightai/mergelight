@@ -79,7 +79,9 @@ export async function jobsCommand(ref: PrRef, o: JobsCommandOptions): Promise<nu
   progress(`Reading ${ref.owner}/${ref.repo}#${ref.number}`);
   const pr = await fetchPullRequest(ref);
   // Nothing a job does could be pushed to the default branch (push-jobs.ts), so no AI time is spent on it.
-  if (pr.defaultBranch && pr.headRef === pr.defaultBranch) {
+  // Only the repository's own default branch: a fork's branch can have the same name.
+  const sameRepo = (pr.headRepo ?? "").toLowerCase() === `${pr.owner}/${pr.repo}`.toLowerCase();
+  if (pr.defaultBranch && sameRepo && pr.headRef === pr.defaultBranch) {
     return finish({ head: pr.headSha, outcomes: [], problems: [], changes: [], skipped: `The pull request comes from ${pr.headRef}, the repository's default branch, so no job runs.` });
   }
   progress("Checking out the code");

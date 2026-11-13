@@ -105,3 +105,28 @@ test("the jobs' commit never goes onto the default branch or a protected one", (
   assert.equal(longLivedBranch("feature/x", "main", false), null);
   assert.equal(longLivedBranch("feature/x", undefined, false), null);
 });
+
+test("the push takes a file swapped for a folder, or a folder for a file, only when the push deletes what was there", () => {
+  const all = parseJobFile(".mergelight/jobs/all.md", '---\non: src\nmay-change: "**"\n---\nTask.').job;
+  const plan = (changes, m, files) => checkPush(result(changes, [{ name: "all", source: ".mergelight/jobs/all.md", status: "changed", files: changes.map((c) => c.path), summary: "" }]), [all], HEAD, modes(m), [], files);
+  const fileToFolder = plan([{ path: "docs/guide", deleted: true }, { path: "docs/guide/index.md", contents: b64("x\n") }], { docs: "040000", "docs/guide": "100644", "docs/guide/index.md": null }, ["docs/guide"]);
+  assert.deepEqual(fileToFolder.deletions, ["docs/guide"], fileToFolder.why);
+  const folderToFile = plan([{ path: "docs/a.md", deleted: true }, { path: "docs", contents: b64("x\n") }], { docs: "040000", "docs/a.md": "100644" }, ["docs/a.md"]);
+  assert.deepEqual(folderToFile.additions.map((a) => a.path), ["docs"], folderToFile.why);
+  assert.match(plan([{ path: "docs", contents: b64("x\n") }], { docs: "040000" }, ["docs/a.md"]).why, /isn't an ordinary file at the head/, "the folder still holds a file");
+});
+
+test("the push refuses a new file that differs from another only in letter case, and contents cut short", () => {
+  const all = parseJobFile(".mergelight/jobs/all.md", '---\non: src\nmay-change: "**"\n---\nTask.').job;
+  const plan = (changes, m, files) => checkPush(result(changes, [{ name: "all", source: ".mergelight/jobs/all.md", status: "changed", files: changes.map((c) => c.path), summary: "" }]), [all], HEAD, modes(m), [], files);
+  assert.match(plan([{ path: "locales/DA.json", contents: b64("{}\n") }], { locales: "040000", "locales/DA.json": null }, ["locales/da.json"]).why, /locales\/DA\.json differs from another file only in letter case/);
+  assert.match(plan([{ path: "a/x.md", contents: b64("1\n") }, { path: "a/X.md", contents: b64("2\n") }], { a: "040000", "a/x.md": null, "a/X.md": null }, []).why, /differs from another file only in letter case/);
+  // Renaming by letter case is fine: the old name goes in the same push.
+  assert.equal(plan([{ path: "locales/da.json", deleted: true }, { path: "locales/DA.json", contents: b64("{}\n") }], { locales: "040000", "locales/da.json": "100644", "locales/DA.json": null }, ["locales/da.json"]).why, undefined);
+  assert.match(plan([{ path: "docs/x.md", contents: "YWJj" + "ZA" }], { docs: "040000", "docs/x.md": null }, []).why, /can't be read/);
+});
+
+test("a job this pull request doesn't start may change nothing", () => {
+  const plan = checkPush(result([{ path: "locales/da.json", contents: b64("{}\n") }]), [], HEAD, modes({ "locales/da.json": "100644" }));
+  assert.match(plan.why, /The job "translations" isn't on the base branch, or this pull request doesn't start it/);
+});
