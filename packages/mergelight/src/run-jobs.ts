@@ -254,10 +254,20 @@ async function whyRefused(git: JobGit, job: Job, guarded: string[], headLinks: S
   return null;
 }
 
-/** One line of the AI's own words, cut to size. Whatever it is, it ends up as text on GitHub. */
+/** Text with every secret the file check would refuse taken out. */
+export function withoutSecrets(text: string, env: NodeJS.ProcessEnv = process.env): string {
+  let out = text.replace(SECRET, "[removed]");
+  for (const name of SECRET_ENV) {
+    const value = env[name];
+    if (value && value.length >= 20) out = out.split(value).join("[removed]");
+  }
+  return out;
+}
+
+/** One line of the AI's own words, cut to size, with no secret in it. Whatever it is, it ends up as text on GitHub. */
 function summaryOf(answer: unknown): string {
   const s = (answer as { summary?: unknown } | null)?.summary;
-  return typeof s === "string" ? cut(s.replace(/\s+/g, " ").trim(), 300).trim() : "";
+  return typeof s === "string" ? cut(withoutSecrets(s.replace(/\s+/g, " ").trim()), 300).trim() : "";
 }
 
 export interface RunJobsOptions {
@@ -336,7 +346,8 @@ export async function runJobs(o: RunJobsOptions): Promise<JobsResult> {
         answer = await Promise.race([o.ask(job, dir, earlier, Date.now() + now), late]);
       } catch (err) {
         // What stops every job stops the run, which says so and fails: a login that doesn't work, a plan
-        // with no usage left, a sandbox that can't start, or an AI program that isn't there.
+        // with no usage left, a sandbox that can't start, or an AI program that isn't there. On purpose,
+        // nothing from earlier jobs is pushed then: a run is all or nothing, and the next push runs again.
         if (stopsAll(err)) throw err;
         const reason = cut((err instanceof Error ? err.message : String(err)).replace(/\s+/g, " ").trim(), 300);
         outcome("failed", `The AI run for this job failed${reason ? `: ${/[.!?]$/.test(reason) ? reason : `${reason}.`}` : "."} Its changes were dropped.`);

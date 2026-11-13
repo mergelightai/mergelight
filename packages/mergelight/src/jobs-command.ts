@@ -70,10 +70,10 @@ export async function jobsCommand(ref: PrRef, o: JobsCommandOptions): Promise<nu
     return result.outcomes.length && result.outcomes.every((x) => x.status === "failed") ? 1 : 0;
   };
 
-  // Files are written out and read back byte for byte only with git 2.40 or newer (attributes from a tree).
+  // Files are written out and read back byte for byte only with git 2.42 or newer (GIT_ATTR_SOURCE).
   const version = await gitVersion();
-  if (!version || version[0] < 2 || (version[0] === 2 && version[1] < 40)) {
-    o.log(`Jobs need git 2.40 or newer, and this machine has ${version ? version.join(".") : "a git that can't say"}. No job ran.`);
+  if (!version || version[0] < 2 || (version[0] === 2 && version[1] < 42)) {
+    o.log(`Jobs need git 2.42 or newer, and this machine has ${version ? version.join(".") : "a git that can't say"}. No job ran.`);
     return 1;
   }
   progress(`Reading ${ref.owner}/${ref.repo}#${ref.number}`);

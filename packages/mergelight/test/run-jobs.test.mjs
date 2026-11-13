@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { parseJobFile } from "../dist/jobs.js";
-import { buildJobPrompt, caseClashes, isJobCommit, JOBS_TRAILER, MAX_CHANGED_FILES, mirrorGit, newSecret, runJobs } from "../dist/run-jobs.js";
+import { buildJobPrompt, caseClashes, isJobCommit, JOBS_TRAILER, MAX_CHANGED_FILES, mirrorGit, newSecret, runJobs, withoutSecrets } from "../dist/run-jobs.js";
 import { besides, codexInstall, jobHidden, runnerInstall, sandboxArgs } from "../dist/providers/codex.js";
 
 /** A repository with one commit: an English file, a Danish one, a script that can run, a link and a workflow. */
@@ -224,6 +224,12 @@ test("a job's Codex sandbox may write in the job's folder only, and can't read w
   assert.equal(linux, 'permissions.mergelight_job.filesystem={":root"="read","/home"="none","/tmp"="none","/var"="none","/runner"="none","/opt/actions-runner"="none","/opt/hostedtoolcache/Python"="none","/tmp/job"="write"}');
   assert.match(sandboxArgs("/x/.codex", "/tmp/job", ["/etc/kube/config"], [], "linux", ["/tmp", "/etc"])[3], /"\/etc\/kube\/config"="none"/, "a secret inside a readable system folder is still hidden");
   assert.deepEqual(besides("/opt/a/b", (dir) => ({ "/opt": ["a", "z"], "/opt/a": ["b", "y"] })[dir] ?? []), ["/opt/z", "/opt/a/y"]);
+  // Codex installed through nvm in the home folder: its login folder is beside the path and in the
+  // hidden list too, and still appears once, as Codex stops at a table with a key twice.
+  const nvm = { "/home": ["runner"], "/home/runner": [".nvm", ".codex", ".ssh"], "/home/runner/.nvm": ["codex"] };
+  const twice = sandboxArgs("/home/runner/.codex", "/tmp/job", ["/home/runner/.codex", "/home/runner/.ssh"], ["/home/runner/.nvm/codex"], "linux", ["/home", "/tmp", "/usr"], (dir) => nvm[dir] ?? [])[3];
+  assert.equal(twice.split('"/home/runner/.codex"').length - 1, 1, twice);
+  assert.equal(twice.split('"/home/runner/.ssh"').length - 1, 1, twice);
   const args = sandboxArgs("/home/.codex", "/tmp/job dir", ["/home/runner", "/tmp"], ["/tmp/skill"], "darwin");
   assert.deepEqual(args.slice(0, 2), ["-c", 'default_permissions="mergelight_job"']);
   assert.equal(args[3], 'permissions.mergelight_job.filesystem={":root"="read","/home/runner"="none","/tmp"="none","/home/.codex"="none","/tmp/skill"="read","/tmp/job dir"="write"}');
@@ -255,6 +261,7 @@ test("a job that writes a secret is dropped, and one the file already had doesn'
   assert.equal(newSecret("-----BEGIN OPENSSH PRIVATE KEY-----\nabc"), "a key or token");
   assert.equal(newSecret("x my-secret-runner-token-value y", "", { GH_TOKEN: "my-secret-runner-token-value" }), "GH_TOKEN");
   assert.equal(newSecret('{"bye": "Farvel"}'), null);
+  assert.equal(withoutSecrets(`Done, and the key is ${token}.`), "Done, and the key is [removed].", "a job's summary loses a secret too");
   const { head, jobGit } = repo();
   const result = await runJobs({
     git: jobGit,

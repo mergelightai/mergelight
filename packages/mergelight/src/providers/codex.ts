@@ -156,6 +156,8 @@ export function sandboxArgs(home = codexHome(), writable?: string, hidden: strin
     // stay and lead into /usr. On a Mac, whose system needs more, the disk stays readable but the places
     // secrets live are hidden. Either way the job's folder is the one place it can write, and the more
     // specific rule wins. A rule inside a hidden folder is left out, as Linux's sandbox can't make one.
+    // The job's folder inside the hidden /tmp is fine: a write rule opens it there, tried on a GitHub-hosted
+    // Ubuntu runner and in a Linux container. A read rule doesn't, so a readable folder is handled below.
     // On Linux a folder that must stay readable, such as Codex's own in /opt, keeps its top folder: the
     // folders beside its path are hidden instead, level by level.
     const tops = (p: string) => `/${p.split("/").filter(Boolean)[0] ?? ""}`;
@@ -173,7 +175,10 @@ export function sandboxArgs(home = codexHome(), writable?: string, hidden: strin
       ...(platform === "linux" ? [] : readable.map((r): [string, string] => [r, "read"])),
       [writable, "write"],
     ];
-    return ["-c", 'default_permissions="mergelight_job"', "-c", `permissions.mergelight_job.filesystem={${paths.map(([path, access]) => `${JSON.stringify(path)}="${access}"`).join(",")}}`];
+    // One rule for each path: a table with the same key twice stops Codex. A later rule is the more
+    // specific one (the job's own folder last), so it wins.
+    const rules = new Map(paths);
+    return ["-c", 'default_permissions="mergelight_job"', "-c", `permissions.mergelight_job.filesystem={${[...rules].map(([path, access]) => `${JSON.stringify(path)}="${access}"`).join(",")}}`];
   }
   return ["-c", 'default_permissions="mergelight_review"', "-c", `permissions.mergelight_review.filesystem={":root"="read",${JSON.stringify(home)}="none"}`];
 }
