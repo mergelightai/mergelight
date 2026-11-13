@@ -107,6 +107,7 @@ if (path === "repos/o/r") out({ permissions: { push: s.push !== false } });
 else if (path === "pulls/7") out({ number: 7, title: "PR title", body: "", html_url: "https://github.com/o/r/pull/7", user: { login: "a" }, base: { ref: "main", sha: "b" }, head: { sha: s.head || "${REVIEWED}" }, additions: 1, deletions: 0, changed_files: 1 });
 else if (path.startsWith("commits/")) out({ check_runs: s.checkRuns || [] });
 else if (path.startsWith("compare/")) { if (!s.compare) fail("HTTP 404"); out(s.compare); }
+else if (path === "user") { if (!s.viewer) fail("HTTP 403"); out({ login: s.viewer }); }
 else if (path.startsWith("collaborators/")) { const p = ({ teammate: "write", ...s.permissions })[path.split("/")[1]]; if (!p) fail("HTTP 404"); out({ permission: p }); }
 else fail("unexpected get " + path);
 `,
@@ -902,6 +903,18 @@ test("a fixed finding's comment is folded away as resolved when GitHub won't let
   });
   await withFakeGh(pat.env, () => publishReview(review([])));
   assert.ok(pat.writes().some((w) => w.graphql === "fold"));
+  // With a personal token the comment is the person's own: folded too, and the refusal is logged.
+  const own = useScenario({
+    issueComments: [summaryComment(state)],
+    head: PUSHED,
+    viewer: "tommy",
+    resolveError: "Resource not accessible by personal access token",
+    threads: [{ id: "T1", isResolved: false, isOutdated: true, comments: { nodes: [{ ...findingComment("<!-- mergelight:finding id=aaaaaaaaaa -->\nFinding"), author: { __typename: "User", login: "tommy" }, authorAssociation: "OWNER" }] } }],
+  });
+  const lines = [];
+  await withFakeGh(own.env, () => publishReview(review([]), { log: (l) => lines.push(l) }));
+  assert.ok(own.writes().some((w) => w.graphql === "fold"));
+  assert.ok(lines.some((l) => /Couldn't mark a fixed thread resolved: .*Resource not accessible by personal access token/.test(l)));
 
   // The finding comes back: its folded comment shows again.
   const back = useScenario({

@@ -547,6 +547,8 @@ async function settleThreads(api: GitHub, review: Review, log: (s: string) => vo
   const open = new Set(review.findings.map((f) => f.id));
   const sha = review.pr.head_sha.slice(0, 7);
   const canWrite = writeAccess(api);
+  /** Who this token belongs to, asked once if needed. Null for an app or a workflow token. */
+  let viewer: string | null | undefined;
   /** True when the comment was changed. */
   const edit = (commentId: number, body: string): Promise<boolean> =>
     api.write("PATCH", `pulls/comments/${commentId}`, { body }).then(
@@ -581,9 +583,18 @@ async function settleThreads(api: GitHub, review: Review, log: (s: string) => vo
           // not, and says so in different words for an app and for a personal token. Then the fixed comment
           // is folded away as resolved instead, if Mergelight wrote it. Only a passing error (GitHub down, a
           // timeout, a rate limit) leaves the thread for the next review to try again.
-          const passing = /\b5\d\d\b|timed? ?out|ETIMEDOUT|ECONNRESET|EAI_AGAIN|rate limit/i.test(message);
-          if (!passing) fold = Boolean(found.nodeId) && t.comments.nodes[0]?.author?.__typename === "Bot";
-          else {
+          const passing = /\b5\d\d\b|timed? ?out|ETIMEDOUT|ECONNRESET|EAI_AGAIN|rate limit|something went wrong|try again/i.test(message);
+          if (!passing) {
+            log(`Couldn't mark a fixed thread resolved: ${message}`);
+            // Mergelight's own comment: the app's bot, or the login of a personal token.
+            const author = t.comments.nodes[0]?.author;
+            let own = author?.__typename === "Bot";
+            if (!own && author?.login) {
+              if (viewer === undefined) viewer = await api.viewer();
+              own = author.login === viewer;
+            }
+            fold = Boolean(found.nodeId) && own;
+          } else {
             // Left as it was, not marked Handled: a marked thread isn't tried again, and this one should be.
             log(`Couldn't mark a fixed thread resolved: ${message}. The next review tries again.`);
             continue;
