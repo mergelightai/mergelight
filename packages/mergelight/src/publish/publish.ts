@@ -1,6 +1,7 @@
 import type { Finding, Light, Review } from "../types.js";
 import { RESOLVED_ONLY, type PriorFinding } from "../prompt.js";
 import { GitHub, TRANSIENT, type ApiOptions } from "./api.js";
+import { JOBS_TRAILER } from "../run-jobs.js";
 import { commentableLines, place } from "./diff-lines.js";
 import { answeredRemembered, closedBody, patchTouches, readClosed, REMEMBERED_MARKER, reopenedBody, resolvedByPeople, resolverReplies, threadAction, threadFinding, type Handled, type ReviewThread } from "./closed.js";
 import type { FailureNotice } from "./markdown.js";
@@ -61,6 +62,18 @@ export async function readPrReviewState(api: GitHub, number: number): Promise<Pr
   const summary = await ownSummary(issueComments, () => api.viewer());
   const marks = await readMarks([...issueComments, ...reviewComments], askWriteAccess(api));
   return { summary, state: decodeState(summary?.body), marks, reviewComments };
+}
+
+/**
+ * True when the commit is one the team's jobs pushed and a review of it is already posted. GitHub starts
+ * a new run for a job's push once a person approves it, and that run has nothing new to review.
+ */
+export async function reviewedJobCommit(api: GitHub, number: number, sha: string): Promise<boolean> {
+  const commit = await api.get<{ commit: { message: string } }>(`commits/${sha}`).catch(() => null);
+  // Only the last line marks a job commit, as for the jobs themselves.
+  if (!((commit?.commit?.message ?? "").trim().split("\n").pop() ?? "").startsWith(`${JOBS_TRAILER}:`)) return false;
+  const { state } = await readPrReviewState(api, number);
+  return Boolean(state?.rounds.some((r) => r.sha === sha));
 }
 
 const MAX_PREVIOUS = 40;
