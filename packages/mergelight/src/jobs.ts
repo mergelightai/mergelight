@@ -36,7 +36,29 @@ const NAME = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
  * folders AI agents take instructions from would carry a planted text into every later agent and
  * review, and git's own files change how it reads the rest.
  */
-export const REFUSED_PATHS = [".github", ".mergelight", "CODEOWNERS", "AGENTS.md", "CLAUDE.md", ".claude", ".agents", ".codex", ".cursor", ".gitmodules", ".gitattributes", ".git"];
+export const REFUSED_PATHS = [
+  ".github",
+  ".mergelight",
+  "CODEOWNERS",
+  // What AI agents and the review take instructions from. CONTRIBUTING.md is one of the review's conventions.
+  "AGENTS.md",
+  "CLAUDE.md",
+  "GEMINI.md",
+  "CONTRIBUTING.md",
+  "SKILL.md",
+  ".claude",
+  ".agents",
+  ".codex",
+  ".cursor",
+  ".gemini",
+  ".windsurf",
+  ".cursorrules",
+  ".windsurfrules",
+  ".clinerules",
+  ".gitmodules",
+  ".gitattributes",
+  ".git",
+];
 
 export interface Job {
   name: string;
@@ -129,12 +151,24 @@ export function refusedPath(path: string): boolean {
 }
 
 /**
- * Whether this job may change, add or delete the file. Never a skill folder that guides a job, its own or
- * another's: jobs holds the repository's jobs, so a job can't rewrite what tells it or another job what to do.
+ * Whether this job may change, add or delete the file. Never one in a skill folder: the job's own, or one
+ * in guarded, which holds every folder with a SKILL.md on the base branch (guardedFolders). A skill
+ * guides a job or a review, and a job mustn't rewrite what tells it or a review what to do.
  */
-export function mayChange(job: Job, path: string, jobs: Job[] = []): boolean {
+export function mayChange(job: Job, path: string, guarded: string[] = []): boolean {
   if (refusedPath(path)) return false;
   const lower = path.toLowerCase();
-  if ([job, ...jobs].some((j) => j.skill && matchesPath(`/${j.skill}`.toLowerCase(), lower))) return false;
+  if ([...(job.skill ? [job.skill] : []), ...guarded].some((folder) => matchesPath(`/${folder}`.toLowerCase(), lower))) return false;
   return job.mayChange.some((pattern) => matchesPath(pattern, path));
+}
+
+/**
+ * The folders no job may change anything in: every folder with a SKILL.md in the given list of the base
+ * branch's paths, whether a job or a review uses it, and every job's skill folder.
+ */
+export function guardedFolders(paths: string[], jobs: Job[] = []): string[] {
+  const folders = new Set<string>();
+  for (const p of paths) if (/(^|\/)SKILL\.md$/i.test(p) && p.includes("/")) folders.add(p.slice(0, p.lastIndexOf("/")));
+  for (const j of jobs) if (j.skill) folders.add(j.skill);
+  return [...folders].sort();
 }

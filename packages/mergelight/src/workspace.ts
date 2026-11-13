@@ -4,7 +4,7 @@ import { join, posix } from "node:path";
 import { run, runOk } from "./run.js";
 import { importSkills, SKILL_GIT_TIMEOUT_MS, SKILL_IMPORT_TIMEOUT_MS, writeSkills, type TeamSkill, type WrittenSkill } from "./skills.js";
 import type { Convention, TeamRule } from "./prompt.js";
-import { JOB_FILE, MAX_JOB_FILES, readJobs, refusedPath, type Job, type JobProblem } from "./jobs.js";
+import { guardedFolders, JOB_FILE, MAX_JOB_FILES, readJobs, refusedPath, type Job, type JobProblem } from "./jobs.js";
 import { parseRuleFile, repoRules, RULE_FILE } from "./repo-rules.js";
 import type { PullRequest } from "./types.js";
 
@@ -204,13 +204,13 @@ async function baseTree(mirror: string, base: string): Promise<{ paths: string[]
  * The repository's jobs, as the base branch has them, and every job file that was left out with the
  * reason. A pull request can't add a job or widen one for itself: its own copies don't count.
  */
-export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs: Job[]; problems: JobProblem[] }> {
+export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs: Job[]; problems: JobProblem[]; guarded: string[] }> {
   const tree = await baseTree(mirror, base);
-  if (!tree) return { jobs: [], problems: [] };
+  if (!tree) return { jobs: [], problems: [], guarded: [] };
   const problems: JobProblem[] = [];
   // A file that looks meant as a job but sits deeper or ends in .MD is named, never skipped without a word.
   for (const p of tree.paths) {
-    if (p.toLowerCase().startsWith(".mergelight/jobs/") && /\.md$/i.test(p) && !JOB_FILE.test(p)) problems.push({ source: p, problem: "isn't read: a job file sits right in .mergelight/jobs and ends in .md" });
+    if (p.toLowerCase().startsWith(".mergelight/jobs/") && !JOB_FILE.test(p)) problems.push({ source: p, problem: "isn't read: a job file sits right in .mergelight/jobs and ends in .md" });
   }
   const all = tree.paths.filter((p) => JOB_FILE.test(p)).sort();
   const files = await Promise.all(all.slice(0, MAX_JOB_FILES).map(tree.read));
@@ -229,7 +229,7 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
   const parsed = readJobs([...kept.values()], (folder) => ["100644", "100755"].includes(tree.mode(`${folder}/SKILL.md`) ?? ""));
   const unread = all.slice(0, MAX_JOB_FILES).filter((_, i) => files[i] === null).map((source) => ({ source, problem: "couldn't be read: it is empty, too large, a link to something that isn't a file in the repository, or git couldn't read it this time" }));
   const past = all.slice(MAX_JOB_FILES).map((source) => ({ source, problem: `only ${MAX_JOB_FILES} job files are read` }));
-  return { jobs: parsed.jobs, problems: [...parsed.problems, ...problems, ...unread, ...past].sort((a, b) => a.source.localeCompare(b.source)) };
+  return { jobs: parsed.jobs, problems: [...parsed.problems, ...problems, ...unread, ...past].sort((a, b) => a.source.localeCompare(b.source)), guarded: guardedFolders(tree.paths, parsed.jobs) };
 }
 
 /** How many rule files are read at most. */

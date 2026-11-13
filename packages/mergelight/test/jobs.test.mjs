@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { JOB_FILE, jobsToRun, MAX_JOB_FILES, MAX_JOB_TASK_CHARS, MAX_JOBS, mayChange, parseJobFile, readJobs, refusedPath } from "../dist/jobs.js";
+import { guardedFolders, JOB_FILE, jobsToRun, MAX_JOB_FILES, MAX_JOB_TASK_CHARS, MAX_JOBS, mayChange, parseJobFile, readJobs, refusedPath } from "../dist/jobs.js";
 import { jobFilesFor } from "../dist/workspace.js";
 
 const TRANSLATIONS = "---\nname: translations\non: locales/en.json\nmay-change: locales/*.json\n---\nWhen en.json gets new keys, add each one to every other file in locales/, translated.\n";
@@ -105,7 +105,7 @@ test("a job runs only when a pull request changed one of its on files", () => {
 
 test("a job may change only its own paths, and never workflows, Mergelight's files or git's files", () => {
   const { job } = parseJobFile(".mergelight/jobs/x.md", '---\non: src\nmay-change: "**"\n---\nTask.');
-  for (const p of [".github/workflows/ci.yml", "packages/web/.github/x.yml", ".mergelight/jobs/x.md", ".mergelight/rules.md", ".gitmodules", "src/.gitattributes", ".git/config", ".GITHUB/workflows/ci.yml", "docs/.GitAttributes", ".GitModules", "CODEOWNERS", "docs/CODEOWNERS", "AGENTS.md", "packages/web/CLAUDE.md", ".claude/settings.json", ".agents/skills/x/SKILL.md", ".codex/config.toml", ".cursor/rules/style.mdc"]) {
+  for (const p of [".github/workflows/ci.yml", "packages/web/.github/x.yml", ".mergelight/jobs/x.md", ".mergelight/rules.md", ".gitmodules", "src/.gitattributes", ".git/config", ".GITHUB/workflows/ci.yml", "docs/.GitAttributes", ".GitModules", "CODEOWNERS", "docs/CODEOWNERS", "AGENTS.md", "packages/web/CLAUDE.md", ".claude/settings.json", ".agents/skills/x/SKILL.md", ".codex/config.toml", ".cursor/rules/style.mdc", "CONTRIBUTING.md", "docs/CONTRIBUTING.md", "GEMINI.md", ".cursorrules", "tools/x/SKILL.md"]) {
     assert.ok(refusedPath(p), p);
     assert.ok(!mayChange(job, p), p);
   }
@@ -141,6 +141,7 @@ test("jobs are read from the base branch, never from the pull request", async ()
   write(".mergelight/jobs/typo.md", "---\non: src\nmay-change: guide\nskill: .claude/skills/write-doc\n---\nWrite the guide.\n");
   write(".mergelight/jobs/web/deep.md", "---\non: src\nmay-change: docs\n---\nToo deep.\n");
   write(".mergelight/jobs/Upper.MD", "---\non: src\nmay-change: docs\n---\nWrong ending.\n");
+  write(".mergelight/jobs/notes.markdown", "---\non: src\nmay-change: docs\n---\nOther ending.\n");
 
   git("add", "-A");
   // A folder in another letter case, which macOS's own files can't hold next to the real one: straight into git.
@@ -153,7 +154,8 @@ test("jobs are read from the base branch, never from the pull request", async ()
   git("add", "-A");
   git("commit", "-q", "-m", "pr");
 
-  const { jobs, problems } = await jobFilesFor(dir, "main");
+  const { jobs, problems, guarded } = await jobFilesFor(dir, "main");
+  assert.deepEqual(guarded, [".claude/skills/linked", ".claude/skills/real", ".claude/skills/write-docs"]);
   assert.deepEqual(jobs.map((j) => [j.name, j.mayChange, j.task]), [
     ["guide", ["guide"], "Write the guide."],
     ["review-notes", ["reviews"], "Write the review notes."],
@@ -162,7 +164,7 @@ test("jobs are read from the base branch, never from the pull request", async ()
   assert.equal(jobs[1].source, ".mergelight/jobs/review-notes.md", "a link into .github is fine: no job may change a file there");
   assert.equal(jobs[2].source, ".mergelight/jobs/translations.md", "the real file wins over a link to it");
   const why = Object.fromEntries(problems.map((p) => [p.source, p.problem]));
-  assert.deepEqual(Object.keys(why), [".mergelight/jobs/broken.md", ".mergelight/jobs/docs.md", ".mergelight/jobs/i18n.md", ".mergelight/jobs/linked-skill.md", ".mergelight/jobs/outside.md", ".mergelight/jobs/typo.md", ".mergelight/jobs/Upper.MD", ".mergelight/jobs/web/deep.md", ".mergelight/Jobs/cased.md"].sort((a, b) => a.localeCompare(b)));
+  assert.deepEqual(Object.keys(why), [".mergelight/jobs/broken.md", ".mergelight/jobs/docs.md", ".mergelight/jobs/i18n.md", ".mergelight/jobs/linked-skill.md", ".mergelight/jobs/outside.md", ".mergelight/jobs/typo.md", ".mergelight/jobs/Upper.MD", ".mergelight/jobs/web/deep.md", ".mergelight/Jobs/cased.md", ".mergelight/jobs/notes.markdown"].sort((a, b) => a.localeCompare(b)));
   assert.match(why[".mergelight/jobs/linked-skill.md"], /its skill \.claude\/skills\/linked has no SKILL\.md/, "a SKILL.md that is a link isn't copied, so it doesn't count");
   assert.match(why[".mergelight/jobs/docs.md"], /is a link to shared\/docs-job\.md, a file a job could change\. Keep job files in \.mergelight/);
   assert.match(why[".mergelight/jobs/i18n.md"], /is the same file as \.mergelight\/jobs\/translations\.md, so its job counts once/);
@@ -170,7 +172,7 @@ test("jobs are read from the base branch, never from the pull request", async ()
   assert.match(why[".mergelight/jobs/typo.md"], /its skill \.claude\/skills\/write-doc has no SKILL\.md on the base branch/);
   assert.match(why[".mergelight/jobs/web/deep.md"], /a job file sits right in \.mergelight\/jobs and ends in \.md/);
   assert.match(why[".mergelight/jobs/Upper.MD"], /a job file sits right in \.mergelight\/jobs and ends in \.md/);
-  assert.deepEqual(await jobFilesFor(dir, "no-such-branch"), { jobs: [], problems: [] });
+  assert.deepEqual(await jobFilesFor(dir, "no-such-branch"), { jobs: [], problems: [], guarded: [] });
 });
 
 test("past the limit, job files are named, never read", async () => {
@@ -187,14 +189,18 @@ test("past the limit, job files are named, never read", async () => {
   assert.deepEqual(past, [".mergelight/jobs/j20.md", ".mergelight/jobs/j21.md"]);
 });
 
-test("a job may never change a skill folder that guides a job", () => {
-  const { job: docs } = parseJobFile(".mergelight/jobs/docs.md", '---\non: src\nmay-change: "**"\nskill: .claude/skills/write-docs\n---\nTask.');
+test("a job may never change a skill folder, whether a job or a review uses it", () => {
+  const { job: docs } = parseJobFile(".mergelight/jobs/docs.md", '---\non: src\nmay-change: "**"\nskill: tools/write-docs\n---\nTask.');
   const { job: other } = parseJobFile(".mergelight/jobs/other.md", "---\non: src\nmay-change: x\nskill: tools/skills/translate\n---\nTask.");
-  assert.ok(!mayChange(docs, ".claude/skills/write-docs/SKILL.md"), "its own skill");
-  assert.ok(!mayChange(docs, ".Claude/Skills/write-docs/SKILL.md"), "in any letter case");
-  assert.ok(!mayChange(docs, "tools/skills/translate/SKILL.md", [docs, other]), "another job's skill");
-  assert.ok(mayChange(docs, "tools/skills/translate/SKILL.md"), "without the other jobs, only its own counts");
-  assert.ok(mayChange(docs, "tools/skills/other/SKILL.md", [docs, other]));
+  assert.ok(!mayChange(docs, "tools/write-docs/SKILL.md"), "its own skill");
+  assert.ok(!mayChange(docs, "Tools/Write-Docs/notes.md"), "in any letter case");
+  // Every folder with a SKILL.md on the base branch, such as one a review uses from the dashboard, and every job's skill.
+  const guarded = guardedFolders(["review/security/SKILL.md", "review/security/checklist.md", "src/index.ts", "SKILL.md"], [docs, other]);
+  assert.deepEqual(guarded, ["review/security", "tools/skills/translate", "tools/write-docs"]);
+  assert.ok(!mayChange(docs, "review/security/checklist.md", guarded), "a review's skill");
+  assert.ok(!mayChange(docs, "tools/skills/translate/SKILL.md", guarded), "another job's skill");
+  assert.ok(!mayChange(docs, "new/skill/SKILL.md", guarded), "a new skill anywhere");
+  assert.ok(mayChange(docs, "tools/other/readme.md", guarded));
 });
 
 test("a job left out for its skill doesn't take the name or the place of another", () => {
