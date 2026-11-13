@@ -55,6 +55,8 @@ test("a job file that can't be a job says why", () => {
   assert.match(problem("---\non: x\nmay-change: ../other-repo/**\n---\nTask."), /"\.\.\/other-repo\/\*\*" leaves the repository/);
   assert.match(problem('---\non: x\nmay-change: ["**", "!config/secrets/**"]\n---\nTask.'), /"!config\/secrets\/\*\*" starts with !, but a job can't leave files out that way/);
   assert.match(problem("---\non: [locales/en.json,\n  locales/en-GB.json]\nmay-change: y\n---\nTask."), /"\[locales\/en\.json" looks like part of a \[list\]: write the whole list on one line/);
+  for (const value of ["|", ">-", "~", "null"]) assert.match(problem(`---\non: ${value}\n  locales/en.json\nmay-change: y\n---\nTask.`), /is a YAML block or an empty value/, value);
+  assert.match(problem("---\non: src\nmay-change: tools/write-docs/**\nskill: tools/write-docs\n---\nTask."), /only name its own skill folder, tools\/write-docs, which no job may change/);
   for (const nothing of ["/", ".", "//", "./", "docs/./x"]) assert.match(problem(`---\non: x\nmay-change: "${nothing}"\n---\nTask.`), /names no file\. For every file, write \*\*/, nothing);
   assert.match(problem("---\non: x\nmay-change: y\nskill: ../skills\n---\nTask."), /isn't a folder in the repository/);
   assert.match(problem("---\non: x\nmay-change: y\nskill: .claude/skills/*\n---\nTask."), /isn't a folder in the repository/);
@@ -111,6 +113,7 @@ test("a job may change only its own paths, and never workflows, Mergelight's fil
     assert.ok(!mayChange(job, p), p);
   }
   assert.ok(mayChange(job, "src/index.ts"));
+  for (const p of ["src/../package.json", "src/./index.ts", "src//index.ts"]) assert.ok(!mayChange(job, p), p);
   const { job: translations } = parseJobFile(".mergelight/jobs/translations.md", TRANSLATIONS);
   assert.ok(mayChange(translations, "locales/da.json"));
   assert.ok(!mayChange(translations, "locales/da/extra.json"), "* stays inside one folder");
@@ -143,7 +146,9 @@ test("jobs are read from the base branch, never from the pull request", async ()
   write(".mergelight/jobs/web/deep.md", "---\non: src\nmay-change: docs\n---\nToo deep.\n");
   write(".mergelight/jobs/Upper.MD", "---\non: src\nmay-change: docs\n---\nWrong ending.\n");
   write(".mergelight/jobs/notes.markdown", "---\non: src\nmay-change: docs\n---\nOther ending.\n");
-  write("docs/ai-guide.md", "How agents work here.\n");
+  write("handbook/ai-guide.md", "How agents work here.\n");
+  mkdirSync(join(dir, "docs"), { recursive: true });
+  symlinkSync("../handbook/ai-guide.md", join(dir, "docs/ai-guide.md"));
   symlinkSync("docs/ai-guide.md", join(dir, "AGENTS.md"));
   symlinkSync("web/deep.md", join(dir, ".mergelight/jobs/deep-link.md"));
 
@@ -159,7 +164,7 @@ test("jobs are read from the base branch, never from the pull request", async ()
   git("commit", "-q", "-m", "pr");
 
   const { jobs, problems, guarded } = await jobFilesFor(dir, "main");
-  assert.deepEqual(guarded, [".claude/skills/linked", ".claude/skills/real", ".claude/skills/write-docs", "docs/ai-guide.md", "shared/docs-job.md"], "what AGENTS.md or a job file links to is guarded too");
+  assert.deepEqual(guarded, [".claude/skills/linked", ".claude/skills/real", ".claude/skills/write-docs", "docs/ai-guide.md", "handbook/ai-guide.md", "shared/docs-job.md"], "what AGENTS.md or a job file links to is guarded too, all along a chain of links");
   assert.deepEqual(jobs.map((j) => [j.name, j.mayChange, j.task]), [
     ["guide", ["guide"], "Write the guide."],
     ["review-notes", ["reviews"], "Write the review notes."],
@@ -177,7 +182,10 @@ test("jobs are read from the base branch, never from the pull request", async ()
   assert.match(why[".mergelight/jobs/typo.md"], /its skill \.claude\/skills\/write-doc has no SKILL\.md on the base branch/);
   assert.match(why[".mergelight/jobs/web/deep.md"], /a job file sits right in \.mergelight\/jobs and ends in \.md/);
   assert.match(why[".mergelight/jobs/Upper.MD"], /a job file sits right in \.mergelight\/jobs and ends in \.md/);
-  assert.deepEqual(await jobFilesFor(dir, "no-such-branch"), { jobs: [], problems: [], guarded: [] });
+  const missing = await jobFilesFor(dir, "no-such-branch");
+  assert.deepEqual([missing.jobs, missing.guarded], [[], []]);
+  assert.match(missing.incomplete, /The base branch couldn't be read this time, so no job runs/, "a failed read is never taken for no jobs");
+  assert.equal((await jobFilesFor(dir, "main")).incomplete, undefined);
 });
 
 test("past the limit, job files are named, never read", async () => {

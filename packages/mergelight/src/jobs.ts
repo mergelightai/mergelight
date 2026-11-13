@@ -108,6 +108,9 @@ export function parseJobFile(path: string, text: string): { job: Job } | { probl
   if (split !== undefined) return { problem: `the path "${split.slice(0, 100)}" looks like part of a [list]: write the whole list on one line, or as a YAML list` };
   const bad = [...on, ...mayChange].find(badPattern);
   if (bad !== undefined) return { problem: `the path "${bad.slice(0, 100)}" leaves the repository or names no file. For every file, write **` };
+  // A YAML block or empty value ("|", ">-", "~") would be read as a path: only lists and one-line values are read.
+  const yamlBlock = [...on, ...mayChange].find((p) => /^(?:[|>][+-]?|~|null)$/i.test(p));
+  if (yamlBlock !== undefined) return { problem: `the path "${yamlBlock}" is a YAML block or an empty value: write the paths as a list, or on the key's own line` };
   if (mayChange.every(refusedPath)) {
     return { problem: "its may-change paths only name files a job can never change, like .github and .mergelight" };
   }
@@ -116,6 +119,10 @@ export function parseJobFile(path: string, text: string): { job: Job } | { probl
   const skill = written?.replace(/^(\.\/|\/)+/, "").replace(/\/+$/, "");
   if (written === "") return { problem: "its skill line names no folder: write one folder on the same line, like skill: .claude/skills/write-docs" };
   if (written !== undefined && !isSkillPath(skill)) return { problem: `its skill "${written.slice(0, 100)}" isn't a folder in the repository, like .claude/skills/write-docs` };
+  // No job may change a skill folder, its own included, so one that may only change its own skill can do nothing.
+  if (skill && mayChange.every((p) => matchesPath(`/${skill}`.toLowerCase(), p.replace(/^(\.\/|\/)+/, "").toLowerCase()))) {
+    return { problem: `its may-change paths only name its own skill folder, ${skill}, which no job may change` };
+  }
   // HTML comments are what a team turned off, as in rule files.
   const task = withoutComments(block.body).trim();
   if (!task) return { problem: "has no task under its front matter" };
@@ -159,6 +166,8 @@ export function refusedPath(path: string): boolean {
  * guides a job or a review, and a job mustn't rewrite what tells it or a review what to do.
  */
 export function mayChange(job: Job, path: string, guarded: string[] = []): boolean {
+  // A path that steps out of a folder could reach past what a pattern names.
+  if (path.split("/").some((part) => part === "." || part === ".." || part === "")) return false;
   if (refusedPath(path)) return false;
   const lower = path.toLowerCase();
   if ([...(job.skill ? [job.skill] : []), ...guarded].some((folder) => matchesPath(`/${folder}`.toLowerCase(), lower))) return false;

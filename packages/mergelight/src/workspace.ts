@@ -163,7 +163,7 @@ interface BaseFile {
  * to a file inside the repository. A file that is missing, too large or can't be read is null. Null as a
  * whole when the branch can't be listed.
  */
-async function baseTree(mirror: string, base: string): Promise<{ paths: string[]; mode: (path: string) => string | undefined; read: (path: string) => Promise<BaseFile | null>; linkTarget: (path: string) => Promise<string | null> } | null> {
+async function baseTree(mirror: string, base: string): Promise<{ paths: string[]; mode: (path: string) => string | undefined; read: (path: string) => Promise<BaseFile | null>; linkTarget: (path: string) => Promise<string | null | "unread"> } | null> {
   const git = (args: string[]) =>
     run("git", ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential", "-C", mirror, ...args], {
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
@@ -182,11 +182,16 @@ async function baseTree(mirror: string, base: string): Promise<{ paths: string[]
     const read = await git(["cat-file", "blob", sha]);
     return read?.code === 0 ? read.stdout : null;
   };
-  /** Where a link leads, file or folder, when that is inside the repository. */
-  const linkTarget = async (path: string): Promise<string | null> => {
+  /**
+   * Where a link leads, file or folder: the path inside the repository, null when it leads out of it or
+   * nowhere, or "unread" when git couldn't read it this time.
+   */
+  const linkTarget = async (path: string): Promise<string | null | "unread"> => {
     const file = tree.get(path);
     if (file?.mode !== "120000") return null;
-    const target = (await blob(file.sha))?.trim() ?? "";
+    const content = await blob(file.sha);
+    if (content === null) return "unread";
+    const target = content.trim();
     const resolved = posix.normalize(posix.join(posix.dirname(path), target));
     return !target || target.startsWith("/") || resolved === ".." || resolved.startsWith("../") ? null : resolved;
   };
@@ -212,9 +217,9 @@ async function baseTree(mirror: string, base: string): Promise<{ paths: string[]
  * The repository's jobs, as the base branch has them, and every job file that was left out with the
  * reason. A pull request can't add a job or widen one for itself: its own copies don't count.
  */
-export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs: Job[]; problems: JobProblem[]; guarded: string[] }> {
+export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs: Job[]; problems: JobProblem[]; guarded: string[]; incomplete?: string }> {
   const tree = await baseTree(mirror, base);
-  if (!tree) return { jobs: [], problems: [], guarded: [] };
+  if (!tree) return { jobs: [], problems: [], guarded: [], incomplete: "The base branch couldn't be read this time, so no job runs. The next push tries again." };
   const problems: JobProblem[] = [];
   // A file that looks meant as a job but sits deeper or ends in .MD is named, never skipped without a word.
   for (const p of tree.paths) {
@@ -241,15 +246,37 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
   const unread = all.slice(0, MAX_JOB_FILES).filter((_, i) => files[i] === null).map((source) => ({ source, problem: "couldn't be read: it is empty, too large, a link to something that isn't a file in the repository, or git couldn't read it this time" }));
   const past = all.slice(MAX_JOB_FILES).map((source) => ({ source, problem: `only ${MAX_JOB_FILES} job files are read` }));
   // A file no job may change can be a link to one it could, like AGENTS.md to docs/ai-guide.md: what it
-  // leads to is guarded too.
-  const links = tree.paths.filter((p) => tree.mode(p) === "120000" && refusedPath(p)).slice(0, MAX_GUARDED_LINKS);
-  const targets = (await Promise.all(links.map(tree.linkTarget))).filter((t): t is string => t !== null && !refusedPath(t));
+  // leads to is guarded too, and so is each further link in a chain. If that can't be worked out in full,
+  // no job runs: the guard is never quietly smaller than it should be.
+  const sorted = [...parsed.problems, ...problems, ...unread, ...past].sort((a, b) => a.source.localeCompare(b.source));
+  const links = tree.paths.filter((p) => tree.mode(p) === "120000" && refusedPath(p));
+  if (links.length > MAX_GUARDED_LINKS) {
+    return { jobs: parsed.jobs, problems: sorted, guarded: [], incomplete: `The base branch has ${links.length} links from files no job may change, more than the ${MAX_GUARDED_LINKS} that are checked, so no job runs.` };
+  }
+  const targets = new Set<string>();
+  let incomplete: string | undefined;
+  await Promise.all(
+    links.map(async (link) => {
+      let at = link;
+      for (let hop = 0; hop < MAX_LINK_HOPS; hop++) {
+        const next = await tree.linkTarget(at);
+        if (next === "unread") {
+          incomplete = `${at} couldn't be read this time, so no job runs. The next push tries again.`;
+          return;
+        }
+        if (next === null || refusedPath(next) || targets.has(next)) return;
+        targets.add(next);
+        at = next;
+      }
+    }),
+  );
   const guarded = [...new Set([...guardedFolders(tree.paths, parsed.jobs), ...targets])].sort();
-  return { jobs: parsed.jobs, problems: [...parsed.problems, ...problems, ...unread, ...past].sort((a, b) => a.source.localeCompare(b.source)), guarded };
+  return { jobs: parsed.jobs, problems: sorted, guarded, ...(incomplete ? { incomplete } : {}) };
 }
 
-/** How many links from files no job may change are followed, to guard what they lead to. */
-const MAX_GUARDED_LINKS = 200;
+/** How many links from files no job may change are followed, to guard what they lead to, and how far each. */
+const MAX_GUARDED_LINKS = 1000;
+const MAX_LINK_HOPS = 5;
 
 /** How many rule files are read at most. */
 const MAX_RULE_FILES = 100;
