@@ -263,6 +263,12 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
   // A skill that isn't on the base branch: the job would run without what the team meant it to follow.
   // Only an ordinary SKILL.md counts, as the skill copy takes no links.
   const parsed = readJobs([...kept.values()], (folder) => ["100644", "100755"].includes(tree.mode(`${folder}/SKILL.md`) ?? ""));
+  // A link to a file that couldn't be a job doesn't "count once": say where the reason is.
+  const refusedSources = new Set(parsed.problems.map((p) => p.source));
+  for (const p of problems) {
+    const same = /is the same file as (.+?), so its job counts once/.exec(p.problem)?.[1];
+    if (same && refusedSources.has(same)) p.problem = `is a link to ${same}, which can't be a job: see ${same}`;
+  }
   // A skill named through a linked folder: the copy only takes the real folder, so say that, not "no SKILL.md".
   for (const p of parsed.problems) {
     const skill = /its skill (\S+) has no SKILL\.md/.exec(p.problem)?.[1];

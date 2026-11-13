@@ -73,7 +73,11 @@ export const REFUSED_FOLDERS = [
   ".gitea",
   ".forgejo",
   ".buildkite",
-  "buildkite",
+  // Only at the root, where Buildkite reads it: a folder of that name elsewhere is ordinary.
+  "/buildkite",
+  ".lefthook",
+  ".prow",
+  ".harness",
   ".husky",
   ".devcontainer",
   ".semaphore",
@@ -87,6 +91,9 @@ export const REFUSED_FOLDERS = [
 ];
 
 /**
+ * A file an instruction file only names, such as one CLAUDE.md imports with @, isn't guarded: that is out
+ * of scope, and docs/jobs.md tells teams to keep such files in a folder no job may change.
+ *
  * Files a job can never change, whatever its file says, in any folder. Only the file's own name counts,
  * so a folder that happens to be called owners is ordinary.
  */
@@ -163,6 +170,12 @@ export const REFUSED_FILES = [
   "codemagic.yaml",
   "Jenkinsfile",
   "azure-pipelines.yml",
+  "cloudbuild.json",
+  "codefresh.yml",
+  "codefresh.yaml",
+  "lefthook.json",
+  ".lefthook.json",
+  ".lefthook.toml",
   "buildkite.yml",
   "buildkite.yaml",
   "buildkite.json",
@@ -274,6 +287,11 @@ export function parseJobFile(path: string, text: string): { job: Job } | { probl
     }
     return { problem: `its front matter has a line that isn't read: "${line.trim().slice(0, 60)}". Write each key on a line of its own, and list items under on or may-change with nothing after the colon` };
   }
+  // A quote that opens and never closes would let a comment or a typo widen what the job names.
+  for (const line of block.fm.split(/\r?\n/)) {
+    const value = /^(?:(?:on|may-change)[ \t]*:|[ \t]*-)[ \t]*(["'])(.*)$/.exec(line);
+    if (value && !value[2]!.includes(value[1]!)) return { problem: `a path opens with a quote that never closes: ${line.trim().slice(0, 60)}` };
+  }
   // HTML comments are what a team turned off, as in rule files.
   const task = withoutComments(block.body).trim();
   if (!task) return { problem: "has no task under its front matter" };
@@ -318,7 +336,8 @@ export function folded(path: string): string {
 export function refusedPath(path: string): boolean {
   const lower = folded(path);
   const name = lower.replace(/\/+$/, "").split("/").pop() ?? "";
-  // Roo reads .roorules-<mode> for each mode.
+  // Roo reads .roorules-<mode> for each mode, and lefthook reads lefthook-local.<any>.
+  if (/^lefthook-local\./.test(name)) return true;
   return REFUSED_FOLDERS.some((refused) => matchesPath(folded(refused), lower)) || REFUSED_FILES.some((refused) => folded(refused) === name) || name.startsWith(".roorules-");
 }
 

@@ -69,6 +69,8 @@ test("a job file that can't be a job says why", () => {
   assert.match(problem("---\non:\n  - locales/en.json,\n    locales/en-GB.json\nmay-change: y\n---\nTask."), /a list item in its front matter ends with a comma/);
   assert.match(problem("---\non: locales/en.json\n  locales/en-GB.json\nmay-change: y\n---\nTask."), /its on value goes on to an indented line, which isn't read/);
   assert.match(problem("---\non: x\nmay-change: y\nskill: .claude\n  /skills/write-docs\n---\nTask."), /write the skill folder on the skill line itself/);
+  assert.match(problem('---\non: src\nmay-change: "build #2/**\n---\nTask.'), /a path opens with a quote that never closes/);
+  assert.match(problem("---\non: src\nmay-change:\n  - 'docs/**\n---\nTask."), /a path opens with a quote that never closes/);
   assert.match(problem("---\non:\n  locales/en.json\nmay-change: y\n---\nTask."), /its on value goes on to an indented line, which isn't read/, "an empty key line too");
   // Every front matter line is one that is read, or the file says which isn't.
   assert.match(problem("---\non: locales/en.json\n  - locales/en-GB.json\nmay-change: y\n---\nTask."), /has a line that isn't read: "- locales\/en-GB\.json"/);
@@ -139,13 +141,13 @@ test("a job runs only when a pull request changed one of its on files", () => {
 
 test("a job may change only its own paths, and never workflows, Mergelight's files or git's files", () => {
   const { job } = parseJobFile(".mergelight/jobs/x.md", '---\non: src\nmay-change: "**"\n---\nTask.');
-  for (const p of [".github/workflows/ci.yml", "packages/web/.github/x.yml", ".huſky/pre-commit", ".gıtattributes", ".mergelight/jobs/x.md", ".mergelight/rules.md", ".gitmodules", "src/.gitattributes", ".git/config", ".GITHUB/workflows/ci.yml", "docs/.GitAttributes", ".GitModules", "CODEOWNERS", "docs/CODEOWNERS", "AGENTS.md", "packages/web/CLAUDE.md", ".claude/settings.json", ".agents/skills/x/SKILL.md", ".codex/config.toml", ".cursor/rules/style.mdc", "CONTRIBUTING.md", "docs/CONTRIBUTING.md", "GEMINI.md", ".cursorrules", "tools/x/SKILL.md", ".mcp.json", "CLAUDE.local.md", "AGENTS.override.md", ".vscode/tasks.json", ".roo/rules.md", ".kiro/steering/x.md", ".lfsconfig", "CONVENTIONS.md", ".continue/rules/x.md", ".goosehints", "AGENT.md", "QWEN.md", "CRUSH.md", ".kilocode/rules/x.md", ".trae/rules/x.md", ".augment-guidelines", ".openhands/microagents/x.md", ".gitlab-ci.yml", ".circleci/config.yml", "Jenkinsfile", "azure-pipelines.yml", ".husky/pre-commit", ".devcontainer/devcontainer.json", "WARP.md", "opencode.json", ".idx/airules.md", ".travis.yml", ".gitea/workflows/ci.yml", ".pre-commit-config.yaml", "lefthook.yml", ".devcontainer.json", ".roomodes", "appveyor.yml", ".semaphore/semaphore.yml", "cloudbuild.yaml", ".githooks/pre-push", "OWNERS", ".mergify.yml", "renovate.json", ".renovaterc", "bors.toml", "lefthook.yaml", ".woodpecker.yaml", ".tekton/pipeline.yaml", ".clinerules/security.md", ".clinerules", ".roorules-code", ".coderabbit.yaml", ".tabnine/x.json", ".idx/dev.nix", ".zed/settings.json", "buildkite.yml", "buildkite/pipeline.yml"]) {
+  for (const p of [".github/workflows/ci.yml", "packages/web/.github/x.yml", ".huſky/pre-commit", ".gıtattributes", ".mergelight/jobs/x.md", ".mergelight/rules.md", ".gitmodules", "src/.gitattributes", ".git/config", ".GITHUB/workflows/ci.yml", "docs/.GitAttributes", ".GitModules", "CODEOWNERS", "docs/CODEOWNERS", "AGENTS.md", "packages/web/CLAUDE.md", ".claude/settings.json", ".agents/skills/x/SKILL.md", ".codex/config.toml", ".cursor/rules/style.mdc", "CONTRIBUTING.md", "docs/CONTRIBUTING.md", "GEMINI.md", ".cursorrules", "tools/x/SKILL.md", ".mcp.json", "CLAUDE.local.md", "AGENTS.override.md", ".vscode/tasks.json", ".roo/rules.md", ".kiro/steering/x.md", ".lfsconfig", "CONVENTIONS.md", ".continue/rules/x.md", ".goosehints", "AGENT.md", "QWEN.md", "CRUSH.md", ".kilocode/rules/x.md", ".trae/rules/x.md", ".augment-guidelines", ".openhands/microagents/x.md", ".gitlab-ci.yml", ".circleci/config.yml", "Jenkinsfile", "azure-pipelines.yml", ".husky/pre-commit", ".devcontainer/devcontainer.json", "WARP.md", "opencode.json", ".idx/airules.md", ".travis.yml", ".gitea/workflows/ci.yml", ".pre-commit-config.yaml", "lefthook.yml", ".devcontainer.json", ".roomodes", "appveyor.yml", ".semaphore/semaphore.yml", "cloudbuild.yaml", ".githooks/pre-push", "OWNERS", ".mergify.yml", "renovate.json", ".renovaterc", "bors.toml", "lefthook.yaml", ".woodpecker.yaml", ".tekton/pipeline.yaml", ".clinerules/security.md", ".clinerules", ".roorules-code", ".coderabbit.yaml", ".tabnine/x.json", ".idx/dev.nix", ".zed/settings.json", "buildkite.yml", "buildkite/pipeline.yml", "cloudbuild.json", "codefresh.yml", "lefthook-local.yaml", ".lefthook/pre-commit/x.sh", ".prow/config.yaml"]) {
     assert.ok(refusedPath(p), p);
     assert.ok(!mayChange(job, p), p);
   }
   assert.ok(mayChange(job, "src/index.ts"));
   // A refused file name is only the file itself: a folder with that name is ordinary.
-  for (const p of ["src/main/resources/templates/owners/ownerDetails.html", "app/views/agent.md/x.md", "docs/codeowners-guide/a.md"]) assert.ok(mayChange(job, p), p);
+  for (const p of ["src/main/resources/templates/owners/ownerDetails.html", "app/views/agent.md/x.md", "docs/codeowners-guide/a.md", "src/integrations/buildkite/client.ts"]) assert.ok(mayChange(job, p), p);
   for (const p of ["src/../package.json", "src/./index.ts", "src//index.ts"]) assert.ok(!mayChange(job, p), p);
   const { job: translations } = parseJobFile(".mergelight/jobs/translations.md", TRANSLATIONS);
   assert.ok(mayChange(translations, "locales/da.json"));
@@ -194,6 +196,7 @@ test("jobs are read from the base branch, never from the pull request", async ()
   write(".mergelight/jobs/README.md", "---\non: src\nmay-change: docs\n---\nWritten like a job.\n");
   write(".mergelight/jobs/.gitkeep", "");
   symlinkSync("../jobs.md", join(dir, ".mergelight/jobs/extra.md"));
+  symlinkSync("Copy Job.md", join(dir, ".mergelight/jobs/copy-link.md"));
   // Two copies with the same text: one is refused for its name, and the other still counts.
   write(".mergelight/jobs/Copy Job.md", "---\non: src\nmay-change: copies\n---\nCopy.\n");
   write(".mergelight/jobs/copy-job.md", "---\non: src\nmay-change: copies\n---\nCopy.\n");
@@ -229,10 +232,11 @@ test("jobs are read from the base branch, never from the pull request", async ()
   assert.equal(jobs[2].source, ".mergelight/jobs/review-notes.md", "a link into .github is fine: no job may change a file there");
   assert.equal(jobs[3].source, ".mergelight/jobs/translations.md", "the real file wins over a link to it");
   const why = Object.fromEntries(problems.map((p) => [p.source, p.problem]));
-  assert.deepEqual(Object.keys(why), [".mergelight/jobs/broken.md", ".mergelight/jobs/docs.md", ".mergelight/jobs/i18n.md", ".mergelight/jobs/linked-skill.md", ".mergelight/jobs/outside.md", ".mergelight/jobs/typo.md", ".mergelight/jobs/Upper.MD", ".mergelight/jobs/web/deep.md", ".mergelight/Jobs/cased.md", ".mergelight/jobs/notes.markdown", ".mergelight/jobs/deep-link.md", ".mergelight/jobs.md", ".mergelight/jobs/Copy Job.md", ".mergelight/jobs/via-link.md", ".mergelight/jobs/extra.md", ".mergelight/jobs/README.md"].sort((a, b) => a.localeCompare(b)));
+  assert.deepEqual(Object.keys(why), [".mergelight/jobs/broken.md", ".mergelight/jobs/docs.md", ".mergelight/jobs/i18n.md", ".mergelight/jobs/linked-skill.md", ".mergelight/jobs/outside.md", ".mergelight/jobs/typo.md", ".mergelight/jobs/Upper.MD", ".mergelight/jobs/web/deep.md", ".mergelight/Jobs/cased.md", ".mergelight/jobs/notes.markdown", ".mergelight/jobs/deep-link.md", ".mergelight/jobs.md", ".mergelight/jobs/Copy Job.md", ".mergelight/jobs/via-link.md", ".mergelight/jobs/extra.md", ".mergelight/jobs/README.md", ".mergelight/jobs/copy-link.md"].sort((a, b) => a.localeCompare(b)));
   assert.match(why[".mergelight/jobs.md"], /jobs are files right in the \.mergelight\/jobs folder/);
   assert.match(why[".mergelight/jobs/README.md"], /is the folder's notes, never read as a job/);
   assert.match(why[".mergelight/jobs/extra.md"], /is a link to \.mergelight\/jobs\.md, which isn't a job file that is read/);
+  assert.match(why[".mergelight/jobs/copy-link.md"], /is a link to \.mergelight\/jobs\/Copy Job\.md, which can't be a job: see/);
   assert.match(why[".mergelight/jobs/Copy Job.md"], /must be lowercase/);
   assert.match(why[".mergelight/jobs/via-link.md"], /its skill \.agents\/skills\/real is reached through \.agents\/skills, which is a link: name the skill by its real folder/);
   assert.match(why[".mergelight/jobs/deep-link.md"], /is a link to \.mergelight\/jobs\/web\/deep\.md, which isn't a job file that is read/);
