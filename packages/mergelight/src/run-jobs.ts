@@ -4,7 +4,7 @@ import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { mayChange, type Job, type JobProblem } from "./jobs.js";
 import type { Convention } from "./prompt.js";
-import { LimitError, LoginError } from "./providers/codex.js";
+import { LimitError, LoginError, SandboxError } from "./providers/codex.js";
 import { run, type RunResult } from "./run.js";
 import type { PullRequest } from "./types.js";
 
@@ -138,6 +138,11 @@ export function caseBlindDisk(root = tmpdir()): boolean {
   } finally {
     rmSync(probe, { recursive: true, force: true });
   }
+}
+
+/** An error no other job would get past either. */
+function stopsAll(err: unknown): boolean {
+  return err instanceof LoginError || err instanceof LimitError || err instanceof SandboxError || (err as NodeJS.ErrnoException | null)?.code === "ENOENT";
 }
 
 /** Text cut to a number of characters, never in the middle of one. */
@@ -328,8 +333,9 @@ export async function runJobs(o: RunJobsOptions): Promise<JobsResult> {
         // The AI run ends at the same moment as the race, so its process is stopped when the job is given up.
         answer = await Promise.race([o.ask(job, dir, earlier, Date.now() + now), late]);
       } catch (err) {
-        // A login that doesn't work or a plan with no usage left stops every job: the run says so and fails.
-        if (err instanceof LoginError || err instanceof LimitError) throw err;
+        // What stops every job stops the run, which says so and fails: a login that doesn't work, a plan
+        // with no usage left, a sandbox that can't start, or an AI program that isn't there.
+        if (stopsAll(err)) throw err;
         const reason = cut((err instanceof Error ? err.message : String(err)).replace(/\s+/g, " ").trim(), 300);
         outcome("failed", `The AI run for this job failed${reason ? `: ${/[.!?]$/.test(reason) ? reason : `${reason}.`}` : "."} Its changes were dropped.`);
         continue;
@@ -351,8 +357,8 @@ export async function runJobs(o: RunJobsOptions): Promise<JobsResult> {
       current = tree;
       outcome("changed", summary || `It changed ${mine.length} file${mine.length === 1 ? "" : "s"}.`, mine.map((e) => e.path));
     } catch (err) {
-      if (err instanceof LoginError || err instanceof LimitError) throw err;
-      outcome("failed", `This job couldn't run: ${(err instanceof Error ? err.message : String(err)).slice(0, 300)}`);
+      if (stopsAll(err)) throw err;
+      outcome("failed", `This job couldn't run: ${cut(err instanceof Error ? err.message : String(err), 300)}`);
     } finally {
       // A folder the AI made read-only mustn't sink the run: a leftover is only a leftover.
       for (const folder of [dir, scratch]) {

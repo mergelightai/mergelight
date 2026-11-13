@@ -49,6 +49,8 @@ export async function claudeAvailable(): Promise<boolean> {
  * and anything that would ask for permission is denied. Login and plan are the user's own.
  */
 export async function runClaude(opts: ModelOptions): Promise<ModelResult> {
+  // A run whose time is up never starts: its kill timer would only fire after the job was given up.
+  if (opts.deadline && opts.deadline <= Date.now()) throw new Error("there was no time left to start the AI");
   const args = [
     "-p",
     "--output-format", "json",
@@ -70,7 +72,7 @@ export async function runClaude(opts: ModelOptions): Promise<ModelResult> {
   const result = await run("claude", args, {
     cwd: opts.cwd,
     input: opts.prompt,
-    timeoutMs: opts.deadline ? Math.max(1_000, opts.deadline - Date.now()) : (opts.timeoutMs ?? 25 * 60_000),
+    timeoutMs: opts.deadline ? opts.deadline - Date.now() : (opts.timeoutMs ?? 25 * 60_000),
     env: claudeEnv(),
   });
   const checkLogin = (text: string) => {

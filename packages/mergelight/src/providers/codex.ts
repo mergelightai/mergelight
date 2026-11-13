@@ -91,12 +91,20 @@ function mcpServers(config: string): string[] {
  * steer them, so the folder with the login is taken out of what they can read. Codex itself still reads it.
  * For a job, they may also write in the one folder the job works in, and nowhere else.
  */
-export function sandboxArgs(home = codexHome(), writable?: string, hidden: string[] = [], readable: string[] = []): string[] {
+/** What a shell and its tools need on Linux, and nothing more: no home folders, no runner, no temp folder, no /proc. */
+export const LINUX_SYSTEM = ["/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/etc", "/dev"];
+
+export function sandboxArgs(home = codexHome(), writable?: string, hidden: string[] = [], readable: string[] = [], platform: NodeJS.Platform = process.platform): string[] {
   if (writable) {
-    // A job's files get pushed, so its commands can't read where secrets or other code live either: the
-    // home folder, Mergelight's cache, the runner's own folders and the temp folder. The job's own skill
-    // stays readable and only the job's folder can be written: the more specific rule wins.
-    const paths: [string, string][] = [[":root", "read"], ...hidden.map((h): [string, string] => [h, "none"]), [home, "none"], ...readable.map((r): [string, string] => [r, "read"]), [writable, "write"]];
+    // A job's files get pushed, so its commands mustn't reach secrets or other code. On Linux, where
+    // runners are, they read nothing but the system folders a shell needs. Elsewhere (a Mac, where the
+    // system needs more than that) they read the disk but none of the places secrets live. Either way the
+    // job's own skill stays readable and only the job's folder can be written: the more specific rule wins.
+    const start: [string, string][] =
+      platform === "linux"
+        ? [[":root", "none"], ...LINUX_SYSTEM.map((p): [string, string] => [p, "read"])]
+        : [[":root", "read"], ...hidden.map((h): [string, string] => [h, "none"])];
+    const paths: [string, string][] = [...start, [home, "none"], ...readable.map((r): [string, string] => [r, "read"]), [writable, "write"]];
     return ["-c", 'default_permissions="mergelight_job"', "-c", `permissions.mergelight_job.filesystem={${paths.map(([path, access]) => `${JSON.stringify(path)}="${access}"`).join(",")}}`];
   }
   return ["-c", 'default_permissions="mergelight_review"', "-c", `permissions.mergelight_review.filesystem={":root"="read",${JSON.stringify(home)}="none"}`];
@@ -114,7 +122,9 @@ export function jobHidden(env: NodeJS.ProcessEnv = process.env, install: string 
   const workParent = work ? dirname(work) : undefined;
   // Anything but the disk's root itself: /runner and /_work are common install and work folders.
   const deepEnough = (p: string | undefined) => (p && p.split("/").filter(Boolean).length >= 1 ? p : undefined);
-  const places = [homedir(), env.MERGELIGHT_CACHE, env.RUNNER_TEMP, env.GITHUB_WORKSPACE, deepEnough(work), deepEnough(workParent), deepEnough(install ?? undefined), tmpdir(), "/tmp"].filter((p): p is string => Boolean(p));
+  // Credential files other tools are told about, wherever they are.
+  const named = [env.KUBECONFIG, env.GOOGLE_APPLICATION_CREDENTIALS, env.AWS_SHARED_CREDENTIALS_FILE, env.AWS_CONFIG_FILE, env.GH_CONFIG_DIR, env.DOCKER_CONFIG, env.AZURE_CONFIG_DIR].flatMap((v) => v?.split(":") ?? []);
+  const places = [homedir(), dirname(homedir()), "/root", "/run/secrets", "/var/run/secrets", env.MERGELIGHT_CACHE, env.RUNNER_TEMP, env.GITHUB_WORKSPACE, deepEnough(work), deepEnough(workParent), deepEnough(install ?? undefined), ...named, tmpdir(), "/tmp"].filter((p): p is string => Boolean(p) && p !== "/");
   const real = places.map((p) => {
     try {
       return realpathSync(p);
@@ -133,9 +143,12 @@ export function jobHidden(env: NodeJS.ProcessEnv = process.env, install: string 
 export function runnerInstall(ps: (pid: number) => string | null = psLine, start = process.ppid): string | null {
   let pid = start;
   for (let i = 0; i < 30 && pid > 1; i++) {
-    const m = /^\s*(\d+)\s+(\S+)/.exec(ps(pid) ?? "");
+    const line = ps(pid) ?? "";
+    const m = /^\s*(\d+)\s/.exec(line);
     if (!m) return null;
-    if (/\/bin\/Runner\.(?:Worker|Listener)$/.test(m[2]!)) return dirname(dirname(m[2]!));
+    // The program's path may hold spaces, so it is found by its ending, not as the first word.
+    const exe = /^\s*\d+\s+(.*?\/bin\/Runner\.(?:Worker|Listener))(?:\s|$)/.exec(line)?.[1];
+    if (exe) return dirname(dirname(exe));
     pid = Number(m[1]);
   }
   return null;
@@ -213,6 +226,8 @@ export async function withoutProjectDocs(has: Promise<Set<string>> = codexFeatur
  * Everything else (provider, model, login) is the user's own Codex setup.
  */
 export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
+  // A run whose time is up never starts: its kill timer would only fire after the job was given up.
+  if (opts.deadline && opts.deadline <= Date.now()) throw new Error("there was no time left to start the AI");
   const config = readUserConfig();
   const work = mkdtempSync(join(tmpdir(), "mergelight-codex-"));
   const schemaFile = join(work, "schema.json");
@@ -293,7 +308,7 @@ export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
   try {
     const result = await run("codex", args, {
       input: opts.prompt,
-      timeoutMs: opts.deadline ? Math.max(1_000, opts.deadline - Date.now()) : (opts.timeoutMs ?? 25 * 60_000),
+      timeoutMs: opts.deadline ? opts.deadline - Date.now() : (opts.timeoutMs ?? 25 * 60_000),
       onStdout,
       env: codexEnv(),
     });

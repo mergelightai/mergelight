@@ -66,7 +66,8 @@ export async function jobsCommand(ref: PrRef, o: JobsCommandOptions): Promise<nu
     if (!o.out && !process.env.RUNNER_TEMP) o.log(`The result is in ${out}.`);
     // The workflow pushes only when there is something to push.
     if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `changes=${result.changes.length}\nresult=${out}\n`);
-    return 0;
+    // Every job that ran failed: that is the run failing, not a pull request with nothing to do.
+    return result.outcomes.length && result.outcomes.every((x) => x.status === "failed") ? 1 : 0;
   };
 
   // Files are written out and read back byte for byte only with git 2.40 or newer (attributes from a tree).

@@ -217,7 +217,10 @@ test("the job's prompt gives the team's task as the instruction, and the pull re
 });
 
 test("a job's Codex sandbox may write in the job's folder only, and can't read where secrets live", () => {
-  const args = sandboxArgs("/home/.codex", "/tmp/job dir", ["/home/runner", "/tmp"], ["/tmp/skill"]);
+  // On Linux, where runners are: nothing but the system folders, the skill and the job's own folder.
+  const linux = sandboxArgs("/home/.codex", "/tmp/job", ["/home/runner"], ["/tmp/skill"], "linux")[3];
+  assert.equal(linux, 'permissions.mergelight_job.filesystem={":root"="none","/usr"="read","/bin"="read","/sbin"="read","/lib"="read","/lib32"="read","/lib64"="read","/libx32"="read","/etc"="read","/dev"="read","/home/.codex"="none","/tmp/skill"="read","/tmp/job"="write"}');
+  const args = sandboxArgs("/home/.codex", "/tmp/job dir", ["/home/runner", "/tmp"], ["/tmp/skill"], "darwin");
   assert.deepEqual(args.slice(0, 2), ["-c", 'default_permissions="mergelight_job"']);
   assert.equal(args[3], 'permissions.mergelight_job.filesystem={":root"="read","/home/runner"="none","/tmp"="none","/home/.codex"="none","/tmp/skill"="read","/tmp/job dir"="write"}');
   assert.equal(sandboxArgs("/home/.codex")[1], 'default_permissions="mergelight_review"', "a review still only reads");
@@ -236,6 +239,9 @@ test("a job's Codex sandbox may write in the job's folder only, and can't read w
   const lines = { 300: "200 node /tmp/mergelight/dist/cli.js jobs", 200: "100 /opt/actions-runner/bin/Runner.Worker spawnclient 1 2", 100: "1 /opt/actions-runner/bin/Runner.Listener run" };
   assert.equal(runnerInstall((pid) => lines[pid] ?? null, 300), "/opt/actions-runner");
   assert.equal(runnerInstall(() => null, 300), null, "outside a runner");
+  assert.equal(runnerInstall((pid) => (pid === 5 ? "1 /opt/GitHub Runner/bin/Runner.Worker spawnclient 1 2" : null), 5), "/opt/GitHub Runner", "a path with a space");
+  const named = jobHidden({ KUBECONFIG: "/etc/kube/config:/srv/other", GOOGLE_APPLICATION_CREDENTIALS: "/srv/gcp.json" }, null);
+  for (const p of ["/etc/kube/config", "/srv/other", "/srv/gcp.json", "/var/run/secrets", "/root"]) assert.ok(named.includes(p), p);
 });
 
 test("a job that writes a secret is dropped, and one the file already had doesn't count", async () => {
@@ -433,4 +439,10 @@ test("a job that adds a file whose name differs from another only in letter case
   // On a disk that ignores case the write lands in da.json itself; elsewhere a second file appears.
   if (result.outcomes[0].status === "refused") assert.match(result.outcomes[0].summary, /differ from others only in letter case: locales\/DA\.json/);
   else assert.deepEqual(result.changes.map((c) => c.path), ["locales/da.json"]);
+});
+
+test("every job failing fails the run, and an AI program that isn't there stops it", async () => {
+  const { head, jobGit } = repo();
+  const missing = Object.assign(new Error("spawn codex ENOENT"), { code: "ENOENT" });
+  await assert.rejects(runJobs({ git: jobGit, head, jobs: [job("translations", "locales/*.json")], ask: async () => { throw missing; } }), /ENOENT/);
 });

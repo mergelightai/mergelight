@@ -310,6 +310,9 @@ test("the guard follows links the way the file system does, and runs no job when
     symlinkSync(target, join(dir, path));
   };
   git("init", "-q", "-b", "main");
+  // A job, so the guard is worked out at all.
+  mkdirSync(join(dir, ".mergelight/jobs"), { recursive: true });
+  writeFileSync(join(dir, ".mergelight/jobs/x.md"), "---\non: src\nmay-change: src\n---\nTask.\n");
   // AGENTS.md leads to a file through a folder that is itself a link.
   write("vendor/ai/guide.md", "Guide.\n");
   link("../vendor/ai", "shared/ai");
@@ -357,6 +360,9 @@ test("a protected link to the repository's root runs no job", async () => {
   const dir = mkdtempSync(join(tmpdir(), "mergelight-jobs-root-"));
   const git = (...args) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t.test", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
   git("init", "-q", "-b", "main");
+  // A job, so the guard is worked out at all.
+  mkdirSync(join(dir, ".mergelight/jobs"), { recursive: true });
+  writeFileSync(join(dir, ".mergelight/jobs/x.md"), "---\non: src\nmay-change: src\n---\nTask.\n");
   mkdirSync(join(dir, ".cursor"));
   symlinkSync("../", join(dir, ".cursor/everything"));
   writeFileSync(join(dir, "README.md"), "Hi\n");
@@ -373,6 +379,9 @@ test("files an instruction file imports with @ are guarded, as deep as Claude Co
     writeFileSync(join(dir, path), text);
   };
   git("init", "-q", "-b", "main");
+  // A job, so the guard is worked out at all.
+  mkdirSync(join(dir, ".mergelight/jobs"), { recursive: true });
+  writeFileSync(join(dir, ".mergelight/jobs/x.md"), "---\non: src\nmay-change: src\n---\nTask.\n");
   write("CLAUDE.md", "# Team notes\nSee @docs/ai-guide.md and @./style.md. Mail us at team@example.com.\n");
   write("docs/ai-guide.md", "More in @deeper/one.md\n");
   write("docs/deeper/one.md", "Done.\n");
@@ -405,6 +414,9 @@ test("rules in a folder a protected link leads to, and a large instruction file,
     writeFileSync(join(dir, path), text);
   };
   git("init", "-q", "-b", "main");
+  // A job, so the guard is worked out at all.
+  mkdirSync(join(dir, ".mergelight/jobs"), { recursive: true });
+  writeFileSync(join(dir, ".mergelight/jobs/x.md"), "---\non: src\nmay-change: src\n---\nTask.\n");
   write("config/cursor/rules/style.mdc", "Follow @../../../docs/style-guide.md\n");
   write("docs/style-guide.md", "Style.\n");
   symlinkSync("config/cursor", join(dir, ".cursor"));
@@ -426,6 +438,9 @@ test("instruction files in a guarded folder that is a link are read for imports 
     writeFileSync(join(dir, path), text);
   };
   git("init", "-q", "-b", "main");
+  // A job, so the guard is worked out at all.
+  mkdirSync(join(dir, ".mergelight/jobs"), { recursive: true });
+  writeFileSync(join(dir, ".mergelight/jobs/x.md"), "---\non: src\nmay-change: src\n---\nTask.\n");
   write("config/claude/CLAUDE.md", "See @../docs/guide.md\n");
   write("docs/guide.md", "Guide.\n");
   symlinkSync("config/claude", join(dir, ".claude"));
@@ -444,6 +459,9 @@ test("an instruction file reached through an ordinary folder link has its import
     writeFileSync(join(dir, path), text);
   };
   git("init", "-q", "-b", "main");
+  // A job, so the guard is worked out at all.
+  mkdirSync(join(dir, ".mergelight/jobs"), { recursive: true });
+  writeFileSync(join(dir, ".mergelight/jobs/x.md"), "---\non: src\nmay-change: src\n---\nTask.\n");
   write("apps/web/CLAUDE.md", "See @../shared/ai.md\n");
   write("packages/shared/ai.md", "Through the link.\n");
   write("apps/shared/ai.md", "Through the real folder.\n");

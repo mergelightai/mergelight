@@ -187,12 +187,15 @@ async function baseTree(mirror: string, base: string): Promise<{ paths: string[]
     const read = await git(["cat-file", "blob", sha]);
     return read?.code === 0 ? read.stdout : FAILED;
   };
-  /** What a link holds, as git keeps it: its target, as written. Null for no link, "unread" when git couldn't read it this time. */
-  const linkContent = async (path: string): Promise<string | null | "unread"> => {
+  /** What a link holds, as git keeps it: its target, as written. Null for no link, "unread" when git couldn't read it this time. Read once each. */
+  const links = new Map<string, Promise<string | null | "unread">>();
+  const linkContent = (path: string): Promise<string | null | "unread"> => {
+    const known = links.get(path);
+    if (known) return known;
     const file = tree.get(path);
-    if (file?.mode !== "120000") return null;
-    const content = await blob(file.sha);
-    return content === FAILED || content === null ? "unread" : content;
+    const read = file?.mode !== "120000" ? Promise.resolve(null) : blob(file.sha).then((content) => (content === FAILED || content === null ? "unread" : content));
+    links.set(path, read);
+    return read;
   };
   /** A file, null when there is none to read, or FAILED when git couldn't read it this time. */
   const readOrFail = async (path: string, max = MAX_CONVENTION_BYTES): Promise<BaseFile | null | typeof FAILED> => {
@@ -269,6 +272,7 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
   // A skill that isn't on the base branch: the job would run without what the team meant it to follow.
   // Only an ordinary SKILL.md counts, as the skill copy takes no links.
   const parsed = readJobs([...kept.values()], (folder) => ["100644", "100755"].includes(tree.mode(`${folder}/SKILL.md`) ?? ""));
+  // No job to run: no guard to work out, and nothing to say about one.
   // A link to a file that couldn't be a job doesn't "count once": say where the reason is.
   const refusedSources = new Set(parsed.problems.map((p) => p.source));
   for (const p of problems) {
@@ -291,6 +295,7 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
   // followed in turn, until nothing new turns up. If that can't be worked out in full, no job runs: the
   // guard is never quietly smaller than it should be.
   const sorted = [...parsed.problems, ...problems, ...unread, ...past].map(({ source, problem }) => ({ source, problem })).sort((a, b) => a.source.localeCompare(b.source));
+  if (!parsed.jobs.length) return { jobs: [], problems: sorted, guarded: [] };
   const targets = new Set<string>();
   const folders = guardedFolders(tree.paths, parsed.jobs);
   const inGuard = (p: string) => refusedPath(p) || [...folders, ...targets].some((t) => p === t || p.startsWith(`${t}/`));
