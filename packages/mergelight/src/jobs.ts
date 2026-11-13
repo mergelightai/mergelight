@@ -73,6 +73,7 @@ export const REFUSED_FOLDERS = [
   ".gitea",
   ".forgejo",
   ".buildkite",
+  "buildkite",
   ".husky",
   ".devcontainer",
   ".semaphore",
@@ -162,6 +163,9 @@ export const REFUSED_FILES = [
   "codemagic.yaml",
   "Jenkinsfile",
   "azure-pipelines.yml",
+  "buildkite.yml",
+  "buildkite.yaml",
+  "buildkite.json",
   "bitbucket-pipelines.yml",
   // How git reads the rest.
   ".gitmodules",

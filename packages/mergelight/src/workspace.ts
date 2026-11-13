@@ -147,6 +147,9 @@ export async function conventionsFor(mirror: string, base: string, changedPaths:
   return (await teamFilesFor(mirror, base, changedPaths)).conventions;
 }
 
+/** A git read that failed this time, told apart from a file that is too large or missing. */
+const FAILED = Symbol("failed");
+
 /** A file as the base branch has it. */
 interface BaseFile {
   path: string;
@@ -163,7 +166,7 @@ interface BaseFile {
  * to a file inside the repository. A file that is missing, too large or can't be read is null. Null as a
  * whole when the branch can't be listed.
  */
-async function baseTree(mirror: string, base: string): Promise<{ paths: string[]; mode: (path: string) => string | undefined; read: (path: string) => Promise<BaseFile | null>; linkContent: (path: string) => Promise<string | null | "unread"> } | null> {
+async function baseTree(mirror: string, base: string): Promise<{ paths: string[]; mode: (path: string) => string | undefined; read: (path: string) => Promise<BaseFile | null>; readOrFail: (path: string) => Promise<BaseFile | null | typeof FAILED>; linkContent: (path: string) => Promise<string | null | "unread"> } | null> {
   const git = (args: string[]) =>
     run("git", ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential", "-C", mirror, ...args], {
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
@@ -176,34 +179,46 @@ async function baseTree(mirror: string, base: string): Promise<{ paths: string[]
     const m = /^(\d{6}) blob ([0-9a-f]{40,64})\t([\s\S]+)$/.exec(entry);
     if (m) tree.set(m[3]!, { mode: m[1]!, sha: m[2]! });
   }
-  const blob = async (sha: string): Promise<string | null> => {
+  /** A file's text, null when it is too large, or FAILED when git couldn't read it this time. */
+  const blob = async (sha: string): Promise<string | null | typeof FAILED> => {
     const sized = await git(["cat-file", "-s", sha]);
-    if (sized?.code !== 0 || !(Number(sized.stdout.trim()) <= MAX_CONVENTION_BYTES)) return null;
+    if (sized?.code !== 0) return FAILED;
+    if (!(Number(sized.stdout.trim()) <= MAX_CONVENTION_BYTES)) return null;
     const read = await git(["cat-file", "blob", sha]);
-    return read?.code === 0 ? read.stdout : null;
+    return read?.code === 0 ? read.stdout : FAILED;
   };
   /** What a link holds, as git keeps it: its target, as written. Null for no link, "unread" when git couldn't read it this time. */
   const linkContent = async (path: string): Promise<string | null | "unread"> => {
     const file = tree.get(path);
     if (file?.mode !== "120000") return null;
-    return (await blob(file.sha)) ?? "unread";
+    const content = await blob(file.sha);
+    return content === FAILED || content === null ? "unread" : content;
   };
-  const read = async (path: string): Promise<BaseFile | null> => {
+  /** A file, null when there is none to read, or FAILED when git couldn't read it this time. */
+  const readOrFail = async (path: string): Promise<BaseFile | null | typeof FAILED> => {
     let file = tree.get(path);
     const link = file?.mode === "120000";
     let resolved: string | undefined;
     if (file && link) {
       // A link: git keeps the target's path as its content.
-      const target = (await blob(file.sha))?.trim() ?? "";
+      const content = await blob(file.sha);
+      if (content === FAILED) return FAILED;
+      const target = content?.trim() ?? "";
       resolved = posix.normalize(posix.join(posix.dirname(path), target));
       if (!target || target.startsWith("/") || resolved === ".." || resolved.startsWith("../")) return null;
       file = tree.get(resolved);
     }
     if (!file || (file.mode !== "100644" && file.mode !== "100755")) return null;
-    const text = (await blob(file.sha))?.trim();
+    const content = await blob(file.sha);
+    if (content === FAILED) return FAILED;
+    const text = content?.trim();
     return text ? { path, sha: file.sha, text, link, ...(resolved ? { target: resolved } : {}) } : null;
   };
-  return { paths: [...tree.keys()], mode: (path) => tree.get(path)?.mode, read, linkContent };
+  const read = async (path: string): Promise<BaseFile | null> => {
+    const file = await readOrFail(path);
+    return file === FAILED ? null : file;
+  };
+  return { paths: [...tree.keys()], mode: (path) => tree.get(path)?.mode, read, readOrFail, linkContent };
 }
 
 /**
@@ -226,7 +241,11 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
     else if (/^\.mergelight(?:\/jobs)?$/i.test(p) || p.toLowerCase().startsWith(".mergelight/jobs.")) problems.push({ source: p, problem: "isn't read: jobs are files right in the .mergelight/jobs folder, which can't be a link" });
   }
   const all = tree.paths.filter((p) => JOB_FILE.test(p) && !/\/readme\.md$/i.test(p)).sort();
-  const files = await Promise.all(all.slice(0, MAX_JOB_FILES).map(tree.read));
+  const tries = await Promise.all(all.slice(0, MAX_JOB_FILES).map(tree.readOrFail));
+  // A job file git couldn't read this time would let another job take its place: no job runs instead.
+  const failedRead = all.find((_, i) => tries[i] === FAILED);
+  if (failedRead) return { jobs: [], problems: [], guarded: [], incomplete: `${failedRead} couldn't be read this time, so no job runs. The next push tries again.` };
+  const files = tries.map((f) => (f === FAILED ? null : f));
   // A job file and a link to it, or two copies of one file, are one job. The real file wins over a link.
   const kept = new Map<string, BaseFile>();
   const read = files.filter((f): f is BaseFile => f !== null).sort((a, b) => Number(a.link) - Number(b.link) || a.path.localeCompare(b.path));
