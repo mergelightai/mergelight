@@ -7,17 +7,18 @@ import { declinesOf, fetchContext, MAX_REASON, reportReview } from "./cloud.js";
 import { GitHub } from "./publish/api.js";
 import { writeAccess } from "./publish/handled.js";
 import { publishTeamChecks } from "./publish/team-checks.js";
-import { answerRemembered, confirmReasons, approveCheck, checkLimitTitle, checkLoginTitle, failCheck, failSummary, previousFindings, publishReview, startCheck, startSummary, syncApproval, UNREVIEWED, APPROVALS_OFF, updatePendingSummary } from "./publish/publish.js";
+import { reviewedJobCommit, answerRemembered, confirmReasons, approveCheck, checkLimitTitle, checkLoginTitle, failCheck, failSummary, previousFindings, publishReview, startCheck, startSummary, syncApproval, UNREVIEWED, APPROVALS_OFF, updatePendingSummary } from "./publish/publish.js";
 import { configuredModel, LimitError, LoginError, loginFailureMessage } from "./providers/codex.js";
 import { limitNotice, loginNotice } from "./publish/markdown.js";
 import { renderRejected, renderTerminal } from "./render.js";
 import { reviewPullRequest } from "./review.js";
 import { jobsCommand } from "./jobs-command.js";
 import { pushJobs } from "./push-jobs.js";
+import { jobsReport } from "./run-jobs.js";
 import { askForApp, connect, githubConnect } from "./connect.js";
 import { init, realInitDeps } from "./init.js";
 import { realDeps, setup } from "./setup.js";
-import type { Review, TeamCheckResult } from "./types.js";
+import type { JobsReport, Review, TeamCheckResult } from "./types.js";
 
 const HELP = `Mergelight: AI code review on the plan you already pay for.
 
@@ -53,6 +54,9 @@ Options
   --verify-with <name>  Who checks the findings: claude or codex
                         (default: claude when Claude Code is installed)
   --verify-model <name> Model for the checker (default for claude: opus)
+  --jobs <file>         With --post: the file mergelight jobs wrote, for the Jobs part of the summary
+  --jobs-commit <sha>   With --jobs: the commit the push step made. It is the one reviewed
+  --jobs-why <text>     With --jobs: why the push step pushed nothing
   --keep                Keep the temporary checkout
   --by <login>          Who approved, for approve
                         With approve, --at is the commit they approved: an older one doesn't count
@@ -124,6 +128,9 @@ async function main(): Promise<number> {
       yes: { type: "boolean" },
       "no-save": { type: "boolean" },
       from: { type: "string" },
+      jobs: { type: "string" },
+      "jobs-commit": { type: "string" },
+      "jobs-why": { type: "string" },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -250,6 +257,17 @@ async function main(): Promise<number> {
 
   // review
   const api = new GitHub(ref.owner, ref.repo, { dryRun, log });
+  // What the team's jobs did just before: shown in the summary, and their commit is the one reviewed.
+  let jobs: JobsReport | null = null;
+  if (values.jobs) {
+    try {
+      jobs = jobsReport(JSON.parse(readFileSync(values.jobs, "utf8")), { commit: values["jobs-commit"], why: values["jobs-why"] });
+    } catch (err) {
+      log(`Couldn't read the jobs file, so the summary leaves the jobs out: ${(err as Error).message}`);
+    }
+  }
+  const jobCommit = jobs?.commit ? { sha: jobs.commit, jobs: jobs.outcomes.filter((o) => o.status === "changed").map((o) => o.name) } : undefined;
+  values.at ??= jobCommit?.sha;
   let checkRunId: number | null = null;
   let summaryComment: Awaited<ReturnType<typeof startSummary>> = null;
   /** The edit that names the models, so a result or a failure notice is always written after it. */
@@ -257,6 +275,10 @@ async function main(): Promise<number> {
   let headSha = values.at ?? null;
   if (values.post) {
     headSha ??= (await fetchPullRequest(ref)).headSha;
+    if (await reviewedJobCommit(api, ref.number, headSha).catch(() => false)) {
+      log(`${headSha.slice(0, 7)} is a commit the team's jobs pushed, and its review is already posted. Nothing to do.`);
+      return 0;
+    }
     checkRunId = await startCheck(api, headSha, provider ?? "codex");
     // Says which AI reviews from the start. The models' exact names follow once the first reviewer answers.
     // Without --provider the review runs on Codex, as reviewPullRequest decides.
@@ -289,6 +311,7 @@ async function main(): Promise<number> {
       writtenSkills: cloud.writtenSkills,
       checks: cloud.checks,
       onTeamChecks: (results) => (answered = results),
+      jobCommit,
       onModels: (models) => {
         naming = updatePendingSummary(api, summaryComment, models).catch((e) => {
           log(`Couldn't name the models yet: ${(e as Error).message}`);
@@ -305,6 +328,7 @@ async function main(): Promise<number> {
       onProgress: progress.onProgress,
     });
     progress.stop();
+    if (jobs) review.jobs = jobs;
 
     const json = JSON.stringify(review, null, 2);
     if (values.out) writeFileSync(values.out, `${json}\n`);

@@ -10,7 +10,7 @@ import { nextStep, reviewStatus } from "../dist/mcp/findings.js";
 import { GitHub } from "../dist/publish/api.js";
 import { decodeMark, encodeMark, findingState, readMarks } from "../dist/publish/handled.js";
 import { pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "../dist/publish/markdown.js";
-import { answerRemembered, APPROVAL_MARKER, APPROVALS_OFF, confirmReasons, previousFindings, publishReview, startSummary } from "../dist/publish/publish.js";
+import { answerRemembered, APPROVAL_MARKER, APPROVALS_OFF, confirmReasons, previousFindings, publishReview, reviewedJobCommit, startSummary } from "../dist/publish/publish.js";
 import { decodeState, encodeState, nextState } from "../dist/publish/state.js";
 import { buildVerifierPrompt } from "../dist/prompt.js";
 
@@ -105,6 +105,7 @@ if (args.includes("--paginate")) {
 const path = args[1].replace("repos/o/r/", "");
 if (path === "repos/o/r") out({ permissions: { push: s.push !== false } });
 else if (path === "pulls/7") out({ number: 7, title: "PR title", body: "", html_url: "https://github.com/o/r/pull/7", user: { login: "a" }, base: { ref: "main", sha: "b" }, head: { sha: s.head || "${REVIEWED}" }, additions: 1, deletions: 0, changed_files: 1 });
+else if (path.startsWith("commits/") && path.split("/").length === 2) out({ sha: path.slice(8), commit: { message: (s.commitMessages || {})[path.slice(8)] || "A commit" }, parents: [] });
 else if (path.startsWith("commits/")) out({ check_runs: s.checkRuns || [] });
 else if (path.startsWith("compare/")) { if (!s.compare) fail("HTTP 404"); out(s.compare); }
 else if (path === "user") { if (!s.viewer) fail("HTTP 403"); out({ login: s.viewer }); }
@@ -959,4 +960,16 @@ test("a fixed finding's comment is folded away as resolved when GitHub won't let
   });
   await withFakeGh(hidden.env, () => publishReview(review([finding({ id: "aaaaaaaaaa", tier: "post" })])));
   assert.ok(!hidden.writes().some((w) => w.graphql === "unfold"));
+});
+
+test("a commit the jobs pushed is reviewed once: the run GitHub starts for it after an approval does nothing", async () => {
+  const job = "d".repeat(40);
+  const reviewed = useScenario({ issueComments: [summaryComment(stateOf([], new Map(), null, job))], commitMessages: { [job]: "Run the job translations\n\n- translations: Added 3 keys.\n\nMergelight-Jobs: translations" } });
+  assert.equal(await withFakeGh(reviewed.env, () => reviewedJobCommit(new GitHub("o", "r"), 7, job)), true);
+  // Not reviewed yet: the review right after the push.
+  const fresh = useScenario({ issueComments: [summaryComment(stateOf([]))], commitMessages: { [job]: "Run the job translations\n\nMergelight-Jobs: translations" } });
+  assert.equal(await withFakeGh(fresh.env, () => reviewedJobCommit(new GitHub("o", "r"), 7, job)), false);
+  // A person's commit is always reviewed, also when it was reviewed before: a re-run is someone asking.
+  const own = useScenario({ issueComments: [summaryComment(stateOf([], new Map(), null, job))] });
+  assert.equal(await withFakeGh(own.env, () => reviewedJobCommit(new GitHub("o", "r"), 7, job)), false);
 });

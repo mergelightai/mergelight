@@ -1,5 +1,5 @@
 import type { UpdateNotice } from "../update.js";
-import type { Finding, Light, Review } from "../types.js";
+import type { Finding, Light, Review, JobsReport } from "../types.js";
 import type { Handled } from "./closed.js";
 import type { Mark } from "./handled.js";
 import { encodeState, type ReviewState } from "./state.js";
@@ -241,6 +241,24 @@ export function notReadLine(list: Review["not_read"]): string | null {
   return `<sub>Not read: ${parts.join(", and ")}.</sub>`;
 }
 
+/** What the team's jobs did before this review: each job, and anything that kept their changes off the branch. */
+export function jobsLines(j: JobsReport): string[] {
+  const out = ["#### Jobs"];
+  const files = (n: number) => `${n} file${n === 1 ? "" : "s"}`;
+  for (const o of j.outcomes) {
+    const name = `**${clean(o.name)}**`;
+    const said = clean(o.summary);
+    if (o.status === "changed") out.push(`- ✅ ${name}: ${said} (${files(o.files)}${j.commit ? ` in \`${j.commit.slice(0, 7)}\`` : ", not pushed"})`);
+    else if (o.status === "nothing") out.push(`- ${name} changed nothing: ${said}`);
+    else if (o.status === "refused") out.push(`- ⚠️ ${name} was dropped: ${said}`);
+    else out.push(`- ⚠️ ${name} couldn't finish: ${said}`);
+  }
+  if (j.notPushed) out.push(`- ⚠️ Nothing was pushed: ${clean(j.notPushed)}`);
+  for (const p of j.problems) out.push(`- ⚠️ \`${clean(p.source).replace(/`/g, "")}\` is left out: ${clean(p.problem)}.`);
+  if (j.commit) out.push("", `The jobs wrote \`${j.commit.slice(0, 7)}\` with AI, and this review read it like the rest. Pull before you push again.`);
+  return out;
+}
+
 export function summaryBody({ review: r, state, urls, marks = new Map(), handled = new Map(), update }: SummaryInput, withState = true): string {
   const light = LIGHT[r.light];
   const top = r.findings.filter((f) => f.tier === "post").sort((a, b) => (a.rank ?? 9) - (b.rank ?? 9) || rank(a) - rank(b));
@@ -303,6 +321,8 @@ export function summaryBody({ review: r, state, urls, marks = new Map(), handled
 
   const unread = notReadLine(r.not_read);
   if (unread) out.push("", unread);
+
+  if (r.jobs) out.push("", ...jobsLines(r.jobs));
 
   const reviewer = modelLabel(r.provider.name, r.provider.model);
   const checker = r.verifier ? modelLabel(r.verifier.name, r.verifier.model) : reviewer;
