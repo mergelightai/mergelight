@@ -135,6 +135,17 @@ async function landedCommit(api: GitHub, branch: string, parent: string, message
   return tip && tip.parents.length === 1 && tip.parents[0]?.sha === parent && same(tip.commit.message) === same(message) ? tip.sha : null;
 }
 
+/**
+ * Why the jobs' commit may not go onto this branch, or null when it may. Never onto a long-lived one: a
+ * pull request can come from main itself, such as one from main into a release branch, and a commit there
+ * would skip every review. The default branch and a protected one count.
+ */
+export function longLivedBranch(branch: string, defaultBranch: string | undefined, isProtected: boolean): string | null {
+  if (defaultBranch && branch === defaultBranch) return `The pull request comes from ${branch}, the repository's default branch, and jobs never push to it.`;
+  if (isProtected) return `The pull request comes from ${branch}, a protected branch, and jobs never push to one.`;
+  return null;
+}
+
 const CREATE_COMMIT = `mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid url } } }`;
 
 export interface PushJobsOptions {
@@ -170,6 +181,11 @@ export async function pushJobs(ref: PrRef, o: PushJobsOptions): Promise<number> 
     if (pr.headRepo?.toLowerCase() !== `${pr.owner}/${pr.repo}`.toLowerCase() || !pr.headRef) return refuse("The pull request comes from another repository, and nothing is pushed to one.", 0);
     // Closed or merged while the jobs ran: a commit on its branch would go nowhere.
     if (pr.state && pr.state !== "open") return refuse("The pull request is closed.", 0);
+    const api = new GitHub(pr.owner, pr.repo, { dryRun: o.dryRun, log: o.log });
+    const branchPath = pr.headRef.split("/").map(encodeURIComponent).join("/");
+    const branch = await api.get<{ protected?: boolean }>(`branches/${branchPath}`);
+    const longLived = longLivedBranch(pr.headRef, pr.defaultBranch, branch?.protected === true);
+    if (longLived) return refuse(longLived, 0);
     if ((result as JobsResult).head !== pr.headSha) return refuse(`The jobs ran on ${String((result as JobsResult).head).slice(0, 7)}, but the branch is at ${pr.headSha.slice(0, 7)} now. The next push runs them again.`, 0);
 
     const { mirror, teamBase } = await fetchMirror(pr);
@@ -191,7 +207,6 @@ export async function pushJobs(ref: PrRef, o: PushJobsOptions): Promise<number> 
     }
 
     const message = commitMessage(plan);
-    const api = new GitHub(pr.owner, pr.repo, { dryRun: o.dryRun, log: o.log });
     const input = {
       branch: { repositoryNameWithOwner: `${pr.owner}/${pr.repo}`, branchName: pr.headRef },
       // GitHub refuses when the branch has moved on since: a push that came in between is never undone.

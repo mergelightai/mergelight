@@ -79,6 +79,8 @@ export interface PullRequest {
   headRepo?: string | null;
   /** "open" or "closed". */
   state?: string;
+  /** The repository's default branch, such as main. */
+  defaultBranch?: string;
   additions: number;
   deletions: number;
   changedFiles: number;

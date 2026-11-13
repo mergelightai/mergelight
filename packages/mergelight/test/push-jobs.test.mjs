@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { parseJobFile } from "../dist/jobs.js";
-import { checkPush, commitMessage } from "../dist/push-jobs.js";
+import { checkPush, commitMessage, longLivedBranch } from "../dist/push-jobs.js";
 
 const HEAD = "a".repeat(40);
 const translations = parseJobFile(".mergelight/jobs/translations.md", "---\non: locales/en.json\nmay-change: locales/*.json\n---\nTranslate.").job;
@@ -97,4 +97,11 @@ test("the push refuses a write that clashes with a file, a submodule or a folder
   assert.match(why("vendor/lib/x.md", { vendor: "040000", "vendor/lib": "160000", "vendor/lib/x.md": null }), /inside vendor\/lib, which isn't a folder at the head/);
   assert.match(why("docs", { docs: "040000" }), /isn't an ordinary file at the head \(mode 040000\)/);
   assert.equal(why("docs/new.md", { docs: "040000", "docs/new.md": null }), undefined);
+});
+
+test("the jobs' commit never goes onto the default branch or a protected one", () => {
+  assert.match(longLivedBranch("main", "main", false), /the repository's default branch, and jobs never push to it/);
+  assert.match(longLivedBranch("release/2", "main", true), /a protected branch/);
+  assert.equal(longLivedBranch("feature/x", "main", false), null);
+  assert.equal(longLivedBranch("feature/x", undefined, false), null);
 });
