@@ -63,8 +63,14 @@ export const REFUSED_PATHS = [
   ".cursorrules",
   ".windsurfrules",
   ".clinerules",
+  "CONVENTIONS.md",
+  ".continue",
+  ".rules",
+  ".goosehints",
+  ".aider.conf.yml",
   ".gitmodules",
   ".gitattributes",
+  ".lfsconfig",
   ".git",
 ];
 
@@ -112,7 +118,8 @@ export function parseJobFile(path: string, text: string): { job: Job } | { probl
   const negated = [...on, ...mayChange].find((p) => p.startsWith("!"));
   if (negated !== undefined) return { problem: `the path "${negated.slice(0, 100)}" starts with !, but a job can't leave files out that way. List only the files it may change` };
   // A [list] split over lines reads as "[a," and "b]": only the key's own line is read.
-  const split = [...on, ...mayChange].find((p) => p.startsWith("[") || p.endsWith("]"));
+  // Brackets that open and close, like Next.js's app/[locale], are part of a name.
+  const split = [...on, ...mayChange].find((p) => (p.startsWith("[") && !p.includes("]")) || (p.endsWith("]") && !p.includes("[")));
   if (split !== undefined) return { problem: `the path "${split.slice(0, 100)}" looks like part of a [list]: write the whole list on one line, or as a YAML list` };
   const bad = [...on, ...mayChange].find(badPattern);
   if (bad !== undefined) return { problem: `the path "${bad.slice(0, 100)}" leaves the repository or names no file. For every file, write **` };

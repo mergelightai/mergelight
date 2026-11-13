@@ -55,6 +55,7 @@ test("a job file that can't be a job says why", () => {
   assert.match(problem("---\non: x\nmay-change: ../other-repo/**\n---\nTask."), /"\.\.\/other-repo\/\*\*" leaves the repository/);
   assert.match(problem('---\non: x\nmay-change: ["**", "!config/secrets/**"]\n---\nTask.'), /"!config\/secrets\/\*\*" starts with !, but a job can't leave files out that way/);
   assert.match(problem("---\non: [locales/en.json,\n  locales/en-GB.json]\nmay-change: y\n---\nTask."), /"\[locales\/en\.json" looks like part of a \[list\]: write the whole list on one line/);
+  assert.equal(problem('---\non: app/[locale]/page.tsx\nmay-change: "[locale]/messages.json"\n---\nTask.'), undefined, "brackets that close are part of a name, as in Next.js");
   for (const value of ["|", ">-", "|2", ">2-", "~", "null"]) assert.match(problem(`---\non: ${value}\n  locales/en.json\nmay-change: y\n---\nTask.`), /is a YAML block or an empty value/, value);
   assert.match(problem("---\non: src\nmay-change: tools/write-docs/**\nskill: tools/write-docs\n---\nTask."), /only name files a job can never change, or its own skill folder, tools\/write-docs/);
   assert.match(problem("---\non: src\nmay-change: .github/**, tools/write-docs/**\nskill: tools/write-docs\n---\nTask."), /only name files a job can never change, or its own skill folder/);
@@ -109,7 +110,7 @@ test("a job runs only when a pull request changed one of its on files", () => {
 
 test("a job may change only its own paths, and never workflows, Mergelight's files or git's files", () => {
   const { job } = parseJobFile(".mergelight/jobs/x.md", '---\non: src\nmay-change: "**"\n---\nTask.');
-  for (const p of [".github/workflows/ci.yml", "packages/web/.github/x.yml", ".mergelight/jobs/x.md", ".mergelight/rules.md", ".gitmodules", "src/.gitattributes", ".git/config", ".GITHUB/workflows/ci.yml", "docs/.GitAttributes", ".GitModules", "CODEOWNERS", "docs/CODEOWNERS", "AGENTS.md", "packages/web/CLAUDE.md", ".claude/settings.json", ".agents/skills/x/SKILL.md", ".codex/config.toml", ".cursor/rules/style.mdc", "CONTRIBUTING.md", "docs/CONTRIBUTING.md", "GEMINI.md", ".cursorrules", "tools/x/SKILL.md", ".mcp.json", "CLAUDE.local.md", "AGENTS.override.md", ".vscode/tasks.json", ".roo/rules.md", ".kiro/steering/x.md"]) {
+  for (const p of [".github/workflows/ci.yml", "packages/web/.github/x.yml", ".mergelight/jobs/x.md", ".mergelight/rules.md", ".gitmodules", "src/.gitattributes", ".git/config", ".GITHUB/workflows/ci.yml", "docs/.GitAttributes", ".GitModules", "CODEOWNERS", "docs/CODEOWNERS", "AGENTS.md", "packages/web/CLAUDE.md", ".claude/settings.json", ".agents/skills/x/SKILL.md", ".codex/config.toml", ".cursor/rules/style.mdc", "CONTRIBUTING.md", "docs/CONTRIBUTING.md", "GEMINI.md", ".cursorrules", "tools/x/SKILL.md", ".mcp.json", "CLAUDE.local.md", "AGENTS.override.md", ".vscode/tasks.json", ".roo/rules.md", ".kiro/steering/x.md", ".lfsconfig", "CONVENTIONS.md", ".continue/rules/x.md", ".goosehints"]) {
     assert.ok(refusedPath(p), p);
     assert.ok(!mayChange(job, p), p);
   }
@@ -147,6 +148,13 @@ test("jobs are read from the base branch, never from the pull request", async ()
   write(".mergelight/jobs/web/deep.md", "---\non: src\nmay-change: docs\n---\nToo deep.\n");
   write(".mergelight/jobs/Upper.MD", "---\non: src\nmay-change: docs\n---\nWrong ending.\n");
   write(".mergelight/jobs/notes.markdown", "---\non: src\nmay-change: docs\n---\nOther ending.\n");
+  write(".mergelight/jobs.md", "---\non: src\nmay-change: docs\n---\nNext to the folder.\n");
+  // Two copies with the same text: one is refused for its name, and the other still counts.
+  write(".mergelight/jobs/Copy Job.md", "---\non: src\nmay-change: copies\n---\nCopy.\n");
+  write(".mergelight/jobs/copy-job.md", "---\non: src\nmay-change: copies\n---\nCopy.\n");
+  mkdirSync(join(dir, ".agents"), { recursive: true });
+  symlinkSync("../.claude/skills", join(dir, ".agents/skills"));
+  write(".mergelight/jobs/via-link.md", "---\non: src\nmay-change: guide\nskill: .agents/skills/real\n---\nVia a link.\n");
   write("handbook/ai-guide.md", "How agents work here.\n");
   mkdirSync(join(dir, "docs"), { recursive: true });
   symlinkSync("../handbook/ai-guide.md", join(dir, "docs/ai-guide.md"));
@@ -165,16 +173,21 @@ test("jobs are read from the base branch, never from the pull request", async ()
   git("commit", "-q", "-m", "pr");
 
   const { jobs, problems, guarded } = await jobFilesFor(dir, "main");
-  assert.deepEqual(guarded, [".claude/skills/linked", ".claude/skills/real", ".claude/skills/write-docs", "docs/ai-guide.md", "handbook/ai-guide.md", "shared/docs-job.md"], "what AGENTS.md or a job file links to is guarded too, all along a chain of links");
+  for (const p of [".claude/skills/linked", ".claude/skills/real", ".claude/skills/write-docs", "docs/ai-guide.md", "handbook/ai-guide.md", "shared/docs-job.md"]) assert.ok(guarded.includes(p), `${p}: what AGENTS.md or a job file links to is guarded too, all along a chain of links`);
+  for (const p of ["AGENTS.md", ".mergelight/jobs/docs.md"]) assert.ok(guarded.includes(p), `${p}: every link is guarded`);
   assert.deepEqual(jobs.map((j) => [j.name, j.mayChange, j.task]), [
+    ["copy-job", ["copies"], "Copy."],
     ["guide", ["guide"], "Write the guide."],
     ["review-notes", ["reviews"], "Write the review notes."],
     ["translations", ["locales/*.json"], "When en.json gets new keys, add each one to every other file in locales/, translated."],
   ]);
-  assert.equal(jobs[1].source, ".mergelight/jobs/review-notes.md", "a link into .github is fine: no job may change a file there");
-  assert.equal(jobs[2].source, ".mergelight/jobs/translations.md", "the real file wins over a link to it");
+  assert.equal(jobs[2].source, ".mergelight/jobs/review-notes.md", "a link into .github is fine: no job may change a file there");
+  assert.equal(jobs[3].source, ".mergelight/jobs/translations.md", "the real file wins over a link to it");
   const why = Object.fromEntries(problems.map((p) => [p.source, p.problem]));
-  assert.deepEqual(Object.keys(why), [".mergelight/jobs/broken.md", ".mergelight/jobs/docs.md", ".mergelight/jobs/i18n.md", ".mergelight/jobs/linked-skill.md", ".mergelight/jobs/outside.md", ".mergelight/jobs/typo.md", ".mergelight/jobs/Upper.MD", ".mergelight/jobs/web/deep.md", ".mergelight/Jobs/cased.md", ".mergelight/jobs/notes.markdown", ".mergelight/jobs/deep-link.md"].sort((a, b) => a.localeCompare(b)));
+  assert.deepEqual(Object.keys(why), [".mergelight/jobs/broken.md", ".mergelight/jobs/docs.md", ".mergelight/jobs/i18n.md", ".mergelight/jobs/linked-skill.md", ".mergelight/jobs/outside.md", ".mergelight/jobs/typo.md", ".mergelight/jobs/Upper.MD", ".mergelight/jobs/web/deep.md", ".mergelight/Jobs/cased.md", ".mergelight/jobs/notes.markdown", ".mergelight/jobs/deep-link.md", ".mergelight/jobs.md", ".mergelight/jobs/Copy Job.md", ".mergelight/jobs/via-link.md"].sort((a, b) => a.localeCompare(b)));
+  assert.match(why[".mergelight/jobs.md"], /jobs are files right in the \.mergelight\/jobs folder/);
+  assert.match(why[".mergelight/jobs/Copy Job.md"], /must be lowercase/);
+  assert.match(why[".mergelight/jobs/via-link.md"], /its skill \.agents\/skills\/real is reached through \.agents\/skills, which is a link: name the skill by its real folder/);
   assert.match(why[".mergelight/jobs/deep-link.md"], /is a link to \.mergelight\/jobs\/web\/deep\.md, which isn't a job file that is read/);
   assert.match(why[".mergelight/jobs/linked-skill.md"], /its skill \.claude\/skills\/linked has no SKILL\.md/, "a SKILL.md that is a link isn't copied, so it doesn't count");
   assert.match(why[".mergelight/jobs/docs.md"], /is a link to shared\/docs-job\.md, a file a job could change\. Keep job files in \.mergelight/);
@@ -252,13 +265,16 @@ test("the guard follows links the way the file system does, and runs no job when
   link("config/cursor", ".cursor");
   link("../../docs/rules-src.md", "config/cursor/rules.md");
   write("src/index.ts", "export {};\n");
+  // A link in an ordinary folder that leads into a protected one.
+  write(".github/workflows/ci.yml", "on: push\n");
+  link("../.github/workflows", "docs/workflows");
   git("add", "-A");
   git("commit", "-q", "-m", "base");
   const { guarded, incomplete } = await jobFilesFor(dir, "main");
   assert.equal(incomplete, undefined);
-  assert.deepEqual(guarded, ["config/cursor", "docs/rules-src.md", "shared/ai/guide.md", "vendor/ai"]);
+  assert.deepEqual(guarded, [".cursor", "AGENTS.md", "config/cursor", "config/cursor/rules.md", "docs/rules-src.md", "docs/workflows", "shared/ai", "shared/ai/guide.md", "vendor/ai"]);
   const job = parseJobFile(".mergelight/jobs/x.md", '---\non: src\nmay-change: "**"\n---\nTask.').job;
-  for (const p of ["vendor/ai/guide.md", "config/cursor/style.md", "docs/rules-src.md"]) assert.ok(!mayChange(job, p, guarded), p);
+  for (const p of ["vendor/ai/guide.md", "config/cursor/style.md", "docs/rules-src.md", "docs/workflows/deploy.yml"]) assert.ok(!mayChange(job, p, guarded), p);
   assert.ok(mayChange(job, "src/index.ts", guarded));
 
   // A chain longer than the guard follows: no job runs.
@@ -267,5 +283,17 @@ test("the guard follows links the way the file system does, and runs no job when
   link("chain/hop0.md", "CLAUDE.md");
   git("add", "-A");
   git("commit", "-q", "-m", "chain");
-  assert.match((await jobFilesFor(dir, "main")).incomplete, /CLAUDE\.md leads through more than 10 links, so no job runs/);
+  assert.match((await jobFilesFor(dir, "main")).incomplete, /CLAUDE\.md leads through more than 10 links, or to the repository's root, so no job runs/);
+});
+
+test("a protected link to the repository's root runs no job", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-jobs-root-"));
+  const git = (...args) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t.test", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
+  git("init", "-q", "-b", "main");
+  mkdirSync(join(dir, ".cursor"));
+  symlinkSync("../", join(dir, ".cursor/everything"));
+  writeFileSync(join(dir, "README.md"), "Hi\n");
+  git("add", "-A");
+  git("commit", "-q", "-m", "base");
+  assert.match((await jobFilesFor(dir, "main")).incomplete, /\.cursor\/everything leads through more than 10 links, or to the repository's root/);
 });

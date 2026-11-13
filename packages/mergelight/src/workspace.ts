@@ -192,7 +192,8 @@ async function baseTree(mirror: string, base: string): Promise<{ paths: string[]
     const content = await blob(file.sha);
     if (content === null) return "unread";
     const target = content.trim();
-    const resolved = posix.normalize(posix.join(posix.dirname(path), target));
+    // "folder/" and "folder" are one place, and "./" is the root, ".".
+    const resolved = posix.normalize(posix.join(posix.dirname(path), target)).replace(/\/+$/, "") || ".";
     return !target || target.startsWith("/") || resolved === ".." || resolved.startsWith("../") ? null : resolved;
   };
   const read = async (path: string): Promise<BaseFile | null> => {
@@ -224,6 +225,8 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
   // A file that looks meant as a job but sits deeper or ends in .MD is named, never skipped without a word.
   for (const p of tree.paths) {
     if (p.toLowerCase().startsWith(".mergelight/jobs/") && !JOB_FILE.test(p)) problems.push({ source: p, problem: "isn't read: a job file sits right in .mergelight/jobs and ends in .md" });
+    // A link in place of the folder, or a file next to it, holds no job either.
+    else if (/^\.mergelight(?:\/jobs)?$/i.test(p) || p.toLowerCase().startsWith(".mergelight/jobs.")) problems.push({ source: p, problem: "isn't read: jobs are files right in the .mergelight/jobs folder, which can't be a link" });
   }
   const all = tree.paths.filter((p) => JOB_FILE.test(p)).sort();
   const files = await Promise.all(all.slice(0, MAX_JOB_FILES).map(tree.read));
@@ -232,17 +235,25 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
   const read = files.filter((f): f is BaseFile => f !== null).sort((a, b) => Number(a.link) - Number(b.link) || a.path.localeCompare(b.path));
   const readPaths = new Set(all.slice(0, MAX_JOB_FILES));
   for (const f of read) {
-    const first = kept.get(f.sha);
+    // By the file it is, so a link and what it leads to are one, but two copies with the same text aren't.
+    const first = kept.get(f.target ?? f.path);
     // A job could change the file a link leads to, unless it sits where no job may write.
     if (f.target && !refusedPath(f.target)) problems.push({ source: f.path, problem: `is a link to ${f.target}, a file a job could change. Keep job files in .mergelight` });
     // A link to a file in .mergelight/jobs that isn't read as a job itself would run what is named as not read.
     else if (f.target && f.target.toLowerCase().startsWith(".mergelight/jobs/") && !readPaths.has(f.target)) problems.push({ source: f.path, problem: `is a link to ${f.target}, which isn't a job file that is read` });
     else if (first) problems.push({ source: f.path, problem: `is the same file as ${first.path}, so its job counts once` });
-    else kept.set(f.sha, f);
+    else kept.set(f.target ?? f.path, f);
   }
   // A skill that isn't on the base branch: the job would run without what the team meant it to follow.
   // Only an ordinary SKILL.md counts, as the skill copy takes no links.
   const parsed = readJobs([...kept.values()], (folder) => ["100644", "100755"].includes(tree.mode(`${folder}/SKILL.md`) ?? ""));
+  // A skill named through a linked folder: the copy only takes the real folder, so say that, not "no SKILL.md".
+  for (const p of parsed.problems) {
+    const skill = /its skill (\S+) has no SKILL\.md/.exec(p.problem)?.[1];
+    const parts = skill?.split("/") ?? [];
+    const linked = parts.map((_, i) => parts.slice(0, i + 1).join("/")).find((at) => tree.mode(at) === "120000");
+    if (linked) p.problem = `its skill ${skill} is reached through ${linked}, which is a link: name the skill by its real folder`;
+  }
   const unread = all.slice(0, MAX_JOB_FILES).filter((_, i) => files[i] === null).map((source) => ({ source, problem: "couldn't be read: it is empty, too large, a link to something that isn't a file in the repository, or git couldn't read it this time" }));
   const past = all.slice(MAX_JOB_FILES).map((source) => ({ source, problem: `only ${MAX_JOB_FILES} job files are read` }));
   // A file no job may change can be a link to one it could, like AGENTS.md to docs/ai-guide.md. Every link
@@ -264,6 +275,8 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
       if (++hops > MAX_LINK_HOPS) return "deep";
       const next = await tree.linkTarget(at);
       if (next === "unread" || next === null) return next;
+      // A link to the repository's root would guard every file: that can't be told apart from a mistake.
+      if (next === "." || next === "") return "deep";
       if (!refusedPath(next)) targets.add(next);
       parts = [...next.split("/"), ...parts.slice(i)];
       i = 0;
@@ -283,11 +296,14 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
       followed.add(link);
       const end = await resolve(link);
       if (end === "unread") incomplete ??= `${link} couldn't be read this time, so no job runs. The next push tries again.`;
-      if (end === "deep") incomplete ??= `${link} leads through more than ${MAX_LINK_HOPS} links, so no job runs.`;
+      if (end === "deep") incomplete ??= `${link} leads through more than ${MAX_LINK_HOPS} links, or to the repository's root, so no job runs.`;
     }
     if (incomplete) break;
   }
-  const guarded = [...new Set([...folders, ...targets])].sort();
+  // Every link is guarded too, whatever folder it sits in: a job never writes at or through a link, so a
+  // link like docs/ci to .github/workflows can't carry a change into a protected place.
+  const links = tree.paths.filter((p) => tree.mode(p) === "120000");
+  const guarded = [...new Set([...folders, ...targets, ...links])].sort();
   return { jobs: parsed.jobs, problems: sorted, guarded, ...(incomplete ? { incomplete } : {}) };
 }
 
