@@ -128,10 +128,14 @@ async function writeOut(git: JobGit, tree: string, dir: string, index: string): 
   await must(git, ["--work-tree", dir, "checkout-index", "-a", "-f"], { GIT_INDEX_FILE: index });
 }
 
-/** What dir holds now, as a tree. */
-async function readBack(git: JobGit, dir: string, index: string): Promise<string> {
+/**
+ * What dir holds now, as a tree. The paths in keep are taken from the tree the job started from, in the
+ * index only: nothing in dir is touched after the AI ran, so a link it made there can't lead anywhere.
+ */
+async function readBack(git: JobGit, dir: string, index: string, from: string, keep: string[] = []): Promise<string> {
   // --force: a file the job wrote counts even where a .gitignore in the copy would leave it out.
   await must(git, ["--work-tree", dir, "add", "-A", "--force"], { GIT_INDEX_FILE: index });
+  if (keep.length) await must(git, ["reset", "-q", from, "--", ...keep], { GIT_INDEX_FILE: index });
   return (await must(git, ["write-tree"], { GIT_INDEX_FILE: index })).trim();
 }
 
@@ -258,7 +262,7 @@ export async function runJobs(o: RunJobsOptions): Promise<JobsResult> {
     try {
       await writeOut(git, current, dir, index);
       // The pull request's own Codex skill folders: an older Codex offers them to the model, so they are
-      // kept out of its sight while the job runs, and put back before the files are read back.
+      // kept out of its sight while the job runs. They come back from the tree, not from the folder.
       const aside = join(scratch, "aside");
       for (const folder of AGENT_SKILL_FOLDERS) {
         if (existsSync(join(dir, folder))) {
@@ -283,13 +287,7 @@ export async function runJobs(o: RunJobsOptions): Promise<JobsResult> {
       } finally {
         clearTimeout(timer);
       }
-      for (const folder of AGENT_SKILL_FOLDERS) {
-        if (!existsSync(join(aside, folder))) continue;
-        rmSync(join(dir, folder), { recursive: true, force: true });
-        mkdirSync(join(dir, folder, ".."), { recursive: true });
-        renameSync(join(aside, folder), join(dir, folder));
-      }
-      const tree = await readBack(git, dir, index);
+      const tree = await readBack(git, dir, index, current, AGENT_SKILL_FOLDERS);
       const mine = await changed(git, current, tree);
       const summary = summaryOf(answer);
       if (!mine.length) {
@@ -378,7 +376,7 @@ export function buildJobPrompt(input: JobPromptInput): string {
     "- If the job has nothing to do on this pull request, change nothing.",
     input.tooling === "shell"
       ? "- Read files and edit them, nothing else: don't run the project's scripts, tests, builds or package managers. There is no network."
-      : "- You have file tools only: read, search, edit and write.",
+      : "- You have file tools only: read, search, edit and write. You can't delete a file: if the job needs one deleted, say so in your summary.",
     "",
     "## The pull request",
     "",

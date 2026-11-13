@@ -1,4 +1,5 @@
 import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { run } from "./run.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fetchPullRequest, type PrRef } from "./github.js";
@@ -20,9 +21,16 @@ export interface JobsCommandOptions {
   onProgress?: (message: string) => void;
 }
 
-/** Where the result goes when no --out is given: the runner's temp folder in the Action. */
-export function defaultJobsOut(): string {
-  return join(process.env.RUNNER_TEMP || tmpdir(), "mergelight-jobs.json");
+/** Where the result goes when no --out is given: the runner's temp folder in the Action, one file for each pull request elsewhere. */
+export function defaultJobsOut(ref?: PrRef): string {
+  if (process.env.RUNNER_TEMP) return join(process.env.RUNNER_TEMP, "mergelight-jobs.json");
+  return join(tmpdir(), ref ? `mergelight-jobs-${ref.owner}-${ref.repo}-${ref.number}.json` : "mergelight-jobs.json");
+}
+
+/** git's version, as [major, minor], or null when it can't be told. */
+async function gitVersion(): Promise<[number, number] | null> {
+  const m = /git version (\d+)\.(\d+)/.exec((await run("git", ["--version"]).catch(() => null))?.stdout ?? "");
+  return m ? [Number(m[1]), Number(m[2])] : null;
 }
 
 /** What a run did, in lines for the log. */
@@ -44,7 +52,9 @@ export function describeJobs(result: JobsResult): string[] {
  */
 export async function jobsCommand(ref: PrRef, o: JobsCommandOptions): Promise<number> {
   const progress = o.onProgress ?? (() => {});
-  const out = o.out ?? defaultJobsOut();
+  const out = o.out ?? defaultJobsOut(ref);
+  // A run that stops early never leaves an older result in place.
+  rmSync(out, { force: true });
   const finish = (result: JobsResult): number => {
     writeFileSync(out, `${JSON.stringify(result, null, 2)}\n`);
     for (const line of describeJobs(result)) o.log(line);
@@ -53,6 +63,12 @@ export async function jobsCommand(ref: PrRef, o: JobsCommandOptions): Promise<nu
     return 0;
   };
 
+  // Files are written out and read back byte for byte only with git 2.40 or newer (attributes from a tree).
+  const version = await gitVersion();
+  if (!version || version[0] < 2 || (version[0] === 2 && version[1] < 40)) {
+    o.log(`Jobs need git 2.40 or newer, and this machine has ${version ? version.join(".") : "a git that can't say"}. No job ran.`);
+    return 1;
+  }
   progress(`Reading ${ref.owner}/${ref.repo}#${ref.number}`);
   const pr = await fetchPullRequest(ref);
   progress("Checking out the code");

@@ -224,6 +224,10 @@ test("a job's Codex sandbox may write in the job's folder only, and can't read w
   // Every place stays hidden, even one the job's folder sits in: the job's own rule is more specific.
   const hidden = jobHidden({ RUNNER_TEMP: "/home/runner/work/_temp", GITHUB_WORKSPACE: "/home/runner/work/app/app", MERGELIGHT_CACHE: "/cache" });
   for (const p of ["/home/runner/work/_temp", "/home/runner/work/app/app", "/cache", tmpdir(), "/tmp"]) assert.ok(hidden.includes(p), p);
+  // A self-hosted runner's install folder and its _work folder, with other repositories' checkouts.
+  const selfHosted = jobHidden({ RUNNER_WORKSPACE: "/opt/actions-runner/_work/app" });
+  assert.ok(selfHosted.includes("/opt/actions-runner/_work") && selfHosted.includes("/opt/actions-runner"));
+  assert.ok(!jobHidden({ RUNNER_WORKSPACE: "/work/app" }).includes("/"), "never the whole disk");
 });
 
 test("a job that writes a secret is dropped, and one the file already had doesn't count", async () => {
@@ -336,4 +340,30 @@ test("a large diff is cut in the job's prompt", () => {
   const prompt = buildJobPrompt({ job: job("x", "y"), pr: { owner: "a", repo: "b", number: 1, title: "t", body: "", baseRef: "main" }, diff: "+".repeat(1_000_000), diffTruncated: true, changedPaths: [], tooling: "shell" });
   assert.ok(prompt.length < 300_000);
   assert.match(prompt, /cut short: read the files themselves for the rest/);
+});
+
+test("a link the AI makes in its copy never leads Mergelight outside it", async () => {
+  const { dir, git, jobGit } = repo();
+  mkdirSync(join(dir, ".codex/skills/x"), { recursive: true });
+  writeFileSync(join(dir, ".codex/skills/x/SKILL.md"), "From the pull request.\n");
+  git("add", "-A");
+  git("commit", "-q", "-m", "a codex skill");
+  const head = git("rev-parse", "HEAD");
+  const outside = mkdtempSync(join(tmpdir(), "mergelight-outside-"));
+  mkdirSync(join(outside, "skills/keep"), { recursive: true });
+  writeFileSync(join(outside, "skills/keep/SKILL.md"), "Mine.\n");
+  const result = await runJobs({
+    git: jobGit,
+    head,
+    jobs: [job("anything", '"**"')],
+    ask: async (j, d) => {
+      rmSync(join(d, ".codex"), { recursive: true, force: true });
+      symlinkSync(outside, join(d, ".codex"));
+      return { summary: "Done." };
+    },
+  });
+  assert.notEqual(result.outcomes[0].status, "changed");
+  assert.deepEqual(result.changes, []);
+  assert.equal(readFileSync(join(outside, "skills/keep/SKILL.md"), "utf8"), "Mine.\n", "the folder the link leads to is untouched");
+  assert.ok(!existsSync(join(outside, "skills/x")), "nothing was moved into it");
 });

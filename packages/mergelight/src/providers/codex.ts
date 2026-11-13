@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { run } from "../run.js";
 import type { ModelOptions, ModelResult } from "./index.js";
 
@@ -107,7 +107,12 @@ export function sandboxArgs(home = codexHome(), writable?: string, hidden: strin
  * folder gets a more specific rule. Both the path and where it really is, as macOS links /tmp.
  */
 export function jobHidden(env: NodeJS.ProcessEnv = process.env): string[] {
-  const places = [homedir(), env.MERGELIGHT_CACHE, env.RUNNER_TEMP, env.GITHUB_WORKSPACE, tmpdir(), "/tmp"].filter((p): p is string => Boolean(p));
+  // A self-hosted runner keeps its credentials in its install folder and other repositories' checkouts
+  // next to this one in _work: RUNNER_WORKSPACE is <install>/_work/<repository>.
+  const work = env.RUNNER_WORKSPACE ? dirname(env.RUNNER_WORKSPACE) : undefined;
+  const install = work ? dirname(work) : undefined;
+  const deepEnough = (p: string | undefined) => (p && p.split("/").filter(Boolean).length >= 2 ? p : undefined);
+  const places = [homedir(), env.MERGELIGHT_CACHE, env.RUNNER_TEMP, env.GITHUB_WORKSPACE, deepEnough(work), deepEnough(install), tmpdir(), "/tmp"].filter((p): p is string => Boolean(p));
   const real = places.map((p) => {
     try {
       return realpathSync(p);
