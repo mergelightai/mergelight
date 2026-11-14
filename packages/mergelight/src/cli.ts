@@ -279,7 +279,13 @@ async function main(): Promise<number> {
   // The jobs' commit is reviewed only while it is still the pull request's newest: a review started again
   // later, after more pushes, reads the newest commit instead, never older code over a newer result.
   if (values.post && values["jobs-commit"] && values.at?.toLowerCase() === values["jobs-commit"].toLowerCase()) {
-    const newest = (await fetchPullRequest(ref)).headSha;
+    // Read from the branch itself, which moves at once: the pull request's head can still name the
+    // commit before the jobs' for a few seconds after their push.
+    const pr = await fetchPullRequest(ref);
+    const branch = pr.headRef
+      ? await api.get<{ object: { sha: string } }>(`git/ref/heads/${pr.headRef.split("/").map(encodeURIComponent).join("/")}`).catch(() => null)
+      : null;
+    const newest = branch?.object.sha ?? values.at;
     if (newest.toLowerCase() !== values.at.toLowerCase()) {
       log(`The jobs' commit ${values.at.slice(0, 7)} isn't the newest any more, so this review reads ${newest.slice(0, 7)}.`);
       values.at = newest;

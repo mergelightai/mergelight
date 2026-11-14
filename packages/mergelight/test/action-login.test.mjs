@@ -171,3 +171,9 @@ test("the jobs never get the Mergelight AI app's token, only the workflow's own,
   const step = action.slice(action.indexOf("- name: Get the Mergelight AI app token"), action.indexOf("shell:", action.indexOf("- name: Get the Mergelight AI app token")));
   assert.match(step, /inputs\.run != 'jobs'/);
 });
+
+test("jobs mode never turns a check green on an approval, nor refreshes the login before the jobs", () => {
+  const condition = (name) => action.slice(action.indexOf(`- name: ${name}`), action.indexOf("shell:", action.indexOf(`- name: ${name}`)));
+  assert.match(condition("Approve the check"), /inputs\.run != 'jobs'/);
+  assert.match(condition("Refresh the Codex login if it's due"), /inputs\.run != 'jobs'/);
+});

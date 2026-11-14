@@ -138,7 +138,7 @@ runs:
 
     # A human approved the PR: turn a "needs a human" check green. No Codex needed.
     - name: Approve the check
-      if: github.event_name == 'pull_request_review' && github.event.review.state == 'approved'
+      if: inputs.run != 'jobs' && github.event_name == 'pull_request_review' && github.event.review.state == 'approved'
       shell: bash
       env:
         GH_TOKEN: ${{ steps.app.outputs.token || inputs.github-token }}
@@ -268,8 +268,11 @@ runs:
     # Refresh before anything uses the login, and save at once, so a review never does it halfway
     # through while another starts from the old login. The job always refreshes. A review only does
     # when its token could run out during it.
+    # Not before the jobs: the review that follows them got the workflow's copy of the login when the run
+    # began, and a refresh here would use up the token that copy still holds.
     - name: Refresh the Codex login if it's due
       if: >
+        inputs.run != 'jobs' &&
         env.MERGELIGHT_CHATGPT == '1' &&
         (github.event_name == 'pull_request' || github.event_name == 'pull_request_target' ||
         github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
