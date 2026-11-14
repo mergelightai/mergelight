@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ProviderName } from "./providers/index.js";
 import type { GitHub } from "./publish/api.js";
@@ -305,10 +305,11 @@ export function claudeInWorkflow(text: string | null, input = "claude-code-oauth
     .map((line) => line.replace(/(^|\s)#.*$/, ""))
     .join("\n");
   // The name may be quoted, as YAML allows.
-  if (new RegExp(`(^|\\s)["']?${input}["']?\\s*:`, "m").test(code)) return "yes";
+  if (new RegExp(`(^|[\\s{,])["']?${input}["']?\\s*:`, "m").test(code)) return "yes";
   // A sure "no" only where the workflow uses Mergelight itself, in plain sight. A reusable workflow or a
   // composite action of the team's own may pass the login on in a file this can't see.
-  const direct = /^\s*(?:-\s*)?uses:\s*["']?[^\s"']*mergelight[^\s"']*@/im.test(code);
+  // Mergelight itself, or a fork of it: a repository named mergelight. A wrapper with another name may pass it on.
+  const direct = /^\s*(?:-\s*)?uses:\s*["']?[^\s"'/]+\/mergelight@/im.test(code);
   const wrapped = /^\s*(?:-\s*)?uses:\s*["']?(?:\.\/|[^\s"']*\.github\/workflows\/)/m.test(code);
   return direct && !wrapped ? "no" : "unknown";
 }
@@ -464,6 +465,9 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
             // Without the file the note just doesn't name the account.
           }
         }
+        // A ChatGPT login now, as one from the secret would be: a rejected one is then known as such, so
+        // the reviewer can check instead, and the steps that refresh and save it run.
+        if (checker === "codex" && env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, "MERGELIGHT_CHATGPT=1\n");
         const who = checker === "claude" ? "the Claude plan that confirmed the sign-in" : account ? `the ChatGPT account \`${account}\`` : "the ChatGPT account that entered the code";
         const secret = checker === "claude" ? "CLAUDE_CODE_OAUTH_TOKEN" : env.SECRET_NAME || "CODEX_AUTH_JSON";
         // The note failing to post mustn't leave the check waiting.

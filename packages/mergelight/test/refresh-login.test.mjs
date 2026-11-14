@@ -74,7 +74,8 @@ test("a due login is refreshed and saved before the review starts", async () => 
   assert.equal(await s.run(), 0);
   assert.equal(s.calls.refresh, 1);
   assert.deepEqual(s.calls.saved, ["tok"]);
-  assert.equal(readFileSync(s.envFile, "utf8"), "");
+  // A refresh that worked clears a failed one from earlier in the run.
+  assert.equal(readFileSync(s.envFile, "utf8"), "MERGELIGHT_LOGIN_LOST=0\n");
 });
 
 test("the job refreshes a login with plenty of time left", async () => {
@@ -110,7 +111,7 @@ test("a failed save doesn't stop the review, and the end of the run tries again"
   const s = setup({ event: "pull_request", msLeft: HOUR / 2, saveCode: 1 });
   assert.equal(await s.run(), 0);
   assert.ok(said(s.calls, /tries again when it ends/));
-  assert.equal(readFileSync(s.envFile, "utf8"), "");
+  assert.equal(readFileSync(s.envFile, "utf8"), "MERGELIGHT_LOGIN_LOST=0\n");
 });
 
 test("a review that loses the race carries on while its token still works", async () => {

@@ -250,6 +250,7 @@ test("the review checks with the other AI when it has a login, and with the revi
   assert.match(reviewArgs({ provider: "claude", verify: "codex", claudeToken: "t", codexLoggedIn: true, usesCodex: "0" }), /--verify-with claude .*--verify-missed codex/);
   assert.match(reviewArgs({ provider: "codex", verify: "claude", claudeToken: "t", codexLoggedIn: true, usesClaude: "0" }), /--verify-with codex .*--verify-missed claude/);
   assert.match(reviewArgs({ provider: "claude", verify: "codex", claudeToken: "t", usesCodex: "0", notInstalled: "1" }), /--verify-missed codex --verify-missed-why not-installed/);
+  assert.match(reviewArgs({ provider: "claude", verify: "codex", claudeToken: "t", codexLoggedIn: true, lost: "1" }), /--verify-missed codex --verify-missed-why login-failed/);
 });
 
 test("action.yml is valid YAML, so GitHub can load the action at all", (t) => {

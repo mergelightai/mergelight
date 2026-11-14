@@ -512,9 +512,20 @@ test("a checker's ChatGPT login is asked for only where the workflow passes it o
   assert.equal(claudeInWorkflow("    - uses: mergelightai/mergelight@v0\n      with:\n        # codex-auth-json: x\n", "codex-auth-json"), "no", "a line commented out passes nothing on");
   assert.equal(claudeInWorkflow("    - uses: ./.github/actions/review\n      with:\n        chatgpt: x\n", "codex-auth-json"), "unknown", "a composite action of the team's own may pass it on");
   assert.equal(claudeInWorkflow("    - uses: mergelightai/mergelight@v0\n      with:\n        \"codex-auth-json\": x\n", "codex-auth-json"), "yes", "a quoted name");
+  assert.equal(claudeInWorkflow("    - uses: mergelightai/mergelight@v0\n      with: {codex-auth-json: x, provider: claude}\n", "codex-auth-json"), "yes", "a flow mapping");
+  assert.equal(claudeInWorkflow("    - uses: acme/mergelight-wrapper@v1\n      with:\n        chatgpt: x\n", "codex-auth-json"), "unknown", "a wrapper with another name may pass it on");
   assert.equal(claudeInWorkflow("  with:\n    codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}\n", "codex-auth-json"), "yes");
   const d = deps([], 1);
   d.chatgptUnavailable = () => chatgptInputMissing("MY_LOGIN");
   assert.equal(await connect(d), 1);
   assert.match(d.events.at(-1), /codex-auth-json: \$\{\{ secrets\.MY_LOGIN \}\}/);
+});
+
+test("a ChatGPT login connected to check counts as one, so a rejected one lets the reviewer check", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-connected-check-"));
+  const file = join(dir, "env");
+  writeFileSync(file, "");
+  const api = fakeApi(() => false);
+  await githubConnect(api, 7, "abc", () => {}, { GH_TOKEN: "app", GITHUB_ENV: file, CODEX_HOME: dir }, { purpose: "check", ai: "codex", reviewer: "claude" }).connected("chatgpt");
+  assert.equal(readFileSync(file, "utf8"), "MERGELIGHT_CHATGPT=1\n");
 });

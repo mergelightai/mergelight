@@ -334,7 +334,8 @@ async function main(): Promise<number> {
     progress.stop();
     if (verifyMissed && verifyMissed !== review.verifier?.name && !review.checker_missed) {
       review.checker_missed = verifyMissed;
-      if (values["verify-missed-why"] === "not-installed") review.checker_missed_why = "not-installed";
+      const why = values["verify-missed-why"];
+      if (why === "not-installed" || why === "login-failed") review.checker_missed_why = why;
     }
 
     const json = JSON.stringify(review, null, 2);

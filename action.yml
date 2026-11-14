@@ -489,6 +489,8 @@ runs:
         args=(review "$GITHUB_REPOSITORY#$PR" --post --provider "$MERGELIGHT_PROVIDER" --verify-with "$verify" --out "$RUNNER_TEMP/mergelight-review.json")
         [ -n "$missed" ] && args+=(--verify-missed "$missed")
         [ -n "$missed" ] && [ "${MERGELIGHT_CHECKER_NOT_INSTALLED:-0}" = 1 ] && args+=(--verify-missed-why not-installed)
+        # A saved ChatGPT login that couldn't be refreshed is one that stopped working, not one never connected.
+        [ "$missed" = codex ] && [ "${MERGELIGHT_CHECKER_NOT_INSTALLED:-0}" != 1 ] && [ "${MERGELIGHT_LOGIN_LOST:-0}" = 1 ] && args+=(--verify-missed-why login-failed)
         [ -n "$MODEL" ] && args+=(--model "$MODEL")
         [ -n "$EFFORT" ] && args+=(--effort "$EFFORT")
         [ "$YELLOW_BLOCKS" = "true" ] && args+=(--yellow-blocks)
