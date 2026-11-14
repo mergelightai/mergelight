@@ -225,6 +225,7 @@ runs:
           echo "MERGELIGHT_CHECKER_NOT_INSTALLED=0"
           echo "MERGELIGHT_CHECKER_LOGIN_FAILED=0"
           echo "MERGELIGHT_CHECK_RUN="
+          echo "MERGELIGHT_PROMPT="
           echo "MERGELIGHT_CHATGPT=0"
           echo "MERGELIGHT_CONNECT=0"
           echo "MERGELIGHT_NO_LOGIN=$no_login"
@@ -520,20 +521,21 @@ runs:
         esac
         node "$GITHUB_ACTION_PATH/packages/mergelight/dist/cli.js" "${args[@]}"
 
-    # A connect's check that nobody took over: the review takes it over and clears this, and a connect
-    # that finishes its own check does too. Left over, as when saving the new login failed, the review
-    # failed before it started, or the run was cancelled during the sign-in, it is finished here, so it
-    # doesn't wait for ever.
-    - name: Finish a check the review didn't carry on
+    # The check that stands for this run: a connect's, until the review takes over with its own. Whatever
+    # is still running when the run ends, as when the review never started or the run was cancelled, is
+    # finished here, so it doesn't wait for ever. A finished one is left as it is.
+    - name: Finish a check left running
       if: always() && github.event_name != 'pull_request_review' && env.MERGELIGHT_CHECK_RUN != ''
       shell: bash
       env:
         GH_TOKEN: ${{ steps.app.outputs.token || inputs.github-token }}
       run: |
+        status="$(gh api "repos/$GITHUB_REPOSITORY/check-runs/$MERGELIGHT_CHECK_RUN" --jq .status 2>/dev/null || echo unknown)"
+        [ "$status" = completed ] && exit 0
         gh api -X PATCH "repos/$GITHUB_REPOSITORY/check-runs/$MERGELIGHT_CHECK_RUN" \
           -f status=completed -f conclusion=neutral \
-          -f "output[title]=Couldn't review this pull request: the review didn't start" \
-          -f "output[summary]=The review didn't start: a step before it failed, or the run was cancelled. The workflow log has the details. Push a commit to try again." > /dev/null \
+          -f "output[title]=Couldn't review this pull request: the run stopped first" \
+          -f "output[summary]=A step before the review failed, or the run was cancelled. The workflow log has the details. Push a commit to try again." > /dev/null \
           || echo "::warning::Couldn't finish the Mergelight check."
 
     # Codex may have refreshed the login during the run. Save the new one, or the next run

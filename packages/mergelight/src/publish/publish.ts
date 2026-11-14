@@ -245,48 +245,38 @@ export async function writeCheck(api: GitHub, id: number | null | undefined, hea
  * Shows a live "Reviewing" check right away, so people and agents can see work is
  * happening. A login that can't write checks hears about it once, from the last write.
  */
-export async function startCheck(api: GitHub, headSha: string, provider?: string, carryOn?: number): Promise<number | null> {
+export async function startCheck(api: GitHub, headSha: string, provider?: string, handedOver?: number): Promise<number | null> {
   const tool = provider === "claude" ? "Claude" : provider === "codex" ? "Codex" : null;
-  const body = {
+  // Always a check of the review's own, for the commit it reads: approvals and verdicts then go to the
+  // check this review made, never to an older one.
+  const run = await writeCheck(api, null, headSha, {
     status: "in_progress",
     started_at: new Date().toISOString(),
     output: {
       title: "Reviewing",
       summary: `Mergelight is reviewing this pull request${tool ? ` with ${tool}` : ""} on your own plan. This usually takes 2 to 15 minutes.`,
     },
-  };
-  // The check a connect left going, when it is for this very commit: a push while the connect waited
-  // moves the review to a newer one, and a verdict must never land on a commit it didn't read.
-  let old: { id: number; head_sha: string } | null = null;
-  if (carryOn) {
-    old = await api.get<{ id: number; head_sha: string }>(`check-runs/${carryOn}`).catch(() => null);
-    if (old?.head_sha === headSha) {
-      const going = await writeCheck(api, carryOn, headSha, body).catch(() => null);
-      if (going) return going.id;
-    }
-  }
-  const run = await writeCheck(api, null, headSha, body);
-  // Not carried on: the old one is closed, and only now, with the new one already going, so there is no
-  // moment with neither, and none with it running next to the new one.
-  if (carryOn) {
-    const moved = old && old.head_sha !== headSha;
-    await writeCheck(api, carryOn, old?.head_sha ?? headSha, {
+  });
+  // A connect's check left going for this review is closed only now, with this one already going, so
+  // there is no moment without a running check, and none with both.
+  if (handedOver) {
+    await writeCheck(api, handedOver, headSha, {
       status: "completed",
       conclusion: "neutral",
       completed_at: new Date().toISOString(),
-      output: { title: "Superseded", summary: moved ? `A newer commit was pushed while Mergelight waited, so it reviews ${headSha.slice(0, 7)} instead.` : "Mergelight carries on this review in a new check." },
+      output: { title: "Superseded", summary: "The review goes on in a new check." },
     }).catch(() => null);
   }
   return run?.id ?? null;
 }
 
 /** Puts the summary comment on the PR before anything else, so it comes first. Later rounds edit it in place. */
-export async function startSummary(api: GitHub, number: number, plan?: ReviewPlan): Promise<PrComment | null> {
+export async function startSummary(api: GitHub, number: number, plan?: ReviewPlan, ownPrompt?: string): Promise<PrComment | null> {
   const { summary } = await readPrReviewState(api, number);
   // A "Reviewing" comment left by an earlier run, or by a reconnect, says this run's plan now, keeping its
-  // state. So does a prompt to connect the AI that checks: the review starts without it, and its code or
-  // link is dead by now.
-  const checkerPrompt = isPendingSummary(summary?.body) && Boolean(summary?.body?.includes('"for":"check"'));
+  // state. So does this run's own prompt to connect the AI that checks: the review starts without it, and
+  // its code or link is dead by now. Another run's prompt may still be waiting, so it stays.
+  const checkerPrompt = Boolean(ownPrompt) && isPendingSummary(summary?.body) && Boolean(summary?.body?.includes('"for":"check"')) && Boolean(summary?.body?.includes(ownPrompt!));
   if (summary && plan && (isReviewingSummary(summary.body) || checkerPrompt)) {
     const state = stateBlock(summary.body);
     const body = state ? `${pendingSummaryBody(plan)}\n${state}` : pendingSummaryBody(plan);

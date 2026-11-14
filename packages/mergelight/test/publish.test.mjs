@@ -677,25 +677,17 @@ test("a failed review keeps what earlier rounds found, when it replaces a pendin
   assert.equal(decodeState(writes[0].body.body)?.round, 3);
 });
 
-test("a check a connect left going is carried on only for the commit it was made for", async () => {
+test("the review starts a check of its own, and closes a connect's check only once its own is going", async () => {
   const writes = [];
-  const api = (headSha) => ({
-    get: async () => ({ id: 9, head_sha: headSha }),
-    write: async (method, path, body) => (writes.push({ method, path, body }), { id: path === "check-runs" ? 10 : 9 }),
-  });
-  assert.equal(await startCheck(api("aaa"), "aaa", "codex", 9), 9);
-  assert.equal(writes.at(-1).path, "check-runs/9");
-  writes.length = 0;
-  // A push while the connect waited: the old check is closed as superseded, and a new one made.
-  assert.equal(await startCheck(api("old"), "new", "codex", 9), 10);
-  // The new one first, then the old one closed: there is no moment with neither going.
+  const api = { write: async (method, path, body) => (writes.push({ path, body }), { id: path === "check-runs" ? 10 : 9 }) };
+  assert.equal(await startCheck(api, "new", "codex", 9), 10);
+  // Its own first, then the connect's closed: there is no moment with neither, and none with both.
   assert.deepEqual(writes.map((w) => [w.path, w.body.conclusion ?? w.body.status]), [["check-runs", "in_progress"], ["check-runs/9", "neutral"]]);
-  // One that can't be read is closed too, rather than left running.
   writes.length = 0;
-  const unread = { get: async () => { throw new Error("HTTP 502"); }, write: async (method, path, body) => (writes.push({ path, body }), { id: path === "check-runs" ? 10 : 9 }) };
-  assert.equal(await startCheck(unread, "new", "codex", 9), 10);
-  assert.equal(writes.find((w) => w.path === "check-runs/9").body.conclusion, "neutral");
+  assert.equal(await startCheck(api, "new", "codex"), 10);
+  assert.equal(writes.length, 1);
 });
+
 
 test("an API key with no credit is said to have no credit, not a plan with no usage", () => {
   const notice = limitNotice("Anthropic", null);
@@ -716,7 +708,10 @@ test("a dead prompt to connect the checking AI gives way to the review when it s
     viewer: async () => null,
     write: async (method, path, body) => writes.push({ method, path, body }),
   };
-  await startSummary(api, 7, { reviewer: { name: "claude", model: "opus" } });
+  // Another run's prompt may still be waiting: it stays.
+  await startSummary(api, 7, { reviewer: { name: "claude", model: "opus" } }, "ZZZZ-ZZZZ");
+  assert.equal(writes.length, 0);
+  await startSummary(api, 7, { reviewer: { name: "claude", model: "opus" } }, "AAAA-BBBB");
   assert.equal(writes.length, 1);
   assert.match(writes[0].body.body, /Mergelight: Reviewing/);
   assert.doesNotMatch(writes[0].body.body, /AAAA-BBBB/);

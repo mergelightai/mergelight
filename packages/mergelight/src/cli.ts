@@ -322,12 +322,12 @@ async function main(): Promise<number> {
     // A connect earlier in this run left its check going: the review carries it on, so no check stands
     // finished in between, which a branch rule could take for a review that passed.
     checkRunId = await startCheck(api, headSha, provider ?? "codex", Number(process.env.MERGELIGHT_CHECK_RUN) || undefined);
-    // From here the review finishes the check, or a newer one, whatever happens: the run's last step leaves it.
-    if (process.env.MERGELIGHT_CHECK_RUN && process.env.GITHUB_ENV) appendFileSync(process.env.GITHUB_ENV, "MERGELIGHT_CHECK_RUN=\n");
+    // The review's own check from here: the run's last step finishes it if the review is cancelled first.
+    if (process.env.GITHUB_ENV) appendFileSync(process.env.GITHUB_ENV, `MERGELIGHT_CHECK_RUN=${checkRunId ?? ""}\n`);
     // Says which AI reviews from the start. The models' exact names follow once the first reviewer answers.
     // Without --provider the review runs on Codex, as reviewPullRequest decides.
     const firstGuess = values.model ?? (provider === "claude" ? "opus" : configuredModel());
-    summaryComment = await startSummary(api, ref.number, { reviewer: { name: provider ?? "codex", model: firstGuess ?? null } }).catch((e) => {
+    summaryComment = await startSummary(api, ref.number, { reviewer: { name: provider ?? "codex", model: firstGuess ?? null } }, process.env.MERGELIGHT_PROMPT || undefined).catch((e) => {
       log(`Couldn't post the summary yet: ${(e as Error).message}`);
       return null;
     });

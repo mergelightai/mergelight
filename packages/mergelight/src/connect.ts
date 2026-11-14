@@ -502,6 +502,10 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
     showCode: async (login, claudeUrl) => {
       const setupLink = claudeSetupLink(env.GITHUB_REPOSITORY, number);
       prompted = true;
+      // What tells this run's prompt apart from any other: its code, or its Claude link as the hidden line
+      // keeps it, with "--" escaped. The review that starts after it replaces this one, and no other.
+      const mark = login?.code ?? (claudeUrl ? JSON.stringify(claudeUrl).slice(1, -1).replace(/--/g, "\\u002d\\u002d") : "");
+      if (mark && env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, `MERGELIGHT_PROMPT=${mark}\n`);
       // What tells this run's prompt apart from any other: its code, or its Claude link.
       await upsertSummary(api, number, checker ? connectCheckBody(checker, reviewer, login, runUrl, claudeUrl, setupLink) : connectBody(login, runUrl, claudeUrl, setupLink));
       log("Posted the link and code on the pull request. Waiting for the login.");
