@@ -134,6 +134,7 @@ runs:
         HAS_CLAUDE: ${{ (inputs.claude-code-oauth-token != '' || inputs.anthropic-api-key != '') && '1' || '' }}
         HAS_CODEX: ${{ (inputs.codex-auth-json != '' || inputs.openai-api-key != '') && '1' || '' }}
         HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        VISIBILITY: ${{ github.event.repository.visibility }}
       run: |
         provider="$WANTED"
         if [ -z "$provider" ]; then
@@ -186,7 +187,11 @@ runs:
           if [ "$checker" = claude ]; then checker_has="$HAS_CLAUDE"; else checker_has="$HAS_CODEX"; fi
           if [ "$provider" = claude ]; then reviewer_has="$HAS_CLAUDE"; else reviewer_has="$HAS_CODEX"; fi
           if [ -z "$checker_has" ] && [ -n "$can_ask" ] && [ -n "$reviewer_has" ]; then
-            if [ "$checker" = codex ] && [ -z "$WANTED" ]; then
+            if [ "$checker" = codex ] && [ "${VISIBILITY:-}" = public ]; then
+              # Anyone who can see the pull request could enter a ChatGPT code shown there, and pick whose
+              # account checks. Claude's link instead goes through mergelight.dev, where you sign in.
+              echo "::notice::Codex is set to check, but on a public repository anyone could enter a ChatGPT code shown here, so none is shown. Save the ChatGPT login as the CODEX_AUTH_JSON secret yourself (npx @mergelight/cli setup $GITHUB_REPOSITORY --relogin). This review is checked by $provider."
+            elif [ "$checker" = codex ] && [ -z "$WANTED" ]; then
               # Claude reviews only because it has the one login: with a ChatGPT login saved too, the next
               # run would pick Codex to review. So the sign-in waits for the workflow to say who reviews.
               echo "::notice::Codex is set to check, but connecting ChatGPT would make Codex review from the next run on. Set provider: claude in the workflow to keep Claude reviewing, then push. This review is checked by Claude."

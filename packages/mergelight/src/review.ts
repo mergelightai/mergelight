@@ -18,7 +18,7 @@ import {
   type TeamRule,
   usedMemories,
 } from "./prompt.js";
-import { LimitError, LoginError } from "./providers/codex.js";
+import { LimitError, LoginError, SandboxError } from "./providers/codex.js";
 import { MAX_REPO_RULES } from "./repo-rules.js";
 import { claudeAvailable, runModel as runOneModel, TOOLING, type ModelOptions, type ModelResult, type ProviderName } from "./providers/index.js";
 import { candidateSchema, checkSchema, reviewSchema, reviewSchemaWithDecisions } from "./schema.js";
@@ -456,13 +456,13 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
       });
     // The other AI checking is extra: when its login doesn't work or its plan is used up, the reviewer's
     // own AI checks instead, and the summary says why. The reviewer's own failures still stop the review.
-    let checkerFailed: "login-failed" | "limit" | undefined;
+    let checkerFailed: "login-failed" | "limit" | "sandbox" | undefined;
     let verified: Awaited<ReturnType<typeof verifyCandidates>>;
     try {
       verified = await verifyWithAi(verifyWith, verifyModel);
     } catch (err) {
-      if (verifyWith === provider || !(err instanceof LoginError || err instanceof LimitError)) throw err;
-      checkerFailed = err instanceof LimitError ? "limit" : "login-failed";
+      if (verifyWith === provider || !(err instanceof LoginError || err instanceof LimitError || err instanceof SandboxError)) throw err;
+      checkerFailed = err instanceof LimitError ? "limit" : err instanceof SandboxError ? "sandbox" : "login-failed";
       progress(`${verifyWith === "codex" ? "Codex" : "Claude"} couldn't check (${err.message.slice(0, 120)}), so ${provider === "codex" ? "Codex" : "Claude"} checks the findings`);
       verified = await verifyWithAi(provider, provider === "codex" ? opts.model : (opts.model ?? "opus"));
     }

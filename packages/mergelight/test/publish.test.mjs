@@ -659,6 +659,7 @@ test("the summary says when the AI set to check had no login yet, so the reviewe
   assert.match(checkerMissedLine({ checker_missed: "codex", checker_missed_why: "not-installed", provider: claudeReviews }), /but Codex couldn't be installed on this run, so Claude checked it/);
   assert.match(checkerMissedLine({ checker_missed: "codex", checker_missed_why: "login-failed", provider: claudeReviews }), /but its ChatGPT login didn't work/);
   assert.match(checkerMissedLine({ checker_missed: "codex", checker_missed_why: "limit", provider: claudeReviews }), /but its ChatGPT plan hit its usage limit/);
+  assert.match(checkerMissedLine({ checker_missed: "codex", checker_missed_why: "sandbox", provider: claudeReviews }), /but Codex's sandbox couldn't start on this runner/);
 });
 
 test("a failed review keeps what earlier rounds found, when it replaces a pending summary", async () => {

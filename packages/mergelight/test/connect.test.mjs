@@ -534,3 +534,11 @@ test("a ChatGPT login connected to check counts as one, so a rejected one lets t
   await githubConnect(api, 7, "abc", () => {}, { GH_TOKEN: "app", GITHUB_ENV: file, CODEX_HOME: dir }, { purpose: "check", ai: "codex", reviewer: "claude" }).connected("chatgpt");
   assert.equal(readFileSync(file, "utf8"), "MERGELIGHT_CHATGPT=1\n");
 });
+
+test("one Mergelight step of the job passing the login on is enough, and YAML's shared parts can't be read", () => {
+  const job = (steps) => `jobs:\n  review:\n    steps:\n${steps}`;
+  const two = job("      - if: github.event_name == 'pull_request'\n        uses: mergelightai/mergelight@v0\n        with:\n          codex-auth-json: x\n      - if: github.event_name != 'pull_request'\n        uses: mergelightai/mergelight@v0\n");
+  assert.equal(claudeInWorkflow(two, "codex-auth-json", "review"), "yes");
+  assert.equal(claudeInWorkflow(job("      - uses: mergelightai/mergelight@v0\n        with: *inputs\n"), "codex-auth-json", "review"), "unknown");
+  assert.equal(claudeInWorkflow(job("      - uses: mergelightai/mergelight@v0\n        with:\n          <<: *inputs\n"), "codex-auth-json", "review"), "unknown");
+});

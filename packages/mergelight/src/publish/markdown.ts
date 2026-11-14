@@ -26,6 +26,7 @@ export function checkerMissedLine(r: Pick<Review, "checker_missed" | "checker_mi
     "not-installed": `${name(r.checker_missed)} couldn't be installed on this run`,
     "login-failed": `its ${login} login didn't work`,
     limit: `its ${login} plan hit its usage limit`,
+    sandbox: `${name(r.checker_missed)}'s sandbox couldn't start on this runner`,
   }[r.checker_missed_why ?? "no-login"];
   return `⚠️ ${name(r.checker_missed)} was set to check this review, but ${why}, so ${name(r.provider.name)} checked it.`;
 }

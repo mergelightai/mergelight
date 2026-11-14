@@ -51,6 +51,17 @@ test("a refused API key is a login problem with its own fix, not a ChatGPT one",
   assert.ok(err instanceof LoginError);
   assert.match(err.message, /OPENAI_API_KEY|codex login/);
   assert.doesNotMatch(err.message, /CODEX_AUTH_JSON/);
+  // In the Action, the title names the API key's kind of login.
+  const saved = process.env.GITHUB_ACTIONS;
+  process.env.GITHUB_ACTIONS = "true";
+  try {
+    const inAction = await failingCodex("unexpected status 401 Unauthorized: Incorrect API key", { chatgpt: "0" });
+    assert.equal(inAction.plan, "OpenAI");
+    assert.match(inAction.message, /OPENAI_API_KEY/);
+  } finally {
+    if (saved === undefined) delete process.env.GITHUB_ACTIONS;
+    else process.env.GITHUB_ACTIONS = saved;
+  }
 });
 
 test("other failures keep their own message", async () => {

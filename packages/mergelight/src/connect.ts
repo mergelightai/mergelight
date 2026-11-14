@@ -323,11 +323,13 @@ export function claudeInWorkflow(text: string | null, input = "claude-code-oauth
     steps.push(lines.slice(start, end).join("\n"));
   });
   // A reusable workflow or a composite action of the team's own may pass the login on in a file this
-  // can't see: unless Mergelight is used here in plain sight, it can't say.
-  if (!steps.length) return "unknown";
-  // The name may be quoted, or in a flow mapping, as YAML allows. Every Mergelight step here must pass it.
+  // can't see: unless Mergelight is used here in plain sight, it can't say. Nor through YAML's shared
+  // parts (an alias like *inputs, or a << merge), which this doesn't follow.
+  if (!steps.length || steps.some((step) => /(^|[\s:{,\[])\*[\w-]+|<<\s*:/m.test(step))) return "unknown";
+  // The name may be quoted, or in a flow mapping, as YAML allows. One step of this job passing it on is
+  // enough: a job can hold Mergelight steps that run on other conditions, and they share the secret.
   const passes = (step: string) => new RegExp(`(^|[\\s{,])["']?${input}["']?\\s*:`, "m").test(step);
-  return steps.every(passes) ? "yes" : "no";
+  return steps.some(passes) ? "yes" : "no";
 }
 
 async function workflowHasClaude(api: GitHub, env: NodeJS.ProcessEnv, input = "claude-code-oauth-token"): Promise<"yes" | "no" | "unknown"> {

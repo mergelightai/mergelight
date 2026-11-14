@@ -114,13 +114,13 @@ test("the refresh and its save come before the review", () => {
   assert.doesNotMatch(action, /Reply with the single word OK/, "the job no longer spends plan quota on a model call");
 });
 
-function choose({ wanted = "", checker = "", claude = "", codex = "", event = "pull_request", headRepo = "acme/widgets", actor = "someone" }) {
+function choose({ wanted = "", checker = "", claude = "", codex = "", event = "pull_request", headRepo = "acme/widgets", actor = "someone", visibility = "private" }) {
   const dir = mkdtempSync(join(tmpdir(), "mergelight-choose-"));
   const envFile = join(dir, "env");
   writeFileSync(envFile, "");
   const r = spawnSync("bash", ["-c", stepScript("Choose who reviews and who checks")], {
     encoding: "utf8",
-    env: { PATH: process.env.PATH, GITHUB_ENV: envFile, WANTED: wanted, WANTED_CHECKER: checker, HAS_CLAUDE: claude, HAS_CODEX: codex, GITHUB_EVENT_NAME: event, GITHUB_REPOSITORY: "acme/widgets", GITHUB_ACTOR: actor, HEAD_REPO: headRepo },
+    env: { PATH: process.env.PATH, GITHUB_ENV: envFile, WANTED: wanted, WANTED_CHECKER: checker, HAS_CLAUDE: claude, HAS_CODEX: codex, GITHUB_EVENT_NAME: event, GITHUB_REPOSITORY: "acme/widgets", GITHUB_ACTOR: actor, HEAD_REPO: headRepo, VISIBILITY: visibility },
   });
   const env = Object.fromEntries(readFileSync(envFile, "utf8").trim().split("\n").filter(Boolean).map((l) => l.split("=")));
   return { code: r.status, out: r.stdout, env };
@@ -310,4 +310,12 @@ test("a checker that can't be installed lets the reviewer check, and a reviewer 
     const reviewer = spawnSync("bash", ["-c", script], { encoding: "utf8", env: { PATH: `${bin}:${process.env.PATH}`, GITHUB_ENV: envFile, MERGELIGHT_PROVIDER: provider === "claude" ? "codex" : "claude" } });
     assert.equal(reviewer.status, 1, `${step} for the reviewer`);
   }
+});
+
+test("on a public repository no ChatGPT code is shown for a checker, and Claude's link still is", () => {
+  const open = choose({ wanted: "claude", claude: "1", checker: "codex", visibility: "public" });
+  assert.equal(open.env.MERGELIGHT_CONNECT_CHECK, "");
+  assert.match(open.out, /anyone could enter a ChatGPT code/);
+  assert.equal(open.env.MERGELIGHT_USES_CODEX, "0");
+  assert.equal(choose({ wanted: "codex", codex: "1", checker: "claude", visibility: "public" }).env.MERGELIGHT_CONNECT_CHECK, "claude", "Claude's link goes through mergelight.dev, where you sign in");
 });
