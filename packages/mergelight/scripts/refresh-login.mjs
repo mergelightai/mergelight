@@ -18,8 +18,12 @@ import { getAppToken } from "./app-token.mjs";
 import { maskLogin } from "./mask-login.mjs";
 
 const HOUR = 3_600_000;
-/** Longer than a review's 45 minute job limit, so Codex won't need to refresh during one. */
-const REVIEW_WITHIN = HOUR;
+/**
+ * Longer than a review's 45 minute job limit, so Codex won't need to refresh during one. And as long as
+ * the jobs wait for (action.yml): a login the jobs leave alone, as it runs out too soon, is one the
+ * review refreshes in the same run.
+ */
+export const REVIEW_WITHIN = 2.5 * HOUR;
 /**
  * A review that lost the race needs its token to outlast it, because Codex would try the used refresh
  * token in the token's last 5 minutes. Most reviews finish well inside this.

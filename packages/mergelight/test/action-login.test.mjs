@@ -25,7 +25,7 @@ function stepScript(name) {
 }
 
 /** Runs the login step. A stand-in for gh records any call, because the step should need none. */
-function login({ event, authJson = "", apiKey = "", headRepo = "", actor = "someone" }) {
+function login({ event, authJson = "", apiKey = "", headRepo = "", actor = "someone", run }) {
   const dir = mkdtempSync(join(tmpdir(), "mergelight-action-"));
   const bin = join(dir, "bin");
   mkdirSync(bin);
@@ -50,11 +50,21 @@ function login({ event, authJson = "", apiKey = "", headRepo = "", actor = "some
       HEAD_REPO: headRepo,
       AUTH_JSON: authJson,
       API_KEY: apiKey,
+      ...(run ? { RUN: run } : {}),
     },
   });
   const env = Object.fromEntries(readFileSync(envFile, "utf8").trim().split("\n").filter(Boolean).map((l) => l.split("=")));
   return { code: r.status, out: r.stdout, env, askedGh: existsSync(asked), saved: existsSync(join(dir, "codex-home", "auth.json")) };
 }
+
+test("the jobs step never starts a sign-in: with no login it skips, and the review connects one", () => {
+  const r = login({ event: "pull_request", headRepo: "acme/widgets", run: "jobs" });
+  assert.equal(r.code, 0);
+  assert.equal(r.env.MERGELIGHT_NO_LOGIN, "1");
+  assert.notEqual(r.env.MERGELIGHT_CONNECT, "1");
+  assert.match(r.out, /Skipping the jobs: there's no AI login yet/);
+  assert.equal(login({ event: "pull_request", headRepo: "acme/widgets", run: "review" }).env.MERGELIGHT_CONNECT, "1", "the review still connects");
+});
 
 test("the refresh job with no login has nothing to do, and doesn't fail", () => {
   for (const event of ["schedule", "workflow_dispatch"]) {
@@ -228,7 +238,7 @@ function reviewArgs({ provider, verify, follows = "0", claudeToken = "", codexLo
   chmodSync(join(bin, "codex"), 0o755);
   const r = spawnSync("bash", ["-c", stepScript("Review")], {
     encoding: "utf8",
-    env: { PATH: `${bin}:${process.env.PATH}`, RUNNER_TEMP: dir, GITHUB_ACTION_PATH: dir, GITHUB_REPOSITORY: "acme/widgets", PR: "7", MODEL: "", EFFORT: "", YELLOW_BLOCKS: "false", AUTO_APPROVE: "true", CLAUDE_CODE_OAUTH_TOKEN: claudeToken, ANTHROPIC_API_KEY: "", MERGELIGHT_PROVIDER: provider, MERGELIGHT_VERIFY: verify, MERGELIGHT_VERIFY_FOLLOWS: follows, MERGELIGHT_LOGIN_LOST: lost, MERGELIGHT_USES_CODEX: usesCodex, MERGELIGHT_USES_CLAUDE: usesClaude, MERGELIGHT_CHECKER_NOT_INSTALLED: notInstalled },
+    env: { PATH: `${bin}:${process.env.PATH}`, RUNNER_TEMP: dir, GITHUB_ACTION_PATH: dir, GITHUB_REPOSITORY: "acme/widgets", PR: "7", MODEL: "", EFFORT: "", YELLOW_BLOCKS: "false", AUTO_APPROVE: "true", CLAUDE_CODE_OAUTH_TOKEN: claudeToken, ANTHROPIC_API_KEY: "", MERGELIGHT_PROVIDER: provider, MERGELIGHT_VERIFY: verify, MERGELIGHT_VERIFY_FOLLOWS: follows, MERGELIGHT_LOGIN_LOST: lost, MERGELIGHT_USES_CODEX: usesCodex, MERGELIGHT_USES_CLAUDE: usesClaude, MERGELIGHT_CHECKER_NOT_INSTALLED: notInstalled, COMMIT: "", JOBS_RESULT: "", JOBS_COMMIT: "", JOBS_WHY: "" },
   });
   assert.equal(r.status, 0, r.stderr);
   return r.stdout;
@@ -342,4 +352,52 @@ test("the notice for saving a checker's login names the secret this workflow rea
     env: { PATH: process.env.PATH, GITHUB_ENV: join(mkdtempSync(join(tmpdir(), "mergelight-secret-")), "env"), WANTED: "claude", WANTED_CHECKER: "codex", HAS_CLAUDE: "1", HAS_CODEX: "", GITHUB_EVENT_NAME: "pull_request", GITHUB_REPOSITORY: "acme/widgets", GITHUB_ACTOR: "someone", HEAD_REPO: "acme/widgets", VISIBILITY: "public", SECRET_NAME: "TEAM_CHATGPT" },
   });
   assert.match(r.stdout, /gh secret set TEAM_CHATGPT --repo acme\/widgets/);
+});
+
+test("the jobs never get the Mergelight AI app's token, only the workflow's own, which can only read", () => {
+  const step = action.slice(action.indexOf("- name: Get the Mergelight AI app token"), action.indexOf("shell:", action.indexOf("- name: Get the Mergelight AI app token")));
+  assert.match(step, /inputs\.run != 'jobs'/);
+});
+
+test("jobs mode never turns a check green on an approval, nor refreshes the login before the jobs", () => {
+  const condition = (name) => action.slice(action.indexOf(`- name: ${name}`), action.indexOf("shell:", action.indexOf(`- name: ${name}`)));
+  assert.match(condition("Approve the check"), /inputs\.run != 'jobs'/);
+  assert.match(condition("Refresh the Codex login if it's due"), /inputs\.run != 'jobs'/);
+});
+
+test("the jobs wait for a ChatGPT login that lasts through them and the review", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-lasts-"));
+  const script = stepScript("Check the login lasts through the jobs");
+  const run = (hours) => {
+    const payload = Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + hours * 3600 })).toString("base64url");
+    writeFileSync(join(dir, "auth.json"), JSON.stringify({ tokens: { access_token: `h.${payload}.s` } }));
+    const out = join(dir, `out-${hours}`);
+    writeFileSync(out, "");
+    const r = spawnSync("bash", ["-c", script], { encoding: "utf8", env: { PATH: process.env.PATH, CODEX_HOME: dir, GITHUB_ACTION_PATH: root, GITHUB_OUTPUT: out } });
+    assert.equal(r.status, 0, r.stderr);
+    return readFileSync(out, "utf8");
+  };
+  assert.equal(run(1), "skip=true\n", "runs out within the jobs and the review");
+  assert.equal(run(24), "");
+  assert.ok(action.includes("steps.lasts.outputs.skip != 'true'"));
+});
+
+test("in jobs mode no second AI is set up, and a Claude reviewer with no login skips the jobs without a sign-in", () => {
+  const jobs = (o) => {
+    const dir = mkdtempSync(join(tmpdir(), "mergelight-choose-jobs-"));
+    const envFile = join(dir, "env");
+    writeFileSync(envFile, "");
+    const r = spawnSync("bash", ["-c", stepScript("Choose who reviews and who checks")], {
+      encoding: "utf8",
+      env: { PATH: process.env.PATH, GITHUB_ENV: envFile, RUN: "jobs", WANTED: o.wanted ?? "", WANTED_CHECKER: o.checker ?? "", HAS_CLAUDE: o.claude ?? "", HAS_CODEX: o.codex ?? "", GITHUB_EVENT_NAME: "pull_request", GITHUB_REPOSITORY: "acme/widgets", GITHUB_ACTOR: "someone", HEAD_REPO: "acme/widgets", VISIBILITY: "private" },
+    });
+    return { out: r.stdout, env: Object.fromEntries(readFileSync(envFile, "utf8").trim().split("\n").filter(Boolean).map((l) => l.split("="))) };
+  };
+  const both = jobs({ wanted: "claude", claude: "1", codex: "1" });
+  assert.equal(both.env.MERGELIGHT_VERIFY, "claude");
+  assert.equal(both.env.MERGELIGHT_USES_CODEX, "0");
+  const none = jobs({ wanted: "claude", codex: "1" });
+  assert.equal(none.env.MERGELIGHT_CONNECT_CLAUDE, "0");
+  assert.equal(none.env.MERGELIGHT_NO_LOGIN, "1");
+  assert.match(none.out, /Skipping the jobs: there's no Claude login yet/);
 });

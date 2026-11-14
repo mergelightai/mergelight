@@ -1,3 +1,4 @@
+import type { JobsReport } from "../types.js";
 import type { Finding, Light, Review } from "../types.js";
 import { RESOLVED_ONLY, type PriorFinding } from "../prompt.js";
 import { GitHub, TRANSIENT, type ApiOptions } from "./api.js";
@@ -5,7 +6,7 @@ import { JOBS_TRAILER } from "../run-jobs.js";
 import { commentableLines, place } from "./diff-lines.js";
 import { answeredRemembered, closedBody, patchTouches, readClosed, REMEMBERED_MARKER, reopenedBody, resolvedByPeople, resolverReplies, threadAction, threadFinding, type Handled, type ReviewThread } from "./closed.js";
 import type { FailureNotice } from "./markdown.js";
-import { failedSummaryBody, FINDING_MARKER_RE, headline, inlineBody, isFailedSummary, isPendingSummary, isReviewingSummary, LIGHT, pendingSummaryBody, SUMMARY_MARKER, summaryBody, type ReviewPlan } from "./markdown.js";
+import { jobsLines, failedSummaryBody, FINDING_MARKER_RE, headline, inlineBody, isFailedSummary, isPendingSummary, isReviewingSummary, LIGHT, pendingSummaryBody, SUMMARY_MARKER, summaryBody, type ReviewPlan } from "./markdown.js";
 import { askWriteAccess, MAX_NOTE, readMarks, trustedComment, writeAccess, type Mark, type PrComment } from "./handled.js";
 import { withoutHidden } from "../skills.js";
 import { decodeState, nextState, stateBlock, type ReviewState, type StateFinding } from "./state.js";
@@ -301,26 +302,30 @@ export async function updatePendingSummary(api: GitHub, summary: PrComment | nul
 }
 
 /** A first review that couldn't run shouldn't say "Reviewing" forever, and an older failure shouldn't outlive a newer reason. Real results stay. */
-export async function failSummary(api: GitHub, number: number, notice?: FailureNotice): Promise<void> {
+export async function failSummary(api: GitHub, number: number, notice?: FailureNotice, jobs?: JobsReport | null): Promise<void> {
   const { summary } = await readPrReviewState(api, number);
+  // An earlier review's finished summary is left alone: writing over it could undo a newer run's result.
+  // The check for this commit says what the jobs did instead (failCheck).
   if (!summary || !(isPendingSummary(summary.body) || isFailedSummary(summary.body))) return;
   // A pending summary can carry what earlier rounds found, such as one a login prompt replaced: it stays.
   const state = stateBlock(summary.body);
-  await api.write("PATCH", `issues/comments/${summary.id}`, { body: state ? `${failedSummaryBody(notice)}\n${state}` : failedSummaryBody(notice) });
+  await api.write("PATCH", `issues/comments/${summary.id}`, { body: state ? `${failedSummaryBody(notice, jobs)}\n${state}` : failedSummaryBody(notice, jobs) });
 }
 
 /**
  * A review that couldn't run ends neutral, so a broken login doesn't block
  * merging. The workflow job itself still fails, so it's visible.
  */
-export async function failCheck(api: GitHub, checkRunId: number | null, headSha: string, reason: string, log?: (line: string) => void, title = CHECK_FAILED_TITLE): Promise<void> {
+export async function failCheck(api: GitHub, checkRunId: number | null, headSha: string, reason: string, log?: (line: string) => void, title = CHECK_FAILED_TITLE, jobs?: JobsReport | null): Promise<void> {
+  // What the jobs did, when they ran: the branch changed all the same, and the check is this commit's own.
+  const jobsPart = jobs ? `\n\n${jobsLines(jobs).join("\n").slice(0, 20_000)}` : "";
   await writeCheck(api, checkRunId, headSha, {
     status: "completed",
     conclusion: "neutral",
     completed_at: new Date().toISOString(),
     output: {
       title,
-      summary: `${reason.slice(0, 2000)}\n\nThis check is neutral so a broken review doesn't block merging. The workflow log has the details.`,
+      summary: `${reason.slice(0, 2000)}\n\nThis check is neutral so a broken review doesn't block merging. The workflow log has the details.${jobsPart}`,
     },
   }, log);
 }

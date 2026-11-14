@@ -341,10 +341,15 @@ export function claudeInWorkflow(text: string | null, input = "claude-code-oauth
     }
     // Likewise a step that runs only on other events, such as a schedule: every event its condition names
     // with == is one a pull request never starts, so it never runs where a login is connected.
-    // Only comparisons of the event's name count, never a branch's or anything else's.
-    const named = [...condition.matchAll(/event_name\s*==\s*["']([\w-]+)["']/g)].map((m) => m[1]!);
+    // Only comparisons of the event's name count, never a branch's or anything else's. Each part on its
+    // own side of || must name such an event: a part without one could run on a pull request.
     const pullRequest = new Set(["pull_request", "pull_request_target"]);
-    if (named.length && named.every((e) => !pullRequest.has(e))) return;
+    const parts = condition.replace(/^\s*(?:-\s*)?if:\s*[>|]?[-+]?/, "").replace(/\$\{\{|\}\}|[()]/g, " ").split("||");
+    const otherEventOnly = (part: string) => {
+      const named = [...part.matchAll(/event_name\s*==\s*["']([\w-]+)["']/g)].map((m) => m[1]!);
+      return named.length > 0 && named.every((e) => !pullRequest.has(e));
+    };
+    if (condition && parts.every(otherEventOnly)) return;
     steps.push(step);
   });
   // A reusable workflow or a composite action of the team's own may pass the login on in a file this
@@ -418,17 +423,19 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
    * The app's token dies if the app is removed during the login, which can wait 15 minutes. The comment
    * still has to change, or it keeps offering a dead code, and the workflow's own token can do that.
    */
-  const updateSummary = async (body: string) => {
+  /** Runs a comment read or write, again with the workflow's token when GitHub refuses the app's. */
+  const withWorkflowToken = async <T>(work: () => Promise<T>): Promise<T> => {
     try {
-      await upsertSummary(api, number, body);
+      return await work();
     } catch (err) {
       const fallback = env.GITHUB_WORKFLOW_TOKEN;
       if (!fallback || fallback === env.GH_TOKEN || !/Bad credentials|HTTP 401/i.test(err instanceof Error ? err.message : String(err))) throw err;
       log("GitHub refused the app's token, so this updates the comment with the workflow's token.");
       env.GH_TOKEN = fallback;
-      await upsertSummary(api, number, body);
+      return await work();
     }
   };
+  const updateSummary = (body: string) => withWorkflowToken(() => upsertSummary(api, number, body));
   const finish = (title: string, summary: string) =>
     writeCheck(api, checkId, headSha, { status: "completed", conclusion: "neutral", completed_at: new Date().toISOString(), output: { title, summary } }, log);
   /**
@@ -544,7 +551,7 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
     connected: async (via = "chatgpt") => {
       // Only while the summary is still this run's prompt: another run may have posted its own since. A
       // comment that can't be updated mustn't leave the check waiting.
-      const { summary } = await readPrReviewState(api, number).catch(() => ({ summary: undefined }));
+      const { summary } = await withWorkflowToken(() => readPrReviewState(api, number)).catch(() => ({ summary: undefined }));
       if (!promptMark || summary?.body?.includes(promptMark)) await updateSummary(pendingSummaryBody()).catch((err) => log(`Couldn't update the comment: ${err instanceof Error ? err.message : String(err)}`));
       if (checker) {
         let account: string | null = null;

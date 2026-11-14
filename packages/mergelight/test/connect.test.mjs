@@ -613,3 +613,9 @@ test("a branch comparison isn't read as an event, and a workflow input named lik
   const input = `on:\n  workflow_dispatch:\n    inputs:\n      review:\n        type: string\njobs:\n  review:\n    steps:\n      -${step.slice(7)}`;
   assert.equal(claudeInWorkflow(input, "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "yes");
 });
+
+test("a step whose condition can also be true on a pull request still counts", () => {
+  const job = "jobs:\n  review:\n    steps:\n      - uses: mergelightai/mergelight@v0\n        with:\n          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n      - if: github.event_name == 'schedule' || github.base_ref == 'main'\n        uses: mergelightai/mergelight@v0\n        with:\n          codex-auth-json: x\n";
+  assert.equal(claudeInWorkflow(job, "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "no", "the second part runs on pull requests to main");
+  assert.equal(claudeInWorkflow(job.replace(" || github.base_ref == 'main'", " || github.event_name == 'workflow_dispatch'"), "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "yes");
+});
