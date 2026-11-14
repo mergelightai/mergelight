@@ -118,25 +118,6 @@ export function limitNotice(plan: string, resets: string | null): FailureNotice 
   };
 }
 
-/** Marks the part a failed review adds to an earlier review's summary: what the jobs did then. */
-export const JOBS_AFTER_FAILURE = "<!-- mergelight:jobs-after-failure -->";
-
-/**
- * An earlier review's summary, with what the jobs did in a run whose review failed: the branch changed
- * all the same. The earlier findings and the hidden state stay; the part is replaced, never stacked.
- */
-export function withFailedJobs(body: string, notice: FailureNotice | undefined, jobs: JobsReport): string {
-  // The part from an earlier failed run, between its two marks, goes first: only the newest is shown.
-  const open = body.indexOf(`\n${JOBS_AFTER_FAILURE}\n`);
-  const close = open >= 0 ? body.indexOf(`\n${JOBS_AFTER_FAILURE}`, open + JOBS_AFTER_FAILURE.length + 2) : -1;
-  const clean = open >= 0 && close >= 0 ? body.slice(0, open) + body.slice(close + JOBS_AFTER_FAILURE.length + 1) : body;
-  // Before the hidden state, which the next review reads at the end.
-  const at = clean.indexOf("\n<!-- mergelight:state");
-  const [head, state] = at >= 0 ? [clean.slice(0, at), clean.slice(at)] : [clean, ""];
-  const part = ["", JOBS_AFTER_FAILURE, "", `> ⚠️ ${notice?.heading ?? "The latest review couldn't run"}. What the jobs did then:`, "", ...jobsLines(jobs), JOBS_AFTER_FAILURE];
-  return `${head}${part.join("\n")}${state}`;
-}
-
 /** Marks a summary that only says a run failed, so the next failure can say what's true now. */
 export const FAILED_MARKER = "<!-- mergelight:failed -->";
 const GENERAL_FAILURE = ["### ⚠️ Mergelight couldn't review this pull request", "", "The Mergelight check has the reason. The next push tries again."].join("\n");

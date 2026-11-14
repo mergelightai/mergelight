@@ -13,9 +13,10 @@ permissions: {}
 
 # A new push cancels the older run of the same pull request. An edit that changes only the title or
 # description starts nothing, so it gets a group of its own and never cancels a run that is working.
+# A run started again by hand waits for the one going instead of cancelling it.
 concurrency:
   group: mergelight-pr-${{ github.event.pull_request.number }}${{ (github.event.action == 'edited' && !github.event.changes.base) && '-edit' || '' }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.run_attempt == 1 }}
 
 jobs:
   # The AI does the jobs, with a token that can only read, and writes what they changed to a file.
@@ -56,6 +57,8 @@ jobs:
           path: ${{ steps.jobs.outputs.jobs-result }}
           retention-days: 1
           if-no-files-found: ignore
+          # Run again, the run's file from the first try is replaced, not a reason to fail.
+          overwrite: true
 
   # No AI and no AI login: checks the file again against your jobs, and pushes one commit.
   push-jobs:

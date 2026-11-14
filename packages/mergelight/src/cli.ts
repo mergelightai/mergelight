@@ -377,7 +377,7 @@ async function main(): Promise<number> {
       const limit = err instanceof LimitError ? err : null;
       const title = limit ? checkLimitTitle(limit.plan) : login ? checkLoginTitle(login.plan) : undefined;
       const notice = limit ? limitNotice(limit.plan, limit.resets) : login ? loginNotice(login.plan, message) : undefined;
-      await failCheck(api, checkRunId, headSha, message, log, title).catch((e) => log(`Couldn't update the check: ${(e as Error).message}`));
+      await failCheck(api, checkRunId, headSha, message, log, title, jobs).catch((e) => log(`Couldn't update the check: ${(e as Error).message}`));
       await naming;
       await failSummary(api, ref.number, notice, jobs).catch((e) => log(`Couldn't update the summary: ${(e as Error).message}`));
       // The newest commit wasn't reviewed. An approval Mergelight gave to an earlier commit must not count for this one.
