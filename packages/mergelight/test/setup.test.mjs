@@ -44,7 +44,7 @@ function fake({ secrets = [], isPrivate = true, files = {}, openPrs = [] } = {})
 const puts = (calls) => calls.filter((c) => c.args.includes("PUT")).map((c) => c.args[3]);
 
 test("the templates are the example workflows", () => {
-  for (const name of ["mergelight.yml", "mergelight-approve.yml", "mergelight-refresh.yml"]) {
+  for (const name of ["mergelight.yml", "mergelight-jobs.yml", "mergelight-approve.yml", "mergelight-refresh.yml"]) {
     assert.equal(
       readFileSync(join(here, "..", "templates", name), "utf8"),
       readFileSync(join(here, "..", "..", "..", "examples", name), "utf8"),
@@ -187,4 +187,15 @@ test("a public repository gets the refresh job too", async () => {
   const added = puts(f.calls).join();
   assert.match(added, /mergelight\.yml/);
   assert.match(added, /mergelight-refresh\.yml/);
+});
+
+test("with jobs, the workflow runs them, and every Mergelight line is pinned and skips the same branches", () => {
+  const [main] = workflowFiles(["staging"], { sha: "c".repeat(40), tag: "v0.2.0" }, true);
+  assert.equal(main.name, "mergelight.yml");
+  assert.match(main.content, /run: jobs/);
+  assert.equal([...main.content.matchAll(new RegExp(`mergelightai/mergelight@${"c".repeat(40)} # v0\\.2\\.0`, "g"))].length, 2);
+  assert.match(main.content, new RegExp(`mergelightai/mergelight/push-jobs@${"c".repeat(40)} # v0\\.2\\.0`));
+  assert.doesNotMatch(main.content, /@v0\b/);
+  assert.equal([...main.content.matchAll(/!contains\(fromJSON\('\["staging"\]'\), github\.head_ref\)/g)].length, 2, "the jobs and the review both skip staging");
+  assert.doesNotMatch(workflowFiles()[0].content, /run: jobs/, "without jobs, the plain workflow");
 });

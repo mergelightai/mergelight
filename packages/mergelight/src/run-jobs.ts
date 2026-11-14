@@ -569,7 +569,8 @@ export function buildJobPrompt(input: JobPromptInput): string {
 
 /** One line of text from a file the review didn't write, cut to size. */
 function line(value: unknown, max: number): string {
-  return typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, max).trim() : "";
+  // Cut by characters, so an emoji is never split in half.
+  return typeof value === "string" ? Array.from(value.replace(/\s+/g, " ").trim()).slice(0, max).join("").trim() : "";
 }
 
 /**
@@ -591,6 +592,9 @@ export function jobsReport(result: unknown, push: { commit?: string; why?: strin
   // Jobs that changed files while they ran, but left nothing changed together, have nothing to push.
   const undone = !changed && outcomes.some((o) => o.status === "changed");
   const notPushed = !commit && changed ? line(push.why, 300) || "The push step didn't say why." : undone ? "The jobs' changes undid each other, so there was nothing to push." : undefined;
-  if (!outcomes.length && !problems.length) return null;
-  return { ...(commit ? { commit } : {}), ...(notPushed ? { notPushed } : {}), outcomes, problems, ...(allProblems.length > problems.length ? { moreProblems: allProblems.length - problems.length } : {}) };
+  // Why no job ran, when that is something to fix, such as a file the guard couldn't read. Not the
+  // everyday reasons: no jobs on the base branch, none started by this pull request, a commit jobs made.
+  const skipped = !outcomes.length && typeof r.skipped === "string" && r.skipped.includes("so no job runs") && !r.skipped.startsWith("The newest commit is one that jobs made") ? line(r.skipped, 300) : undefined;
+  if (!outcomes.length && !problems.length && !skipped) return null;
+  return { ...(commit ? { commit } : {}), ...(notPushed ? { notPushed } : {}), ...(skipped ? { skipped } : {}), outcomes, problems, ...(allProblems.length > problems.length ? { moreProblems: allProblems.length - problems.length } : {}) };
 }

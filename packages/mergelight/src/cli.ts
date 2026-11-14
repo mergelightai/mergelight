@@ -64,6 +64,7 @@ Options
   --skip-branches <a,b> For setup: don't review pull requests from these branches
   --relogin             For setup: log in to Codex again
   --no-pin              For setup: follow @v0 and get each release by itself, instead of pinning to the latest
+  --with-jobs           For setup: also run the team's jobs from .mergelight/jobs (see docs/jobs.md)
   --yes                 For setup: don't stop to ask whether the app is installed
   --no-save             For connect: there's nowhere to save a login, so ask for the app instead
   -h, --help            Show this help
@@ -125,6 +126,7 @@ async function main(): Promise<number> {
       relogin: { type: "boolean" },
       pin: { type: "boolean" },
       "no-pin": { type: "boolean" },
+      "with-jobs": { type: "boolean" },
       yes: { type: "boolean" },
       "no-save": { type: "boolean" },
       from: { type: "string" },
@@ -153,6 +155,7 @@ async function main(): Promise<number> {
           skipBranches: values["skip-branches"]?.split(",").map((b) => b.trim()).filter(Boolean),
           relogin: values.relogin,
           pin: !values["no-pin"],
+          jobs: values["with-jobs"],
           yes: values.yes,
         },
         realDeps(),
@@ -273,6 +276,23 @@ async function main(): Promise<number> {
   let summaryComment: Awaited<ReturnType<typeof startSummary>> = null;
   /** The edit that names the models, so a result or a failure notice is always written after it. */
   let naming: Promise<void> = Promise.resolve();
+  // The jobs' commit is reviewed only while it is still the pull request's newest: a review started again
+  // later, after more pushes, reads the newest commit instead, never older code over a newer result.
+  if (values.post && values["jobs-commit"] && values.at?.toLowerCase() === values["jobs-commit"].toLowerCase()) {
+    // Read from the branch itself, which moves at once: the pull request's head can still name the
+    // commit before the jobs' for a few seconds after their push.
+    const pr = await fetchPullRequest(ref);
+    const branch = pr.headRef
+      ? await api.get<{ object: { sha: string } }>(`git/ref/heads/${pr.headRef.split("/").map(encodeURIComponent).join("/")}`).catch(() => null)
+      : null;
+    // Not told: no review, rather than one that may read older code than the newest.
+    if (!branch) throw new Error(`Couldn't read ${pr.headRef ?? "the branch"} to tell whether the jobs' commit is still the newest. Run the review again.`);
+    const newest = branch.object.sha;
+    if (newest.toLowerCase() !== values.at.toLowerCase()) {
+      log(`The jobs' commit ${values.at.slice(0, 7)} isn't the newest any more, so this review reads ${newest.slice(0, 7)}.`);
+      values.at = newest;
+    }
+  }
   let headSha = values.at ?? null;
   if (values.post) {
     headSha ??= (await fetchPullRequest(ref)).headSha;
@@ -325,7 +345,7 @@ async function main(): Promise<number> {
       onProgress: progress.onProgress,
     });
     progress.stop();
-    if (jobs) review.jobs = { ...jobs, ...(jobs.commit ? { reviewed: review.pr.head_sha === jobs.commit } : {}) };
+    if (jobs) review.jobs = { ...jobs, ...(jobs.commit ? { reviewed: review.pr.head_sha.toLowerCase() === jobs.commit.toLowerCase() } : {}) };
 
     const json = JSON.stringify(review, null, 2);
     if (values.out) writeFileSync(values.out, `${json}\n`);
@@ -374,9 +394,9 @@ async function main(): Promise<number> {
       const limit = err instanceof LimitError ? err : null;
       const title = limit ? checkLimitTitle(limit.plan) : login ? checkLoginTitle(login.plan) : undefined;
       const notice = limit ? limitNotice(limit.plan, limit.resets) : login ? loginNotice(login.plan, message) : undefined;
-      await failCheck(api, checkRunId, headSha, message, log, title).catch((e) => log(`Couldn't update the check: ${(e as Error).message}`));
+      await failCheck(api, checkRunId, headSha, message, log, title, jobs).catch((e) => log(`Couldn't update the check: ${(e as Error).message}`));
       await naming;
-      await failSummary(api, ref.number, notice).catch((e) => log(`Couldn't update the summary: ${(e as Error).message}`));
+      await failSummary(api, ref.number, notice, jobs).catch((e) => log(`Couldn't update the summary: ${(e as Error).message}`));
       // The newest commit wasn't reviewed. An approval Mergelight gave to an earlier commit must not count for this one.
       // With approvals turned off, none of Mergelight's approvals stands, this commit's included.
       await syncApproval(api, ref.number, "yellow", headSha, log, values["no-approve"] ? { why: APPROVALS_OFF } : { why: UNREVIEWED, otherCommitsOnly: true });

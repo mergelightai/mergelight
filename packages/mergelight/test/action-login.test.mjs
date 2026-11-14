@@ -25,7 +25,7 @@ function stepScript(name) {
 }
 
 /** Runs the login step. A stand-in for gh records any call, because the step should need none. */
-function login({ event, authJson = "", apiKey = "", headRepo = "", actor = "someone" }) {
+function login({ event, authJson = "", apiKey = "", headRepo = "", actor = "someone", run }) {
   const dir = mkdtempSync(join(tmpdir(), "mergelight-action-"));
   const bin = join(dir, "bin");
   mkdirSync(bin);
@@ -50,11 +50,21 @@ function login({ event, authJson = "", apiKey = "", headRepo = "", actor = "some
       HEAD_REPO: headRepo,
       AUTH_JSON: authJson,
       API_KEY: apiKey,
+      ...(run ? { RUN: run } : {}),
     },
   });
   const env = Object.fromEntries(readFileSync(envFile, "utf8").trim().split("\n").filter(Boolean).map((l) => l.split("=")));
   return { code: r.status, out: r.stdout, env, askedGh: existsSync(asked), saved: existsSync(join(dir, "codex-home", "auth.json")) };
 }
+
+test("the jobs step never starts a sign-in: with no login it skips, and the review connects one", () => {
+  const r = login({ event: "pull_request", headRepo: "acme/widgets", run: "jobs" });
+  assert.equal(r.code, 0);
+  assert.equal(r.env.MERGELIGHT_NO_LOGIN, "1");
+  assert.notEqual(r.env.MERGELIGHT_CONNECT, "1");
+  assert.match(r.out, /Skipping the jobs: there's no AI login yet/);
+  assert.equal(login({ event: "pull_request", headRepo: "acme/widgets", run: "review" }).env.MERGELIGHT_CONNECT, "1", "the review still connects");
+});
 
 test("the refresh job with no login has nothing to do, and doesn't fail", () => {
   for (const event of ["schedule", "workflow_dispatch"]) {
@@ -155,4 +165,32 @@ test("the push step for jobs installs no AI and is given no AI login", () => {
   const push = readFileSync(join(root, "push-jobs/action.yml"), "utf8");
   assert.doesNotMatch(push, /codex|claude|anthropic|openai|auth-json|oauth/i);
   assert.match(push, /push-jobs "\$GITHUB_REPOSITORY#\$PR" --from "\$RESULT"/);
+});
+
+test("the jobs never get the Mergelight AI app's token, only the workflow's own, which can only read", () => {
+  const step = action.slice(action.indexOf("- name: Get the Mergelight AI app token"), action.indexOf("shell:", action.indexOf("- name: Get the Mergelight AI app token")));
+  assert.match(step, /inputs\.run != 'jobs'/);
+});
+
+test("jobs mode never turns a check green on an approval, nor refreshes the login before the jobs", () => {
+  const condition = (name) => action.slice(action.indexOf(`- name: ${name}`), action.indexOf("shell:", action.indexOf(`- name: ${name}`)));
+  assert.match(condition("Approve the check"), /inputs\.run != 'jobs'/);
+  assert.match(condition("Refresh the Codex login if it's due"), /inputs\.run != 'jobs'/);
+});
+
+test("the jobs wait for a ChatGPT login that lasts through them and the review", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-lasts-"));
+  const script = stepScript("Check the login lasts through the jobs");
+  const run = (hours) => {
+    const payload = Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + hours * 3600 })).toString("base64url");
+    writeFileSync(join(dir, "auth.json"), JSON.stringify({ tokens: { access_token: `h.${payload}.s` } }));
+    const out = join(dir, `out-${hours}`);
+    writeFileSync(out, "");
+    const r = spawnSync("bash", ["-c", script], { encoding: "utf8", env: { PATH: process.env.PATH, CODEX_HOME: dir, GITHUB_ACTION_PATH: root, GITHUB_OUTPUT: out } });
+    assert.equal(r.status, 0, r.stderr);
+    return readFileSync(out, "utf8");
+  };
+  assert.equal(run(1), "skip=true\n", "runs out within the jobs and the review");
+  assert.equal(run(24), "");
+  assert.ok(action.includes("steps.lasts.outputs.skip != 'true'"));
 });

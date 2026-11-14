@@ -166,4 +166,6 @@ export interface JobsReport {
   moreProblems?: number;
   /** Whether this review read the commit the jobs pushed. */
   reviewed?: boolean;
+  /** Why no job ran, when that is something to fix. */
+  skipped?: string;
 }
