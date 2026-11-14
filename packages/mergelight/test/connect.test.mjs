@@ -580,3 +580,8 @@ test("a secret fallback naming the save secret passes the login on", () => {
   assert.equal(claudeInWorkflow(job("${{ secrets.CLAUDE_LOGIN || secrets.CLAUDE_CODE_OAUTH_TOKEN }}"), "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "yes");
   assert.equal(claudeInWorkflow(job("${{ secrets.CLAUDE_LOGIN || secrets.OTHER }}"), "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "no");
 });
+
+test("an approval-only condition written over several lines is read whole", () => {
+  const job = `jobs:\n  review:\n    steps:\n      - uses: mergelightai/mergelight@v0\n        with:\n          claude-code-oauth-token: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n      - if: >-\n          github.event_name == 'pull_request_review'\n        uses: mergelightai/mergelight@v0\n`;
+  assert.equal(claudeInWorkflow(job, "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "yes");
+});

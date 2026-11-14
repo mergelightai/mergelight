@@ -10,7 +10,7 @@ import { parsePatch, place } from "../dist/publish/diff-lines.js";
 import { mergeLight, tierOf } from "../dist/review.js";
 import { closedBody, patchTouches, readClosed, reopenedBody, resolvedByPeople, threadAction } from "../dist/publish/closed.js";
 import { checkerMissedLine, clean, failedSummaryBody, isFailedSummary, limitNotice, notReadLine, loginNotice, FINDING_MARKER_RE, inlineBody, isPendingSummary, pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "../dist/publish/markdown.js";
-import { APPROVAL_MARKER, approvalHold, approvalLight, failSummary, startCheck, UNREVIEWED, checkConclusion, isYellowCheck, syncApproval, trustedComment, CHECK_FAILED_TITLE, checkLimitTitle, checkLoginTitle, isFailedCheckTitle } from "../dist/publish/publish.js";
+import { APPROVAL_MARKER, approvalHold, approvalLight, checkLimitTitle as limitTitle, failSummary, startCheck, UNREVIEWED, checkConclusion, isYellowCheck, syncApproval, trustedComment, CHECK_FAILED_TITLE, checkLimitTitle, checkLoginTitle, isFailedCheckTitle } from "../dist/publish/publish.js";
 import { decodeState, encodeState, nextState } from "../dist/publish/state.js";
 import { buildVerifierPrompt } from "../dist/prompt.js";
 import { assignIds } from "../dist/review.js";
@@ -689,11 +689,19 @@ test("a check a connect left going is carried on only for the commit it was made
   // A push while the connect waited: the old check is closed as superseded, and a new one made.
   assert.equal(await startCheck(api("old"), "new", "codex", 9), 10);
   assert.deepEqual(writes.map((w) => [w.path, w.body.conclusion ?? w.body.status]), [["check-runs/9", "neutral"], ["check-runs", "in_progress"]]);
+  // One that can't be read is closed too, rather than left running.
+  writes.length = 0;
+  const unread = { get: async () => { throw new Error("HTTP 502"); }, write: async (method, path, body) => (writes.push({ path, body }), { id: path === "check-runs" ? 10 : 9 }) };
+  assert.equal(await startCheck(unread, "new", "codex", 9), 10);
+  assert.equal(writes[0].body.conclusion, "neutral");
 });
 
 test("an API key with no credit is said to have no credit, not a plan with no usage", () => {
   const notice = limitNotice("Anthropic", null);
   assert.match(notice.heading, /the Anthropic API key has no credit left/);
   assert.match(notice.body, /Add credit to its account/);
+  // OpenAI says the same for credit run out and a spending limit reached: both are named.
+  assert.match(limitNotice("OpenAI", null).body, /credit ran out, or its account reached its spending limit/);
+  assert.match(limitTitle("OpenAI"), /the OpenAI API key has no usage left/);
   assert.match(limitNotice("Claude", "9am").heading, /your Claude plan hit its limit/);
 });

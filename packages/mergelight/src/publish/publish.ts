@@ -204,7 +204,7 @@ export async function answerRemembered(api: GitHub, number: number, ids: string[
 
 export const CHECK_FAILED_TITLE = "Couldn't review this pull request";
 export const checkLoginTitle = (plan: string) => `The ${plan} login didn't work`;
-export const checkLimitTitle = (plan: string) => `${CHECK_FAILED_TITLE}: your ${plan} plan hit its limit`;
+export const checkLimitTitle = (plan: string) => (plan === "OpenAI" || plan === "Anthropic" ? `${CHECK_FAILED_TITLE}: the ${plan} API key has no usage left` : `${CHECK_FAILED_TITLE}: your ${plan} plan hit its limit`);
 export const isFailedCheckTitle = (title: string | null | undefined) => Boolean(title && (title.startsWith(CHECK_FAILED_TITLE) || /^The \w+ login didn't work$/.test(title)));
 
 export interface CheckRun {
@@ -262,14 +262,15 @@ export async function startCheck(api: GitHub, headSha: string, provider?: string
     if (old?.head_sha === headSha) {
       const going = await writeCheck(api, carryOn, headSha, body).catch(() => null);
       if (going) return going.id;
-    } else if (old) {
-      await writeCheck(api, carryOn, old.head_sha, {
-        status: "completed",
-        conclusion: "neutral",
-        completed_at: new Date().toISOString(),
-        output: { title: "Superseded", summary: `A newer commit was pushed while Mergelight waited, so it reviews ${headSha.slice(0, 7)} instead.` },
-      }).catch(() => null);
     }
+    // Not carried on: closed, so it doesn't stay running next to the new one, whatever commit it is for.
+    const moved = old && old.head_sha !== headSha;
+    await writeCheck(api, carryOn, old?.head_sha ?? headSha, {
+      status: "completed",
+      conclusion: "neutral",
+      completed_at: new Date().toISOString(),
+      output: { title: "Superseded", summary: moved ? `A newer commit was pushed while Mergelight waited, so it reviews ${headSha.slice(0, 7)} instead.` : "Mergelight carries on this review in a new check." },
+    }).catch(() => null);
   }
   const run = await writeCheck(api, null, headSha, {
     status: "in_progress",

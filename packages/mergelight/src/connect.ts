@@ -321,8 +321,17 @@ export function claudeInWorkflow(text: string | null, input = "claude-code-oauth
     let end = start + 1;
     while (end < lines.length && (!lines[end]!.trim() || indent(lines[end]!) > dash)) end++;
     const step = lines.slice(start, end).join("\n");
-    // A step that runs only when someone approves needs no AI login: it only turns the check green.
-    if (/^\s*(?:-\s*)?if:[^\n]*==\s*["']pull_request_review["']/m.test(step) && !/pull_request["']/.test(step.replace(/pull_request_review["']/g, ""))) return;
+    // A step that runs only when someone approves needs no AI login: it only turns the check green. Its
+    // condition can go on over the lines below "if:", as with "if: >-".
+    const ifAt = lines.slice(start, end).findIndex((l) => /^\s*(?:-\s*)?if:/.test(l));
+    let condition = "";
+    if (ifAt >= 0) {
+      const own = start + ifAt;
+      let last = own + 1;
+      while (last < end && (!lines[last]!.trim() || indent(lines[last]!) > indent(lines[own]!.replace(/-\s*/, "  ")))) last++;
+      condition = lines.slice(own, last).join(" ");
+    }
+    if (/==\s*["']pull_request_review["']/.test(condition) && !/pull_request["']/.test(condition.replace(/pull_request_review["']/g, ""))) return;
     steps.push(step);
   });
   // A reusable workflow or a composite action of the team's own may pass the login on in a file this
@@ -480,7 +489,8 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
       const setupLink = claudeSetupLink(env.GITHUB_REPOSITORY, number);
       prompted = true;
       // What tells this run's prompt apart from any other: its code, or its Claude link.
-      promptMark = login?.code ?? claudeUrl ?? "mergelight:connect:v1";
+      // The Claude link is kept in the hidden line as connectData writes it, with "--" escaped.
+      promptMark = login?.code ?? (claudeUrl ? JSON.stringify(claudeUrl).slice(1, -1).replace(/--/g, "\\u002d\\u002d") : "mergelight:connect:v1");
       await upsertSummary(api, number, checker ? connectCheckBody(checker, reviewer, login, runUrl, claudeUrl, setupLink) : connectBody(login, runUrl, claudeUrl, setupLink));
       log("Posted the link and code on the pull request. Waiting for the login.");
       // The comment is what people need. A check that can't be written shouldn't end a login that can still work.

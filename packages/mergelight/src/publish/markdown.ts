@@ -129,8 +129,11 @@ export const loginNotice = (plan: string, reason: string): FailureNotice => ({ h
 
 export function limitNotice(plan: string, resets: string | null): FailureNotice {
   // An API key's credit, not a plan: the fix is adding credit.
-  if (plan === "OpenAI" || plan === "Anthropic") {
-    return { heading: `⏳ Mergelight: the ${plan} API key has no credit left`, body: `This pull request wasn't reviewed, because the ${plan} API key has no credit left. Add credit to its account, then push a new commit, and the review runs again.` };
+  if (plan === "OpenAI") {
+    return { heading: "⏳ Mergelight: the OpenAI API key has no usage left", body: "This pull request wasn't reviewed, because the OpenAI API key has no usage left: its credit ran out, or its account reached its spending limit. Check both in the OpenAI account, then push a new commit, and the review runs again." };
+  }
+  if (plan === "Anthropic") {
+    return { heading: "⏳ Mergelight: the Anthropic API key has no credit left", body: "This pull request wasn't reviewed, because the Anthropic API key has no credit left. Add credit to its account, then push a new commit, and the review runs again." };
   }
   const reason = `This pull request wasn't reviewed, because your ${plan} plan has no usage left.`;
   return {

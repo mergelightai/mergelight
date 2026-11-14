@@ -29,7 +29,13 @@ export class LimitError extends Error {
   resets: string | null;
   constructor(plan: Plan, resets: string | null) {
     // An API key's credit is no plan: it says so, so nobody looks for usage on a plan that has some.
-    super(plan === "OpenAI" || plan === "Anthropic" ? `The ${plan} API key has no credit left.` : `Your ${plan} plan hit its usage limit.${resets ? ` Resets: ${resets}.` : ""}`);
+    super(
+      plan === "OpenAI"
+        ? "The OpenAI API key has no usage left: its credit ran out, or it reached its spending limit."
+        : plan === "Anthropic"
+          ? "The Anthropic API key has no credit left."
+          : `Your ${plan} plan hit its usage limit.${resets ? ` Resets: ${resets}.` : ""}`,
+    );
     this.plan = plan;
     this.resets = resets;
   }
