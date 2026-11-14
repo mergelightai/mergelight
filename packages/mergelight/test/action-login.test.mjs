@@ -166,3 +166,8 @@ test("the push step for jobs installs no AI and is given no AI login", () => {
   assert.doesNotMatch(push, /codex|claude|anthropic|openai|auth-json|oauth/i);
   assert.match(push, /push-jobs "\$GITHUB_REPOSITORY#\$PR" --from "\$RESULT"/);
 });
+
+test("the jobs never get the Mergelight AI app's token, only the workflow's own, which can only read", () => {
+  const step = action.slice(action.indexOf("- name: Get the Mergelight AI app token"), action.indexOf("shell:", action.indexOf("- name: Get the Mergelight AI app token")));
+  assert.match(step, /inputs\.run != 'jobs'/);
+});

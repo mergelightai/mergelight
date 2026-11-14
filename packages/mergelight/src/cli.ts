@@ -276,6 +276,15 @@ async function main(): Promise<number> {
   let summaryComment: Awaited<ReturnType<typeof startSummary>> = null;
   /** The edit that names the models, so a result or a failure notice is always written after it. */
   let naming: Promise<void> = Promise.resolve();
+  // The jobs' commit is reviewed only while it is still the pull request's newest: a review started again
+  // later, after more pushes, reads the newest commit instead, never older code over a newer result.
+  if (values.post && values["jobs-commit"] && values.at?.toLowerCase() === values["jobs-commit"].toLowerCase()) {
+    const newest = (await fetchPullRequest(ref)).headSha;
+    if (newest.toLowerCase() !== values.at.toLowerCase()) {
+      log(`The jobs' commit ${values.at.slice(0, 7)} isn't the newest any more, so this review reads ${newest.slice(0, 7)}.`);
+      values.at = newest;
+    }
+  }
   let headSha = values.at ?? null;
   if (values.post) {
     headSha ??= (await fetchPullRequest(ref)).headSha;

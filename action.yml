@@ -123,9 +123,11 @@ runs:
 
     # GitHub's OIDC token proves which repository this run belongs to, and the token server swaps
     # it for an app token limited to that repository. Skipped when you pass your own github-token.
+    # Not for the jobs: they run with the workflow's own token, which can only read, as the docs promise.
     - name: Get the Mergelight AI app token
       id: app
       if: >
+        inputs.run != 'jobs' &&
         inputs.github-token == github.token &&
         (github.event_name == 'pull_request' || github.event_name == 'pull_request_target' ||
         (github.event_name == 'pull_request_review' && github.event.review.state == 'approved'))
