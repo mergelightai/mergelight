@@ -74,6 +74,15 @@ export interface PullRequest {
   baseSha: string;
   /** Latest commit on the PR. */
   headSha: string;
+  /** The branch the PR comes from, and its repository: owner/name, or null when that repository is gone. */
+  headRef?: string;
+  headRepo?: string | null;
+  /** "open" or "closed". */
+  state?: string;
+  /** The repository's default branch, such as main. */
+  defaultBranch?: string;
+  /** Whether the head branch is in this repository, by GitHub's own id: a name can change. */
+  sameRepo?: boolean;
   additions: number;
   deletions: number;
   changedFiles: number;

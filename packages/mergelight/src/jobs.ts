@@ -172,10 +172,20 @@ export const REFUSED_FILES = [
   "azure-pipelines.yml",
   // Build services that run a build command from the repository.
   "netlify.toml",
+  "netlify.yml",
+  "netlify.yaml",
+  "netlify.json",
   "amplify.yml",
   "amplify.yaml",
   "vercel.json",
   "vercel.ts",
+  "vercel.js",
+  "vercel.mjs",
+  "vercel.cjs",
+  "vercel.mts",
+  // Only at the root, where Heroku reads it and runs its scripts, such as postdeploy, on review apps. An
+  // app.json elsewhere, such as a translation namespace, is ordinary.
+  "/app.json",
   "firebase.json",
   "now.json",
   "render.yaml",
@@ -371,10 +381,11 @@ export function jobsToRun(jobs: Job[], changedPaths: string[]): Job[] {
 
 /**
  * A name in the form macOS and Windows compare names in: any letter case, and look-alike letters that
- * fold to plain ones, like ſ to s and ı to i. Upper case first, so those fold too.
+ * fold to plain ones, like ſ to s and ı to i. Upper case first, so those fold too. And one way of writing
+ * accented letters: macOS takes é as one character and as e with an accent for the same name.
  */
 export function folded(path: string): string {
-  return path.toUpperCase().toLowerCase();
+  return path.normalize("NFC").toUpperCase().toLowerCase().normalize("NFC");
 }
 
 /** A path no job may change, whatever its file says. In any letter case: on macOS and Windows, .GitAttributes is .gitattributes. */
@@ -383,7 +394,9 @@ export function refusedPath(path: string): boolean {
   const name = lower.replace(/\/+$/, "").split("/").pop() ?? "";
   // Roo reads .roorules-<mode> for each mode, and lefthook reads lefthook-local.<any>.
   if (/^lefthook-local\./.test(name) || /^\.lintstagedrc/.test(name) || /^lint-staged\.config\./.test(name)) return true;
-  return REFUSED_FOLDERS.some((refused) => matchesPath(folded(refused), lower)) || REFUSED_FILES.some((refused) => folded(refused) === name) || name.startsWith(".roorules-");
+  // A name that starts with / counts only at the root.
+  const rooted = lower.replace(/^(\.\/|\/)+/, "").replace(/\/+$/, "");
+  return REFUSED_FOLDERS.some((refused) => matchesPath(folded(refused), lower)) || REFUSED_FILES.some((refused) => (refused.startsWith("/") ? folded(refused.slice(1)) === rooted : folded(refused) === name)) || name.startsWith(".roorules-");
 }
 
 /**

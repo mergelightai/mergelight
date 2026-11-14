@@ -87,30 +87,64 @@ function mcpServers(config: string): string[] {
 }
 
 /**
- * Commands Codex runs can read the whole disk but not write or reach the network. Code under review can try to
- * steer them, so the folder with the login is taken out of what they can read. Codex itself still reads it.
- * For a job, they may also write in the one folder the job works in, and nowhere else.
- */
-/**
  * Where Codex is installed: its sandbox runs Codex's own program, and its bundled tools such as rg, from
  * there. On a runner that is Node's tool folder, which the Linux rules don't otherwise read. It holds
  * code, never a secret. Found from the codex on PATH; nothing when there is none.
  */
-export function codexInstall(path = process.env.PATH ?? ""): string[] {
+export function codexInstall(path = process.env.PATH ?? "", which: (manager: string) => string | null = managerWhich): string[] {
   for (const dir of path.split(":").filter(Boolean)) {
+    let real: string;
     try {
-      const real = realpathSync(join(dir, "codex"));
-      // The npm package: <root>/bin/codex.js, with the native program in <root>/node_modules. A program on
-      // its own is read from its own folder. Never the home folder, or one that holds it.
-      const folder = /\/bin\/codex\.js$/.test(real) ? dirname(dirname(real)) : dirname(real);
-      const home = homedir();
-      if (folder === "/" || folder === home || home.startsWith(`${folder}/`)) return [];
-      return [folder];
+      real = realpathSync(join(dir, "codex"));
     } catch {
-      // Not in this folder.
+      continue;
     }
+    // A Node version manager puts a shim on PATH that starts the real codex: the manager says where that is.
+    const manager = shimManager(real);
+    if (manager) {
+      const found = which(manager);
+      if (!found) return [];
+      try {
+        real = realpathSync(found);
+      } catch {
+        return [];
+      }
+    }
+    // The npm package: <root>/bin/codex.js, with the native program in <root>/node_modules. A program on
+    // its own is read from its own folder. Never the home folder, or one that holds it.
+    const folder = /\/bin\/codex\.js$/.test(real) ? dirname(dirname(real)) : dirname(real);
+    const home = homedir();
+    if (folder === "/" || folder === home || home.startsWith(`${folder}/`)) return [];
+    return [folder];
   }
   return [];
+}
+
+/** The version manager whose shim this is: Volta's links to volta-shim, asdf's are scripts in its shims folder, mise's link to mise. */
+export function shimManager(real: string, env: NodeJS.ProcessEnv = process.env): string | null {
+  if (/\/volta-shim$/.test(real)) return "volta";
+  if (/\/\.?asdf[^/]*\/shims\/codex$/.test(real)) return "asdf";
+  // asdf can keep its shims anywhere ASDF_DATA_DIR says.
+  if (env.ASDF_DATA_DIR) {
+    let data = env.ASDF_DATA_DIR;
+    try {
+      data = realpathSync(data);
+    } catch {
+      // Compared as written.
+    }
+    if (real === join(data, "shims", "codex")) return "asdf";
+  }
+  if (/\/mise$/.test(real) || /\/mise\/shims\/codex$/.test(real)) return "mise";
+  return null;
+}
+
+/** Where the version manager's real codex is, or null when it can't say. */
+function managerWhich(manager: string): string | null {
+  try {
+    return execFileSync(manager, ["which", "codex"], { encoding: "utf8", timeout: 10_000 }).trim().split("\n")[0] || null;
+  } catch {
+    return null;
+  }
 }
 
 /** On Linux, the top-level folders a job's commands may read: the system and nothing else. /proc is the sandbox's own. */
@@ -128,26 +162,32 @@ function topFolders(): string[] {
 }
 
 /**
- * The folders beside a path, at each level below its top folder, to hide so that only the path itself
- * stays readable: Linux's sandbox can't open a folder again inside one it hid, so the rest around it is
- * hidden instead.
+ * The folders beside a path, at each level below the folder it is carved from (its top folder unless
+ * said), to hide so that only the path itself stays readable: Linux's sandbox can't open a folder again
+ * inside one it hid, so the rest around it is hidden instead.
  */
-export function besides(path: string, list: (dir: string) => string[] = (dir) => readdirSync(dir)): string[] {
+export function besides(path: string, list: (dir: string) => string[] = (dir) => readdirSync(dir), from?: string): string[] | null {
   const parts = path.split("/").filter(Boolean);
   const out: string[] = [];
-  for (let i = 1; i < parts.length; i++) {
+  for (let i = from ? from.split("/").filter(Boolean).length : 1; i < parts.length; i++) {
     const parent = `/${parts.slice(0, i).join("/")}`;
     let names: string[];
     try {
       names = list(parent);
     } catch {
-      continue;
+      // What's beside the path there is unknown, so it can't be hidden: the path isn't made readable.
+      return null;
     }
     for (const name of names) if (name !== parts[i]) out.push(`${parent}/${name}`);
   }
   return out;
 }
 
+/**
+ * Commands Codex runs can read the whole disk but not write or reach the network. Code under review can try to
+ * steer them, so the folder with the login is taken out of what they can read. Codex itself still reads it.
+ * For a job, they may also write in the one folder the job works in, and nowhere else.
+ */
 export function sandboxArgs(home = codexHome(), writable?: string, hidden: string[] = [], readable: string[] = [], platform: NodeJS.Platform = process.platform, top: string[] = platform === "linux" ? topFolders() : [], list?: (dir: string) => string[]): string[] {
   if (writable) {
     // A job's files get pushed, so its commands mustn't reach secrets or other code. On Linux, where
@@ -158,21 +198,39 @@ export function sandboxArgs(home = codexHome(), writable?: string, hidden: strin
     // specific rule wins. A rule inside a hidden folder is left out, as Linux's sandbox can't make one.
     // The job's folder inside the hidden /tmp is fine: a write rule opens it there, tried on a GitHub-hosted
     // Ubuntu runner and in a Linux container. A read rule doesn't, so a readable folder is handled below.
-    // On Linux a folder that must stay readable, such as Codex's own in /opt, keeps its top folder: the
-    // folders beside its path are hidden instead, level by level.
+    const linux = platform === "linux";
+    const holds = (outer: string, p: string) => p.startsWith(`${outer}/`);
+    const secret = [...hidden, home];
     const tops = (p: string) => `/${p.split("/").filter(Boolean)[0] ?? ""}`;
-    const keepTops = new Set(readable.map(tops));
-    const off = platform === "linux" ? top.filter((t) => !LINUX_KEEP.includes(t) && !keepTops.has(t)) : [];
-    const carved = platform === "linux" ? readable.filter((r) => !LINUX_KEEP.includes(tops(r))).flatMap((r) => besides(r, list)) : [];
-    const inside = (p: string) => off.some((t) => p === t || p.startsWith(`${t}/`));
+    // On Linux a folder that must stay readable, such as Codex's own in /opt, is carved from the highest
+    // hidden folder that holds it: the folders beside its path are hidden instead, level by level. That is
+    // its top folder, unless the top is the system's, or a place to hide above it, such as a self-hosted
+    // runner installed under /usr with Codex in its tool folder. One whose surroundings can't be listed
+    // isn't readable at all. Nor is one that is, or holds, a place to hide: it would open that place up.
+    const carves = new Map<string, string[]>();
+    for (const r of readable) {
+      if (secret.some((h) => h === r || holds(r, h))) continue;
+      if (!linux) {
+        carves.set(r, []);
+        continue;
+      }
+      const from = [...(LINUX_KEEP.includes(tops(r)) ? [] : [tops(r)]), ...secret.filter((h) => holds(h, r))].sort((x, y) => x.length - y.length)[0];
+      const around = from ? besides(r, list, from) : [];
+      if (around) carves.set(r, around);
+    }
+    const open = [...carves.keys()];
+    const keepTops = new Set(open.map(tops));
+    const off = linux ? top.filter((t) => !LINUX_KEEP.includes(t) && !keepTops.has(t)) : [];
+    // Nothing that leads to a readable folder is hidden.
+    const carved = [...carves.values()].flat().filter((c) => !open.some((r) => r === c || holds(c, r)));
+    const inside = (p: string) => [...off, ...carved].some((t) => p === t || holds(t, p));
     const paths: [string, string][] = [
       [":root", "read"],
       ...off.map((t): [string, string] => [t, "none"]),
       ...carved.map((c): [string, string] => [c, "none"]),
       // On Linux a hidden folder can't hold a readable one, so one that does is opened up and carved instead.
-      ...hidden.filter((h) => !inside(h) && (platform !== "linux" || !readable.some((r) => r === h || r.startsWith(`${h}/`)))).map((h): [string, string] => [h, "none"]),
-      ...(inside(home) ? [] : [[home, "none"] as [string, string]]),
-      ...(platform === "linux" ? [] : readable.map((r): [string, string] => [r, "read"])),
+      ...secret.filter((h) => !inside(h) && (!linux || !open.some((r) => holds(h, r)))).map((h): [string, string] => [h, "none"]),
+      ...(linux ? [] : open.map((r): [string, string] => [r, "read"])),
       [writable, "write"],
     ];
     // One rule for each path: a table with the same key twice stops Codex. A later rule is the more
@@ -197,7 +255,11 @@ export function jobHidden(env: NodeJS.ProcessEnv = process.env, install: string 
   const deepEnough = (p: string | undefined) => (p && p.split("/").filter(Boolean).length >= 1 ? p : undefined);
   // Credential files other tools are told about, wherever they are.
   const named = [env.KUBECONFIG, env.GOOGLE_APPLICATION_CREDENTIALS, env.AWS_SHARED_CREDENTIALS_FILE, env.AWS_CONFIG_FILE, env.GH_CONFIG_DIR, env.DOCKER_CONFIG, env.AZURE_CONFIG_DIR].flatMap((v) => v?.split(":") ?? []);
-  const places = [homedir(), dirname(homedir()), "/root", "/run/secrets", "/var/run/secrets", env.MERGELIGHT_CACHE, env.RUNNER_TEMP, env.GITHUB_WORKSPACE, deepEnough(work), deepEnough(workParent), deepEnough(install ?? undefined), ...named, tmpdir(), "/tmp"].filter((p): p is string => Boolean(p) && p !== "/");
+  // Never a folder the system's own tools are in, such as /usr for a runner installed right there: hiding
+  // it would leave a job without bash. The runner's own files there are hidden by name instead.
+  const system = (p: string) => LINUX_KEEP.includes(p.replace(/\/+$/, ""));
+  const runnerFiles = install && system(install) ? [".credentials", ".credentials_rsaparams", ".runner", ".env", ".path", "_work", "_diag"].map((f) => join(install, f)) : [];
+  const places = [homedir(), dirname(homedir()), "/root", "/run/secrets", "/var/run/secrets", env.MERGELIGHT_CACHE, env.RUNNER_TEMP, env.GITHUB_WORKSPACE, deepEnough(work), deepEnough(workParent), deepEnough(install ?? undefined), ...named, tmpdir(), "/tmp", ...runnerFiles].filter((p): p is string => typeof p === "string" && p !== "" && p !== "/" && !system(p));
   const real = places.map((p) => {
     try {
       return realpathSync(p);
