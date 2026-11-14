@@ -62,6 +62,12 @@ type SpawnLike = (command: string, args: string[], options: object) => {
   kill: (signal?: NodeJS.Signals) => unknown;
 };
 
+/** How `script` runs the sign-in in a terminal of its own: Linux has util-linux's script, and macOS the BSD one, whose options differ. */
+export function scriptArgs(platform: NodeJS.Platform = process.platform): string[] {
+  const command = "stty cols 3000 rows 50; exec claude setup-token";
+  return platform === "darwin" || platform === "freebsd" ? ["-qF", "/dev/null", "sh", "-c", command] : ["-qfc", command, "/dev/null"];
+}
+
 /**
  * Starts the sign-in. It needs a terminal, so `script` gives it one, wide enough that the link and the token
  * stay on one line. Nothing it prints is logged, because the token is in there. Null if no link appears.
@@ -73,7 +79,7 @@ export function startClaudeSignIn(spawnImpl: SpawnLike = spawn as unknown as Spa
     let onOutput = () => {};
     let child: ReturnType<SpawnLike>;
     try {
-      child = spawnImpl("script", ["-qfc", "stty cols 3000 rows 50; exec claude setup-token", "/dev/null"], { stdio: ["pipe", "pipe", "ignore"], env: { ...agentEnv(), TERM: "xterm-256color", BROWSER: "true" } });
+      child = spawnImpl("script", scriptArgs(), { stdio: ["pipe", "pipe", "ignore"], env: { ...agentEnv(), TERM: "xterm-256color", BROWSER: "true" } });
     } catch {
       resolve(null);
       return;
@@ -163,7 +169,14 @@ export async function waitForPastedCode(deps: WaitDeps, timeoutMs = WAIT_MS, pol
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const end = now() + timeoutMs;
   while (now() < end && !deps.stopped?.()) {
-    const code = readPastedCode((await deps.read().catch(() => null)) ?? "");
+    // A read GitHub never answers mustn't hold the wait past its end: the review waits for it.
+    let timer: NodeJS.Timeout | undefined;
+    const late = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), Math.max(0, end - now()));
+    });
+    const text = await Promise.race([deps.read().catch(() => null), late]);
+    clearTimeout(timer);
+    const code = readPastedCode(text ?? "");
     if (code) return code;
     await sleep(pollMs);
   }
@@ -171,8 +184,9 @@ export async function waitForPastedCode(deps: WaitDeps, timeoutMs = WAIT_MS, pol
 }
 
 /** Hands the token to the rest of the job: hidden in its logs, and available to the steps that save and use it. */
-export function shareClaudeToken(token: string, env: NodeJS.ProcessEnv = process.env, print: (line: string) => void = console.log): void {
+export function shareClaudeToken(token: string, env: NodeJS.ProcessEnv = process.env, print: (line: string) => void = console.log, reviews = true): void {
   if (!/^sk-ant-oat[\w-]+$/.test(token)) throw new Error("That doesn't look like a Claude token.");
   print(`::add-mask::${token}`);
-  if (env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, `MERGELIGHT_CLAUDE_TOKEN=${token}\nMERGELIGHT_PROVIDER=claude\nMERGELIGHT_CONNECT=0\n`);
+  // A login connected to check the review leaves the reviewer as it is.
+  if (env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, reviews ? `MERGELIGHT_CLAUDE_TOKEN=${token}\nMERGELIGHT_PROVIDER=claude\nMERGELIGHT_CONNECT=0\n` : `MERGELIGHT_CLAUDE_TOKEN=${token}\n`);
 }

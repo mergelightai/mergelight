@@ -206,7 +206,7 @@ export async function answerRemembered(api: GitHub, number: number, ids: string[
 
 export const CHECK_FAILED_TITLE = "Couldn't review this pull request";
 export const checkLoginTitle = (plan: string) => `The ${plan} login didn't work`;
-export const checkLimitTitle = (plan: string) => `${CHECK_FAILED_TITLE}: your ${plan} plan hit its limit`;
+export const checkLimitTitle = (plan: string) => (plan === "OpenAI" || plan === "Anthropic" ? `${CHECK_FAILED_TITLE}: the ${plan} API key has no usage left` : `${CHECK_FAILED_TITLE}: your ${plan} plan hit its limit`);
 export const isFailedCheckTitle = (title: string | null | undefined) => Boolean(title && (title.startsWith(CHECK_FAILED_TITLE) || /^The \w+ login didn't work$/.test(title)));
 
 export interface CheckRun {
@@ -246,8 +246,10 @@ export async function writeCheck(api: GitHub, id: number | null | undefined, hea
  * Shows a live "Reviewing" check right away, so people and agents can see work is
  * happening. A login that can't write checks hears about it once, from the last write.
  */
-export async function startCheck(api: GitHub, headSha: string, provider?: string): Promise<number | null> {
+export async function startCheck(api: GitHub, headSha: string, provider?: string, handedOver?: number, started?: (id: number) => void): Promise<number | null> {
   const tool = provider === "claude" ? "Claude" : provider === "codex" ? "Codex" : null;
+  // Always a check of the review's own, for the commit it reads: approvals and verdicts then go to the
+  // check this review made, never to an older one.
   const run = await writeCheck(api, null, headSha, {
     status: "in_progress",
     started_at: new Date().toISOString(),
@@ -256,14 +258,34 @@ export async function startCheck(api: GitHub, headSha: string, provider?: string
       summary: `Mergelight is reviewing this pull request${tool ? ` with ${tool}` : ""} on your own plan. This usually takes 2 to 15 minutes.`,
     },
   });
+  // Known before anything else is asked, so a run cancelled from here on still finishes it.
+  if (run?.id) started?.(run.id);
+  // A connect's check left going for this review is closed only now, with this one already going, so
+  // there is no moment without a running check, and none with both. Only a check still running: a
+  // finished one's verdict stands. It is this run's own, made for this pull request, so also when a push
+  // during the sign-in moved the review to a newer commit. One that can't be read or closed here is
+  // finished by the Action's last step.
+  const old = handedOver ? await api.get<{ status: string; head_sha: string }>(`check-runs/${handedOver}`).catch(() => null) : null;
+  if (handedOver && old && old.status !== "completed") {
+    const moved = old.head_sha !== headSha;
+    await writeCheck(api, handedOver, old.head_sha, {
+      status: "completed",
+      conclusion: "neutral",
+      completed_at: new Date().toISOString(),
+      output: { title: "Superseded", summary: moved ? `A newer commit was pushed while Mergelight waited, so it reviews ${headSha.slice(0, 7)} instead.` : "The review goes on in a new check." },
+    }).catch(() => null);
+  }
   return run?.id ?? null;
 }
 
 /** Puts the summary comment on the PR before anything else, so it comes first. Later rounds edit it in place. */
-export async function startSummary(api: GitHub, number: number, plan?: ReviewPlan): Promise<PrComment | null> {
+export async function startSummary(api: GitHub, number: number, plan?: ReviewPlan, ownPrompt?: string): Promise<PrComment | null> {
   const { summary } = await readPrReviewState(api, number);
-  // A "Reviewing" comment left by an earlier run, or by a reconnect, says this run's plan now, keeping its state.
-  if (summary && plan && isReviewingSummary(summary.body)) {
+  // A "Reviewing" comment left by an earlier run, or by a reconnect, says this run's plan now, keeping its
+  // state. So does this run's own prompt to connect the AI that checks: the review starts without it, and
+  // its code or link is dead by now. Another run's prompt may still be waiting, so it stays.
+  const checkerPrompt = Boolean(ownPrompt) && isPendingSummary(summary?.body) && Boolean(summary?.body?.includes('"for":"check"')) && Boolean(summary?.body?.includes(ownPrompt!));
+  if (summary && plan && (isReviewingSummary(summary.body) || checkerPrompt)) {
     const state = stateBlock(summary.body);
     const body = state ? `${pendingSummaryBody(plan)}\n${state}` : pendingSummaryBody(plan);
     if (body !== summary.body) await api.write("PATCH", `issues/comments/${summary.id}`, { body }).catch(() => null);
@@ -289,7 +311,10 @@ export async function failSummary(api: GitHub, number: number, notice?: FailureN
   const { summary } = await readPrReviewState(api, number);
   // An earlier review's finished summary is left alone: writing over it could undo a newer run's result.
   // The check for this commit says what the jobs did instead (failCheck).
-  if (summary && (isPendingSummary(summary.body) || isFailedSummary(summary.body))) await api.write("PATCH", `issues/comments/${summary.id}`, { body: failedSummaryBody(notice, jobs) });
+  if (!summary || !(isPendingSummary(summary.body) || isFailedSummary(summary.body))) return;
+  // A pending summary can carry what earlier rounds found, such as one a login prompt replaced: it stays.
+  const state = stateBlock(summary.body);
+  await api.write("PATCH", `issues/comments/${summary.id}`, { body: state ? `${failedSummaryBody(notice, jobs)}\n${state}` : failedSummaryBody(notice, jobs) });
 }
 
 /**

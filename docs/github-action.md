@@ -20,6 +20,17 @@ If the review itself can't run, for example because the login expired, the check
 | **Claude plan** (`claude-code-oauth-token`) | Any | Your Claude plan |
 | **Anthropic API key** (`anthropic-api-key`) | Any | Billed per use |
 
+### Two AIs: one reviews, the other checks
+
+`provider` says who reviews, and `verify-with` says who checks the findings, which drops the ones it can disprove. A value you set always wins. Left empty:
+
+- **Who reviews:** Claude when the repository has only a Claude login, and Codex otherwise.
+- **Who checks:** when both AIs have a login, the one that doesn't review, so two AIs look at every finding. With one login, the reviewer checks its own findings.
+
+When `provider: claude` is set and there's no Claude login yet, a pull request from the repository itself shows the Claude link to mergelight.dev, the same way a missing ChatGPT login shows a code.
+
+When the checker has no login yet, a pull request from the repository itself asks to connect it, the same way as the reviewer's login: a ChatGPT code, or a Claude link to mergelight.dev. The review waits for it at most 15 minutes. If nobody connects it, or it can't be asked (a fork, Dependabot, no app to save the login, or a reviewer's ChatGPT login that couldn't be refreshed and has too little time left to wait), the reviewer checks instead and the summary says so. Only a private repository shows a ChatGPT code for the checker, since anyone who can see the pull request could enter it. Elsewhere, save a login of its own yourself, never the one your own Codex uses, as the two would use up each other's tokens: `export CODEX_HOME=$(mktemp -d); codex login; gh secret set CODEX_AUTH_JSON --repo <owner/repo> < $CODEX_HOME/auth.json`. Claude's link goes through mergelight.dev, where you sign in, so it is still shown. The summary's last line names both AIs.
+
 Pull requests from forks and from Dependabot aren't reviewed, because GitHub gives their runs no secrets. On a public repository everyone can see the pull request, so the comment that connects a plan names the account that connected.
 
 ## Set it up
@@ -126,7 +137,8 @@ Mergelight also checks each `.github/instructions/*.instructions.md` file as a r
 | `auth-secret-name` | `CODEX_AUTH_JSON` | The secret the refreshed login is saved to |
 | `model` | Codex default | Model to review with |
 | `effort` | `high` | Reasoning effort: `low`, `medium` or `high` |
-| `verify-with` | `codex` | Who checks the findings: `codex`, or `claude` on a runner with Claude Code logged in |
+| `provider` | | Who reviews: `claude` or `codex`. Empty: Claude with only a Claude login, Codex otherwise |
+| `verify-with` | | Who checks the findings: `claude` or `codex`. Empty: the AI that doesn't review when both have a login, the reviewer otherwise. See [Two AIs](#two-ais-one-reviews-the-other-checks) |
 | `auto-approve` | `true` | When a review is 🟢 and every one of your team's own checks passed, Mergelight approves the PR like a reviewer would, and takes the approval back when a later review isn't 🟢. `false` turns that off: it never approves, and takes back an approval it gave before on each PR's next review. For PRs that are already open, dismiss Mergelight's approval by hand |
 | `yellow-blocks` | `false` | Let the check hold merges: 🟡 waits for an approval and 🔴 fails until the code changes. Your team's own checks from the dashboard follow it too: on, one that failed, couldn't tell or couldn't run holds the merge, and off, it ends neutral. A check that was skipped, because none of its files changed, never holds a merge. For teams: GitHub doesn't let you approve your own PR |
 | `codex-version` | `0.166.0` | Codex CLI version |

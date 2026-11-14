@@ -16,6 +16,23 @@ const MAX_BODY = 65_000;
  * Model text goes into comments, so it must not be able to fake our hidden
  * markers or ping people.
  */
+/** Says when the AI the team asked to check had no login yet, so the reviewer's own AI checked instead. */
+export function checkerMissedLine(r: Pick<Review, "checker_missed" | "checker_missed_why" | "provider">): string | null {
+  if (!r.checker_missed || r.checker_missed === r.provider.name) return null;
+  const name = (ai: "codex" | "claude") => (ai === "codex" ? "Codex" : "Claude");
+  const login = r.checker_missed === "codex" ? "ChatGPT" : "Claude";
+  const why = {
+    "no-login": `it has no ${login} login yet`,
+    "not-installed": `${name(r.checker_missed)} couldn't be installed on this run`,
+    // Codex's could be a ChatGPT login or an OpenAI API key: the run log says which.
+    "login-failed": r.checker_missed === "codex" ? "its login didn't work" : `its ${login} login didn't work`,
+    // A plan's usage or an API key's credit: it can be either.
+    limit: "it hit its usage limit",
+    sandbox: `${name(r.checker_missed)}'s sandbox couldn't start on this runner`,
+  }[r.checker_missed_why ?? "no-login"];
+  return `⚠️ ${name(r.checker_missed)} was set to check this review, but ${why}, so ${name(r.provider.name)} checked it.`;
+}
+
 export function clean(text: string): string {
   return text
     .replace(/<!--/g, "&lt;!--")
@@ -111,6 +128,13 @@ export interface FailureNotice {
 export const loginNotice = (plan: string, reason: string): FailureNotice => ({ heading: `⚠️ Mergelight: the ${plan} login didn't work`, body: reason });
 
 export function limitNotice(plan: string, resets: string | null): FailureNotice {
+  // An API key's credit, not a plan: the fix is adding credit.
+  if (plan === "OpenAI") {
+    return { heading: "⏳ Mergelight: the OpenAI API key has no usage left", body: "This pull request wasn't reviewed, because the OpenAI API key has no usage left: its credit ran out, or its account reached its spending limit. Check both in the OpenAI account, then push a new commit, and the review runs again." };
+  }
+  if (plan === "Anthropic") {
+    return { heading: "⏳ Mergelight: the Anthropic API key has no credit left", body: "This pull request wasn't reviewed, because the Anthropic API key has no credit left. Add credit to its account, then push a new commit, and the review runs again." };
+  }
   const reason = `This pull request wasn't reviewed, because your ${plan} plan has no usage left.`;
   return {
     heading: `⏳ Mergelight: your ${plan} plan hit its limit`,
@@ -285,7 +309,9 @@ export function summaryBody({ review: r, state, urls, marks = new Map(), handled
   const done = state.findings.filter((f) => dropped.includes(f) || (f.status === "gone" && handled.has(f.id)));
   const gone = state.round > 1 ? state.findings.filter((f) => f.status === "gone" && f.tier !== "hardening" && !done.includes(f)) : [];
 
-  const out: string[] = [SUMMARY_MARKER, ...(update ? updateBanner(update) : []), `### ${light.dot} Mergelight: ${light.label}`, "", clean(r.summary), "", `**${headline(r, done.length)}**`];
+  // The other AI not checking is said first, above the AI's own summary, so a cut never takes it.
+  const missed = checkerMissedLine(r);
+  const out: string[] = [SUMMARY_MARKER, ...(update ? updateBanner(update) : []), `### ${light.dot} Mergelight: ${light.label}`, "", ...(missed ? [missed, ""] : []), clean(r.summary), "", `**${headline(r, done.length)}**`];
 
   if (top.length) {
     out.push("", "#### To fix");

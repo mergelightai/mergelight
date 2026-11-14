@@ -20,14 +20,22 @@ export class LoginError extends Error {
   }
 }
 
-export type Plan = "ChatGPT" | "Claude";
+/** Whose login: a ChatGPT plan, a Claude plan, or an OpenAI API key. */
+export type Plan = "ChatGPT" | "Claude" | "OpenAI" | "Anthropic" | "Codex";
 
 /** The plan has no usage left. Nothing is broken, so the person only needs to know that and when it comes back. */
 export class LimitError extends Error {
   plan: Plan;
   resets: string | null;
   constructor(plan: Plan, resets: string | null) {
-    super(`Your ${plan} plan hit its usage limit.${resets ? ` Resets: ${resets}.` : ""}`);
+    // An API key's credit is no plan: it says so, so nobody looks for usage on a plan that has some.
+    super(
+      plan === "OpenAI"
+        ? "The OpenAI API key has no usage left: its credit ran out, or it reached its spending limit."
+        : plan === "Anthropic"
+          ? "The Anthropic API key has no credit left."
+          : `Your ${plan} plan hit its usage limit.${resets ? ` Resets: ${resets}.` : ""}`,
+    );
     this.plan = plan;
     this.resets = resets;
   }
@@ -36,11 +44,13 @@ export class LimitError extends Error {
 /** Both programs start this sentence the same way. Only pass in their own errors: code under review can say anything. */
 const LIMIT_HIT = /you['\u2019]ve hit your\b[^\n]{0,40}\blimit\b/i;
 const WHEN = "[\\w :,()+-]{1,60}";
+const API_BALANCE = /insufficient_quota|exceeded your current quota|credit balance is too low/i;
 
 /** The limit in a program's error output, if that's what the error is. Claude says "resets 9am (UTC)", Codex "try again at 3:14 PM". */
 export function limitFrom(text: string, plan: Plan): LimitError | null {
   const line = text.split("\n").find((l) => LIMIT_HIT.test(l));
-  if (!line) return null;
+  // An API key's balance used up is a limit too: OpenAI's "insufficient_quota", Anthropic's "credit balance is too low".
+  if (!line) return API_BALANCE.test(text) ? new LimitError(plan === "Claude" ? "Anthropic" : "OpenAI", null) : null;
   const resets = line.match(new RegExp(`\\bresets\\s+(${WHEN})`, "i"))?.[1]?.trim();
   if (resets) return new LimitError(plan, resets);
   const retry = line.match(new RegExp(`\\btry again at\\s+(${WHEN})`, "i"))?.[1]?.trim();
@@ -238,7 +248,26 @@ export function sandboxArgs(home = codexHome(), writable?: string, hidden: strin
     const rules = new Map(paths);
     return ["-c", 'default_permissions="mergelight_job"', "-c", `permissions.mergelight_job.filesystem={${[...rules].map(([path, access]) => `${JSON.stringify(path)}="${access}"`).join(",")}}`];
   }
-  return ["-c", 'default_permissions="mergelight_review"', "-c", `permissions.mergelight_review.filesystem={":root"="read",${JSON.stringify(home)}="none"}`];
+  // A review reads the disk but not the login, nor the hidden places it is given, such as the runner's
+  // command files, where an earlier step can leave a login it just connected for later steps.
+  const rules = new Map<string, string>([[":root", "read"], [home, "none"], ...hidden.map((h): [string, string] => [h, "none"])]);
+  return ["-c", 'default_permissions="mergelight_review"', "-c", `permissions.mergelight_review.filesystem={${[...rules].map(([path, access]) => `${JSON.stringify(path)}="${access}"`).join(",")}}`];
+}
+
+/**
+ * The folders of the runner's command files: GITHUB_ENV and the others. Steps pass values on to later
+ * ones through them, such as a Claude login just connected, and GitHub keeps the files until the job ends.
+ */
+export function runnerCommandFiles(env: NodeJS.ProcessEnv = process.env): string[] {
+  const dirs = [env.GITHUB_ENV, env.GITHUB_OUTPUT, env.GITHUB_STATE, env.GITHUB_PATH, env.GITHUB_STEP_SUMMARY].filter((p): p is string => Boolean(p)).map(dirname);
+  const real = dirs.map((d) => {
+    try {
+      return realpathSync(d);
+    } catch {
+      return d;
+    }
+  });
+  return [...new Set([...dirs, ...real])].filter((d) => d !== "/" && d !== ".");
 }
 
 /**
@@ -376,7 +405,7 @@ export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
 
   const args = [
     "exec",
-    ...sandboxArgs(codexHome(), opts.edit ? opts.cwd : undefined, opts.edit ? jobHidden() : [], opts.edit ? [...(opts.readDirs ?? []), ...codexInstall()] : []),
+    ...sandboxArgs(codexHome(), opts.edit ? opts.cwd : undefined, opts.edit ? jobHidden() : runnerCommandFiles(), opts.edit ? [...(opts.readDirs ?? []), ...codexInstall()] : []),
     // A job's commands get only the core variables (PATH, HOME and the like), never the runner's own,
     // such as a database password: what they print can end up in a file that gets pushed.
     ...(opts.edit ? ["-c", 'shell_environment_policy.inherit="core"'] : []),
@@ -460,9 +489,20 @@ export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
       const tail = scrubSecrets((result.stderr || result.stdout).trim().split("\n").slice(-6).join("\n"));
       const limit = limitFrom(`${result.stderr}\n${failures.join("\n")}`, "ChatGPT");
       if (limit) throw limit;
-      // Only a ChatGPT login: a refused API key has a different fix.
-      if (process.env.MERGELIGHT_CHATGPT === "1" && LOGIN_FAILURE.test(`${result.stderr}\n${failures.join("\n")}`)) {
-        throw new LoginError(loginFailureMessage(process.env.SECRET_NAME || undefined));
+      // A refused login, whether Codex reviews or checks: a checker's lets the reviewer check instead
+      // (review.ts). Each kind of login has its own fix.
+      if (LOGIN_FAILURE.test(`${result.stderr}\n${failures.join("\n")}`)) {
+        // A ChatGPT login says so in its own words: one that couldn't be refreshed. In the Mergelight
+        // Action, one that isn't ChatGPT's is an OpenAI API key, and the title says so. Elsewhere it can't
+        // be told, so the advice fits both.
+        const text = `${result.stderr}\n${failures.join("\n")}`;
+        // The Action sets these: a run started elsewhere gets advice for a login of its own.
+        const inAction = Boolean(process.env.MERGELIGHT_PROVIDER) || process.env.MERGELIGHT_CHATGPT === "1";
+        const chatgpt = process.env.MERGELIGHT_CHATGPT === "1" || /access token could not be refreshed/i.test(text);
+        const apiKey = /incorrect api key|invalid_api_key|invalid api key/i.test(text) || (inAction && !chatgpt);
+        if (chatgpt) throw new LoginError(inAction ? loginFailureMessage(process.env.SECRET_NAME || undefined) : "Codex's ChatGPT login couldn't be refreshed. Run codex login and sign in again.");
+        if (apiKey) throw new LoginError(inAction ? "The OpenAI API key didn't work. Check the OPENAI_API_KEY secret." : "OpenAI rejected the API key Codex uses. Replace it, or run codex login to sign in with ChatGPT.", "OpenAI");
+        throw new LoginError("Codex's login didn't work: run codex login and sign in again, or check the OpenAI API key it uses.", "Codex");
       }
       throw new Error(`Codex exited with code ${result.code}.${opts.logFile ? ` Log: ${opts.logFile}` : ""}\n${tail}`);
     }

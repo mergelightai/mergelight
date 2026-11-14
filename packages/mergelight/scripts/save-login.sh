@@ -3,6 +3,8 @@
 # Run from action.yml, which sets CODEX_HOME, RUNNER_TEMP, SECRET_NAME and optionally SECRETS_TOKEN.
 set -euo pipefail
 
+# Only the login this Action set up: a CODEX_HOME from anywhere else, such as a runner's own account, is never saved.
+[ "${CODEX_HOME:-}" = "$RUNNER_TEMP/codex-home" ] || exit 0
 auth="$CODEX_HOME/auth.json"
 seen="$RUNNER_TEMP/codex-auth.sha256"
 [ -f "$auth" ] || exit 0

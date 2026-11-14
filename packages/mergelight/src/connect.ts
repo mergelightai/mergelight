@@ -1,9 +1,10 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { ProviderName } from "./providers/index.js";
 import type { GitHub } from "./publish/api.js";
 import { FAILED_MARKER, PENDING_MARKER, pendingSummaryBody, SUMMARY_MARKER } from "./publish/markdown.js";
-import { CHECK_FAILED_TITLE, readPrReviewState, writeCheck } from "./publish/publish.js";
+import { CHECK_FAILED_TITLE, readPrReviewState, syncApproval, UNREVIEWED, writeCheck } from "./publish/publish.js";
 import { stateBlock } from "./publish/state.js";
 import { claudeCodeRef, readCodeRef, shareClaudeToken, startClaudeSignIn, waitForPastedCode } from "./connect-claude.js";
 
@@ -17,6 +18,8 @@ import { claudeCodeRef, readCodeRef, shareClaudeToken, startClaudeSignIn, waitFo
 
 /** Codex says the code lasts 15 minutes. */
 export const LOGIN_TIMEOUT_MS = 16 * 60_000;
+/** How long a checker's prompt waits for Claude's code: the 15 minutes the comment promises. */
+const CHECK_WAIT_MS = 15 * 60_000;
 
 export const INSTALL_URL = "https://github.com/apps/mergelight-ai/installations/new";
 export const CHATGPT_SECURITY_URL = "https://chatgpt.com/settings/security";
@@ -58,8 +61,10 @@ export function connectedBody(account: string | null, secretName: string): strin
 }
 
 /** The setup page reads the link and code from this hidden line, so a change to how the comment looks can't break it. */
-export function connectData(login: DeviceLogin | null, claudeUrl?: string): string {
-  return `<!-- mergelight:connect:v1 ${JSON.stringify({ url: login?.url ?? "", code: login?.code ?? "", claudeUrl: claudeUrl ?? null }).replace(/--/g, "\\u002d\\u002d")} -->`;
+export function connectData(login: DeviceLogin | null, claudeUrl?: string, purpose?: "check"): string {
+  // "for" is only there for a checker's login, so the page can say what it connects.
+  const data = { url: login?.url ?? "", code: login?.code ?? "", claudeUrl: claudeUrl ?? null, ...(purpose ? { for: purpose } : {}) };
+  return `<!-- mergelight:connect:v1 ${JSON.stringify(data).replace(/--/g, "\\u002d\\u002d")} -->`;
 }
 
 const SETUP_URL = "https://mergelight.dev/setup/";
@@ -95,17 +100,72 @@ export function connectBody(login: DeviceLogin | null, runUrl?: string, claudeUr
   ].join("\n");
 }
 
-export function installAppBody(): string {
+/** Which sign-in a connect offers, and what for: the review, as before, or checking another AI's review. */
+export interface ConnectMode {
+  purpose: "review" | "check";
+  /** For a check: the AI to connect. For a review: claude offers only Claude's link, when Claude must review. */
+  ai?: ProviderName;
+  /** For a check: the AI that reviews, and checks instead when nobody connects. */
+  reviewer?: ProviderName;
+}
+
+/** The name a person signs in with: ChatGPT for Codex. */
+export function loginName(ai: ProviderName): string {
+  return ai === "codex" ? "ChatGPT" : "Claude";
+}
+
+/** The name of the AI that does the work. */
+export function aiName(ai: ProviderName): string {
+  return ai === "codex" ? "Codex" : "Claude";
+}
+
+/**
+ * The comment that asks to connect the AI that checks the review. The review doesn't wait for it longer
+ * than the code lasts: without it, the reviewer's own AI checks, and the summary says so.
+ */
+export function connectCheckBody(ai: ProviderName, reviewer: ProviderName, login: DeviceLogin | null, runUrl?: string, claudeUrl?: string, setupLink = SETUP_URL): string {
+  const steps = ai === "codex" ? (login ? `[Open ChatGPT](${login.url}) and enter \`${login.code}\`` : null) : claudeUrl ? `[Connect on mergelight.dev](${setupLink})` : null;
+  const run = runUrl ? `[your own GitHub Actions run](${runUrl})` : "your own GitHub Actions run";
+  return [
+    SUMMARY_MARKER,
+    PENDING_MARKER,
+    connectData(ai === "codex" ? login : null, ai === "claude" ? claudeUrl : undefined, "check"),
+    `### 🔌 Connect ${loginName(ai)} to check this review`,
+    "",
+    `${steps ?? "Follow the steps on mergelight.dev/setup"}. ${aiName(reviewer)}'s review then starts by itself, and ${aiName(ai)} checks its findings.`,
+    "",
+    `If nobody connects it within 15 minutes, the review starts anyway, checked by ${aiName(reviewer)}.`,
+    "",
+    "<details><summary>Something not working?</summary>",
+    "",
+    `- **The ${ai === "codex" ? "code" : "link"} ran out:** it lasts 15 minutes. Push a new commit to get a new one.`,
+    ...(ai === "codex" ? [`- **OpenAI refuses the code:** turn on "Enable device code sign-in" in your [ChatGPT security settings](${CHATGPT_SECURITY_URL}), or ask your workspace admin to.`] : []),
+    "",
+    "</details>",
+    "",
+    `<sub>Checks use the plan of whoever connects it, so only do this if you're setting up this repository. This comes from ${run}. The login is saved as this repository's secret and never reaches Mergelight.</sub>`,
+  ].join("\n");
+}
+
+/** The waiting check's title while the checker's login is asked for. */
+export function checkWaitingTitle(ai: ProviderName): string {
+  return `Waiting for you to connect ${loginName(ai)} to check the review`;
+}
+
+export function installAppBody(login = "ChatGPT"): string {
   return [
     SUMMARY_MARKER,
     PENDING_MARKER,
     "### 🔌 One step left: install the Mergelight AI app",
     "",
-    `[Install it on this repository](${INSTALL_URL}), or approve its updated permissions if it's already installed, then push a new commit. The app saves your ChatGPT login, so you only connect once.`,
+    `[Install it on this repository](${INSTALL_URL}), or approve its updated permissions if it's already installed, then push a new commit. The app saves your ${login} login, so you only connect once.`,
   ].join("\n");
 }
 
-export function connectFailedBody(reason: string, claudeOffered = false): string {
+export function connectFailedBody(reason: string, claudeOffered = false, onlyClaude = false): string {
+  if (onlyClaude) {
+    return [SUMMARY_MARKER, FAILED_MARKER, "### ⚠️ Mergelight couldn't connect to Claude", "", reason, "", "Push a new commit to get a new link. You can also use an Anthropic API key instead: https://mergelight.dev/setup"].join("\n");
+  }
   return [
     SUMMARY_MARKER,
     FAILED_MARKER,
@@ -125,6 +185,12 @@ export interface ClaudeConnect {
 }
 
 export interface ConnectDeps {
+  /** Only this sign-in is offered: Claude's, with no ChatGPT code. */
+  only?: "claude";
+  /** Why Claude can't be offered, when there is a reason to tell, such as the workflow not passing its login on. */
+  claudeUnavailable?: () => string | undefined;
+  /** Why ChatGPT's code isn't offered, when there is a reason to tell, such as the workflow not passing its login on. */
+  chatgptUnavailable?: () => string | undefined;
   /** Starts the Claude sign-in, when this repository can use it. Null if it can't. */
   startClaude?: () => Promise<ClaudeConnect | null>;
   /** Runs the login and resolves with its exit code. */
@@ -187,8 +253,14 @@ export async function connect(deps: ConnectDeps): Promise<number> {
     return 0;
   }
   await deps.failed(
-    claude
+    deps.only === "claude"
+      ? claude
+        ? "The Claude link ran out before anyone finished signing in."
+        : (deps.claudeUnavailable?.() ?? "Claude's sign-in couldn't start on this run.")
+      : claude
       ? "The ChatGPT code and the Claude link both ran out before anyone finished signing in."
+      : !shown && deps.chatgptUnavailable?.()
+      ? deps.chatgptUnavailable()!
       : shown
       ? `The code ran out, or OpenAI refused it. Check that "Enable device code sign-in" is on in your [ChatGPT security settings](${CHATGPT_SECURITY_URL}).`
       : `Codex couldn't start a device login. "Enable device code sign-in" may be off in your [ChatGPT security settings](${CHATGPT_SECURITY_URL}), or for your workspace.`,
@@ -197,14 +269,27 @@ export async function connect(deps: ConnectDeps): Promise<number> {
 }
 
 /** Tells the pull request the app has to be installed first. There's nowhere to save a login without it. */
-export async function askForApp(api: GitHub, number: number, headSha: string): Promise<void> {
-  await upsertSummary(api, number, installAppBody());
+export async function askForApp(api: GitHub, number: number, headSha: string, login = "ChatGPT"): Promise<void> {
+  await upsertSummary(api, number, installAppBody(login));
   await writeCheck(api, null, headSha, {
     status: "completed",
     conclusion: "neutral",
     completed_at: new Date().toISOString(),
     output: { title: "Install the Mergelight AI app", summary: `Install it, then push a new commit: ${INSTALL_URL}` },
   });
+  await takeBackOlderApprovals(api, number, headSha);
+}
+
+/**
+ * No review runs for this commit: an approval Mergelight gave an earlier one must not count for it, next
+ * to a check that a branch rule takes for passed. Only while this commit is still the newest: a newer run
+ * may have reviewed and approved the newest one meanwhile. One that can't be read is taken for the
+ * newest, as a merge can't be taken back.
+ */
+async function takeBackOlderApprovals(api: GitHub, number: number, headSha: string, log: (line: string) => void = () => {}): Promise<void> {
+  const newest = await (async () => (await api.get<{ head: { sha: string } }>(`pulls/${number}`)).head.sha)().catch(() => headSha);
+  if (newest === headSha) await syncApproval(api, number, "yellow", headSha, log, { why: UNREVIEWED, otherCommitsOnly: true });
+  else log(`A newer commit (${newest.slice(0, 7)}) has its own run, so Mergelight's approvals are left to it.`);
 }
 
 /** The summary holds what earlier rounds found, so a login prompt on a reviewed pull request has to keep that. */
@@ -220,49 +305,209 @@ export function withState(body: string, previous: string | undefined): string {
 }
 
 /** The real thing: Codex on this runner, and the pull request as the place to show the code. */
-/** A repository set up before Claude support doesn't pass the login on, so connecting it would only ask again next time. */
-async function workflowHasClaude(api: GitHub, env: NodeJS.ProcessEnv): Promise<boolean> {
-  const [, path, ref] = (env.GITHUB_WORKFLOW_REF ?? "").match(/^[^/]+\/[^/]+\/(.+?)@(.+)$/) ?? [];
-  if (!path || !ref) return false;
-  return api
-    .get<{ content: string }>(`contents/${path}?ref=${encodeURIComponent(env.GITHUB_SHA ?? ref)}`)
-    .then((f) => Buffer.from(f.content, "base64").toString("utf8").includes("claude-code-oauth-token"), () => false);
+/**
+ * Whether the workflow passes a Claude login on to Mergelight. A repository set up before Claude support
+ * doesn't, so connecting Claude there would only ask again next time: "no". A workflow that calls a
+ * reusable one may pass it on in a file this can't tell, and one that can't be read can't say: "unknown".
+ */
+export function claudeInWorkflow(text: string | null, input = "claude-code-oauth-token", job?: string, secret?: string, forCheck = false): "yes" | "no" | "unknown" {
+  if (text === null) return "unknown";
+  // Lines that are code, not comments: a line commented out passes nothing on.
+  let lines = text.split("\n").map((line) => line.replace(/(^|\s)#.*$/, ""));
+  const indent = (line: string) => line.match(/^\s*/)![0].length;
+  // Only this run's job: an input another job passes on doesn't reach this one.
+  if (job) {
+    // The job's key, right under jobs:, with an anchor after it or not (review: &review): never a
+    // workflow input or anything else of that name. One that can't be found can't be told.
+    const jobsAt = lines.findIndex((line) => /^["']?jobs["']?\s*:\s*$/.test(line));
+    if (jobsAt < 0) return "unknown";
+    let jobsEnd = jobsAt + 1;
+    while (jobsEnd < lines.length && (!lines[jobsEnd]!.trim() || indent(lines[jobsEnd]!) > 0)) jobsEnd++;
+    const childIndent = lines.slice(jobsAt + 1, jobsEnd).find((l) => l.trim())?.match(/^\s*/)?.[0].length ?? 2;
+    const keyRe = new RegExp(`^\\s{${childIndent}}["']?${job.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}["']?\\s*:\\s*(?:&[\\w-]+\\s*)?$`);
+    const found = lines.slice(jobsAt + 1, jobsEnd).findIndex((line) => keyRe.test(line));
+    if (found < 0) return "unknown";
+    const at = jobsAt + 1 + found;
+    let end = at + 1;
+    while (end < lines.length && (!lines[end]!.trim() || indent(lines[end]!) > indent(lines[at]!))) end++;
+    lines = lines.slice(at, end);
+  }
+  // Each step that uses Mergelight itself, or a fork of it (a repository named mergelight), from its "-" on.
+  const steps: string[] = [];
+  lines.forEach((line, i) => {
+    if (!/^\s*(?:-\s*)?uses:\s*["']?[^\s"'/]+\/mergelight@/i.test(line)) return;
+    let start = i;
+    while (start > 0 && !/^\s*-\s/.test(lines[start]!)) start--;
+    const dash = indent(lines[start]!);
+    let end = start + 1;
+    while (end < lines.length && (!lines[end]!.trim() || indent(lines[end]!) > dash)) end++;
+    const step = lines.slice(start, end).join("\n");
+    // A step that runs only when someone approves needs no AI login: it only turns the check green. Its
+    // condition can go on over the lines below "if:", as with "if: >-".
+    const ifAt = lines.slice(start, end).findIndex((l) => /^\s*(?:-\s*)?if:/.test(l));
+    let condition = "";
+    if (ifAt >= 0) {
+      const own = start + ifAt;
+      let last = own + 1;
+      while (last < end && (!lines[last]!.trim() || indent(lines[last]!) > indent(lines[own]!.replace(/-\s*/, "  ")))) last++;
+      condition = lines.slice(own, last).join(" ");
+    }
+    // Likewise a step that runs only on other events, such as a schedule: every event its condition names
+    // with == is one a pull request never starts, so it never runs where a login is connected.
+    // Only comparisons of the event's name count, never a branch's or anything else's. Each part on its
+    // own side of || must name such an event: a part without one could run on a pull request.
+    // So is a step that runs only for a review someone submitted, as when its condition compares
+    // github.event.review.state with a word: a pull request's event has no review, so that is never true.
+    const pullRequest = new Set(["pull_request", "pull_request_target"]);
+    const parts = condition.replace(/^\s*(?:-\s*)?if:\s*[>|]?[-+]?/, "").replace(/\$\{\{|\}\}/g, " ").split("||");
+    const otherEventOnly = (part: string) => {
+      // A group with ! before it turns what is inside around: it can't be told.
+      if (/!\s*\(/.test(part)) return false;
+      const terms = part.replace(/[()]/g, " ").split("&&");
+      const named = [...part.matchAll(/event_name\s*==\s*["']([\w-]+)["']/g)].map((m) => m[1]!);
+      if (named.length > 0 && named.every((e) => !pullRequest.has(e))) return true;
+      return terms.some((t) => /^\s*github\.event\.review\.[\w.]+\s*==\s*["'][^"']*[A-Za-z][^"']*["']\s*$/.test(t));
+    };
+    if (condition && parts.every(otherEventOnly)) return;
+    // A step that only runs the jobs never checks a review: for the checker's login it doesn't count.
+    if (forCheck && /^\s*["']?run["']?\s*:\s*["']?jobs["']?\s*$/m.test(step)) return;
+    steps.push(step);
+  });
+  // A reusable workflow or a composite action of the team's own may pass the login on in a file this
+  // can't see: unless Mergelight is used here in plain sight, it can't say. Nor through YAML's shared
+  // parts (an alias like *inputs, or a << merge), which this doesn't follow.
+  if (!steps.length || steps.some((step) => /(^|[\s:{,\[])\*[\w-]+|<<\s*:/m.test(step))) return "unknown";
+  // The name may be quoted, or in a flow mapping, as YAML allows. Every Mergelight step of this job must
+  // pass it on: which one runs now can't be told from here, and a login saved for a step that doesn't
+  // pass it on would replace the one another step uses. The message then says what to add.
+  // And from the secret the login is saved to: a login saved as CLAUDE_CODE_OAUTH_TOKEN never reaches
+  // a step that reads another secret.
+  const passes = (step: string) => {
+    // Spaces only after the colon: a value left empty mustn't take the next line for its own.
+    const found = new RegExp(`(?:^|[\\s{,])["']?${input}["']?[ \\t]*:[ \\t]*([^\\n,}]*)`, "m").exec(step);
+    if (!found) return false;
+    let value = found[1]!.trim();
+    // A value goes on over the lines below that are set in further than its name, as YAML reads it: after
+    // >- or |, those lines are the value; after anything else, they carry it on, as with "${{" alone on
+    // the first line.
+    const rest = step.slice(found.index + found[0].length).split("\n").slice(1);
+    const own = indent(step.slice(0, found.index + found[0].length).split("\n").pop()!);
+    const more: string[] = [];
+    for (const l of rest) {
+      if (l.trim() && indent(l) <= own) break;
+      more.push(l.trim());
+    }
+    value = (/^[>|][-+0-9]*$/.test(value) ? more : [value, ...more]).join(" ").trim();
+    // An empty value passes nothing on: a login saved now would never reach a later run.
+    if (!value || /^(["'])\1$/.test(value) || value === "~" || value === "null") return false;
+    // secrets.NAME or secrets['NAME'], in any letter case, as GitHub reads secret names. With a fallback,
+    // like secrets.A || secrets.B, one of them being the secret is enough.
+    const named = [...value.matchAll(/secrets(?:\.([A-Za-z0-9_]+)|\[\s*["']([A-Za-z0-9_]+)["']\s*\])/gi)].map((m) => (m[1] ?? m[2])!.toUpperCase());
+    return !secret || !named.length || named.includes(secret.toUpperCase());
+  };
+  return steps.every(passes) ? "yes" : "no";
 }
 
-export function githubConnect(api: GitHub, number: number, headSha: string, log: (line: string) => void, env = process.env): ConnectDeps {
+/** How long reading the workflow file may take before it counts as one that can't be read. */
+const WORKFLOW_READ_MS = 60_000;
+
+async function workflowHasClaude(api: GitHub, env: NodeJS.ProcessEnv, input = "claude-code-oauth-token", secret = "CLAUDE_CODE_OAUTH_TOKEN", forCheck = false): Promise<"yes" | "no" | "unknown"> {
+  const [, path, ref] = (env.GITHUB_WORKFLOW_REF ?? "").match(/^[^/]+\/[^/]+\/(.+?)@(.+)$/) ?? [];
+  if (!path || !ref) return "unknown";
+  const read = api.get<{ content: string }>(`contents/${path}?ref=${encodeURIComponent(env.GITHUB_SHA ?? ref)}`).then((f) => Buffer.from(f.content, "base64").toString("utf8"), () => null);
+  // A read GitHub never answers mustn't hold the sign-in, and the review after it, up: it can't be told then.
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), WORKFLOW_READ_MS);
+  });
+  const text = await Promise.race([read, late]);
+  clearTimeout(timer);
+  return claudeInWorkflow(text, input, env.GITHUB_JOB, secret, forCheck);
+}
+
+/** The same for a ChatGPT login: a workflow that doesn't pass codex-auth-json would never see one saved now. */
+export function chatgptInputMissing(secret = "CODEX_AUTH_JSON"): string {
+  return `The workflow doesn't pass a ChatGPT login to Mergelight, so one connected now would never reach a later run. Add \`codex-auth-json: \${{ secrets.${secret} }}\` under \`with:\` where the workflow uses Mergelight, then push a commit.`;
+}
+
+/** What to do when the workflow doesn't pass a Claude login on: a login saved now would never reach a later run. */
+export const CLAUDE_INPUT_MISSING =
+  "The workflow doesn't pass a Claude login to Mergelight, so one connected now would never reach a later run. Add `claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}` under `with:` where the workflow uses Mergelight, then push a commit.";
+
+export function githubConnect(api: GitHub, number: number, headSha: string, log: (line: string) => void, env = process.env, mode: ConnectMode = { purpose: "review" }): ConnectDeps {
+  const checker = mode.purpose === "check" && mode.ai ? mode.ai : null;
+  const reviewer = mode.reviewer ?? (checker === "codex" ? "claude" : "codex");
+  // Claude's link alone: Claude checks, or Claude must review and has no login yet.
+  const onlyClaude = mode.ai === "claude";
   const runUrl = env.GITHUB_RUN_ID ? `${env.GITHUB_SERVER_URL}/${env.GITHUB_REPOSITORY}/actions/runs/${env.GITHUB_RUN_ID}` : undefined;
   let checkId: number | null = null;
   let running: ChildProcess | null = null;
   let claudeOffered = false;
+  /** Whether the prompt reached the pull request: only then is there a prompt to replace. */
+  let prompted = false;
+  /** What tells this run's prompt apart from another run's. */
+  let promptMark = "";
+  /** Why Claude isn't offered, when the workflow is the reason. */
+  let claudeMissing: string | undefined;
+  let chatgptMissing: string | undefined;
   /**
    * The app's token dies if the app is removed during the login, which can wait 15 minutes. The comment
    * still has to change, or it keeps offering a dead code, and the workflow's own token can do that.
    */
-  const updateSummary = async (body: string) => {
+  /** Runs a comment read or write, again with the workflow's token when GitHub refuses the app's. */
+  const withWorkflowToken = async <T>(work: () => Promise<T>): Promise<T> => {
     try {
-      await upsertSummary(api, number, body);
+      return await work();
     } catch (err) {
       const fallback = env.GITHUB_WORKFLOW_TOKEN;
       if (!fallback || fallback === env.GH_TOKEN || !/Bad credentials|HTTP 401/i.test(err instanceof Error ? err.message : String(err))) throw err;
       log("GitHub refused the app's token, so this updates the comment with the workflow's token.");
       env.GH_TOKEN = fallback;
-      await upsertSummary(api, number, body);
+      return await work();
     }
   };
+  const updateSummary = (body: string) => withWorkflowToken(() => upsertSummary(api, number, body));
   const finish = (title: string, summary: string) =>
     writeCheck(api, checkId, headSha, { status: "completed", conclusion: "neutral", completed_at: new Date().toISOString(), output: { title, summary } }, log);
+  /**
+   * Connected: the check stays going and the review carries it on. A check finished now would stand
+   * neutral until the review starts, and a branch rule takes neutral for passed.
+   */
+  const handOn = async (title: string, summary: string) => {
+    if (!checkId) return;
+    // Outside the Action, no review follows in this run to take the check on. It ends here, cancelled, not
+    // neutral: no review ran, so a branch rule must not take it for passed.
+    if (!env.MERGELIGHT_PROVIDER) {
+      await writeCheck(api, checkId, headSha, { status: "completed", conclusion: "cancelled", completed_at: new Date().toISOString(), output: { title, summary: "No review ran with this. Push a commit, and Mergelight reviews it." } }, log);
+      return;
+    }
+    await writeCheck(api, checkId, headSha, { status: "in_progress", output: { title, summary } }, log);
+    if (env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, `MERGELIGHT_CHECK_RUN=${checkId}\n`);
+  };
   return {
+    ...(onlyClaude ? { only: "claude" as const } : {}),
+    claudeUnavailable: () => claudeMissing,
+    chatgptUnavailable: () => chatgptMissing,
     stopLogin: () => running?.kill("SIGTERM"),
     startClaude: async () => {
-      if (!(await workflowHasClaude(api, env))) return null;
+      // Connecting ChatGPT to check a Claude review offers only ChatGPT: Claude already has a login.
+      if (checker === "codex") return null;
+      // Claude is offered only where the workflow passes its login on. Beside ChatGPT, only when that is
+      // sure. Asked for by name, also when a reusable workflow may pass it on where this can't see.
+      const passes = await workflowHasClaude(api, env, "claude-code-oauth-token", "CLAUDE_CODE_OAUTH_TOKEN", Boolean(checker));
+      if (passes === "no") {
+        claudeMissing = CLAUDE_INPUT_MISSING;
+        return null;
+      }
+      if (!onlyClaude && passes !== "yes") return null;
       const signIn = await startClaudeSignIn();
       if (!signIn) {
-        log("Claude's sign-in didn't start, so only ChatGPT is offered.");
+        log(onlyClaude ? "Claude's sign-in didn't start." : "Claude's sign-in didn't start, so only ChatGPT is offered.");
         return null;
       }
       const ref = claudeCodeRef(signIn.url);
       if (!ref) {
-        log("Claude's sign-in link wasn't the expected shape, so only ChatGPT is offered.");
+        log(onlyClaude ? "Claude's sign-in link wasn't the expected shape." : "Claude's sign-in link wasn't the expected shape, so only ChatGPT is offered.");
         signIn.stop();
         return null;
       }
@@ -275,23 +520,32 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
           signIn.stop();
         },
         wait: async () => {
-          const code = await waitForPastedCode({ read: () => readCodeRef((path) => api.get(path), ref), stopped: () => over });
+          // As long as the comment says: a checker's prompt promises the review starts after 15 minutes.
+          const code = await waitForPastedCode({ read: () => readCodeRef((path) => api.get(path), ref), stopped: () => over }, checker ? CHECK_WAIT_MS : undefined);
           if (!code) return false;
           const token = await signIn.finish(code);
           if (!token) {
             log("Claude didn't accept that code.");
             return false;
           }
-          shareClaudeToken(token, env);
+          shareClaudeToken(token, env, console.log, !checker);
           return true;
         },
       };
     },
-    startLogin: (onOutput) =>
-      new Promise((resolve, reject) => {
+    startLogin: async (onOutput) => {
+      // Connecting Claude alone starts no ChatGPT sign-in.
+      if (onlyClaude) return 1;
+      // A checker's ChatGPT login is asked for only where the workflow passes it on to later runs.
+      if (checker === "codex" && (await workflowHasClaude(api, env, "codex-auth-json", env.SECRET_NAME || "CODEX_AUTH_JSON", true)) === "no") {
+        chatgptMissing = chatgptInputMissing(env.SECRET_NAME || "CODEX_AUTH_JSON");
+        return 1;
+      }
+      return new Promise<number>((resolve, reject) => {
         const child = spawn("codex", ["login", "--device-auth"], { stdio: ["ignore", "pipe", "pipe"] });
         running = child;
-        const timer = setTimeout(() => child.kill("SIGTERM"), LOGIN_TIMEOUT_MS);
+        // A checker's prompt promises the review starts after 15 minutes.
+        const timer = setTimeout(() => child.kill("SIGTERM"), checker ? CHECK_WAIT_MS : LOGIN_TIMEOUT_MS);
         child.stdout.setEncoding("utf8").on("data", onOutput);
         child.stderr.setEncoding("utf8").on("data", onOutput);
         child.on("error", (err) => {
@@ -302,27 +556,65 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
           clearTimeout(timer);
           resolve(code ?? 1);
         });
-      }),
+      });
+    },
     showCode: async (login, claudeUrl) => {
-      await upsertSummary(api, number, connectBody(login, runUrl, claudeUrl, claudeSetupLink(env.GITHUB_REPOSITORY, number)));
+      const setupLink = claudeSetupLink(env.GITHUB_REPOSITORY, number);
+      prompted = true;
+      // What tells this run's prompt apart from any other: its code, or its Claude link as the hidden line
+      // keeps it, with "--" escaped. The review that starts after it replaces this one, and no other.
+      const mark = login?.code ?? (claudeUrl ? JSON.stringify(claudeUrl).slice(1, -1).replace(/--/g, "\\u002d\\u002d") : "");
+      promptMark = mark;
+      if (mark && env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, `MERGELIGHT_PROMPT=${mark}\n`);
+      // What tells this run's prompt apart from any other: its code, or its Claude link.
+      await upsertSummary(api, number, checker ? connectCheckBody(checker, reviewer, login, runUrl, claudeUrl, setupLink) : connectBody(login, runUrl, claudeUrl, setupLink));
       log("Posted the link and code on the pull request. Waiting for the login.");
       // The comment is what people need. A check that can't be written shouldn't end a login that can still work.
       try {
         const run = await writeCheck(api, null, headSha, {
           status: "in_progress",
           started_at: new Date().toISOString(),
-          output: { title: claudeUrl ? "Waiting for you to connect your AI" : "Waiting for you to connect ChatGPT", summary: "Follow the steps in the pull request's Mergelight comment." },
+          output: checker
+            ? { title: checkWaitingTitle(checker), summary: `Follow the steps in the pull request's Mergelight comment. Without it, the review starts in 15 minutes, checked by ${aiName(reviewer)}.` }
+            : { title: onlyClaude ? "Waiting for you to connect Claude" : claudeUrl ? "Waiting for you to connect your AI" : "Waiting for you to connect ChatGPT", summary: "Follow the steps in the pull request's Mergelight comment." },
         }, log);
         checkId = run?.id ?? null;
+        // Known from now on: if the run is cancelled while it waits, its last step finishes this check.
+        if (checkId && env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, `MERGELIGHT_CHECK_RUN=${checkId}\n`);
       } catch (err) {
         log(`Couldn't show the waiting check: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
     connected: async (via = "chatgpt") => {
-      await updateSummary(pendingSummaryBody());
+      // Only while the summary is still this run's prompt: another run may have posted its own since. A
+      // comment that can't be updated mustn't leave the check waiting.
+      const { summary } = await withWorkflowToken(() => readPrReviewState(api, number)).catch(() => ({ summary: undefined }));
+      if (!promptMark || summary?.body?.includes(promptMark)) await updateSummary(pendingSummaryBody()).catch((err) => log(`Couldn't update the comment: ${err instanceof Error ? err.message : String(err)}`));
+      if (checker) {
+        let account: string | null = null;
+        if (checker === "codex") {
+          try {
+            account = connectedAccount(readFileSync(join(env.CODEX_HOME ?? "", "auth.json"), "utf8"));
+          } catch {
+            // Without the file the note just doesn't name the account.
+          }
+        }
+        // A ChatGPT login now, as one from the secret would be: a rejected one is then known as such, so
+        // the reviewer can check instead, and the steps that refresh and save it run.
+        if (checker === "codex" && env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, "MERGELIGHT_CHATGPT=1\n");
+        const who = checker === "claude" ? "the Claude plan that confirmed the sign-in" : account ? `the ChatGPT account \`${account}\`` : "the ChatGPT account that entered the code";
+        const secret = checker === "claude" ? "CLAUDE_CODE_OAUTH_TOKEN" : env.SECRET_NAME || "CODEX_AUTH_JSON";
+        // The note failing to post mustn't leave the check waiting.
+        await api
+          .write("POST", `issues/${number}/comments`, { body: `🔌 ${aiName(checker)} now checks reviews on this repository, with ${who}. If that isn't yours, remove the \`${secret}\` secret and push a commit to connect again.` })
+          .catch((err) => log(`Couldn't post who connected: ${err instanceof Error ? err.message : String(err)}`));
+        await handOn(`Connected to ${loginName(checker)}`, `Starting the review, checked by ${aiName(checker)}.`);
+        log(`Connected to ${loginName(checker)} to check the review.`);
+        return;
+      }
       if (via === "claude") {
         await api.write("POST", `issues/${number}/comments`, { body: "🔌 Reviews on this repository now use the Claude plan that confirmed the sign-in. If that isn't yours, remove the `CLAUDE_CODE_OAUTH_TOKEN` secret and push a commit to connect again." });
-        await finish("Connected to Claude", "Starting the review.");
+        await handOn("Connected to Claude", "Starting the review.");
         log("Connected to Claude.");
         return;
       }
@@ -332,14 +624,33 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
       } catch {
         // Without the file the note just doesn't name the account.
       }
+      // A ChatGPT login now, as one from the secret would be, so a rejected one is called that.
+      if (env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, "MERGELIGHT_CHATGPT=1\n");
       await api.write("POST", `issues/${number}/comments`, { body: connectedBody(connectedAccount(auth), env.SECRET_NAME || "CODEX_AUTH_JSON") });
-      await finish("Connected to ChatGPT", "Starting the review.");
+      await handOn("Connected to ChatGPT", "Starting the review.");
       log("Connected to ChatGPT.");
     },
     failed: async (reason) => {
+      // A checker that wasn't connected holds nothing up: the review starts, checked by the reviewer's AI,
+      // and its summary says so. The comment it replaces is the connect one, so it is left for the review.
+      if (checker) {
+        // The prompt stays until the review that starts now replaces it: changing the comment here could
+        // overwrite a newer run's finished review, as reading it first doesn't stop that.
+        // The review goes on, so the check does too: it isn't finished in between.
+        await handOn(`${loginName(checker)} wasn't connected`, `${reason} The review goes on, checked by ${aiName(reviewer)}.`).catch((err) => log(`Couldn't update the check: ${err instanceof Error ? err.message : String(err)}`));
+        log(`${reason} The review goes on, checked by ${aiName(reviewer)}.`);
+        return;
+      }
       // One failed write mustn't stop the other. Only the app that made a check can finish it.
-      await updateSummary(connectFailedBody(reason, claudeOffered)).catch((err) => log(`Couldn't update the comment: ${err instanceof Error ? err.message : String(err)}`));
-      await finish(CHECK_FAILED_TITLE, reason).catch((err) => log(`Couldn't finish the check: ${err instanceof Error ? err.message : String(err)}`));
+      await updateSummary(connectFailedBody(reason, claudeOffered, onlyClaude)).catch((err) => log(`Couldn't update the comment: ${err instanceof Error ? err.message : String(err)}`));
+      const finished = await finish(CHECK_FAILED_TITLE, reason).then(
+        () => true,
+        (err) => (log(`Couldn't finish the check: ${err instanceof Error ? err.message : String(err)}`), false),
+      );
+      // Finished here: nothing is left for the run's last step to finish. Not finished: it still is.
+      if (finished && env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, "MERGELIGHT_CHECK_RUN=\n");
+      // No review runs, as when one fails.
+      await takeBackOlderApprovals(api, number, headSha, log);
       log(reason);
     },
   };

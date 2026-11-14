@@ -9,8 +9,8 @@ import { fileURLToPath } from "node:url";
 import { parsePatch, place } from "../dist/publish/diff-lines.js";
 import { mergeLight, tierOf } from "../dist/review.js";
 import { closedBody, patchTouches, readClosed, reopenedBody, resolvedByPeople, threadAction } from "../dist/publish/closed.js";
-import { clean, failedSummaryBody, isFailedSummary, limitNotice, notReadLine, loginNotice, FINDING_MARKER_RE, inlineBody, isPendingSummary, pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "../dist/publish/markdown.js";
-import { APPROVAL_MARKER, approvalHold, approvalLight, UNREVIEWED, checkConclusion, isYellowCheck, syncApproval, trustedComment, CHECK_FAILED_TITLE, checkLimitTitle, checkLoginTitle, isFailedCheckTitle } from "../dist/publish/publish.js";
+import { checkerMissedLine, clean, failedSummaryBody, isFailedSummary, limitNotice, notReadLine, loginNotice, FINDING_MARKER_RE, inlineBody, isPendingSummary, pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "../dist/publish/markdown.js";
+import { APPROVAL_MARKER, approvalHold, approvalLight, checkLimitTitle as limitTitle, failSummary, startCheck, startSummary, UNREVIEWED, checkConclusion, isYellowCheck, syncApproval, trustedComment, CHECK_FAILED_TITLE, checkLimitTitle, checkLoginTitle, isFailedCheckTitle } from "../dist/publish/publish.js";
 import { decodeState, encodeState, nextState } from "../dist/publish/state.js";
 import { buildVerifierPrompt } from "../dist/prompt.js";
 import { assignIds } from "../dist/review.js";
@@ -646,4 +646,103 @@ test("the last line of a review names the models and the tokens it used", async 
   // An older review without a count says nothing about tokens.
   const older = summaryBody({ review: { ...review, stats: { duration_ms: 1000 } }, state: nextState(null, [], "abcdef1234", "green", new Map()), urls: new Map() });
   assert.doesNotMatch(older, /tokens/);
+});
+
+test("the summary says when the AI set to check had no login yet, so the reviewer checked", () => {
+  assert.equal(
+    checkerMissedLine({ checker_missed: "codex", provider: { name: "claude", model: "claude-opus-5-5", effort: "high" } }),
+    "⚠️ Codex was set to check this review, but it has no ChatGPT login yet, so Claude checked it.",
+  );
+  assert.equal(checkerMissedLine({ checker_missed: "claude", provider: { name: "codex", model: null, effort: "high" } }), "⚠️ Claude was set to check this review, but it has no Claude login yet, so Codex checked it.");
+  assert.equal(checkerMissedLine({ provider: { name: "codex", model: null, effort: "high" } }), null);
+  const claudeReviews = { name: "claude", model: null, effort: "high" };
+  assert.match(checkerMissedLine({ checker_missed: "codex", checker_missed_why: "not-installed", provider: claudeReviews }), /but Codex couldn't be installed on this run, so Claude checked it/);
+  assert.match(checkerMissedLine({ checker_missed: "codex", checker_missed_why: "login-failed", provider: claudeReviews }), /but its login didn't work, so Claude checked it/);
+  assert.match(checkerMissedLine({ checker_missed: "codex", checker_missed_why: "limit", provider: claudeReviews }), /but it hit its usage limit, so Claude checked it/);
+  assert.match(checkerMissedLine({ checker_missed: "codex", checker_missed_why: "sandbox", provider: claudeReviews }), /but Codex's sandbox couldn't start on this runner/);
+});
+
+test("a summary too long for GitHub still says the AI set to check didn't", () => {
+  const review = {
+    pr: { owner: "o", repo: "r", number: 1, title: "t", head_sha: "abcdef1234", base_sha: "b", diff_files: 1 },
+    provider: { name: "claude", model: null, effort: "high" },
+    checker_missed: "codex",
+    light: "green",
+    summary: "Long. ".repeat(20_000),
+    findings: [],
+    stats: { duration_ms: 1000 },
+  };
+  const body = summaryBody({ review, state: nextState(null, [], "abcdef1234", "green", new Map()), urls: new Map() });
+  assert.match(body, /Summary cut short/);
+  assert.match(body, /Codex was set to check this review/);
+});
+
+test("a failed review keeps what earlier rounds found, when it replaces a pending summary", async () => {
+  const state = encodeState({ v: 1, round: 3, findings: [] });
+  const writes = [];
+  const api = {
+    list: async (path) => (path.startsWith("issues/") ? [{ id: 5, user: { login: "mergelight-ai[bot]", type: "Bot" }, author_association: "NONE", body: `${pendingSummaryBody()}\n${state}` }] : []),
+    viewer: async () => null,
+    write: async (method, path, body) => writes.push({ method, path, body }),
+  };
+  await failSummary(api, 7);
+  assert.equal(writes.length, 1);
+  assert.ok(isFailedSummary(writes[0].body.body));
+  assert.ok(writes[0].body.body.endsWith(state), "the state block is still there");
+  assert.equal(decodeState(writes[0].body.body)?.round, 3);
+});
+
+test("the review starts a check of its own, and closes a connect's check only once its own is going", async () => {
+  const writes = [];
+  const api = (old) => ({ get: async () => old, write: async (method, path, body) => (writes.push({ path, body }), { id: path === "check-runs" ? 10 : 9 }) });
+  const known = [];
+  assert.equal(await startCheck(api({ status: "in_progress", head_sha: "new" }), "new", "codex", 9, (id) => known.push([id, writes.length])), 10);
+  // Its own first, then the connect's closed: there is no moment with neither, and none with both.
+  assert.deepEqual(writes.map((w) => [w.path, w.body.conclusion ?? w.body.status]), [["check-runs", "in_progress"], ["check-runs/9", "neutral"]]);
+  // Its own is known before the connect's is asked about, so a run cancelled in between still finishes it.
+  assert.deepEqual(known, [[10, 1]]);
+  writes.length = 0;
+  assert.equal(await startCheck(api(null), "new", "codex"), 10);
+  assert.equal(writes.length, 1);
+  // A finished verdict is never touched, nor a check that can't be read: the Action's last step finishes that one.
+  for (const old of [{ status: "completed", head_sha: "new" }, null]) {
+    writes.length = 0;
+    await startCheck(api(old), "new", "codex", 9);
+    assert.ok(!writes.some((w) => w.path === "check-runs/9"), JSON.stringify(old));
+  }
+  // The connect's check on the commit it waited on, after a push moved the review to a newer one: closed, and it says why.
+  writes.length = 0;
+  await startCheck(api({ status: "in_progress", head_sha: "older" }), "newer00", "codex", 9);
+  const closed = writes.find((w) => w.path === "check-runs/9");
+  assert.equal(closed?.body.conclusion, "neutral");
+  assert.match(closed.body.output.summary, /newer commit was pushed.*newer00/);
+});
+
+
+test("an API key with no credit is said to have no credit, not a plan with no usage", () => {
+  const notice = limitNotice("Anthropic", null);
+  assert.match(notice.heading, /the Anthropic API key has no credit left/);
+  assert.match(notice.body, /Add credit to its account/);
+  // OpenAI says the same for credit run out and a spending limit reached: both are named.
+  assert.match(limitNotice("OpenAI", null).body, /credit ran out, or its account reached its spending limit/);
+  assert.match(limitTitle("OpenAI"), /the OpenAI API key has no usage left/);
+  assert.match(limitNotice("Claude", "9am").heading, /your Claude plan hit its limit/);
+});
+
+test("a dead prompt to connect the checking AI gives way to the review when it starts", async () => {
+  const { connectCheckBody } = await import("../dist/connect.js");
+  const prompt = connectCheckBody("codex", "claude", { url: "https://auth.openai.com/d", code: "AAAA-BBBB" });
+  const writes = [];
+  const api = {
+    list: async (path) => (path.startsWith("issues/") ? [{ id: 5, user: { login: "mergelight-ai[bot]", type: "Bot" }, author_association: "NONE", body: prompt }] : []),
+    viewer: async () => null,
+    write: async (method, path, body) => writes.push({ method, path, body }),
+  };
+  // Another run's prompt may still be waiting: it stays.
+  await startSummary(api, 7, { reviewer: { name: "claude", model: "opus" } }, "ZZZZ-ZZZZ");
+  assert.equal(writes.length, 0);
+  await startSummary(api, 7, { reviewer: { name: "claude", model: "opus" } }, "AAAA-BBBB");
+  assert.equal(writes.length, 1);
+  assert.match(writes[0].body.body, /Mergelight: Reviewing/);
+  assert.doesNotMatch(writes[0].body.body, /AAAA-BBBB/);
 });

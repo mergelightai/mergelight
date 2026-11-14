@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { currentRepo, fetchPullRequest, parsePrRef } from "./github.js";
 import { serve } from "./mcp/server.js";
@@ -53,6 +53,8 @@ Options
   --effort <level>      Reasoning effort: low, medium, high (default: high)
   --verify-with <name>  Who checks the findings: claude or codex
                         (default: claude when Claude Code is installed)
+  --verify-missed <name>
+                        The AI that was meant to check but had no login: the summary says so
   --verify-model <name> Model for the checker (default for claude: opus)
   --jobs <file>         With --post: the file mergelight jobs wrote, for the Jobs part of the summary
   --jobs-commit <sha>   With --jobs: the commit the push step made. It is the one reviewed
@@ -67,6 +69,9 @@ Options
   --with-jobs           For setup: also run the team's jobs from .mergelight/jobs (see docs/jobs.md)
   --yes                 For setup: don't stop to ask whether the app is installed
   --no-save             For connect: there's nowhere to save a login, so ask for the app instead
+  --for check --ai <name> --reviewer <name>
+                        For connect: connect the AI that checks another AI's review. Nobody
+                        connecting it holds nothing up: the reviewer checks instead
   -h, --help            Show this help
 
 Reviews run on your own logged-in Codex CLI, and Claude Code if you check with it.
@@ -129,6 +134,11 @@ async function main(): Promise<number> {
       "with-jobs": { type: "boolean" },
       yes: { type: "boolean" },
       "no-save": { type: "boolean" },
+      for: { type: "string" },
+      ai: { type: "string" },
+      reviewer: { type: "string" },
+      "verify-missed": { type: "string" },
+      "verify-missed-why": { type: "string" },
       from: { type: "string" },
       jobs: { type: "string" },
       "jobs-commit": { type: "string" },
@@ -195,6 +205,12 @@ async function main(): Promise<number> {
     log(`mergelight: --verify-with must be codex or claude, not "${verifyWith}"`);
     return 1;
   }
+  // The AI the team asked to check, which had no login, so the reviewer's own AI checked instead.
+  const verifyMissed = values["verify-missed"];
+  if (verifyMissed !== undefined && verifyMissed !== "codex" && verifyMissed !== "claude") {
+    log(`mergelight: --verify-missed must be codex or claude, not "${verifyMissed}"`);
+    return 1;
+  }
 
   if (command === "post") {
     const review = JSON.parse(readFileSync(target, "utf8")) as Review;
@@ -234,15 +250,42 @@ async function main(): Promise<number> {
   }
 
   if (command === "connect") {
+    // --for check: connect the AI that checks another AI's review. It never stops the review: when nobody
+    // connects it, or it can't be saved, the reviewer's own AI checks, and the review's summary says so.
+    const check = values.for === "check";
+    const ai = values.ai;
+    const reviewer = values.reviewer;
+    if (values.for !== undefined && values.for !== "check" && values.for !== "review") {
+      log(`mergelight: --for must be review or check, not "${values.for}"`);
+      return 1;
+    }
+    if (check && ((ai !== "codex" && ai !== "claude") || (reviewer !== "codex" && reviewer !== "claude") || ai === reviewer)) {
+      log("mergelight: connect --for check needs --ai and --reviewer, each codex or claude, and not the same.");
+      return 1;
+    }
+    // For a review, --ai claude offers only Claude's link: the workflow says Claude reviews, and it has no login yet.
+    if (!check && ai !== undefined && ai !== "claude") {
+      log(`mergelight: for a review, --ai can only be claude, not "${ai}"`);
+      return 1;
+    }
     try {
       const api = new GitHub(ref.owner, ref.repo, { log });
       const { headSha } = await fetchPullRequest(ref);
+      if (check) {
+        if (values["no-save"]) {
+          log(`There's nowhere to save a ${ai === "codex" ? "ChatGPT" : "Claude"} login without the Mergelight AI app, so the reviewer's own AI checks this time.`);
+          return 0;
+        }
+        await connect(githubConnect(api, ref.number, headSha, log, process.env, { purpose: "check", ai: ai as "codex" | "claude", reviewer: reviewer as "codex" | "claude" }));
+        return 0;
+      }
+      const login = ai === "claude" ? "Claude" : "ChatGPT";
       if (values["no-save"]) {
-        await askForApp(api, ref.number, headSha);
-        log("Install the Mergelight AI app: without it there's nowhere to save the ChatGPT login.");
+        await askForApp(api, ref.number, headSha, login);
+        log(`Install the Mergelight AI app: without it there's nowhere to save the ${login} login.`);
         return 1;
       }
-      return await connect(githubConnect(api, ref.number, headSha, log));
+      return await connect(githubConnect(api, ref.number, headSha, log, process.env, ai === "claude" ? { purpose: "review", ai: "claude" } : { purpose: "review" }));
     } catch (err) {
       log(`mergelight: ${err instanceof Error ? err.message : String(err)}`);
       return 1;
@@ -296,11 +339,21 @@ async function main(): Promise<number> {
   let headSha = values.at ?? null;
   if (values.post) {
     headSha ??= (await fetchPullRequest(ref)).headSha;
-    checkRunId = await startCheck(api, headSha, provider ?? "codex");
+    // A connect earlier in this run left its check going: the review carries it on, so no check stands
+    // finished in between, which a branch rule could take for a review that passed.
+    const handedOver = process.env.MERGELIGHT_PROVIDER ? Number(process.env.MERGELIGHT_CHECK_RUN) || undefined : undefined;
+    // The review's own check, as soon as it exists: the Action's last step finishes it if the review is
+    // cancelled first. Only in the Action, so another review later in a workflow never takes it for its
+    // own. The connect's check stays on the list too: the last step leaves it alone once it is finished,
+    // and finishes it when closing it here failed.
+    const record = (id: number) => {
+      if (process.env.MERGELIGHT_PROVIDER && process.env.GITHUB_ENV) appendFileSync(process.env.GITHUB_ENV, `MERGELIGHT_CHECK_RUN=${[id, handedOver].filter(Boolean).join(" ")}\n`);
+    };
+    checkRunId = await startCheck(api, headSha, provider ?? "codex", handedOver, record);
     // Says which AI reviews from the start. The models' exact names follow once the first reviewer answers.
     // Without --provider the review runs on Codex, as reviewPullRequest decides.
     const firstGuess = values.model ?? (provider === "claude" ? "opus" : configuredModel());
-    summaryComment = await startSummary(api, ref.number, { reviewer: { name: provider ?? "codex", model: firstGuess ?? null } }).catch((e) => {
+    summaryComment = await startSummary(api, ref.number, { reviewer: { name: provider ?? "codex", model: firstGuess ?? null } }, process.env.MERGELIGHT_PROMPT || undefined).catch((e) => {
       log(`Couldn't post the summary yet: ${(e as Error).message}`);
       return null;
     });
@@ -315,7 +368,9 @@ async function main(): Promise<number> {
   let checksPosted = false;
   try {
     // The login step already found this login can't be refreshed, so don't send every reviewer to find out.
-    if (process.env.MERGELIGHT_LOGIN_LOST === "1") throw new LoginError(loginFailureMessage(process.env.SECRET_NAME || undefined));
+    // Only when Codex is in this review: a Claude review whose Codex checker lost its login is checked by Claude.
+    const usesCodex = (provider ?? "codex") === "codex" || verifyWith === "codex";
+    if (usesCodex && process.env.MERGELIGHT_LOGIN_LOST === "1") throw new LoginError(loginFailureMessage(process.env.SECRET_NAME || undefined));
     // Before the threads are read: a reply written after this counts as newer than this review.
     const startedAt = new Date();
     let previous = values.post ? await previousFindings(api, ref.number, headSha ?? undefined) : undefined;
@@ -330,7 +385,8 @@ async function main(): Promise<number> {
       onTeamChecks: (results) => (answered = results),
       jobCommit,
       onModels: (models) => {
-        naming = updatePendingSummary(api, summaryComment, models).catch((e) => {
+        // One after the other: a later name never lands before an earlier one, nor after the result.
+        naming = naming.then(() => updatePendingSummary(api, summaryComment, models)).catch((e) => {
           log(`Couldn't name the models yet: ${(e as Error).message}`);
         });
       },
@@ -345,6 +401,11 @@ async function main(): Promise<number> {
       onProgress: progress.onProgress,
     });
     progress.stop();
+    if (verifyMissed && verifyMissed !== review.verifier?.name && !review.checker_missed) {
+      review.checker_missed = verifyMissed;
+      const why = values["verify-missed-why"];
+      if (why === "not-installed" || why === "login-failed") review.checker_missed_why = why;
+    }
     if (jobs) review.jobs = { ...jobs, ...(jobs.commit ? { reviewed: review.pr.head_sha.toLowerCase() === jobs.commit.toLowerCase() } : {}) };
 
     const json = JSON.stringify(review, null, 2);
