@@ -638,3 +638,9 @@ test("a job may not delete a binary file, such as an image in its folder", async
   assert.equal(shimManager("/opt/tools/shims/codex", { ASDF_DATA_DIR: "/opt/tools" }), "asdf", "asdf's shims where ASDF_DATA_DIR says");
   assert.equal(shimManager("/opt/tools/shims/codex", {}), null);
 });
+
+test("a runner installed right at /usr never hides the system's own tools from a job", () => {
+  const hidden = jobHidden({}, "/usr");
+  assert.ok(!hidden.includes("/usr"), JSON.stringify(hidden));
+  assert.ok(jobHidden({}, "/usr/local/runner").includes("/usr/local/runner"));
+});

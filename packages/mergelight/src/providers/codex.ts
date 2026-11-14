@@ -255,7 +255,10 @@ export function jobHidden(env: NodeJS.ProcessEnv = process.env, install: string 
   const deepEnough = (p: string | undefined) => (p && p.split("/").filter(Boolean).length >= 1 ? p : undefined);
   // Credential files other tools are told about, wherever they are.
   const named = [env.KUBECONFIG, env.GOOGLE_APPLICATION_CREDENTIALS, env.AWS_SHARED_CREDENTIALS_FILE, env.AWS_CONFIG_FILE, env.GH_CONFIG_DIR, env.DOCKER_CONFIG, env.AZURE_CONFIG_DIR].flatMap((v) => v?.split(":") ?? []);
-  const places = [homedir(), dirname(homedir()), "/root", "/run/secrets", "/var/run/secrets", env.MERGELIGHT_CACHE, env.RUNNER_TEMP, env.GITHUB_WORKSPACE, deepEnough(work), deepEnough(workParent), deepEnough(install ?? undefined), ...named, tmpdir(), "/tmp"].filter((p): p is string => Boolean(p) && p !== "/");
+  // Never a folder the system's own tools are in, such as /usr for a runner installed right there: hiding
+  // it would leave a job without bash. The runner's credentials sit elsewhere then, under its own name.
+  const system = (p: string) => LINUX_KEEP.includes(p.replace(/\/+$/, ""));
+  const places = [homedir(), dirname(homedir()), "/root", "/run/secrets", "/var/run/secrets", env.MERGELIGHT_CACHE, env.RUNNER_TEMP, env.GITHUB_WORKSPACE, deepEnough(work), deepEnough(workParent), deepEnough(install ?? undefined), ...named, tmpdir(), "/tmp"].filter((p): p is string => Boolean(p) && p !== "/" && !system(p));
   const real = places.map((p) => {
     try {
       return realpathSync(p);
