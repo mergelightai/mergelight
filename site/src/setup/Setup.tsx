@@ -1324,8 +1324,9 @@ function ConnectStep({ repo, pr, status, code: found, ask = null, publicCheck = 
   const checking = forCheck && only;
   // On a public repo no code comes for a ChatGPT checker, so the login is saved from their own computer.
   const byCommand = publicCheck && billing === 'plan' && provider === 'openai';
-  // A login of its own in a fresh folder, never the one their own Codex uses, kept in a file so it can be read back.
-  const command = `export CODEX_HOME=$(mktemp -d); printf 'cli_auth_credentials_store = "file"\\n' > "$CODEX_HOME/config.toml"; codex login; gh secret set CODEX_AUTH_JSON --repo ${repo.fullName} < "$CODEX_HOME/auth.json"`;
+  // The same line the Action prints: a login of its own in a fresh folder, never the one their own Codex uses,
+  // kept in a file so it can be saved, and the folder removed after.
+  const command = `d=$(mktemp -d); echo 'cli_auth_credentials_store = "file"' > $d/config.toml; CODEX_HOME=$d codex login && gh secret set CODEX_AUTH_JSON --repo ${repo.fullName} < $d/auth.json; rm -rf $d`;
   const mode = billing === 'plan' ? (provider === 'openai' ? 'chatgpt' : 'claude') : provider === 'openai' ? 'apikey' : 'anthropic';
   const [copied, setCopied] = useState<string | null>(null);
   const prUrl = pr?.url ?? `https://github.com/${repo.fullName}/pulls`;
