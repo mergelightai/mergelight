@@ -245,17 +245,29 @@ export async function pushJobs(ref: PrRef, o: PushJobsOptions): Promise<number> 
       // Run again after its push landed: the branch is now at the commit it made, right on the one the
       // jobs ran on, with the jobs line and these very files. That is pushed, not refused.
       const api = new GitHub(pr.owner, pr.repo, { dryRun: o.dryRun, log: o.log });
-      type Tip = { sha: string; parents: { sha: string }[]; commit: { message: string }; files?: { filename: string; previous_filename?: string }[] };
+      type File = { filename: string; previous_filename?: string; status: string; sha?: string };
+      type Tip = { sha: string; parents: { sha: string }[]; commit: { message: string }; files?: File[] };
       const tip = await api.get<Tip>(`commits/${pr.headSha}`).catch(() => null);
-      const changed = new Set((tip?.files ?? []).flatMap((f) => [f.filename, ...(f.previous_filename ? [f.previous_filename] : [])]));
-      const paths = (result as JobsResult).changes.map((c) => c?.path).filter(plainPath);
+      // Each file as the commit left it, a rename's old name as removed: these very changes, contents too.
+      const changed = new Map<string, File>();
+      for (const f of tip?.files ?? []) {
+        changed.set(f.filename, f);
+        if (f.previous_filename) changed.set(f.previous_filename, { filename: f.previous_filename, status: "removed" });
+      }
+      const changes = (result as JobsResult).changes.filter((c) => plainPath(c?.path));
+      const sameChange = (c: (typeof changes)[number]) => {
+        const f = changed.get(c.path);
+        if (!f) return false;
+        if ("deleted" in c) return f.status === "removed";
+        return f.status !== "removed" && typeof c.contents === "string" && f.sha === blobSha(Buffer.from(c.contents, "base64"));
+      };
       const ours =
         tip &&
         tip.parents.length === 1 &&
         tip.parents[0]?.sha === (result as JobsResult).head &&
         (tip.commit.message.trim().split("\n").pop() ?? "").startsWith(`${JOBS_TRAILER}:`) &&
-        changed.size === paths.length &&
-        paths.every((p) => changed.has(p));
+        changed.size === changes.length &&
+        changes.every(sameChange);
       if (ours) {
         o.log(`Already pushed as ${pr.headSha.slice(0, 7)}.`);
         output({ pushed: "true", commit: pr.headSha });
