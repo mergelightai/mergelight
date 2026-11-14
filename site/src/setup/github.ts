@@ -75,14 +75,18 @@ export interface WorkflowFile {
   content: string;
 }
 
-/** Only a real step counts, so a pin line someone left in a comment isn't mistaken for what runs. */
-const ACTION_USE = /^([ \t]*(?:-[ \t]+)?uses:[ \t]*)["']?mergelightai\/mergelight@([^\s#"']+)["']?(?:[ \t]*#[ \t]*(\S+))?/m;
+/**
+ * Only a real step counts, so a pin line someone left in a comment isn't mistaken for what runs. A jobs
+ * workflow also uses the push step, mergelightai/mergelight/push-jobs, which must move with the review.
+ */
+const ACTION_USE = /^([ \t]*(?:-[ \t]+)?uses:[ \t]*)["']?mergelightai\/mergelight(\/push-jobs)?@([^\s#"']+)["']?(?:[ \t]*#[ \t]*(\S+))?/m;
 /** The note in a new workflow saying why it isn't pinned, which stops being true once it is. */
-const NOT_PINNED_NOTE = /^[ \t]*# Not pinned, on purpose[^\n]*\n(?:[ \t]*#[^\n]*\n)*(?=[ \t]*(?:-[ \t]+)?uses:[ \t]*["']?mergelightai\/mergelight@)/gm;
+const NOT_PINNED_NOTE = /^[ \t]*# Not pinned, on purpose[^\n]*\n(?:[ \t]*#[^\n]*\n)*(?=[ \t]*(?:-[ \t]+)?uses:[ \t]*["']?mergelightai\/mergelight(?:\/push-jobs)?@)/gm;
 
+/** The installed version is the review step's. A push-jobs step may come first in the file, and may differ. */
 export function readInstalled(content: string): Installed | null {
-  const m = content.match(ACTION_USE);
-  return m ? { ref: m[2]!, version: m[3] ?? null, content } : null;
+  const m = [...content.matchAll(new RegExp(ACTION_USE, 'gm'))].find((use) => !use[2]);
+  return m ? { ref: m[3]!, version: m[4] ?? null, content } : null;
 }
 
 /** A moving tag like v0 gets each release by itself. Only a pinned commit has anything to update. */
@@ -96,7 +100,7 @@ const pinnedNote = (note: string) => {
 
 /** Points every use of the Action at this release's commit. The only other change is the note about pinning. */
 export function pinned(content: string, release: Release): string {
-  return content.replace(NOT_PINNED_NOTE, pinnedNote).replace(new RegExp(ACTION_USE, 'gm'), (_, before: string) => `${before}mergelightai/mergelight@${release.sha} # ${release.tag}`);
+  return content.replace(NOT_PINNED_NOTE, pinnedNote).replace(new RegExp(ACTION_USE, 'gm'), (_, before: string, step?: string) => `${before}mergelightai/mergelight${step ?? ''}@${release.sha} # ${release.tag}`);
 }
 
 export interface SetupPr {
@@ -206,7 +210,7 @@ const SETUP_BODY = [
 const SETUP_CHANGED = 'Update the Mergelight workflow';
 const updateTitle = (release: Release) => `Update Mergelight to ${release.tag}`;
 const updateBody = (release: Release, addsRefresh: boolean) =>
-  `Moves the workflow to [${release.tag}](https://github.com/mergelightai/mergelight/releases/tag/${release.tag}), pinned to its exact commit. Only that line changes.${addsRefresh ? ' It also adds a small job that keeps a ChatGPT login fresh.' : ''} This pull request reviews itself with the new version.`;
+  `Moves the workflow to [${release.tag}](https://github.com/mergelightai/mergelight/releases/tag/${release.tag}), pinned to its exact commit. Only the Mergelight version lines change.${addsRefresh ? ' It also adds a small job that keeps a ChatGPT login fresh.' : ''} This pull request reviews itself with the new version.`;
 
 const toBase64 = (text: string) => btoa(String.fromCharCode(...new TextEncoder().encode(text)));
 const fromBase64 = (text: string) => new TextDecoder().decode(Uint8Array.from(atob(text.replace(/\s/g, '')), (c) => c.charCodeAt(0)));
