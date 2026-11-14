@@ -98,7 +98,7 @@ test("the team's earlier decisions come with the answer, and one that isn't shap
 });
 
 test("an org that isn't on the dashboard gets no memories, whatever the answer holds", async () => {
-  assert.deepEqual(await fetchContext(setup(json(200, { connected: false, memories: [MEMORY] })).deps), { connected: false, memories: [], rules: [], skills: [], checks: [], writtenSkills: [] });
+  assert.deepEqual(await fetchContext(setup(json(200, { connected: false, memories: [MEMORY] })).deps), { connected: false, answered: true, memories: [], rules: [], skills: [], checks: [], writtenSkills: [] });
   // A server that is set but can't be asked is not the same as "off": the review says so.
   assert.deepEqual(await fetchContext(setup(json(500, {})).deps), { connected: false, memories: [], rules: [], skills: [], checks: [], writtenSkills: [], failed: true });
   assert.deepEqual(await fetchContext(setup(() => { throw new Error("down"); }).deps), { connected: false, memories: [], rules: [], skills: [], checks: [], writtenSkills: [], failed: true });
@@ -476,5 +476,10 @@ test("reasons given in threads go first, so marks can't crowd them out of a repo
 test("only the server's own yes says the org's plan includes Jobs", async () => {
   assert.equal((await fetchContext(setup(json(200, { connected: true, jobs: true })).deps)).jobs, true);
   for (const jobs of [false, "true", 1, undefined]) assert.equal((await fetchContext(setup(json(200, { connected: true, jobs })).deps)).jobs, false, String(jobs));
-  assert.equal((await fetchContext(setup(json(200, { connected: false, jobs: true })).deps)).jobs, undefined, "an org that isn't connected has no plan");
+  // An org given Jobs that isn't on the dashboard: nothing of the dashboard, but the grant counts.
+  const granted = await fetchContext(setup(json(200, { connected: false, jobs: true, memories: [MEMORY] })).deps);
+  assert.equal(granted.jobs, true);
+  assert.equal(granted.connected, false);
+  assert.deepEqual(granted.memories, []);
+  assert.equal((await fetchContext(setup(json(200, { connected: false, jobs: "true" })).deps)).jobs, undefined);
 });

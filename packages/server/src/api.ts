@@ -284,7 +284,8 @@ export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"
       const written = await db.query("select id, name, description, body from written_skills where repo_id = $1 order by id limit 10", [who.repoId]);
       return { memories: rows, rules: rules.rows, skills: skills.rows.map((s) => s.path as string), checks: checks.rows, written: written.rows };
     });
-    if (!found) return respond(200, { connected: false });
+    // An org given Jobs needs no dashboard data for them: the grant is said either way.
+    if (!found) return respond(200, { connected: false, ...(jobsOrgs.has(who.orgId) ? { jobs: true } : {}) });
     const rules = found.rules.map((r) => ({ id: `R${r.id}`, kind: r.kind, text: r.text, ...(r.paths.length ? { paths: r.paths } : {}), scope: r.repo_id === null ? "org" : "repo" }));
     // The most recently used ones that fit. A list too large for the client to read would cost it the whole answer.
     const memories = [];

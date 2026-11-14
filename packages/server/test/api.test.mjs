@@ -628,6 +628,10 @@ test("only an org in JOBS_ORGS is told its plan includes Jobs", async () => {
   api = createApi({ pool, publicUrl: PUBLIC_URL, fetchImpl, now: () => clock, jobsOrgs: new Set([ACME.id]) });
   assert.equal((await (await get(makeToken())).json()).jobs, true);
   assert.equal((await (await get(makeToken({ repository_owner_id: String(OTHER.id), repository_owner: OTHER.login }))).json()).jobs, false);
+  // Given Jobs without turning the dashboard on: nothing of the dashboard, but the grant is said.
+  const THIRD = { id: 3003, login: "third" };
+  api = createApi({ pool, publicUrl: PUBLIC_URL, fetchImpl, now: () => clock, jobsOrgs: new Set([THIRD.id]) });
+  assert.deepEqual(await (await get(makeToken({ repository_owner_id: String(THIRD.id), repository_owner: THIRD.login }))).json(), { connected: false, jobs: true });
 });
 
 test("JOBS_ORGS names orgs by GitHub's number, and a typo stops the start instead of meaning no orgs", () => {

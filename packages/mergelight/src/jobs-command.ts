@@ -31,11 +31,14 @@ export const JOBS_PLAN_URL = "https://mergelight.dev/dashboard/";
  * Why no job may run for this org, or null when they may. Jobs is part of a paid plan, and only the
  * org's Mergelight server can say yes: no server, no answer, or no yes, and no job runs.
  */
-export function jobsGate(ctx: CloudContext): string | null {
+export function jobsGate(ctx: CloudContext, ownRepository = true): string | null {
+  // The server's yes is for the run's own repository: GitHub signed the pass for it. Jobs for another
+  // repository don't run on it.
+  if (!ownRepository) return "Jobs run only from the repository's own workflow, so no job ran.";
   if (ctx.failed) return "The Mergelight server couldn't be asked whether your plan includes Jobs, so no job ran. The next push asks again.";
-  if (!ctx.connected) return `Jobs is part of a paid plan, and needs your org's Mergelight server: set server in the workflow. No job ran. ${JOBS_PLAN_URL}`;
-  if (!ctx.jobs) return `Your org's plan doesn't include Jobs, so no job ran. ${JOBS_PLAN_URL}`;
-  return null;
+  if (ctx.jobs === true) return null;
+  if (!ctx.answered && !ctx.connected) return `Jobs is part of a paid plan, and needs your org's Mergelight server: set server in the workflow. No job ran. ${JOBS_PLAN_URL}`;
+  return `Your org's plan doesn't include Jobs, or the org isn't set up on Mergelight's server yet, so no job ran. ${JOBS_PLAN_URL}`;
 }
 
 /**
@@ -122,7 +125,8 @@ export async function jobsCommand(ref: PrRef, o: JobsCommandOptions): Promise<nu
     const toRun = jobsToRun(jobs, ws.touchedPaths);
     if (!toRun.length) return finish({ ...empty, problems, skipped: "This pull request changes none of the files that start a job." });
     // Asked only when a job would run, so a repository without jobs never calls the server for them.
-    const closed = jobsGate(await (o.context ?? fetchContext)({ log: o.log }));
+    const ownRepository = (process.env.GITHUB_REPOSITORY ?? "").toLowerCase() === `${ref.owner}/${ref.repo}`.toLowerCase();
+    const closed = jobsGate(await (o.context ?? fetchContext)({ log: o.log }), ownRepository);
     if (closed) return finish({ ...empty, problems, notRun: closed });
     // The pull request's own links and imports are guarded too: one that makes AGENTS.md a link to a
     // file a job may change would carry the job's change into what agents read. Its jobs never count.
