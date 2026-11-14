@@ -192,6 +192,11 @@ await run('update-keeps-pending-roles', { onBase: customized(`${OLD_SHA} # v0.1.
   expect(put?.body.branch === 'mergelight-setup-old', 'updates the open pull request');
   expect(content === customized(`${RELEASE.sha} # ${RELEASE.tag}`) + roleLines, 'moves only the version lines, and keeps the change of AI waiting there');
 });
+await run('update-checks-every-file-first', { onBase: customized(`${OLD_SHA} # v0.1.0`), baseRefresh: customized(`${OLD_SHA} # v0.1.0`), prFile: customized(`${OLD_SHA} # v0.1.0`), login: true, button: 'Update to v0.2.0' }, ({ writes, after }) => {
+  // The open PR took the refresh job out, so it can't be updated: that's known before anything is written.
+  expect(writes.length === 0, 'writes nothing, not even the file it could update');
+  expect(/That didn't work/.test(after), 'and says it failed');
+});
 await run('open-pr-already-current', { prFile: withLogin.file, prRefresh: withLogin.refresh, login: true }, ({ writes, after }) => {
   expect(writes.length === 0, 'writes nothing');
   expect(/PR #5 opened/.test(after), 'reuses it');

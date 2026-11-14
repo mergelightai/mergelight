@@ -10,25 +10,35 @@ export interface Roles {
   checker: Ai;
 }
 
-/** Which AIs have a login saved as a repo secret. */
+/** Which AIs have a login the Action gets. */
 export interface Logins {
   claude: boolean;
   codex: boolean;
 }
 
-/** What the Mergelight step's `with:` sets. Null where it says nothing the Action would read as an AI. */
+/** What the Mergelight step's `with:` sets. Null where it doesn't set a plain claude or codex. */
 export interface SetRoles {
   provider: Ai | null;
   verifyWith: Ai | null;
 }
 
-const CLAUDE_SECRETS = ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'];
-const CODEX_SECRETS = ['CODEX_AUTH_JSON', 'OPENAI_API_KEY'];
+/** Each AI's login inputs: its plan's login first, then its API key. */
+export const LOGIN_INPUTS: Record<Ai, [string, string]> = {
+  codex: ['codex-auth-json', 'openai-api-key'],
+  claude: ['claude-code-oauth-token', 'anthropic-api-key'],
+};
+/** The secret each login input reads in a workflow this page can change, the one setup writes. */
+export const LOGIN_SECRET: Record<string, string> = {
+  'codex-auth-json': 'CODEX_AUTH_JSON',
+  'openai-api-key': 'OPENAI_API_KEY',
+  'claude-code-oauth-token': 'CLAUDE_CODE_OAUTH_TOKEN',
+  'anthropic-api-key': 'ANTHROPIC_API_KEY',
+};
 
-/** `codexSecret` is the workflow's own name for a ChatGPT login, from its auth-secret-name. */
-export const loginsFrom = (secretNames: string[], codexSecret = 'CODEX_AUTH_JSON'): Logins => ({
-  claude: secretNames.some((n) => CLAUDE_SECRETS.includes(n)),
-  codex: secretNames.some((n) => CODEX_SECRETS.includes(n) || n === codexSecret),
+/** Which AIs have a login, from the secrets' names, for a workflow that hands every login input its own secret. */
+export const loginsFrom = (secretNames: string[]): Logins => ({
+  claude: LOGIN_INPUTS.claude.some((input) => secretNames.includes(LOGIN_SECRET[input]!)),
+  codex: LOGIN_INPUTS.codex.some((input) => secretNames.includes(LOGIN_SECRET[input]!)),
 });
 
 export const otherAi = (ai: Ai): Ai => (ai === 'claude' ? 'codex' : 'claude');
@@ -169,19 +179,17 @@ function locate(content: string): Step | null {
   return { lines, text, usesLine, keyCol, withLine, childIndent: childIndent < 0 ? keyCol + 2 : childIndent, entries, blockEnd };
 }
 
-/** An input's value, without quotes or a comment. Null when it isn't there, and empty when it's there with nothing. */
+/** An input's value on its one line, without quotes or a comment. Null when it isn't there or goes on over more lines. */
 function readValue(step: Step, key: string): string | null {
   const entry = step.entries.find((e) => e.key === key);
-  if (!entry) return null;
-  let value = step.text[entry.start]!.replace(/^[^:]*:/, '').replace(/[ \t]+#.*$/, '').trim();
-  if (/^[|>]/.test(value)) value = step.text.slice(entry.start + 1, entry.end).join(' ').trim();
-  value = value.replace(/^(["'])(.*)\1$/, '$2').trim();
-  return value === '~' || value === 'null' ? '' : value;
+  if (!entry || entry.end !== entry.start + 1) return null;
+  const value = step.text[entry.start]!.replace(/^[^:]*:/, '').replace(/[ \t]+#.*$/, '').trim();
+  return value.replace(/^(["'])(.*)\1$/, '$2');
 }
 
-/** An AI as the Action reads it. Anything else, like an expression or nothing, is null. */
+/** An AI as the Action reads it: exactly claude or codex, which it compares as is. Anything else is null. */
 function readAi(step: Step, key: string): Ai | null {
-  const value = readValue(step, key)?.toLowerCase();
+  const value = readValue(step, key);
   return value === 'claude' || value === 'codex' ? value : null;
 }
 
@@ -191,28 +199,42 @@ export function readRoles(content: string): SetRoles | null {
   return step && { provider: readAi(step, 'provider'), verifyWith: readAi(step, 'verify-with') };
 }
 
-/** The inputs that hand each AI's login to the Action. The first is the one a login connected from a pull request goes to. */
-export const LOGIN_INPUTS: Record<Ai, [string, string]> = {
-  codex: ['codex-auth-json', 'openai-api-key'],
-  claude: ['claude-code-oauth-token', 'anthropic-api-key'],
-};
-
 /**
- * Whether the Mergelight step hands this AI a login. One still to be connected needs the input a connected login
- * goes to: any other one would never see it. Without the step, nothing is handed on.
+ * Whether the page can tell for sure who reviews and who checks, and change it. Each login input the Mergelight step
+ * has reads its own secret, the way setup writes it, there's no auth-secret-name, and provider and verify-with are
+ * left out or plain claude or codex. Anything else, like another secret, an expression or a YAML anchor, is a
+ * workflow someone set up their own way, so it's theirs to change by hand.
  */
-export function passesLogin(content: string, ai: Ai, connecting: boolean): boolean {
+export function isStandard(content: string): boolean {
   const step = locate(content);
   if (!step) return false;
-  return (connecting ? LOGIN_INPUTS[ai].slice(0, 1) : LOGIN_INPUTS[ai]).some((key) => Boolean(readValue(step, key)));
+  return step.entries.every(({ key }) => {
+    if (key === 'auth-secret-name') return false;
+    if (key === 'provider' || key === 'verify-with') return readAi(step, key) !== null;
+    const secret = LOGIN_SECRET[key];
+    return !secret || new RegExp(`^\\$\\{\\{\\s*secrets\\.${secret}\\s*\\}\\}$`, 'i').test(readValue(step, key) ?? '');
+  });
 }
 
-/** The secret that holds a ChatGPT login, as the Action reads it: auth-secret-name when it's set to a name, CODEX_AUTH_JSON otherwise. */
-export function authSecretName(content: string | null): string {
-  const step = content ? locate(content) : null;
-  const name = step ? readValue(step, 'auth-secret-name') : null;
-  return name && /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ? name : 'CODEX_AUTH_JSON';
+/** The login inputs the Mergelight step has. In a standard step each one reads its own secret. */
+export function loginInputs(content: string): string[] {
+  const step = locate(content);
+  return step ? step.entries.map((e) => e.key).filter((key) => key in LOGIN_SECRET) : [];
 }
+
+/**
+ * Which AIs have a login the Action gets: a secret that's there, read by an input the step has. Without a standard
+ * step to read, the secrets alone tell.
+ */
+export function loginsIn(content: string | null, secretNames: string[]): Logins {
+  if (!content || !isStandard(content)) return loginsFrom(secretNames);
+  const inputs = loginInputs(content);
+  const has = (ai: Ai) => LOGIN_INPUTS[ai].some((input) => inputs.includes(input) && secretNames.includes(LOGIN_SECRET[input]!));
+  return { claude: has('claude'), codex: has('codex') };
+}
+
+/** Whether the Mergelight step hands this AI a login at all: without one of its inputs, it can never review or check. */
+export const passesLogin = (content: string, ai: Ai): boolean => LOGIN_INPUTS[ai].some((input) => loginInputs(content).includes(input));
 
 /**
  * Sets these inputs in the Mergelight step's `with:`, in this order. A line that's there gets its value replaced in

@@ -93,8 +93,9 @@ async function scenario(name, start, body) {
       if (p === `/pulls/${PR.number}/files`) return json(req, [{ filename: '.github/workflows/mergelight.yml' }]);
       if (p === `/pulls/${PR.number}`) return json(req, { merged: world.merged, head: { sha: world.head } });
       if (p === `/issues/${PR.number}/comments`) return json(req, world.comments);
-      if (p === '/actions/secrets') return json(req, { secrets: world.secrets.map((name) => ({ name })) });
-      if (p === '/actions/organization-secrets') return json(req, { secrets: world.orgSecrets.map((name) => ({ name })) });
+      // A number is how GitHub answers instead of a list.
+      if (p === '/actions/secrets') return Array.isArray(world.secrets) ? json(req, { secrets: world.secrets.map((name) => ({ name })) }) : json(req, {}, world.secrets);
+      if (p === '/actions/organization-secrets') return Array.isArray(world.orgSecrets) ? json(req, { secrets: world.orgSecrets.map((name) => ({ name })) }) : json(req, {}, world.orgSecrets);
       if (p === '/contents/.github/workflows/mergelight.yml') {
         const ref = u.searchParams.get('ref');
         if (world.fileGone) return json(req, {}, 404);
@@ -223,6 +224,14 @@ await scenario('claude-only-adds-chatgpt', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'
   expect(!t.includes(CODE) && /Merge your PR first/.test(t), 'shows no code before the merge, though the run has one');
   await shot('connect-after-merge', true);
 
+  await click('button', 'Back');
+  t = await until((x) => /Mergelight is on/.test(x), 'live, after Back');
+  expect(/ChatGPT isn't connected yet\./.test(t) && /Resume/.test(t), 'offers to pick up the connection again');
+  await shot('live-resume');
+  await wait(600);
+  await click('button', 'Resume');
+  await until((x) => /Merge your PR first/.test(x), 'the step that waits for the merge, again');
+
   world.merged = true;
   t = await until((x) => x.includes(CODE), 'the code, once merged');
   expect(/Connect ChatGPT to check reviews/.test(t) && /Claude's review then starts by itself, and ChatGPT checks its findings/.test(t), 'says the login is for checking the review');
@@ -235,7 +244,7 @@ await scenario('claude-only-adds-chatgpt', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'
   world.checks.rolesha = { status: 'in_progress', conclusion: null, output: { title: 'Reviewing' } };
   t = await until((x) => /Mergelight is on/.test(x), 'back to live');
   expect(/Reviews with Claude, checked by ChatGPT/.test(t), 'Claude still reviews, now checked by ChatGPT');
-  expect(!/Merge PR #9/.test(t), 'nothing left to merge');
+  expect(!/Merge PR #9/.test(t) && !/Resume/.test(t), 'nothing left to merge or connect');
   expect(!t.includes(CODE), 'and no code is left on screen');
 });
 
@@ -349,6 +358,29 @@ await scenario('open-pr-gets-the-change', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN']
   const put = world.writes.find((w) => w.m === 'PUT');
   expect(world.writes.every((w) => w.m === 'PUT') && put?.body.branch === 'mergelight-setup-old' && put?.body.sha === 'prblob', 'adds to the pull request that changes the workflow already');
   expect(unb64(put.body.content).includes(`mergelight@${'a'.repeat(40)} # v0.2.0`) && unb64(put.body.content).includes('verify-with: codex'), 'keeps what that pull request changed, and makes this change on top');
+  const job = world.writes.find((w) => w.m === 'PUT' && w.p.endsWith('/mergelight-refresh.yml'));
+  expect(job && unb64(job.body.content).includes(`uses: mergelightai/mergelight@${'a'.repeat(40)} # v0.2.0\n`), 'the job it adds runs the version that pull request moves to, not the live one');
+});
+
+await scenario('tagged-repo-gets-a-tagged-job', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], file: TEMPLATE.replace('mergelightai/mergelight@v0', 'mergelightai/mergelight@v0.1.5') }, async ({ world, until, click, reachLive, choose }) => {
+  await reachLive();
+  await choose('Add ChatGPT');
+  await click('button', 'Open PR');
+  await until((x) => /Merge your PR first/.test(x), 'the next step');
+  const job = world.writes.find((w) => w.m === 'PUT' && w.p.endsWith('/mergelight-refresh.yml'));
+  expect(job && unb64(job.body.content).includes('uses: mergelightai/mergelight@v0.1.5\n'), 'the job runs the same tag as the review');
+});
+
+// The open pull request's workflow takes ChatGPT only through an API key, so that's the one way the page offers.
+const NAMED = TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`);
+await scenario('reused-pr-file-counts', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], file: NAMED, open: { ...PR, ref: 'mergelight-setup-old' }, branchFile: NAMED.replace('          codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}\n', '') }, async ({ page, world, until, click, reachLive, choose }) => {
+  await reachLive();
+  await choose('Add ChatGPT');
+  await click('button', 'Open PR');
+  const t = await until((x) => /Connect ChatGPT to check reviews/.test(x), 'the connect step');
+  expect(/Add a secret named OPENAI_API_KEY/.test(t), 'goes by what the pull request holds: an API key');
+  expect(!/Your plan|Enter the code|Turn on Enable device code/.test(t) && !(await offers(page, 'Claude')), 'and offers no way that workflow would never read');
+  expect(world.writes.every((w) => w.m === 'PUT'), 'on the open pull request');
 });
 
 await scenario('open-pr-into-another-branch', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], open: { ...PR, ref: 'mergelight-setup-old', base: 'staging' }, branchFile: TEMPLATE }, async ({ world, until, click, reachLive, choose }) => {
@@ -453,17 +485,37 @@ await scenario('public-repo-adds-chatgpt-checker', { isPrivate: false, secrets: 
   expect(/Reviews with Claude, checked by ChatGPT/.test(t) && !/Merge PR #9/.test(t), 'with the merged change');
 });
 
-const OWN_NAME = TEMPLATE.replace('secrets.CODEX_AUTH_JSON', 'secrets.TEAM_CODEX').replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n          auth-secret-name: TEAM_CODEX\n`);
-await scenario('public-repo-own-secret-name', { isPrivate: false, secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], file: OWN_NAME }, async ({ world, until, click, reachLive, choose }) => {
-  await reachLive();
-  await choose('Add ChatGPT');
-  await click('button', 'Open PR');
-  let t = await until((x) => /Connect ChatGPT to check reviews/.test(x), 'the connect step');
-  const command = `d=$(mktemp -d); echo 'cli_auth_credentials_store = "file"' > $d/config.toml; CODEX_HOME=$d codex login && gh secret set TEAM_CODEX --repo acme/api < $d/auth.json; rm -rf $d`;
-  expect(t.includes(command), 'the command saves the login under the name the workflow reads');
-  world.secrets.push('TEAM_CODEX');
-  t = await until((x) => /Mergelight is on/.test(x), 'live, once the login is saved under that name');
-  expect(/Merge PR #9 to review with Claude and check with ChatGPT/.test(t) && /Change/.test(t) && !/Add ChatGPT/.test(t), 'and counts ChatGPT as connected');
+const DOCS = 'https://github.com/mergelightai/mergelight/blob/main/docs/github-action.md#two-ais-one-reviews-the-other-checks';
+/** The live step's text when the page leaves the choice to the workflow, and nothing to click that changes it. */
+const readOnly = async (page, live) => !/Add ChatGPT|Add Claude/.test(live) && !(await page.evaluate(() => [...document.querySelectorAll('section[aria-label="Your AI"] button')].length)) && (await page.evaluate(() => document.querySelector('section[aria-label="Your AI"] a')?.href)) === DOCS;
+
+const OWN_NAME = TEMPLATE.replace('secrets.CODEX_AUTH_JSON', 'secrets.TEAM_CODEX').replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n          verify-with: codex\n          auth-secret-name: TEAM_CODEX\n`);
+await scenario('customized-workflow-is-read-only', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN', 'TEAM_CODEX'], file: OWN_NAME }, async ({ page, world, shot, reachLive }) => {
+  const { live } = await reachLive();
+  expect(/Reviews with Claude, checked by ChatGPT/.test(live), 'shows who reviews, which the file says in full');
+  expect(/Your workflow is customized, so you set provider and verify-with in it by hand\./.test(live), 'says why it offers no change');
+  expect(await readOnly(page, live), 'offers no change, and links to how to set them');
+  await shot('live-customized');
+  expect(world.writes.length === 0, 'writes nothing');
+});
+
+await scenario('customized-roles-unknown', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN', 'CODEX_AUTH_JSON'], file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: \${{ vars.WHO }}\n`) }, async ({ page, reachLive }) => {
+  const { live } = await reachLive();
+  expect(/Who reviews and who checks: unknown/.test(live) && !/Reviews with/.test(live), "an expression can't be read for sure, so it says so");
+  expect(/Your workflow is customized/.test(live) && (await readOnly(page, live)), 'and offers no change');
+});
+
+await scenario('org-secrets-unreadable', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], orgSecrets: 403 }, async ({ page, reachLive }) => {
+  const { live } = await reachLive();
+  expect(/Who reviews and who checks: unknown/.test(live), "the defaults depend on logins it can't see");
+  expect(/We can't read all of this repo's secrets, so we can't tell which AIs are connected\./.test(live), 'says why');
+  expect(await readOnly(page, live), 'and offers no change');
+});
+
+await scenario('repo-secrets-unreadable', { secrets: 403, file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n          verify-with: codex\n`) }, async ({ page, reachLive }) => {
+  const { live } = await reachLive();
+  expect(/Reviews with Claude, checked by ChatGPT/.test(live), 'a file that says both is still read');
+  expect(/We can't read all of this repo's secrets/.test(live) && (await readOnly(page, live)), 'but nothing is offered to change');
 });
 
 await scenario('chatgpt-only-adds-claude', { secrets: ['CODEX_AUTH_JSON'] }, async ({ page, world, until, click, shot, reachLive, choose }) => {
@@ -511,6 +563,90 @@ await scenario('checker-missed-while-it-says-so', { secrets: ['CODEX_AUTH_JSON']
   world.checks.rolesha = { status: 'in_progress', conclusion: null, output: { title: 'Reviewing' } };
   await wait(5000);
   expect(!/Mergelight is on/.test(await text()), 'also once the review is going');
+});
+
+await scenario('only-the-ways-the-workflow-takes', { secrets: ['CODEX_AUTH_JSON'], file: TEMPLATE.replace('          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n', '') }, async ({ page, until, click, reachLive, choose, shot }) => {
+  await reachLive();
+  await choose('Add Claude');
+  await click('button', 'Open PR');
+  const t = await until((x) => /Connect Claude to check reviews/.test(x), 'the connect step');
+  expect(/Add a secret named ANTHROPIC_API_KEY/.test(t), 'the workflow takes Claude through an API key, so that is the way');
+  expect(!/Your plan|claude setup-token|Open Claude|CLAUDE_CODE_OAUTH_TOKEN/.test(t) && !(await offers(page, 'ChatGPT')), "and it offers no plan login the workflow doesn't read");
+  await shot('connect-key-only');
+});
+
+await scenario('chatgpt-pending-can-resume', { secrets: ['CODEX_AUTH_JSON'] }, async ({ until, click, reachLive, choose }) => {
+  await reachLive();
+  await choose('Add Claude');
+  await click('button', 'Open PR');
+  await until((x) => /Connect Claude to check reviews/.test(x), 'the connect step');
+  await wait(600);
+  await click('button', 'Back');
+  const t = await until((x) => /Mergelight is on/.test(x), 'live, after Back');
+  expect(/Claude isn't connected yet\./.test(t) && /Resume/.test(t), 'offers to pick the connection up again');
+  await wait(600);
+  await click('button', 'Resume');
+  await until((x) => /Connect Claude to check reviews/.test(x), 'back on the connection');
+});
+
+const BEHIND = TEMPLATE.replace('mergelightai/mergelight@v0', `mergelightai/mergelight@${'b'.repeat(40)} # v0.1.0`);
+await scenario('update-pr-then-change', { secrets: ['CODEX_AUTH_JSON', 'CLAUDE_CODE_OAUTH_TOKEN'], refresh: REFRESH, file: BEHIND }, async ({ page, world, until, click }) => {
+  await page.goto(`${base}/setup/`, { waitUntil: 'networkidle2' });
+  await page.evaluate(() => sessionStorage.setItem('mergelight.setup.state', 's'));
+  await page.goto(`${base}/setup/?code=c&state=s`, { waitUntil: 'networkidle2' });
+  await until((x) => x.includes('Which repo'), 'the list');
+  await click('[role=option]', 'api');
+  await until((x) => /Update Mergelight on api/.test(x), 'the update step');
+  await wait(800);
+  await click('button', 'Update to v0.2.0');
+  let t = await until((x) => /Your PR is open/.test(x), 'the update PR');
+  expect(/Your AI/.test(t) && /Change/.test(t), 'the open update PR shows who reviews, and the change');
+  await wait(800);
+  await click('section[aria-label="Your AI"] button', 'Change');
+  await until((x) => /Choose your AI/.test(x), 'the choice');
+  await wait(800);
+  await click('[role=radiogroup][aria-label="Reviews your PRs"] label', 'Claude');
+  await wait(200);
+  await click('button', 'Open PR');
+  t = await until((x) => /Merge PR #9 to review with Claude and check with ChatGPT/.test(x), 'the change');
+  const puts = world.writes.filter((w) => w.m === 'PUT' && w.p.endsWith('/mergelight.yml'));
+  const last = unb64(puts.at(-1).body.content);
+  expect(puts.length === 2 && puts[1].body.branch === world.open.ref && last.includes(`@${SHA} # v0.2.0`) && last.includes('provider: claude'), 'lands on the update PR, on top of the update');
+});
+
+await scenario('no-change-while-an-update-opens', { secrets: ['CODEX_AUTH_JSON', 'CLAUDE_CODE_OAUTH_TOKEN'], refresh: REFRESH, file: BEHIND, slowPut: 2500 }, async ({ page, until, click, text }) => {
+  await page.goto(`${base}/setup/`, { waitUntil: 'networkidle2' });
+  await page.evaluate(() => sessionStorage.setItem('mergelight.setup.state', 's'));
+  await page.goto(`${base}/setup/?code=c&state=s`, { waitUntil: 'networkidle2' });
+  await until((x) => x.includes('Which repo'), 'the list');
+  await click('[role=option]', 'api');
+  await until((x) => /Update Mergelight on api/.test(x), 'the update step');
+  await wait(800);
+  await click('button', 'Update to v0.2.0');
+  await until((x) => /Opening your PR/.test(x), 'the update opening');
+  await click('section[aria-label="Your AI"] button', 'Change');
+  await wait(400);
+  expect(!/Choose your AI/.test(await text()), 'Change waits until the update PR is open');
+});
+
+await scenario('old-link-after-the-run-moved-on', { secrets: ['CODEX_AUTH_JSON'], comments: [{ user: { login: BOT }, body: withState(pendingSummaryBody(), undefined) }], checks: { rolesha: { status: 'in_progress', conclusion: null, output: { title: 'Reviewing' } } } }, async ({ page, until, text }) => {
+  await page.goto(`${base}/setup/?repo=acme/api&pr=9&connect=claude`, { waitUntil: 'networkidle2' });
+  const t = await until((x) => /This link has ended/.test(x), 'the ended link');
+  expect(/get a new link/.test(t), 'says how to get a new one');
+  await wait(5000);
+  expect(!/Mergelight is on/.test(await text()), 'never counts the review going on as connected');
+});
+
+await scenario('new-commit-asks-for-nothing', { secrets: ['CODEX_AUTH_JSON'], comments: [askToCheck({ url: '', code: '', claudeUrl: CLAUDE })], checks: { rolesha: waitingToCheck('Claude') } }, async ({ page, world, until }) => {
+  await page.goto(`${base}/setup/?repo=acme/api&pr=9&connect=claude`, { waitUntil: 'networkidle2' });
+  await until((x) => /Open Claude/.test(x), 'the Claude step');
+  world.comments = [{ user: { login: BOT }, body: withState(pendingSummaryBody(), undefined) }];
+  world.checks.rolesha = { status: 'in_progress', conclusion: null, output: { title: 'Reviewing' } };
+  await until((x) => /This link has ended/.test(x), 'the ended link');
+  // A new commit whose run checks without Claude, as a workflow that stopped asking for it would.
+  world.checks.newsha = { status: 'completed', conclusion: 'success', output: { title: '🟢 Safe to merge: Nothing worth fixing' } };
+  world.head = 'newsha';
+  await until((x) => /Mergelight is on/.test(x), 'live, as the new run asked for nothing');
 });
 
 await scenario('step-cant-be-found', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], file: `${TEMPLATE}  again:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: mergelightai/mergelight@v0\n` }, async ({ world, reachLive }) => {
