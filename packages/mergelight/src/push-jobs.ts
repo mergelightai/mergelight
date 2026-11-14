@@ -3,7 +3,7 @@ import { appendFileSync, readFileSync } from "node:fs";
 import { fetchPullRequest, type PrRef } from "./github.js";
 import { jobsToRun, mayChange, type Job } from "./jobs.js";
 import { GitHub } from "./publish/api.js";
-import { isBinary, isJobCommit, JOBS_TRAILER, MAX_CHANGE_BYTES, MAX_CHANGED_FILES, mirrorGit, newSecret, textOf, withoutSecrets, type JobsResult } from "./run-jobs.js";
+import { blobIsBinary, isBinary, isJobCommit, JOBS_TRAILER, MAX_CHANGE_BYTES, MAX_CHANGED_FILES, mirrorGit, newSecret, textOf, withoutSecrets, type JobsResult } from "./run-jobs.js";
 import { fetchMirror, headGuarded, jobFilesFor } from "./workspace.js";
 
 /**
@@ -267,9 +267,9 @@ export async function pushJobs(ref: PrRef, o: PushJobsOptions): Promise<number> 
     if ("why" in plan) return refuse(plan.why, 1);
     // Nor may a job delete a binary file, such as an image: checked against the head, as the jobs step does.
     for (const path of plan.deletions) {
-      const old = await git.bytes(["cat-file", "blob", `${pr.headSha}:${path}`]);
-      if (!old) throw new Error(`Couldn't read ${path} at ${pr.headSha.slice(0, 7)}.`);
-      if (isBinary(old)) return refuse(`${path} is a binary file, which a job may never delete.`, 1);
+      const binary = await blobIsBinary(git, `${pr.headSha}:${path}`);
+      if (binary === null) throw new Error(`Couldn't read ${path} at ${pr.headSha.slice(0, 7)}.`);
+      if (binary) return refuse(`${path} is a binary file, which a job may never delete.`, 1);
     }
     // The jobs step drops a job that writes a secret the file didn't have. The file it hands over is checked again.
     for (const a of plan.additions) {
@@ -282,8 +282,13 @@ export async function pushJobs(ref: PrRef, o: PushJobsOptions): Promise<number> 
         if (size.code !== 0 || !(Number(size.stdout.trim()) > 60 * 1024 * 1024)) throw new Error(`Couldn't read ${a.path} at ${pr.headSha.slice(0, 7)}.`);
         old = Buffer.alloc(0);
       }
-      // A job never writes text over a binary file, such as an image, as the jobs step checks too.
-      if (old.length && isBinary(old)) return refuse(`${a.path} is a binary file, which a job may never overwrite.`, 1);
+      // A job never writes text over a binary file, such as an image, as the jobs step checks too. Told
+      // from the file's start, so a file of any size is checked, and one that can't be is refused.
+      if (modes.get(a.path) && modes.get(a.path) !== "040000") {
+        const binary = await blobIsBinary(git, `${pr.headSha}:${a.path}`);
+        if (binary === null) throw new Error(`Couldn't read ${a.path} at ${pr.headSha.slice(0, 7)}.`);
+        if (binary) return refuse(`${a.path} is a binary file, which a job may never overwrite.`, 1);
+      }
       // Read as the text it is, so a key in a UTF-16 file is seen too.
       const secret = newSecret(textOf(a.bytes), textOf(old));
       if (secret) return refuse(`${a.path} would hold what looks like ${secret === "a key or token" ? "a key or token" : `the runner's ${secret}`}.`, 1);

@@ -309,7 +309,12 @@ export async function jobFilesFor(mirror: string, base: string, guardFor?: Job[]
   if (!guarding.length) return { jobs: [], problems: sorted, guarded: [] };
   const targets = new Set<string>();
   const folders = guardedFolders(tree.paths, guarding);
-  const inGuard = (p: string) => refusedPath(p) || [...folders, ...targets].some((t) => p === t || p.startsWith(`${t}/`));
+  // In any letter case, as a disk that ignores it opens Docs and docs as one folder: links and instruction
+  // files under either spelling are followed.
+  const inGuard = (p: string) => {
+    const f = folded(p);
+    return refusedPath(p) || [...folders, ...targets].some((t) => f === folded(t) || f.startsWith(`${folded(t)}/`));
+  };
   /**
    * A path with every link in it and in its folders followed, part by part, the way the file system does:
    * a link is followed before a ".." after it is applied. Where it ends is guarded. Null when it leaves
@@ -457,7 +462,7 @@ export async function jobFilesFor(mirror: string, base: string, guardFor?: Job[]
       }
       if (typeof end !== "string" || end === "deep") continue;
       for (const p of markdown) {
-        if (!p.startsWith(`${end}/`)) continue;
+        if (!folded(p).startsWith(`${folded(end)}/`)) continue;
         const through = `${link}/${p.slice(end.length + 1)}`;
         if (guardedLink || isInstructions(p) || refusedPath(through)) enqueue(p, [posix.dirname(through)], 0);
       }

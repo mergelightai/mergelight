@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -66,6 +66,8 @@ export interface JobsResult {
 export interface JobGit {
   run(args: string[], env?: Record<string, string>): Promise<RunResult>;
   bytes(args: string[]): Promise<Buffer | null>;
+  /** The first bytes of what git prints, at most max of them: enough to tell text from binary in a file of any size. */
+  head?(args: string[], max: number): Promise<Buffer | null>;
 }
 
 /**
@@ -83,6 +85,34 @@ export function mirrorGit(mirror: string): JobGit {
     bytes: (args) =>
       new Promise((resolve) => {
         execFile("git", [...base, ...args], { env, encoding: "buffer", maxBuffer: 64 * 1024 * 1024, timeout: 120_000 }, (err, stdout) => resolve(err ? null : stdout));
+      }),
+    head: (args, max) =>
+      new Promise((resolve) => {
+        const child = spawn("git", [...base, ...args], { env, stdio: ["ignore", "pipe", "ignore"] });
+        const chunks: Buffer[] = [];
+        let size = 0;
+        let done = false;
+        const finish = (out: Buffer | null) => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          resolve(out);
+        };
+        const timer = setTimeout(() => {
+          child.kill("SIGKILL");
+          finish(null);
+        }, 120_000);
+        child.stdout.on("data", (chunk: Buffer) => {
+          chunks.push(chunk);
+          size += chunk.length;
+          // Enough read: the rest isn't needed, however large the file is.
+          if (size >= max) {
+            child.kill("SIGKILL");
+            finish(Buffer.concat(chunks).subarray(0, max));
+          }
+        });
+        child.on("error", () => finish(null));
+        child.on("close", (code) => finish(code === 0 ? Buffer.concat(chunks) : null));
       }),
   };
 }
@@ -202,6 +232,20 @@ export function isBinary(bytes: Uint8Array): boolean {
   return bytes.subarray(0, 8000).includes(0);
 }
 
+/**
+ * Whether a file git keeps is binary, read from its start only, so a file of any size can be told: the
+ * same test as isBinary, with its size for UTF-16's whole characters. Null when git can't read it.
+ */
+export async function blobIsBinary(git: JobGit, blob: string): Promise<boolean | null> {
+  const sized = await git.run(["cat-file", "-s", blob]);
+  const size = Number(sized.stdout.trim());
+  if (sized.code !== 0 || !Number.isFinite(size)) return null;
+  const start = git.head ? await git.head(["cat-file", "blob", blob], 8002) : await git.bytes(["cat-file", "blob", blob]);
+  if (!start) return null;
+  if ((start[0] === 0xff && start[1] === 0xfe) || (start[0] === 0xfe && start[1] === 0xff)) return size % 2 !== 0 || textOf(start.subarray(0, 8000)).includes("\u0000");
+  return start.subarray(0, 8000).includes(0);
+}
+
 /** Whether the tree has something at path that isn't a folder, such as a link or a file. */
 async function notFolder(git: JobGit, tree: string, path: string): Promise<boolean> {
   const line = await must(git, ["ls-tree", "--full-tree", tree, "--", path]);
@@ -272,8 +316,8 @@ async function whyRefused(git: JobGit, job: Job, guarded: string[], headLinks: S
   for (const e of mine) {
     const shas = [...(e.status === "D" ? [] : [e.newSha]), ...(/^0+$/.test(e.oldSha) ? [] : [e.oldSha])];
     for (const sha of shas) {
-      const bytes = await git.bytes(["cat-file", "blob", sha]);
-      if (!bytes || isBinary(bytes)) {
+      // A file that can't be told is taken for binary.
+      if ((await blobIsBinary(git, sha)) !== false) {
         binary.push(e.path);
         break;
       }
