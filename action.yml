@@ -533,10 +533,12 @@ runs:
         # Only a check known to be still running: a finished verdict stands, and one that can't be read is left.
         status="$(gh api "repos/$GITHUB_REPOSITORY/check-runs/$MERGELIGHT_CHECK_RUN" --jq .status 2>/dev/null || echo unknown)"
         if [ "$status" != in_progress ] && [ "$status" != queued ]; then exit 0; fi
+        # Cancelled, not neutral: no review ran and no approval was taken back, so the check must not pass
+        # next to an approval Mergelight gave an older commit.
         gh api -X PATCH "repos/$GITHUB_REPOSITORY/check-runs/$MERGELIGHT_CHECK_RUN" \
-          -f status=completed -f conclusion=neutral \
+          -f status=completed -f conclusion=cancelled \
           -f "output[title]=Couldn't review this pull request: the run stopped first" \
-          -f "output[summary]=A step before the review failed, or the run was cancelled. The workflow log has the details. Push a commit to try again." > /dev/null \
+          -f "output[summary]=A step before the review failed, or the run was cancelled. The workflow log has the details. Push a commit, or run it again, to review." > /dev/null \
           || echo "::warning::Couldn't finish the Mergelight check."
 
     # Codex may have refreshed the login during the run. Save the new one, or the next run

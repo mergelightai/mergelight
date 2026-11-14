@@ -329,3 +329,9 @@ test("on a public repository no ChatGPT code is shown for a checker, and Claude'
   assert.equal(open.env.MERGELIGHT_USES_CODEX, "0");
   assert.equal(choose({ wanted: "codex", codex: "1", checker: "claude", visibility: "public" }).env.MERGELIGHT_CONNECT_CHECK, "claude", "Claude's link goes through mergelight.dev, where you sign in");
 });
+
+test("a check left running when the run ends is cancelled, so an older approval can't pass it", () => {
+  const step = action.slice(action.indexOf("- name: Finish a check left running"), action.indexOf("- name: Save the refreshed Codex login"));
+  assert.match(step, /conclusion=cancelled/);
+  assert.match(step, /"\$status" != in_progress \] && \[ "\$status" != queued/, "only a check known to be running");
+});
