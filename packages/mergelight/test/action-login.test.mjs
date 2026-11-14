@@ -186,15 +186,15 @@ test("with a login for both AIs, the one that doesn't review checks, and a value
 });
 
 test("a checker with no login is connected from the repository's own pull request, and nowhere else", () => {
-  const ask = choose({ claude: "1", checker: "codex" });
+  const ask = choose({ wanted: "claude", claude: "1", checker: "codex" });
   assert.equal(ask.env.MERGELIGHT_PROVIDER, "claude");
   assert.equal(ask.env.MERGELIGHT_CONNECT_CHECK, "codex");
   assert.equal(ask.env.MERGELIGHT_USES_CODEX, "1", "Codex is installed, its sandbox opened and its login asked for");
   assert.equal(ask.env.MERGELIGHT_VERIFY_FOLLOWS, "0");
   assert.equal(choose({ codex: "1", checker: "claude" }).env.MERGELIGHT_CONNECT_CHECK, "claude");
-  assert.equal(choose({ claude: "1", checker: "codex", headRepo: "stranger/widgets" }).env.MERGELIGHT_CONNECT_CHECK, "", "a fork");
-  assert.equal(choose({ claude: "1", checker: "codex", actor: "dependabot[bot]" }).env.MERGELIGHT_CONNECT_CHECK, "", "Dependabot");
-  assert.equal(choose({ claude: "1", checker: "codex", event: "schedule" }).env.MERGELIGHT_CONNECT_CHECK, "", "not a pull request");
+  assert.equal(choose({ wanted: "claude", claude: "1", checker: "codex", headRepo: "stranger/widgets" }).env.MERGELIGHT_CONNECT_CHECK, "", "a fork");
+  assert.equal(choose({ wanted: "claude", claude: "1", checker: "codex", actor: "dependabot[bot]" }).env.MERGELIGHT_CONNECT_CHECK, "", "Dependabot");
+  assert.equal(choose({ wanted: "claude", claude: "1", checker: "codex", event: "schedule" }).env.MERGELIGHT_CONNECT_CHECK, "", "not a pull request");
   // One sign-in a run: a Codex reviewer with no login connects first.
   assert.equal(choose({ checker: "claude" }).env.MERGELIGHT_CONNECT_CHECK, "");
 });
@@ -272,4 +272,19 @@ test("only the Codex login this Action set up is ever saved", () => {
   });
   assert.equal(r.status, 0, r.stderr);
   assert.equal(existsSync(asked), false, "nothing was saved");
+});
+
+test("a checker is set up only when it can check, and connecting ChatGPT never moves an automatic Claude reviewer", () => {
+  // Claude reviews only because it has the one login: asking for ChatGPT would make Codex review next time.
+  const auto = choose({ claude: "1", checker: "codex" });
+  assert.equal(auto.env.MERGELIGHT_CONNECT_CHECK, "");
+  assert.match(auto.out, /Set provider: claude in the workflow/);
+  assert.equal(auto.env.MERGELIGHT_USES_CODEX, "0", "nothing is installed for a checker that can't check");
+  // Said in the workflow, Claude stays the reviewer, so ChatGPT is asked for.
+  const said = choose({ wanted: "claude", claude: "1", checker: "codex" });
+  assert.equal(said.env.MERGELIGHT_CONNECT_CHECK, "codex");
+  assert.equal(said.env.MERGELIGHT_USES_CODEX, "1");
+  // A fork can't ask, so the checker isn't set up either.
+  assert.equal(choose({ wanted: "claude", claude: "1", checker: "codex", headRepo: "stranger/widgets" }).env.MERGELIGHT_USES_CODEX, "0");
+  assert.ok(action.indexOf("- name: Refresh the Codex login again after the sign-in") > action.indexOf("- name: Connect the checker"));
 });

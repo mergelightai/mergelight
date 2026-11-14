@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { checkWaitingTitle, CLAUDE_INPUT_MISSING, claudeInWorkflow, claudeSetupLink, connect, connectBody, connectCheckBody, connectedAccount, connectedBody, connectFailedBody, githubConnect, installAppBody, parseDeviceLogin, withState } from "../dist/connect.js";
+import { chatgptInputMissing, checkWaitingTitle, CLAUDE_INPUT_MISSING, claudeInWorkflow, claudeSetupLink, connect, connectBody, connectCheckBody, connectedAccount, connectedBody, connectFailedBody, githubConnect, installAppBody, parseDeviceLogin, withState } from "../dist/connect.js";
 import { claudeCodeRef, parseClaudeLink, parseClaudeToken, readCodeRef, readPastedCode, scriptArgs, shareClaudeToken, startClaudeSignIn, waitForPastedCode } from "../dist/connect-claude.js";
 import { isPendingSummary, PENDING_MARKER, SUMMARY_MARKER } from "../dist/publish/markdown.js";
 import { ownSummary } from "../dist/publish/publish.js";
@@ -499,4 +499,13 @@ test("Claude is asked for only where the workflow can pass its login on to later
   d.claudeUnavailable = () => CLAUDE_INPUT_MISSING;
   assert.equal(await connect(d), 1);
   assert.match(d.events.at(-1), /claude-code-oauth-token: \$\{\{ secrets\.CLAUDE_CODE_OAUTH_TOKEN \}\}/);
+});
+
+test("a checker's ChatGPT login is asked for only where the workflow passes it on, and the reason says what to add", async () => {
+  assert.equal(claudeInWorkflow("  with:\n    claude-code-oauth-token: x\n", "codex-auth-json"), "no");
+  assert.equal(claudeInWorkflow("  with:\n    codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}\n", "codex-auth-json"), "yes");
+  const d = deps([], 1);
+  d.chatgptUnavailable = () => chatgptInputMissing("MY_LOGIN");
+  assert.equal(await connect(d), 1);
+  assert.match(d.events.at(-1), /codex-auth-json: \$\{\{ secrets\.MY_LOGIN \}\}/);
 });

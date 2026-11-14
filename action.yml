@@ -181,19 +181,32 @@ runs:
         # One sign-in per run: a Codex reviewer with no login connects first, and the checker comes later.
         # Without it, the reviewer checks, and the review's summary says so.
         connect_check=""
+        checker_has=1
         if [ "$checker" != "$provider" ]; then
-          if [ "$checker" = claude ]; then has="$HAS_CLAUDE"; else has="$HAS_CODEX"; fi
+          if [ "$checker" = claude ]; then checker_has="$HAS_CLAUDE"; else checker_has="$HAS_CODEX"; fi
           if [ "$provider" = claude ]; then reviewer_has="$HAS_CLAUDE"; else reviewer_has="$HAS_CODEX"; fi
-          if [ -z "$has" ] && [ -n "$can_ask" ] && [ -n "$reviewer_has" ]; then connect_check="$checker"; fi
+          if [ -z "$checker_has" ] && [ -n "$can_ask" ] && [ -n "$reviewer_has" ]; then
+            if [ "$checker" = codex ] && [ -z "$WANTED" ]; then
+              # Claude reviews only because it has the one login: with a ChatGPT login saved too, the next
+              # run would pick Codex to review. So the sign-in waits for the workflow to say who reviews.
+              echo "::notice::Codex is set to check, but connecting ChatGPT would make Codex review from the next run on. Set provider: claude in the workflow to keep Claude reviewing, then push. This review is checked by Claude."
+            else
+              connect_check="$checker"
+            fi
+          fi
         fi
         # Left empty, a checker that is the reviewer stays the reviewer: connecting Claude in place of
         # ChatGPT further on makes Claude review, and then Claude checks too.
         follows=0
         if [ -z "$WANTED_CHECKER" ] && [ "$checker" = "$provider" ]; then follows=1; fi
+        # A checker is set up only when it can check: it has a login, or one is asked for now. Otherwise
+        # the reviewer checks, and nothing that could fail is installed for it.
+        checker_used=""
+        if [ -n "$checker_has" ] || [ -n "$connect_check" ]; then checker_used="$checker"; fi
         uses_codex=0
-        if [ "$provider" = codex ] || [ "$checker" = codex ]; then uses_codex=1; fi
+        if [ "$provider" = codex ] || [ "$checker_used" = codex ]; then uses_codex=1; fi
         uses_claude=0
-        if [ "$provider" = claude ] || [ "$checker" = claude ]; then uses_claude=1; fi
+        if [ "$provider" = claude ] || [ "$checker_used" = claude ]; then uses_claude=1; fi
         # A job can run this Action more than once, so nothing carries over from an earlier run.
         {
           echo "MERGELIGHT_PROVIDER=$provider"
@@ -374,6 +387,16 @@ runs:
         args=(connect "$GITHUB_REPOSITORY#$PR" --for check --ai "$MERGELIGHT_CONNECT_CHECK" --reviewer "$MERGELIGHT_PROVIDER")
         [ "$CAN_SAVE" = "true" ] || args+=(--no-save)
         node "$GITHUB_ACTION_PATH/packages/mergelight/dist/cli.js" "${args[@]}" || echo "::warning::Connecting the checker didn't finish, so the reviewer checks this time."
+
+    # The sign-in for the checker can take 15 minutes, which a Codex reviewer's login may not have left.
+    - name: Refresh the Codex login again after the sign-in
+      if: env.MERGELIGHT_CHATGPT == '1' && env.MERGELIGHT_CONNECT_CHECK != ''
+      shell: bash
+      env:
+        SECRETS_TOKEN: ${{ inputs.secrets-token }}
+        SECRET_NAME: ${{ inputs.auth-secret-name }}
+        TOKEN_SERVER: ${{ inputs.token-server }}
+      run: node "$GITHUB_ACTION_PATH/packages/mergelight/scripts/refresh-login.mjs"
 
     - name: Hide the new Codex login in the logs
       if: env.MERGELIGHT_CONNECT == '1' || env.MERGELIGHT_CONNECT_CHECK == 'codex'

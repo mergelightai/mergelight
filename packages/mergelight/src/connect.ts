@@ -189,6 +189,8 @@ export interface ConnectDeps {
   only?: "claude";
   /** Why Claude can't be offered, when there is a reason to tell, such as the workflow not passing its login on. */
   claudeUnavailable?: () => string | undefined;
+  /** Why ChatGPT's code isn't offered, when there is a reason to tell, such as the workflow not passing its login on. */
+  chatgptUnavailable?: () => string | undefined;
   /** Starts the Claude sign-in, when this repository can use it. Null if it can't. */
   startClaude?: () => Promise<ClaudeConnect | null>;
   /** Runs the login and resolves with its exit code. */
@@ -257,6 +259,8 @@ export async function connect(deps: ConnectDeps): Promise<number> {
         : (deps.claudeUnavailable?.() ?? "Claude's sign-in couldn't start on this run.")
       : claude
       ? "The ChatGPT code and the Claude link both ran out before anyone finished signing in."
+      : !shown && deps.chatgptUnavailable?.()
+      ? deps.chatgptUnavailable()!
       : shown
       ? `The code ran out, or OpenAI refused it. Check that "Enable device code sign-in" is on in your [ChatGPT security settings](${CHATGPT_SECURITY_URL}).`
       : `Codex couldn't start a device login. "Enable device code sign-in" may be off in your [ChatGPT security settings](${CHATGPT_SECURITY_URL}), or for your workspace.`,
@@ -293,17 +297,22 @@ export function withState(body: string, previous: string | undefined): string {
  * doesn't, so connecting Claude there would only ask again next time: "no". A workflow that calls a
  * reusable one may pass it on in a file this can't tell, and one that can't be read can't say: "unknown".
  */
-export function claudeInWorkflow(text: string | null): "yes" | "no" | "unknown" {
+export function claudeInWorkflow(text: string | null, input = "claude-code-oauth-token"): "yes" | "no" | "unknown" {
   if (text === null) return "unknown";
-  if (text.includes("claude-code-oauth-token")) return "yes";
+  if (text.includes(input)) return "yes";
   return /^\s*(?:-\s*)?uses:\s*["']?[^\s"'#]*\.github\/workflows\//m.test(text) ? "unknown" : "no";
 }
 
-async function workflowHasClaude(api: GitHub, env: NodeJS.ProcessEnv): Promise<"yes" | "no" | "unknown"> {
+async function workflowHasClaude(api: GitHub, env: NodeJS.ProcessEnv, input = "claude-code-oauth-token"): Promise<"yes" | "no" | "unknown"> {
   const [, path, ref] = (env.GITHUB_WORKFLOW_REF ?? "").match(/^[^/]+\/[^/]+\/(.+?)@(.+)$/) ?? [];
   if (!path || !ref) return "unknown";
   const text = await api.get<{ content: string }>(`contents/${path}?ref=${encodeURIComponent(env.GITHUB_SHA ?? ref)}`).then((f) => Buffer.from(f.content, "base64").toString("utf8"), () => null);
-  return claudeInWorkflow(text);
+  return claudeInWorkflow(text, input);
+}
+
+/** The same for a ChatGPT login: a workflow that doesn't pass codex-auth-json would never see one saved now. */
+export function chatgptInputMissing(secret = "CODEX_AUTH_JSON"): string {
+  return `The workflow doesn't pass a ChatGPT login to Mergelight, so one connected now would never reach a later run. Add \`codex-auth-json: \${{ secrets.${secret} }}\` under \`with:\` where the workflow uses Mergelight, then push a commit.`;
 }
 
 /** What to do when the workflow doesn't pass a Claude login on: a login saved now would never reach a later run. */
@@ -321,6 +330,7 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
   let claudeOffered = false;
   /** Why Claude isn't offered, when the workflow is the reason. */
   let claudeMissing: string | undefined;
+  let chatgptMissing: string | undefined;
   /**
    * The app's token dies if the app is removed during the login, which can wait 15 minutes. The comment
    * still has to change, or it keeps offering a dead code, and the workflow's own token can do that.
@@ -341,6 +351,7 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
   return {
     ...(onlyClaude ? { only: "claude" as const } : {}),
     claudeUnavailable: () => claudeMissing,
+    chatgptUnavailable: () => chatgptMissing,
     stopLogin: () => running?.kill("SIGTERM"),
     startClaude: async () => {
       // Connecting ChatGPT to check a Claude review offers only ChatGPT: Claude already has a login.
@@ -386,9 +397,15 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
         },
       };
     },
-    startLogin: (onOutput) =>
+    startLogin: async (onOutput) => {
       // Connecting Claude alone starts no ChatGPT sign-in.
-      onlyClaude ? Promise.resolve(1) : new Promise((resolve, reject) => {
+      if (onlyClaude) return 1;
+      // A checker's ChatGPT login is asked for only where the workflow passes it on to later runs.
+      if (checker === "codex" && (await workflowHasClaude(api, env, "codex-auth-json")) === "no") {
+        chatgptMissing = chatgptInputMissing(env.SECRET_NAME || "CODEX_AUTH_JSON");
+        return 1;
+      }
+      return new Promise<number>((resolve, reject) => {
         const child = spawn("codex", ["login", "--device-auth"], { stdio: ["ignore", "pipe", "pipe"] });
         running = child;
         const timer = setTimeout(() => child.kill("SIGTERM"), LOGIN_TIMEOUT_MS);
@@ -402,7 +419,8 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
           clearTimeout(timer);
           resolve(code ?? 1);
         });
-      }),
+      });
+    },
     showCode: async (login, claudeUrl) => {
       const setupLink = claudeSetupLink(env.GITHUB_REPOSITORY, number);
       await upsertSummary(api, number, checker ? connectCheckBody(checker, reviewer, login, runUrl, claudeUrl, setupLink) : connectBody(login, runUrl, claudeUrl, setupLink));
@@ -422,7 +440,8 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
       }
     },
     connected: async (via = "chatgpt") => {
-      await updateSummary(pendingSummaryBody());
+      // A comment that can't be updated mustn't leave the check waiting.
+      await updateSummary(pendingSummaryBody()).catch((err) => log(`Couldn't update the comment: ${err instanceof Error ? err.message : String(err)}`));
       if (checker) {
         let account: string | null = null;
         if (checker === "codex") {
