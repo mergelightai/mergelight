@@ -187,6 +187,10 @@ await run('pinned-behind', { onBase: customized(`${OLD_SHA} # v0.1.0`), login: t
   expect(/Changes that one line, and nothing else in your file/.test(before) && /Adds the small job/.test(before), 'one existing file, and says it adds the job');
   expect(/Only that line changes/.test(pull?.body.body) && /also adds a small job/.test(pull?.body.body), 'the PR says the same');
 });
+const withJobs = (use) => `${customized(use)}  push:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: mergelightai/mergelight/push-jobs@${use}\n`;
+await run('pinned-jobs-workflow', { onBase: withJobs(`${OLD_SHA} # v0.1.0`), login: true, button: 'Update to v0.2.0' }, ({ file }) => {
+  expect(file === withJobs(`${RELEASE.sha} # ${RELEASE.tag}`), 'moves the push-jobs step to the release too, and keeps its path');
+});
 await run('pinned-with-refresh-missing', { onBase: customized(`${OLD_SHA} # v0.1.0`), login: true, button: 'Update to v0.2.0' }, ({ puts, refresh }) => {
   expect(puts.length === 2, 'adds the refresh job');
   expect(refresh?.includes(`mergelight@${RELEASE.sha} # ${RELEASE.tag}`), 'pinned like the rest');

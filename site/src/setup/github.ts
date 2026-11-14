@@ -75,14 +75,17 @@ export interface WorkflowFile {
   content: string;
 }
 
-/** Only a real step counts, so a pin line someone left in a comment isn't mistaken for what runs. */
-const ACTION_USE = /^([ \t]*(?:-[ \t]+)?uses:[ \t]*)["']?mergelightai\/mergelight@([^\s#"']+)["']?(?:[ \t]*#[ \t]*(\S+))?/m;
+/**
+ * Only a real step counts, so a pin line someone left in a comment isn't mistaken for what runs. A jobs
+ * workflow also uses the push step, mergelightai/mergelight/push-jobs, which must move with the review.
+ */
+const ACTION_USE = /^([ \t]*(?:-[ \t]+)?uses:[ \t]*)["']?mergelightai\/mergelight(\/push-jobs)?@([^\s#"']+)["']?(?:[ \t]*#[ \t]*(\S+))?/m;
 /** The note in a new workflow saying why it isn't pinned, which stops being true once it is. */
-const NOT_PINNED_NOTE = /^[ \t]*# Not pinned, on purpose[^\n]*\n(?:[ \t]*#[^\n]*\n)*(?=[ \t]*(?:-[ \t]+)?uses:[ \t]*["']?mergelightai\/mergelight@)/gm;
+const NOT_PINNED_NOTE = /^[ \t]*# Not pinned, on purpose[^\n]*\n(?:[ \t]*#[^\n]*\n)*(?=[ \t]*(?:-[ \t]+)?uses:[ \t]*["']?mergelightai\/mergelight(?:\/push-jobs)?@)/gm;
 
 export function readInstalled(content: string): Installed | null {
   const m = content.match(ACTION_USE);
-  return m ? { ref: m[2]!, version: m[3] ?? null, content } : null;
+  return m ? { ref: m[3]!, version: m[4] ?? null, content } : null;
 }
 
 /** A moving tag like v0 gets each release by itself. Only a pinned commit has anything to update. */
@@ -96,7 +99,7 @@ const pinnedNote = (note: string) => {
 
 /** Points every use of the Action at this release's commit. The only other change is the note about pinning. */
 export function pinned(content: string, release: Release): string {
-  return content.replace(NOT_PINNED_NOTE, pinnedNote).replace(new RegExp(ACTION_USE, 'gm'), (_, before: string) => `${before}mergelightai/mergelight@${release.sha} # ${release.tag}`);
+  return content.replace(NOT_PINNED_NOTE, pinnedNote).replace(new RegExp(ACTION_USE, 'gm'), (_, before: string, step?: string) => `${before}mergelightai/mergelight${step ?? ''}@${release.sha} # ${release.tag}`);
 }
 
 export interface SetupPr {
