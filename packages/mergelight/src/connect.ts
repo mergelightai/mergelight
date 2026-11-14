@@ -304,9 +304,17 @@ export function claudeInWorkflow(text: string | null, input = "claude-code-oauth
   const indent = (line: string) => line.match(/^\s*/)![0].length;
   // Only this run's job: an input another job passes on doesn't reach this one.
   if (job) {
-    // The job's key, with an anchor after it or not (review: &review). One that can't be found can't be told.
-    const at = lines.findIndex((line) => new RegExp(`^\\s+["']?${job.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}["']?\\s*:\\s*(?:&[\\w-]+\\s*)?$`).test(line));
-    if (at < 0) return "unknown";
+    // The job's key, right under jobs:, with an anchor after it or not (review: &review): never a
+    // workflow input or anything else of that name. One that can't be found can't be told.
+    const jobsAt = lines.findIndex((line) => /^["']?jobs["']?\s*:\s*$/.test(line));
+    if (jobsAt < 0) return "unknown";
+    let jobsEnd = jobsAt + 1;
+    while (jobsEnd < lines.length && (!lines[jobsEnd]!.trim() || indent(lines[jobsEnd]!) > 0)) jobsEnd++;
+    const childIndent = lines.slice(jobsAt + 1, jobsEnd).find((l) => l.trim())?.match(/^\s*/)?.[0].length ?? 2;
+    const keyRe = new RegExp(`^\\s{${childIndent}}["']?${job.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}["']?\\s*:\\s*(?:&[\\w-]+\\s*)?$`);
+    const found = lines.slice(jobsAt + 1, jobsEnd).findIndex((line) => keyRe.test(line));
+    if (found < 0) return "unknown";
+    const at = jobsAt + 1 + found;
     let end = at + 1;
     while (end < lines.length && (!lines[end]!.trim() || indent(lines[end]!) > indent(lines[at]!))) end++;
     lines = lines.slice(at, end);
@@ -333,9 +341,10 @@ export function claudeInWorkflow(text: string | null, input = "claude-code-oauth
     }
     // Likewise a step that runs only on other events, such as a schedule: every event its condition names
     // with == is one a pull request never starts, so it never runs where a login is connected.
-    const named = [...condition.matchAll(/==\s*["']([\w-]+)["']/g)].map((m) => m[1]!);
+    // Only comparisons of the event's name count, never a branch's or anything else's.
+    const named = [...condition.matchAll(/event_name\s*==\s*["']([\w-]+)["']/g)].map((m) => m[1]!);
     const pullRequest = new Set(["pull_request", "pull_request_target"]);
-    if (named.length && named.every((e) => !pullRequest.has(e)) && /event_name/.test(condition)) return;
+    if (named.length && named.every((e) => !pullRequest.has(e))) return;
     steps.push(step);
   });
   // A reusable workflow or a composite action of the team's own may pass the login on in a file this
@@ -449,12 +458,12 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
       if (!onlyClaude && passes !== "yes") return null;
       const signIn = await startClaudeSignIn();
       if (!signIn) {
-        log("Claude's sign-in didn't start, so only ChatGPT is offered.");
+        log(onlyClaude ? "Claude's sign-in didn't start." : "Claude's sign-in didn't start, so only ChatGPT is offered.");
         return null;
       }
       const ref = claudeCodeRef(signIn.url);
       if (!ref) {
-        log("Claude's sign-in link wasn't the expected shape, so only ChatGPT is offered.");
+        log(onlyClaude ? "Claude's sign-in link wasn't the expected shape." : "Claude's sign-in link wasn't the expected shape, so only ChatGPT is offered.");
         signIn.stop();
         return null;
       }

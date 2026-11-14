@@ -360,7 +360,8 @@ async function main(): Promise<number> {
       onTeamChecks: (results) => (answered = results),
       jobCommit,
       onModels: (models) => {
-        naming = updatePendingSummary(api, summaryComment, models).catch((e) => {
+        // One after the other: a later name never lands before an earlier one, nor after the result.
+        naming = naming.then(() => updatePendingSummary(api, summaryComment, models)).catch((e) => {
           log(`Couldn't name the models yet: ${(e as Error).message}`);
         });
       },

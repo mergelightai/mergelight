@@ -603,3 +603,13 @@ test("a step that runs only on other events, such as a schedule, needs no login"
   const job = "jobs:\n  review:\n    steps:\n      - if: github.event_name == 'pull_request'\n        uses: mergelightai/mergelight@v0\n        with:\n          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n      - if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'\n        uses: mergelightai/mergelight@v0\n        with:\n          codex-auth-json: x\n";
   assert.equal(claudeInWorkflow(job, "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "yes");
 });
+
+test("a branch comparison isn't read as an event, and a workflow input named like the job is never taken for it", () => {
+  const step = "        uses: mergelightai/mergelight@v0\n        with:\n          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n";
+  const branch = `jobs:\n  review:\n    steps:\n      - if: github.event_name != 'schedule' && github.base_ref == 'main'\n${step}`;
+  assert.equal(claudeInWorkflow(branch, "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "yes");
+  const otherBranch = `jobs:\n  review:\n    steps:\n      - if: github.base_ref == 'main'\n        uses: mergelightai/mergelight@v0\n        with:\n          codex-auth-json: x\n      - uses: mergelightai/mergelight@v0\n        with:\n          claude-code-oauth-token: x\n`;
+  assert.equal(claudeInWorkflow(otherBranch, "claude-code-oauth-token", "review"), "no", "a step on a branch condition still runs on pull requests");
+  const input = `on:\n  workflow_dispatch:\n    inputs:\n      review:\n        type: string\njobs:\n  review:\n    steps:\n      -${step.slice(7)}`;
+  assert.equal(claudeInWorkflow(input, "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "yes");
+});
