@@ -375,8 +375,26 @@ test("the notice for saving a checker's login names the secret this workflow rea
     encoding: "utf8",
     env: { PATH: process.env.PATH, GITHUB_ENV: join(mkdtempSync(join(tmpdir(), "mergelight-secret-")), "env"), WANTED: "claude", WANTED_CHECKER: "codex", HAS_CLAUDE: "1", HAS_CODEX: "", GITHUB_EVENT_NAME: "pull_request", GITHUB_REPOSITORY: "acme/widgets", GITHUB_ACTOR: "someone", HEAD_REPO: "acme/widgets", VISIBILITY: "public", SECRET_NAME: "TEAM_CHATGPT" },
   });
-  assert.match(r.stdout, /gh secret set TEAM_CHATGPT --repo acme\/widgets < \$CODEX_HOME\/auth\.json/);
-  assert.match(r.stdout, /export CODEX_HOME=\$\(mktemp -d\); codex login/, "a login of its own, never the one the person's Codex uses");
+  assert.match(r.stdout, /gh secret set TEAM_CHATGPT --repo acme\/widgets < \$d\/auth\.json/);
+  // The command as printed, run with stand-ins: a login of its own, kept in a file even where Codex would
+  // use the keychain, saved, and then deleted. The person's own shell keeps its CODEX_HOME.
+  const command = r.stdout.match(/never the one your own Codex uses: (.*)\. This review/)[1];
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-notice-"));
+  const bin = join(dir, "bin");
+  mkdirSync(bin);
+  const saved = join(dir, "saved");
+  const homes = join(dir, "homes");
+  writeFileSync(join(bin, "codex"), `#!/usr/bin/env bash\necho "$CODEX_HOME" > "${homes}"\ngrep -q 'cli_auth_credentials_store = "file"' "$CODEX_HOME/config.toml" && echo '{"tokens":{}}' > "$CODEX_HOME/auth.json"\n`);
+  writeFileSync(join(bin, "gh"), `#!/usr/bin/env bash\necho "$*" > "${saved}.args"\ncat > "${saved}"\n`);
+  chmodSync(join(bin, "codex"), 0o755);
+  chmodSync(join(bin, "gh"), 0o755);
+  const ran = spawnSync("bash", ["-c", `${command}; echo "after=$CODEX_HOME"`], { encoding: "utf8", env: { PATH: `${bin}:${process.env.PATH}`, CODEX_HOME: "/home/me/.codex" } });
+  assert.equal(readFileSync(saved, "utf8"), '{"tokens":{}}\n', "the file the login wrote is what is saved");
+  assert.match(readFileSync(`${saved}.args`, "utf8"), /^secret set TEAM_CHATGPT --repo acme\/widgets/);
+  const home = readFileSync(homes, "utf8").trim();
+  assert.notEqual(home, "/home/me/.codex", "never the person's own Codex login");
+  assert.ok(!existsSync(home), "the login's folder is deleted once it is saved");
+  assert.match(ran.stdout, /after=\/home\/me\/\.codex/);
 });
 
 test("the jobs never get the Mergelight AI app's token, only the workflow's own, which can only read", () => {
