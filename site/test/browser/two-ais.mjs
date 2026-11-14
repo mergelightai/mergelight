@@ -311,10 +311,10 @@ await scenario('public-repo-adds-chatgpt-checker', { isPrivate: false, secrets: 
   expect(/This repo is public, so anyone who can see your PR could enter a ChatGPT code\. Next, you save the login from your own computer/.test(t), 'the choice says why the login comes from their computer');
   await click('button', 'Open PR');
   t = await until((x) => /Connect ChatGPT to check reviews/.test(x), 'the connect step');
-  const command = 'npx @mergelight/cli setup acme/api --relogin';
+  const command = `export CODEX_HOME=$(mktemp -d); printf 'cli_auth_credentials_store = "file"\\n' > "$CODEX_HOME/config.toml"; codex login; gh secret set CODEX_AUTH_JSON --repo acme/api < "$CODEX_HOME/auth.json"`;
   expect(t.includes(command), 'shows the command, with this repo filled in');
   expect(/This repo is public, so anyone who can see your PR could enter a ChatGPT code/.test(t), 'and says why');
-  expect(/close that PR/.test(t) && /merging it would undo this change/.test(t), 'warns about the extra PR the command opens');
+  expect(!/close that PR/.test(t) && /your own Codex stays signed in/.test(t), 'a login of its own, and no extra PR to close');
   expect(/Until it's saved, Claude checks its own reviews/.test(t), 'says what happens until then');
   await click('button', 'Copy');
   await until((x) => /Copied/.test(x), 'the copied label');

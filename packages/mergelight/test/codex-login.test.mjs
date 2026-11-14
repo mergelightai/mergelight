@@ -45,10 +45,30 @@ test("code that mentions a 401 isn't a login problem", async () => {
   assert.ok(!(err instanceof LoginError));
 });
 
-test("a refused API key isn't a ChatGPT login problem", async () => {
+test("a refused API key is a login problem with its own fix, not a ChatGPT one", async () => {
+  // A login error either way, so a checker's lets the reviewer check instead.
   const err = await failingCodex("unexpected status 401 Unauthorized: Incorrect API key", { chatgpt: "0" });
-  assert.ok(!(err instanceof LoginError));
-  assert.match(err.message, /Incorrect API key/);
+  assert.ok(err instanceof LoginError);
+  assert.match(err.message, /OPENAI_API_KEY|codex login/);
+  assert.doesNotMatch(err.message, /CODEX_AUTH_JSON/);
+  // In the Action, the title names the API key's kind of login.
+  const saved = process.env.MERGELIGHT_PROVIDER;
+  process.env.MERGELIGHT_PROVIDER = "claude";
+  try {
+    const inAction = await failingCodex("unexpected status 401 Unauthorized: Incorrect API key", { chatgpt: "0" });
+    assert.equal(inAction.plan, "OpenAI");
+    assert.match(inAction.message, /OPENAI_API_KEY/);
+    // A ChatGPT login says so in its own words, flag or not.
+    const chatgpt = await failingCodex("Your access token could not be refreshed", { chatgpt: "0" });
+    assert.equal(chatgpt.plan, "ChatGPT");
+  } finally {
+    if (saved === undefined) delete process.env.MERGELIGHT_PROVIDER;
+    else process.env.MERGELIGHT_PROVIDER = saved;
+  }
+  // An API key's used-up balance is a limit, so a checker's lets the reviewer check.
+  const quota = await failingCodex("unexpected status 429: insufficient_quota", { chatgpt: "0" });
+  assert.ok(quota instanceof LimitError);
+  assert.equal(quota.plan, "OpenAI");
 });
 
 test("other failures keep their own message", async () => {
@@ -118,11 +138,16 @@ async function fakeClaude(stdout, extraEnv = {}) {
 
 const refused = JSON.stringify({ type: "result", subtype: "success", is_error: true, result: "Invalid API key. Please run /login" });
 
-test("a Claude login that doesn't work becomes a clear message", async () => {
-  const { result } = await fakeClaude(refused, { MERGELIGHT_PROVIDER: "claude" });
+test("a Claude login that doesn't work becomes a clear message, whether Claude reviews or checks", async () => {
+  const { result } = await fakeClaude(refused, { MERGELIGHT_PROVIDER: "claude", GITHUB_ACTIONS: "true" });
   assert.ok(result instanceof LoginError);
   assert.match(result.message, /claude setup-token/);
   assert.match(result.message, /CLAUDE_CODE_OAUTH_TOKEN/);
+  const checking = await fakeClaude(refused, { MERGELIGHT_PROVIDER: "codex", GITHUB_ACTIONS: "true" });
+  assert.ok(checking.result instanceof LoginError, "Claude checking a Codex review");
+  const local = await fakeClaude(refused, { GITHUB_ACTIONS: "" });
+  assert.ok(local.result instanceof LoginError);
+  assert.match(local.result.message, /Run claude and log in again/);
 });
 
 test("a Claude plan that hit its limit says so, and when it comes back", async () => {
@@ -188,3 +213,11 @@ test("Codex never reads AGENTS.md from the checkout unless a run asks for it", a
   assert.doesNotMatch(allowed, /project_doc_max_bytes/);
 });
 
+
+test("a review's commands can't read the runner's command files, where a step can leave a new login", async () => {
+  const { runnerCommandFiles, sandboxArgs: rules } = await import("../dist/providers/codex.js");
+  const dirs = runnerCommandFiles({ GITHUB_ENV: "/rt/_runner_file_commands/set_env_1", GITHUB_OUTPUT: "/rt/_runner_file_commands/set_output_1" });
+  assert.deepEqual(dirs, ["/rt/_runner_file_commands"]);
+  assert.equal(rules("/h/.codex", undefined, dirs)[3], 'permissions.mergelight_review.filesystem={":root"="read","/h/.codex"="none","/rt/_runner_file_commands"="none"}');
+  assert.deepEqual(runnerCommandFiles({}), []);
+});

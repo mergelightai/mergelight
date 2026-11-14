@@ -215,6 +215,10 @@ export interface CloudContext {
   writtenSkills: WrittenSkill[];
   /** True when a server is set and it couldn't be asked. The review then says that it ran without the team's rules. */
   failed?: boolean;
+  /** The server answered this run, connected to the dashboard or not. */
+  answered?: boolean;
+  /** True when the org's plan includes Jobs. Only the server's own yes counts. */
+  jobs?: boolean;
 }
 
 const NOTHING: CloudContext = { connected: false, memories: [], rules: [], skills: [], checks: [], writtenSkills: [] };
@@ -321,10 +325,11 @@ export async function fetchContext(deps: CloudDeps = {}): Promise<CloudContext> 
       d.log(`The Mergelight server answered ${res.status}. The review runs without it.`);
       return { ...NOTHING, failed: true };
     }
-    const answer = res.answer as { connected?: unknown; memories?: unknown; rules?: unknown; skills?: unknown; checks?: unknown; written_skills?: unknown } | null;
-    if (answer?.connected !== true) return NOTHING;
+    const answer = res.answer as { connected?: unknown; memories?: unknown; rules?: unknown; skills?: unknown; checks?: unknown; written_skills?: unknown; jobs?: unknown } | null;
+    // Not on the dashboard: nothing of it, but whether the org's plan includes Jobs still counts.
+    if (answer?.connected !== true) return { ...NOTHING, answered: true, ...(answer?.jobs === true ? { jobs: true } : {}) };
     const skills = Array.isArray(answer.skills) ? answer.skills.filter(isSkillPath).slice(0, 10) : [];
-    return { connected: true, memories: readMemories(answer.memories), rules: readRules(answer.rules), skills, checks: readChecks(answer.checks), writtenSkills: readWrittenSkills(answer.written_skills) };
+    return { connected: true, answered: true, memories: readMemories(answer.memories), rules: readRules(answer.rules), skills, checks: readChecks(answer.checks), writtenSkills: readWrittenSkills(answer.written_skills), jobs: answer.jobs === true };
   } catch (err) {
     d.log(`Couldn't reach the Mergelight server (${(err as Error).message}). The review runs without it.`);
     return { ...NOTHING, failed: true };

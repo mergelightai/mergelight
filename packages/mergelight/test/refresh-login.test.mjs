@@ -51,9 +51,11 @@ test("reads when the access token expires, and copes with one it can't read", ()
 
 test("when a refresh is due", () => {
   const DAY = 24 * HOUR;
-  assert.equal(isDue("pull_request", NOW + 59 * 60_000, NOW), true, "under an hour left, so it could run out during the review");
-  assert.equal(isDue("pull_request", NOW + 61 * 60_000, NOW), false);
-  assert.equal(isDue("pull_request_target", NOW + 59 * 60_000, NOW), true);
+  // Under 2.5 hours left: it could run out during the review, and it is the window in which the jobs
+  // wait for the review to refresh it.
+  assert.equal(isDue("pull_request", NOW + 149 * 60_000, NOW), true, "could run out during the jobs and the review");
+  assert.equal(isDue("pull_request", NOW + 151 * 60_000, NOW), false);
+  assert.equal(isDue("pull_request_target", NOW + 149 * 60_000, NOW), true);
   assert.equal(isDue("pull_request", null, NOW), false, "unknown expiry: a review leaves it to Codex");
   for (const event of ["schedule", "workflow_dispatch"]) {
     assert.equal(isDue(event, NOW + 10 * DAY, NOW), true, "the job always refreshes, so it notices a dead login");
@@ -74,7 +76,8 @@ test("a due login is refreshed and saved before the review starts", async () => 
   assert.equal(await s.run(), 0);
   assert.equal(s.calls.refresh, 1);
   assert.deepEqual(s.calls.saved, ["tok"]);
-  assert.equal(readFileSync(s.envFile, "utf8"), "");
+  // A refresh that worked clears a failed one from earlier in the run.
+  assert.equal(readFileSync(s.envFile, "utf8"), "MERGELIGHT_LOGIN_LOST=0\nMERGELIGHT_LOGIN_SHORT=0\n");
 });
 
 test("the job refreshes a login with plenty of time left", async () => {
@@ -110,7 +113,7 @@ test("a failed save doesn't stop the review, and the end of the run tries again"
   const s = setup({ event: "pull_request", msLeft: HOUR / 2, saveCode: 1 });
   assert.equal(await s.run(), 0);
   assert.ok(said(s.calls, /tries again when it ends/));
-  assert.equal(readFileSync(s.envFile, "utf8"), "");
+  assert.equal(readFileSync(s.envFile, "utf8"), "MERGELIGHT_LOGIN_LOST=0\nMERGELIGHT_LOGIN_SHORT=0\n");
 });
 
 test("a review that loses the race carries on while its token still works", async () => {
@@ -118,7 +121,8 @@ test("a review that loses the race carries on while its token still works", asyn
   assert.equal(await s.run(), 0);
   assert.deepEqual(s.calls.saved, []);
   assert.ok(said(s.calls, /carries on.*30 minutes/));
-  assert.equal(readFileSync(s.envFile, "utf8"), "", "the review still runs");
+  // The review still runs, and nothing else may wait on what's left, as the checker's sign-in would.
+  assert.equal(readFileSync(s.envFile, "utf8"), "MERGELIGHT_LOGIN_SHORT=1\n");
 });
 
 test("a review that loses the race with no time left doesn't start Codex", async () => {

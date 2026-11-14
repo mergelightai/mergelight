@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { currentRepo, fetchPullRequest, parsePrRef } from "./github.js";
 import { serve } from "./mcp/server.js";
@@ -12,10 +12,13 @@ import { configuredModel, LimitError, LoginError, loginFailureMessage } from "./
 import { limitNotice, loginNotice } from "./publish/markdown.js";
 import { renderRejected, renderTerminal } from "./render.js";
 import { reviewPullRequest } from "./review.js";
+import { jobsCommand } from "./jobs-command.js";
+import { pushJobs } from "./push-jobs.js";
+import { jobsReport } from "./run-jobs.js";
 import { askForApp, connect, githubConnect } from "./connect.js";
 import { init, realInitDeps } from "./init.js";
 import { realDeps, setup } from "./setup.js";
-import type { Review, TeamCheckResult } from "./types.js";
+import type { JobsReport, Review, TeamCheckResult } from "./types.js";
 
 const HELP = `Mergelight: AI code review on the plan you already pay for.
 
@@ -27,6 +30,11 @@ Usage
   mergelight mcp                         Run the MCP server, so your coding agent can read findings
   mergelight setup <owner/repo>          Set up the GitHub Action on a repository
   mergelight connect <pr>                In the Action: connect ChatGPT from the pull request
+  mergelight jobs <pr> [--out <file>]    Run the team's jobs from .mergelight/jobs on a pull request, and
+                                         write what they changed to a file. Nothing is pushed or posted
+  mergelight push-jobs <pr> --from <file>
+                                         Check a jobs file again against the base branch, and push it as
+                                         one commit to the pull request's branch. Runs no AI
 
   <pr> is a pull request URL, owner/repo#123, or a number inside a clone.
 
@@ -45,7 +53,12 @@ Options
   --effort <level>      Reasoning effort: low, medium, high (default: high)
   --verify-with <name>  Who checks the findings: claude or codex
                         (default: claude when Claude Code is installed)
+  --verify-missed <name>
+                        The AI that was meant to check but had no login: the summary says so
   --verify-model <name> Model for the checker (default for claude: opus)
+  --jobs <file>         With --post: the file mergelight jobs wrote, for the Jobs part of the summary
+  --jobs-commit <sha>   With --jobs: the commit the push step made. It is the one reviewed
+  --jobs-why <text>     With --jobs: why the push step pushed nothing
   --keep                Keep the temporary checkout
   --by <login>          Who approved, for approve
                         With approve, --at is the commit they approved: an older one doesn't count
@@ -53,8 +66,12 @@ Options
   --skip-branches <a,b> For setup: don't review pull requests from these branches
   --relogin             For setup: log in to Codex again
   --no-pin              For setup: follow @v0 and get each release by itself, instead of pinning to the latest
+  --with-jobs           For setup: also run the team's jobs from .mergelight/jobs (see docs/jobs.md)
   --yes                 For setup: don't stop to ask whether the app is installed
   --no-save             For connect: there's nowhere to save a login, so ask for the app instead
+  --for check --ai <name> --reviewer <name>
+                        For connect: connect the AI that checks another AI's review. Nobody
+                        connecting it holds nothing up: the reviewer checks instead
   -h, --help            Show this help
 
 Reviews run on your own logged-in Codex CLI, and Claude Code if you check with it.
@@ -114,8 +131,18 @@ async function main(): Promise<number> {
       relogin: { type: "boolean" },
       pin: { type: "boolean" },
       "no-pin": { type: "boolean" },
+      "with-jobs": { type: "boolean" },
       yes: { type: "boolean" },
       "no-save": { type: "boolean" },
+      for: { type: "string" },
+      ai: { type: "string" },
+      reviewer: { type: "string" },
+      "verify-missed": { type: "string" },
+      "verify-missed-why": { type: "string" },
+      from: { type: "string" },
+      jobs: { type: "string" },
+      "jobs-commit": { type: "string" },
+      "jobs-why": { type: "string" },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -138,6 +165,7 @@ async function main(): Promise<number> {
           skipBranches: values["skip-branches"]?.split(",").map((b) => b.trim()).filter(Boolean),
           relogin: values.relogin,
           pin: !values["no-pin"],
+          jobs: values["with-jobs"],
           yes: values.yes,
         },
         realDeps(),
@@ -161,7 +189,7 @@ async function main(): Promise<number> {
     await serve();
     return 0;
   }
-  if (!["review", "post", "approve", "connect"].includes(command) || !target) {
+  if (!["review", "post", "approve", "connect", "jobs", "push-jobs"].includes(command) || !target) {
     process.stderr.write(HELP);
     return 1;
   }
@@ -177,6 +205,12 @@ async function main(): Promise<number> {
     log(`mergelight: --verify-with must be codex or claude, not "${verifyWith}"`);
     return 1;
   }
+  // The AI the team asked to check, which had no login, so the reviewer's own AI checked instead.
+  const verifyMissed = values["verify-missed"];
+  if (verifyMissed !== undefined && verifyMissed !== "codex" && verifyMissed !== "claude") {
+    log(`mergelight: --verify-missed must be codex or claude, not "${verifyMissed}"`);
+    return 1;
+  }
 
   if (command === "post") {
     const review = JSON.parse(readFileSync(target, "utf8")) as Review;
@@ -187,16 +221,71 @@ async function main(): Promise<number> {
 
   const ref = parsePrRef(target, values.repo ?? (await currentRepo()));
 
+  if (command === "jobs") {
+    const progress = progressPrinter();
+    try {
+      // A log line clears the progress line first, so the two never run together in a terminal.
+      const clearing = (line: string) => log(process.stderr.isTTY ? `\r\x1b[2K${line}` : line);
+      return await jobsCommand(ref, { provider, model: values.model, effort: values.effort, out: values.out, at: values.at, keep: values.keep, log: clearing, onProgress: progress.onProgress });
+    } catch (err) {
+      progress.stop();
+      log(`mergelight: ${err instanceof Error ? err.message : String(err)}`);
+      return 1;
+    } finally {
+      progress.stop();
+    }
+  }
+
+  if (command === "push-jobs") {
+    if (!values.from) {
+      log("push-jobs needs --from <file>, the file mergelight jobs wrote");
+      return 1;
+    }
+    try {
+      return await pushJobs(ref, { from: values.from, dryRun, log });
+    } catch (err) {
+      log(`mergelight: ${err instanceof Error ? err.message : String(err)}`);
+      return 1;
+    }
+  }
+
   if (command === "connect") {
+    // --for check: connect the AI that checks another AI's review. It never stops the review: when nobody
+    // connects it, or it can't be saved, the reviewer's own AI checks, and the review's summary says so.
+    const check = values.for === "check";
+    const ai = values.ai;
+    const reviewer = values.reviewer;
+    if (values.for !== undefined && values.for !== "check" && values.for !== "review") {
+      log(`mergelight: --for must be review or check, not "${values.for}"`);
+      return 1;
+    }
+    if (check && ((ai !== "codex" && ai !== "claude") || (reviewer !== "codex" && reviewer !== "claude") || ai === reviewer)) {
+      log("mergelight: connect --for check needs --ai and --reviewer, each codex or claude, and not the same.");
+      return 1;
+    }
+    // For a review, --ai claude offers only Claude's link: the workflow says Claude reviews, and it has no login yet.
+    if (!check && ai !== undefined && ai !== "claude") {
+      log(`mergelight: for a review, --ai can only be claude, not "${ai}"`);
+      return 1;
+    }
     try {
       const api = new GitHub(ref.owner, ref.repo, { log });
       const { headSha } = await fetchPullRequest(ref);
+      if (check) {
+        if (values["no-save"]) {
+          log(`There's nowhere to save a ${ai === "codex" ? "ChatGPT" : "Claude"} login without the Mergelight AI app, so the reviewer's own AI checks this time.`);
+          return 0;
+        }
+        await connect(githubConnect(api, ref.number, headSha, log, process.env, { purpose: "check", ai: ai as "codex" | "claude", reviewer: reviewer as "codex" | "claude" }));
+        return 0;
+      }
+      const login = ai === "claude" ? "Claude" : "ChatGPT";
       if (values["no-save"]) {
-        await askForApp(api, ref.number, headSha);
-        log("Install the Mergelight AI app: without it there's nowhere to save the ChatGPT login.");
+        await askForApp(api, ref.number, headSha, login);
+        log(`Install the Mergelight AI app: without it there's nowhere to save the ${login} login.`);
         return 1;
       }
-      return await connect(githubConnect(api, ref.number, headSha, log));
+      return await connect(githubConnect(api, ref.number, headSha, log, process.env, ai === "claude" ? { purpose: "review", ai: "claude" } : { purpose: "review" }));
     } catch (err) {
       log(`mergelight: ${err instanceof Error ? err.message : String(err)}`);
       return 1;
@@ -214,18 +303,57 @@ async function main(): Promise<number> {
 
   // review
   const api = new GitHub(ref.owner, ref.repo, { dryRun, log });
+  // What the team's jobs did just before: shown in the summary, and their commit is the one reviewed.
+  let jobs: JobsReport | null = null;
+  if (values.jobs) {
+    try {
+      jobs = jobsReport(JSON.parse(readFileSync(values.jobs, "utf8")), { commit: values["jobs-commit"], why: values["jobs-why"] });
+    } catch (err) {
+      log(`Couldn't read the jobs file, so the summary leaves the jobs out: ${(err as Error).message}`);
+    }
+  }
+  const jobCommit = jobs?.commit ? { sha: jobs.commit, jobs: jobs.outcomes.filter((o) => o.status === "changed").map((o) => o.name) } : undefined;
+  // The commit the push step names is the one to review, also when the jobs file can't be read.
+  values.at ??= jobCommit?.sha ?? (/^[0-9a-f]{40}$/.test(values["jobs-commit"] ?? "") ? values["jobs-commit"] : undefined);
   let checkRunId: number | null = null;
   let summaryComment: Awaited<ReturnType<typeof startSummary>> = null;
   /** The edit that names the models, so a result or a failure notice is always written after it. */
   let naming: Promise<void> = Promise.resolve();
+  // The jobs' commit is reviewed only while it is still the pull request's newest: a review started again
+  // later, after more pushes, reads the newest commit instead, never older code over a newer result.
+  if (values.post && values["jobs-commit"] && values.at?.toLowerCase() === values["jobs-commit"].toLowerCase()) {
+    // Read from the branch itself, which moves at once: the pull request's head can still name the
+    // commit before the jobs' for a few seconds after their push.
+    const pr = await fetchPullRequest(ref);
+    const branch = pr.headRef
+      ? await api.get<{ object: { sha: string } }>(`git/ref/heads/${pr.headRef.split("/").map(encodeURIComponent).join("/")}`).catch(() => null)
+      : null;
+    // Not told: no review, rather than one that may read older code than the newest.
+    if (!branch) throw new Error(`Couldn't read ${pr.headRef ?? "the branch"} to tell whether the jobs' commit is still the newest. Run the review again.`);
+    const newest = branch.object.sha;
+    if (newest.toLowerCase() !== values.at.toLowerCase()) {
+      log(`The jobs' commit ${values.at.slice(0, 7)} isn't the newest any more, so this review reads ${newest.slice(0, 7)}.`);
+      values.at = newest;
+    }
+  }
   let headSha = values.at ?? null;
   if (values.post) {
     headSha ??= (await fetchPullRequest(ref)).headSha;
-    checkRunId = await startCheck(api, headSha, provider ?? "codex");
+    // A connect earlier in this run left its check going: the review carries it on, so no check stands
+    // finished in between, which a branch rule could take for a review that passed.
+    const handedOver = process.env.MERGELIGHT_PROVIDER ? Number(process.env.MERGELIGHT_CHECK_RUN) || undefined : undefined;
+    // The review's own check, as soon as it exists: the Action's last step finishes it if the review is
+    // cancelled first. Only in the Action, so another review later in a workflow never takes it for its
+    // own. The connect's check stays on the list too: the last step leaves it alone once it is finished,
+    // and finishes it when closing it here failed.
+    const record = (id: number) => {
+      if (process.env.MERGELIGHT_PROVIDER && process.env.GITHUB_ENV) appendFileSync(process.env.GITHUB_ENV, `MERGELIGHT_CHECK_RUN=${[id, handedOver].filter(Boolean).join(" ")}\n`);
+    };
+    checkRunId = await startCheck(api, headSha, provider ?? "codex", handedOver, record);
     // Says which AI reviews from the start. The models' exact names follow once the first reviewer answers.
     // Without --provider the review runs on Codex, as reviewPullRequest decides.
     const firstGuess = values.model ?? (provider === "claude" ? "opus" : configuredModel());
-    summaryComment = await startSummary(api, ref.number, { reviewer: { name: provider ?? "codex", model: firstGuess ?? null } }).catch((e) => {
+    summaryComment = await startSummary(api, ref.number, { reviewer: { name: provider ?? "codex", model: firstGuess ?? null } }, process.env.MERGELIGHT_PROMPT || undefined).catch((e) => {
       log(`Couldn't post the summary yet: ${(e as Error).message}`);
       return null;
     });
@@ -240,7 +368,9 @@ async function main(): Promise<number> {
   let checksPosted = false;
   try {
     // The login step already found this login can't be refreshed, so don't send every reviewer to find out.
-    if (process.env.MERGELIGHT_LOGIN_LOST === "1") throw new LoginError(loginFailureMessage(process.env.SECRET_NAME || undefined));
+    // Only when Codex is in this review: a Claude review whose Codex checker lost its login is checked by Claude.
+    const usesCodex = (provider ?? "codex") === "codex" || verifyWith === "codex";
+    if (usesCodex && process.env.MERGELIGHT_LOGIN_LOST === "1") throw new LoginError(loginFailureMessage(process.env.SECRET_NAME || undefined));
     // Before the threads are read: a reply written after this counts as newer than this review.
     const startedAt = new Date();
     let previous = values.post ? await previousFindings(api, ref.number, headSha ?? undefined) : undefined;
@@ -253,8 +383,10 @@ async function main(): Promise<number> {
       writtenSkills: cloud.writtenSkills,
       checks: cloud.checks,
       onTeamChecks: (results) => (answered = results),
+      jobCommit,
       onModels: (models) => {
-        naming = updatePendingSummary(api, summaryComment, models).catch((e) => {
+        // One after the other: a later name never lands before an earlier one, nor after the result.
+        naming = naming.then(() => updatePendingSummary(api, summaryComment, models)).catch((e) => {
           log(`Couldn't name the models yet: ${(e as Error).message}`);
         });
       },
@@ -269,6 +401,12 @@ async function main(): Promise<number> {
       onProgress: progress.onProgress,
     });
     progress.stop();
+    if (verifyMissed && verifyMissed !== review.verifier?.name && !review.checker_missed) {
+      review.checker_missed = verifyMissed;
+      const why = values["verify-missed-why"];
+      if (why === "not-installed" || why === "login-failed") review.checker_missed_why = why;
+    }
+    if (jobs) review.jobs = { ...jobs, ...(jobs.commit ? { reviewed: review.pr.head_sha.toLowerCase() === jobs.commit.toLowerCase() } : {}) };
 
     const json = JSON.stringify(review, null, 2);
     if (values.out) writeFileSync(values.out, `${json}\n`);
@@ -317,9 +455,9 @@ async function main(): Promise<number> {
       const limit = err instanceof LimitError ? err : null;
       const title = limit ? checkLimitTitle(limit.plan) : login ? checkLoginTitle(login.plan) : undefined;
       const notice = limit ? limitNotice(limit.plan, limit.resets) : login ? loginNotice(login.plan, message) : undefined;
-      await failCheck(api, checkRunId, headSha, message, log, title).catch((e) => log(`Couldn't update the check: ${(e as Error).message}`));
+      await failCheck(api, checkRunId, headSha, message, log, title, jobs).catch((e) => log(`Couldn't update the check: ${(e as Error).message}`));
       await naming;
-      await failSummary(api, ref.number, notice).catch((e) => log(`Couldn't update the summary: ${(e as Error).message}`));
+      await failSummary(api, ref.number, notice, jobs).catch((e) => log(`Couldn't update the summary: ${(e as Error).message}`));
       // The newest commit wasn't reviewed. An approval Mergelight gave to an earlier commit must not count for this one.
       // With approvals turned off, none of Mergelight's approvals stands, this commit's included.
       await syncApproval(api, ref.number, "yellow", headSha, log, values["no-approve"] ? { why: APPROVALS_OFF } : { why: UNREVIEWED, otherCommitsOnly: true });

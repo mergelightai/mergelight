@@ -1,5 +1,5 @@
 import type { UpdateNotice } from "../update.js";
-import type { Finding, Light, Review } from "../types.js";
+import type { Finding, Light, Review, JobsReport } from "../types.js";
 import type { Handled } from "./closed.js";
 import type { Mark } from "./handled.js";
 import { encodeState, type ReviewState } from "./state.js";
@@ -16,6 +16,23 @@ const MAX_BODY = 65_000;
  * Model text goes into comments, so it must not be able to fake our hidden
  * markers or ping people.
  */
+/** Says when the AI the team asked to check had no login yet, so the reviewer's own AI checked instead. */
+export function checkerMissedLine(r: Pick<Review, "checker_missed" | "checker_missed_why" | "provider">): string | null {
+  if (!r.checker_missed || r.checker_missed === r.provider.name) return null;
+  const name = (ai: "codex" | "claude") => (ai === "codex" ? "Codex" : "Claude");
+  const login = r.checker_missed === "codex" ? "ChatGPT" : "Claude";
+  const why = {
+    "no-login": `it has no ${login} login yet`,
+    "not-installed": `${name(r.checker_missed)} couldn't be installed on this run`,
+    // Codex's could be a ChatGPT login or an OpenAI API key: the run log says which.
+    "login-failed": r.checker_missed === "codex" ? "its login didn't work" : `its ${login} login didn't work`,
+    // A plan's usage or an API key's credit: it can be either.
+    limit: "it hit its usage limit",
+    sandbox: `${name(r.checker_missed)}'s sandbox couldn't start on this runner`,
+  }[r.checker_missed_why ?? "no-login"];
+  return `⚠️ ${name(r.checker_missed)} was set to check this review, but ${why}, so ${name(r.provider.name)} checked it.`;
+}
+
 export function clean(text: string): string {
   return text
     .replace(/<!--/g, "&lt;!--")
@@ -111,6 +128,13 @@ export interface FailureNotice {
 export const loginNotice = (plan: string, reason: string): FailureNotice => ({ heading: `⚠️ Mergelight: the ${plan} login didn't work`, body: reason });
 
 export function limitNotice(plan: string, resets: string | null): FailureNotice {
+  // An API key's credit, not a plan: the fix is adding credit.
+  if (plan === "OpenAI") {
+    return { heading: "⏳ Mergelight: the OpenAI API key has no usage left", body: "This pull request wasn't reviewed, because the OpenAI API key has no usage left: its credit ran out, or its account reached its spending limit. Check both in the OpenAI account, then push a new commit, and the review runs again." };
+  }
+  if (plan === "Anthropic") {
+    return { heading: "⏳ Mergelight: the Anthropic API key has no credit left", body: "This pull request wasn't reviewed, because the Anthropic API key has no credit left. Add credit to its account, then push a new commit, and the review runs again." };
+  }
   const reason = `This pull request wasn't reviewed, because your ${plan} plan has no usage left.`;
   return {
     heading: `⏳ Mergelight: your ${plan} plan hit its limit`,
@@ -122,9 +146,11 @@ export function limitNotice(plan: string, resets: string | null): FailureNotice 
 export const FAILED_MARKER = "<!-- mergelight:failed -->";
 const GENERAL_FAILURE = ["### ⚠️ Mergelight couldn't review this pull request", "", "The Mergelight check has the reason. The next push tries again."].join("\n");
 
-export function failedSummaryBody(notice?: FailureNotice): string {
-  if (notice) return [SUMMARY_MARKER, FAILED_MARKER, `### ${notice.heading}`, "", notice.body].join("\n");
-  return [SUMMARY_MARKER, FAILED_MARKER, GENERAL_FAILURE].join("\n");
+export function failedSummaryBody(notice?: FailureNotice, jobs?: JobsReport | null): string {
+  // What the jobs did stays on the pull request when the review fails: the branch changed all the same.
+  const after = jobs ? ["", ...jobsLines(jobs)] : [];
+  if (notice) return [SUMMARY_MARKER, FAILED_MARKER, `### ${notice.heading}`, "", notice.body, ...after].join("\n");
+  return [SUMMARY_MARKER, FAILED_MARKER, GENERAL_FAILURE, ...after].join("\n");
 }
 
 /** Only at the very start, because a summary with results can quote text from the pull request. Earlier releases wrote no marker. */
@@ -241,6 +267,38 @@ export function notReadLine(list: Review["not_read"]): string | null {
   return `<sub>Not read: ${parts.join(", and ")}.</sub>`;
 }
 
+/** What the team's jobs did before this review: each job, and anything that kept their changes off the branch. */
+export function jobsLines(j: JobsReport): string[] {
+  const out = ["#### Jobs"];
+  const files = (n: number) => `${n} file${n === 1 ? "" : "s"}`;
+  for (const o of j.outcomes) {
+    const name = `**${clean(o.name)}**`;
+    const said = clean(o.summary);
+    // What the job changed while it ran: a later job can undo some of it, so only the pushed commit is the result.
+    if (o.status === "changed") out.push(`- ✅ ${name}: ${said} (changed ${files(o.files)} while it ran${j.commit ? "" : ", not pushed"})`);
+    else if (o.status === "nothing") out.push(`- ${name} changed nothing: ${said}`);
+    else if (o.status === "refused") out.push(`- ⚠️ ${name} was dropped: ${said}`);
+    else out.push(`- ⚠️ ${name} couldn't finish: ${said}`);
+  }
+  if (j.skipped) out.push(`- ⚠️ No job ran: ${clean(j.skipped)}`);
+  if (j.notRun) out.push(`- ⚠️ No job ran: ${clean(j.notRun)}`);
+  if (j.notPushed) out.push(`- ⚠️ Nothing was pushed: ${clean(j.notPushed)}`);
+  for (const p of j.problems) out.push(`- ⚠️ \`${clean(p.source).replace(/`/g, "")}\` is left out: ${clean(p.problem)}.`);
+  if (j.moreProblems) out.push(`- ⚠️ ${j.moreProblems} more job file${j.moreProblems === 1 ? " is" : "s are"} left out. The jobs step's log lists ${j.moreProblems === 1 ? "it" : "them"}.`);
+  if (j.commit) {
+    out.push(
+      "",
+      // Said to be reviewed only when this review read it; a failed review read nothing.
+      j.reviewed === true
+        ? `The jobs wrote \`${j.commit.slice(0, 7)}\` with AI, and this review read it like the rest. Pull before you push again.`
+        : j.reviewed === false
+          ? `The jobs wrote \`${j.commit.slice(0, 7)}\` with AI. This review read another commit, so that one isn't reviewed here. Pull before you push again.`
+          : `The jobs wrote \`${j.commit.slice(0, 7)}\` with AI. Pull before you push again.`,
+    );
+  }
+  return out;
+}
+
 export function summaryBody({ review: r, state, urls, marks = new Map(), handled = new Map(), update }: SummaryInput, withState = true): string {
   const light = LIGHT[r.light];
   const top = r.findings.filter((f) => f.tier === "post").sort((a, b) => (a.rank ?? 9) - (b.rank ?? 9) || rank(a) - rank(b));
@@ -251,7 +309,9 @@ export function summaryBody({ review: r, state, urls, marks = new Map(), handled
   const done = state.findings.filter((f) => dropped.includes(f) || (f.status === "gone" && handled.has(f.id)));
   const gone = state.round > 1 ? state.findings.filter((f) => f.status === "gone" && f.tier !== "hardening" && !done.includes(f)) : [];
 
-  const out: string[] = [SUMMARY_MARKER, ...(update ? updateBanner(update) : []), `### ${light.dot} Mergelight: ${light.label}`, "", clean(r.summary), "", `**${headline(r, done.length)}**`];
+  // The other AI not checking is said first, above the AI's own summary, so a cut never takes it.
+  const missed = checkerMissedLine(r);
+  const out: string[] = [SUMMARY_MARKER, ...(update ? updateBanner(update) : []), `### ${light.dot} Mergelight: ${light.label}`, "", ...(missed ? [missed, ""] : []), clean(r.summary), "", `**${headline(r, done.length)}**`];
 
   if (top.length) {
     out.push("", "#### To fix");
@@ -303,6 +363,8 @@ export function summaryBody({ review: r, state, urls, marks = new Map(), handled
 
   const unread = notReadLine(r.not_read);
   if (unread) out.push("", unread);
+
+  if (r.jobs) out.push("", ...jobsLines(r.jobs));
 
   const reviewer = modelLabel(r.provider.name, r.provider.model);
   const checker = r.verifier ? modelLabel(r.verifier.name, r.verifier.model) : reviewer;

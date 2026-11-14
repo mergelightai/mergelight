@@ -18,8 +18,12 @@ import { getAppToken } from "./app-token.mjs";
 import { maskLogin } from "./mask-login.mjs";
 
 const HOUR = 3_600_000;
-/** Longer than a review's 45 minute job limit, so Codex won't need to refresh during one. */
-const REVIEW_WITHIN = HOUR;
+/**
+ * Longer than a review's 45 minute job limit, so Codex won't need to refresh during one. And as long as
+ * the jobs wait for (action.yml): a login the jobs leave alone, as it runs out too soon, is one the
+ * review refreshes in the same run.
+ */
+export const REVIEW_WITHIN = 2.5 * HOUR;
 /**
  * A review that lost the race needs its token to outlast it, because Codex would try the used refresh
  * token in the token's last 5 minutes. Most reviews finish well inside this.
@@ -147,6 +151,8 @@ export async function refreshLogin({
   if (after?.refresh_token && after.access_token && after.access_token !== before.tokens.access_token) {
     maskLogin({ env, log });
     log("Refreshed the Codex login.");
+    // A refresh that failed earlier in this run no longer stops the review, nor holds a sign-in back.
+    if (env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, "MERGELIGHT_LOGIN_LOST=0\nMERGELIGHT_LOGIN_SHORT=0\n");
     if (save(token) !== 0) log("::warning::Couldn't save the refreshed Codex login yet. This run tries again when it ends.");
     return 0;
   }
@@ -158,6 +164,8 @@ export async function refreshLogin({
   // Probably another run refreshed it a while ago. The access token still works, so use what's left of it.
   if (expiry !== null && expiry - now() > CARRY_ON_ABOVE) {
     log(`::warning::Couldn't refresh the Codex login${reason ? ` (${reason})` : ""}, so another run may have done it already. This review carries on, since the login is good for another ${left(expiry - now())}.`);
+    // What's left is for the review: nothing else in this run may wait on it, as the checker's sign-in would.
+    if (env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, "MERGELIGHT_LOGIN_SHORT=1\n");
     return 0;
   }
   // Codex would try the same used token, once per reviewer, so don't start it.

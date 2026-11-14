@@ -917,7 +917,7 @@ function AddStep(props: {
         <Heading title={`Update Mergelight on ${name}`} sub={`It's pinned to ${details.installed?.version ?? 'an older version'}, and ${update.tag} is out.`} />
         <ul className="mt-3 divide-y divide-white/[0.06]">
           <Fact icon={<Check className="size-4" />}>Moves the pin to the exact commit of {update.tag}</Fact>
-          <Fact icon={<Check className="size-4" />}>{details.refresh ? 'Changes that one line in both files, and nothing else' : 'Changes that one line, and nothing else in your file'}</Fact>
+          <Fact icon={<Check className="size-4" />}>{details.refresh ? 'Changes only the Mergelight version lines in both files' : 'Changes only the Mergelight version lines in your file'}</Fact>
           {!details.refresh && fileCount > 1 && <Fact icon={<Check className="size-4" />}>Adds the small job that keeps a ChatGPT login fresh</Fact>}
           <Fact center icon={<LockIcon className="size-4" />}>
             <span className="flex items-center justify-between gap-3">
@@ -1324,7 +1324,8 @@ function ConnectStep({ repo, pr, status, code: found, ask = null, publicCheck = 
   const checking = forCheck && only;
   // On a public repo no code comes for a ChatGPT checker, so the login is saved from their own computer.
   const byCommand = publicCheck && billing === 'plan' && provider === 'openai';
-  const command = `npx @mergelight/cli setup ${repo.fullName} --relogin`;
+  // A login of its own in a fresh folder, never the one their own Codex uses, kept in a file so it can be read back.
+  const command = `export CODEX_HOME=$(mktemp -d); printf 'cli_auth_credentials_store = "file"\\n' > "$CODEX_HOME/config.toml"; codex login; gh secret set CODEX_AUTH_JSON --repo ${repo.fullName} < "$CODEX_HOME/auth.json"`;
   const mode = billing === 'plan' ? (provider === 'openai' ? 'chatgpt' : 'claude') : provider === 'openai' ? 'apikey' : 'anthropic';
   const [copied, setCopied] = useState<string | null>(null);
   const prUrl = pr?.url ?? `https://github.com/${repo.fullName}/pulls`;
@@ -1397,11 +1398,7 @@ function ConnectStep({ repo, pr, status, code: found, ask = null, publicCheck = 
                 {copied === command ? 'Copied' : 'Copy'}
               </button>
             </span>
-            <span className="mt-1 block text-[13.5px] text-muted [text-wrap:pretty]">It signs in to ChatGPT and saves the login in {repo.fullName.split('/')[1]}. It needs Node, the GitHub CLI and Codex on your computer.</span>
-          </Numbered>
-          <Numbered n={2}>
-            If it opens a PR with Mergelight's standard files, close that PR
-            <span className="mt-1 block text-[13.5px] text-muted [text-wrap:pretty]">You don't need it, and merging it would undo this change.</span>
+            <span className="mt-1 block text-[13.5px] text-muted [text-wrap:pretty]">It signs in to ChatGPT with a login of its own and saves it in {repo.fullName.split('/')[1]}, so your own Codex stays signed in. It needs Codex and the GitHub CLI on your computer.</span>
           </Numbered>
         </ol>
       ) : mode === 'chatgpt' ? (

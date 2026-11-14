@@ -1,6 +1,7 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { run } from "../run.js";
 import type { ModelOptions, ModelResult } from "./index.js";
 
@@ -19,14 +20,22 @@ export class LoginError extends Error {
   }
 }
 
-export type Plan = "ChatGPT" | "Claude";
+/** Whose login: a ChatGPT plan, a Claude plan, or an OpenAI API key. */
+export type Plan = "ChatGPT" | "Claude" | "OpenAI" | "Anthropic" | "Codex";
 
 /** The plan has no usage left. Nothing is broken, so the person only needs to know that and when it comes back. */
 export class LimitError extends Error {
   plan: Plan;
   resets: string | null;
   constructor(plan: Plan, resets: string | null) {
-    super(`Your ${plan} plan hit its usage limit.${resets ? ` Resets: ${resets}.` : ""}`);
+    // An API key's credit is no plan: it says so, so nobody looks for usage on a plan that has some.
+    super(
+      plan === "OpenAI"
+        ? "The OpenAI API key has no usage left: its credit ran out, or it reached its spending limit."
+        : plan === "Anthropic"
+          ? "The Anthropic API key has no credit left."
+          : `Your ${plan} plan hit its usage limit.${resets ? ` Resets: ${resets}.` : ""}`,
+    );
     this.plan = plan;
     this.resets = resets;
   }
@@ -35,11 +44,13 @@ export class LimitError extends Error {
 /** Both programs start this sentence the same way. Only pass in their own errors: code under review can say anything. */
 const LIMIT_HIT = /you['\u2019]ve hit your\b[^\n]{0,40}\blimit\b/i;
 const WHEN = "[\\w :,()+-]{1,60}";
+const API_BALANCE = /insufficient_quota|exceeded your current quota|credit balance is too low/i;
 
 /** The limit in a program's error output, if that's what the error is. Claude says "resets 9am (UTC)", Codex "try again at 3:14 PM". */
 export function limitFrom(text: string, plan: Plan): LimitError | null {
   const line = text.split("\n").find((l) => LIMIT_HIT.test(l));
-  if (!line) return null;
+  // An API key's balance used up is a limit too: OpenAI's "insufficient_quota", Anthropic's "credit balance is too low".
+  if (!line) return API_BALANCE.test(text) ? new LimitError(plan === "Claude" ? "Anthropic" : "OpenAI", null) : null;
   const resets = line.match(new RegExp(`\\bresets\\s+(${WHEN})`, "i"))?.[1]?.trim();
   if (resets) return new LimitError(plan, resets);
   const retry = line.match(new RegExp(`\\btry again at\\s+(${WHEN})`, "i"))?.[1]?.trim();
@@ -86,11 +97,239 @@ function mcpServers(config: string): string[] {
 }
 
 /**
+ * Where Codex is installed: its sandbox runs Codex's own program, and its bundled tools such as rg, from
+ * there. On a runner that is Node's tool folder, which the Linux rules don't otherwise read. It holds
+ * code, never a secret. Found from the codex on PATH; nothing when there is none.
+ */
+export function codexInstall(path = process.env.PATH ?? "", which: (manager: string) => string | null = managerWhich): string[] {
+  for (const dir of path.split(":").filter(Boolean)) {
+    let real: string;
+    try {
+      real = realpathSync(join(dir, "codex"));
+    } catch {
+      continue;
+    }
+    // A Node version manager puts a shim on PATH that starts the real codex: the manager says where that is.
+    const manager = shimManager(real);
+    if (manager) {
+      const found = which(manager);
+      if (!found) return [];
+      try {
+        real = realpathSync(found);
+      } catch {
+        return [];
+      }
+    }
+    // The npm package: <root>/bin/codex.js, with the native program in <root>/node_modules. A program on
+    // its own is read from its own folder. Never the home folder, or one that holds it.
+    const folder = /\/bin\/codex\.js$/.test(real) ? dirname(dirname(real)) : dirname(real);
+    const home = homedir();
+    if (folder === "/" || folder === home || home.startsWith(`${folder}/`)) return [];
+    return [folder];
+  }
+  return [];
+}
+
+/** The version manager whose shim this is: Volta's links to volta-shim, asdf's are scripts in its shims folder, mise's link to mise. */
+export function shimManager(real: string, env: NodeJS.ProcessEnv = process.env): string | null {
+  if (/\/volta-shim$/.test(real)) return "volta";
+  if (/\/\.?asdf[^/]*\/shims\/codex$/.test(real)) return "asdf";
+  // asdf can keep its shims anywhere ASDF_DATA_DIR says.
+  if (env.ASDF_DATA_DIR) {
+    let data = env.ASDF_DATA_DIR;
+    try {
+      data = realpathSync(data);
+    } catch {
+      // Compared as written.
+    }
+    if (real === join(data, "shims", "codex")) return "asdf";
+  }
+  if (/\/mise$/.test(real) || /\/mise\/shims\/codex$/.test(real)) return "mise";
+  return null;
+}
+
+/** Where the version manager's real codex is, or null when it can't say. */
+function managerWhich(manager: string): string | null {
+  try {
+    return execFileSync(manager, ["which", "codex"], { encoding: "utf8", timeout: 10_000 }).trim().split("\n")[0] || null;
+  } catch {
+    return null;
+  }
+}
+
+/** On Linux, the top-level folders a job's commands may read: the system and nothing else. /proc is the sandbox's own. */
+export const LINUX_KEEP = ["/usr", "/etc", "/dev", "/proc", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/nix"];
+
+/** Every top-level folder on this disk that is a real folder, not a link such as /bin to /usr/bin. */
+function topFolders(): string[] {
+  try {
+    return readdirSync("/", { withFileTypes: true })
+      .filter((d) => d.isDirectory() && !d.isSymbolicLink())
+      .map((d) => `/${d.name}`);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The folders beside a path, at each level below the folder it is carved from (its top folder unless
+ * said), to hide so that only the path itself stays readable: Linux's sandbox can't open a folder again
+ * inside one it hid, so the rest around it is hidden instead.
+ */
+export function besides(path: string, list: (dir: string) => string[] = (dir) => readdirSync(dir), from?: string): string[] | null {
+  const parts = path.split("/").filter(Boolean);
+  const out: string[] = [];
+  for (let i = from ? from.split("/").filter(Boolean).length : 1; i < parts.length; i++) {
+    const parent = `/${parts.slice(0, i).join("/")}`;
+    let names: string[];
+    try {
+      names = list(parent);
+    } catch {
+      // What's beside the path there is unknown, so it can't be hidden: the path isn't made readable.
+      return null;
+    }
+    for (const name of names) if (name !== parts[i]) out.push(`${parent}/${name}`);
+  }
+  return out;
+}
+
+/**
  * Commands Codex runs can read the whole disk but not write or reach the network. Code under review can try to
  * steer them, so the folder with the login is taken out of what they can read. Codex itself still reads it.
+ * For a job, they may also write in the one folder the job works in, and nowhere else.
  */
-export function sandboxArgs(home = codexHome()): string[] {
-  return ["-c", 'default_permissions="mergelight_review"', "-c", `permissions.mergelight_review.filesystem={":root"="read",${JSON.stringify(home)}="none"}`];
+export function sandboxArgs(home = codexHome(), writable?: string, hidden: string[] = [], readable: string[] = [], platform: NodeJS.Platform = process.platform, top: string[] = platform === "linux" ? topFolders() : [], list?: (dir: string) => string[]): string[] {
+  if (writable) {
+    // A job's files get pushed, so its commands mustn't reach secrets or other code. On Linux, where
+    // runners are, every top-level folder but the system's is hidden, whatever the runner's layout: home
+    // folders, /root, /opt, /var, /run, /tmp and any runner folder. The links at the top, such as /bin,
+    // stay and lead into /usr. On a Mac, whose system needs more, the disk stays readable but the places
+    // secrets live are hidden. Either way the job's folder is the one place it can write, and the more
+    // specific rule wins. A rule inside a hidden folder is left out, as Linux's sandbox can't make one.
+    // The job's folder inside the hidden /tmp is fine: a write rule opens it there, tried on a GitHub-hosted
+    // Ubuntu runner and in a Linux container. A read rule doesn't, so a readable folder is handled below.
+    const linux = platform === "linux";
+    const holds = (outer: string, p: string) => p.startsWith(`${outer}/`);
+    const secret = [...hidden, home];
+    const tops = (p: string) => `/${p.split("/").filter(Boolean)[0] ?? ""}`;
+    // On Linux a folder that must stay readable, such as Codex's own in /opt, is carved from the highest
+    // hidden folder that holds it: the folders beside its path are hidden instead, level by level. That is
+    // its top folder, unless the top is the system's, or a place to hide above it, such as a self-hosted
+    // runner installed under /usr with Codex in its tool folder. One whose surroundings can't be listed
+    // isn't readable at all. Nor is one that is, or holds, a place to hide: it would open that place up.
+    const carves = new Map<string, string[]>();
+    for (const r of readable) {
+      if (secret.some((h) => h === r || holds(r, h))) continue;
+      if (!linux) {
+        carves.set(r, []);
+        continue;
+      }
+      const from = [...(LINUX_KEEP.includes(tops(r)) ? [] : [tops(r)]), ...secret.filter((h) => holds(h, r))].sort((x, y) => x.length - y.length)[0];
+      const around = from ? besides(r, list, from) : [];
+      if (around) carves.set(r, around);
+    }
+    const open = [...carves.keys()];
+    const keepTops = new Set(open.map(tops));
+    const off = linux ? top.filter((t) => !LINUX_KEEP.includes(t) && !keepTops.has(t)) : [];
+    // Nothing that leads to a readable folder is hidden.
+    const carved = [...carves.values()].flat().filter((c) => !open.some((r) => r === c || holds(c, r)));
+    const inside = (p: string) => [...off, ...carved].some((t) => p === t || holds(t, p));
+    const paths: [string, string][] = [
+      [":root", "read"],
+      ...off.map((t): [string, string] => [t, "none"]),
+      ...carved.map((c): [string, string] => [c, "none"]),
+      // On Linux a hidden folder can't hold a readable one, so one that does is opened up and carved instead.
+      ...secret.filter((h) => !inside(h) && (!linux || !open.some((r) => holds(h, r)))).map((h): [string, string] => [h, "none"]),
+      ...(linux ? [] : open.map((r): [string, string] => [r, "read"])),
+      [writable, "write"],
+    ];
+    // One rule for each path: a table with the same key twice stops Codex. A later rule is the more
+    // specific one (the job's own folder last), so it wins.
+    const rules = new Map(paths);
+    return ["-c", 'default_permissions="mergelight_job"', "-c", `permissions.mergelight_job.filesystem={${[...rules].map(([path, access]) => `${JSON.stringify(path)}="${access}"`).join(",")}}`];
+  }
+  // A review reads the disk but not the login, nor the hidden places it is given, such as the runner's
+  // command files, where an earlier step can leave a login it just connected for later steps.
+  const rules = new Map<string, string>([[":root", "read"], [home, "none"], ...hidden.map((h): [string, string] => [h, "none"])]);
+  return ["-c", 'default_permissions="mergelight_review"', "-c", `permissions.mergelight_review.filesystem={${[...rules].map(([path, access]) => `${JSON.stringify(path)}="${access}"`).join(",")}}`];
+}
+
+/**
+ * The folders of the runner's command files: GITHUB_ENV and the others. Steps pass values on to later
+ * ones through them, such as a Claude login just connected, and GitHub keeps the files until the job ends.
+ */
+export function runnerCommandFiles(env: NodeJS.ProcessEnv = process.env): string[] {
+  const dirs = [env.GITHUB_ENV, env.GITHUB_OUTPUT, env.GITHUB_STATE, env.GITHUB_PATH, env.GITHUB_STEP_SUMMARY].filter((p): p is string => Boolean(p)).map(dirname);
+  const real = dirs.map((d) => {
+    try {
+      return realpathSync(d);
+    } catch {
+      return d;
+    }
+  });
+  return [...new Set([...dirs, ...real])].filter((d) => d !== "/" && d !== ".");
+}
+
+/**
+ * Folders a job's commands may not read: where secrets and other code live, such as other repositories'
+ * checkouts in the temp folder. Each is hidden even when the job's folder sits inside it: the job's own
+ * folder gets a more specific rule. Both the path and where it really is, as macOS links /tmp.
+ */
+export function jobHidden(env: NodeJS.ProcessEnv = process.env, install: string | null = runnerInstall()): string[] {
+  // A self-hosted runner keeps its credentials in its install folder and other repositories' checkouts
+  // next to this one in _work: RUNNER_WORKSPACE is <install>/_work/<repository>.
+  const work = env.RUNNER_WORKSPACE ? dirname(env.RUNNER_WORKSPACE) : undefined;
+  const workParent = work ? dirname(work) : undefined;
+  // Anything but the disk's root itself: /runner and /_work are common install and work folders.
+  const deepEnough = (p: string | undefined) => (p && p.split("/").filter(Boolean).length >= 1 ? p : undefined);
+  // Credential files other tools are told about, wherever they are.
+  const named = [env.KUBECONFIG, env.GOOGLE_APPLICATION_CREDENTIALS, env.AWS_SHARED_CREDENTIALS_FILE, env.AWS_CONFIG_FILE, env.GH_CONFIG_DIR, env.DOCKER_CONFIG, env.AZURE_CONFIG_DIR].flatMap((v) => v?.split(":") ?? []);
+  // Never a folder the system's own tools are in, such as /usr for a runner installed right there: hiding
+  // it would leave a job without bash. The runner's own files there are hidden by name instead.
+  const system = (p: string) => LINUX_KEEP.includes(p.replace(/\/+$/, ""));
+  const runnerFiles = install && system(install) ? [".credentials", ".credentials_rsaparams", ".runner", ".env", ".path", "_work", "_diag"].map((f) => join(install, f)) : [];
+  // Only the runner's install folder is let go when it is a system one: a credential file or folder a
+  // tool is pointed at stays hidden wherever it is.
+  const runnerPlace = install && !system(install) ? deepEnough(install) : undefined;
+  // The work folders worked out from where the runner keeps checkouts are let go when they are system folders too.
+  const inferred = (p: string | undefined) => (p && !system(p) ? deepEnough(p) : undefined);
+  const places = [inferred(homedir()), inferred(dirname(homedir())), "/root", "/run/secrets", "/var/run/secrets", env.MERGELIGHT_CACHE, env.RUNNER_TEMP, env.GITHUB_WORKSPACE, inferred(work), inferred(workParent), runnerPlace, ...named, tmpdir(), "/tmp", ...runnerFiles].filter((p): p is string => typeof p === "string" && p !== "" && p !== "/");
+  const real = places.map((p) => {
+    try {
+      return realpathSync(p);
+    } catch {
+      return p;
+    }
+  });
+  return [...new Set([...places, ...real])];
+}
+
+/**
+ * The folder the GitHub runner is installed in, found from the running processes: one above this one is
+ * <install>/bin/Runner.Worker. Its credentials are there, wherever its work folder was set. Null outside
+ * a runner, or when the processes can't be read.
+ */
+export function runnerInstall(ps: (pid: number) => string | null = psLine, start = process.ppid): string | null {
+  let pid = start;
+  for (let i = 0; i < 30 && pid > 1; i++) {
+    const line = ps(pid) ?? "";
+    const m = /^\s*(\d+)\s/.exec(line);
+    if (!m) return null;
+    // The program's path may hold spaces, so it is found by its ending, not as the first word.
+    const exe = /^\s*\d+\s+(.*?\/bin\/Runner\.(?:Worker|Listener))(?:\s|$)/.exec(line)?.[1];
+    if (exe) return dirname(dirname(exe));
+    pid = Number(m[1]);
+  }
+  return null;
+}
+
+/** One process's parent and command line, as ps prints them. */
+function psLine(pid: number): string | null {
+  try {
+    return execFileSync("ps", ["-o", "ppid=,command=", "-p", String(pid)], { encoding: "utf8", timeout: 5_000 }).trim();
+  } catch {
+    return null;
+  }
 }
 
 /** Tokens the runner holds that a reviewing agent has no use for. It only needs its own login. */
@@ -156,6 +395,8 @@ export async function withoutProjectDocs(has: Promise<Set<string>> = codexFeatur
  * Everything else (provider, model, login) is the user's own Codex setup.
  */
 export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
+  // A run whose time is up never starts: its kill timer would only fire after the job was given up.
+  if (opts.deadline && opts.deadline <= Date.now()) throw new Error("there was no time left to start the AI");
   const config = readUserConfig();
   const work = mkdtempSync(join(tmpdir(), "mergelight-codex-"));
   const schemaFile = join(work, "schema.json");
@@ -164,7 +405,10 @@ export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
 
   const args = [
     "exec",
-    ...sandboxArgs(),
+    ...sandboxArgs(codexHome(), opts.edit ? opts.cwd : undefined, opts.edit ? jobHidden() : runnerCommandFiles(), opts.edit ? [...(opts.readDirs ?? []), ...codexInstall()] : []),
+    // A job's commands get only the core variables (PATH, HOME and the like), never the runner's own,
+    // such as a database password: what they print can end up in a file that gets pushed.
+    ...(opts.edit ? ["-c", 'shell_environment_policy.inherit="core"'] : []),
     "--ephemeral",
     "--skip-git-repo-check",
     "--json",
@@ -233,7 +477,7 @@ export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
   try {
     const result = await run("codex", args, {
       input: opts.prompt,
-      timeoutMs: opts.timeoutMs ?? 25 * 60_000,
+      timeoutMs: opts.deadline ? Math.max(1, opts.deadline - Date.now()) : (opts.timeoutMs ?? 25 * 60_000),
       onStdout,
       env: codexEnv(),
     });
@@ -245,9 +489,20 @@ export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
       const tail = scrubSecrets((result.stderr || result.stdout).trim().split("\n").slice(-6).join("\n"));
       const limit = limitFrom(`${result.stderr}\n${failures.join("\n")}`, "ChatGPT");
       if (limit) throw limit;
-      // Only a ChatGPT login: a refused API key has a different fix.
-      if (process.env.MERGELIGHT_CHATGPT === "1" && LOGIN_FAILURE.test(`${result.stderr}\n${failures.join("\n")}`)) {
-        throw new LoginError(loginFailureMessage(process.env.SECRET_NAME || undefined));
+      // A refused login, whether Codex reviews or checks: a checker's lets the reviewer check instead
+      // (review.ts). Each kind of login has its own fix.
+      if (LOGIN_FAILURE.test(`${result.stderr}\n${failures.join("\n")}`)) {
+        // A ChatGPT login says so in its own words: one that couldn't be refreshed. In the Mergelight
+        // Action, one that isn't ChatGPT's is an OpenAI API key, and the title says so. Elsewhere it can't
+        // be told, so the advice fits both.
+        const text = `${result.stderr}\n${failures.join("\n")}`;
+        // The Action sets these: a run started elsewhere gets advice for a login of its own.
+        const inAction = Boolean(process.env.MERGELIGHT_PROVIDER) || process.env.MERGELIGHT_CHATGPT === "1";
+        const chatgpt = process.env.MERGELIGHT_CHATGPT === "1" || /access token could not be refreshed/i.test(text);
+        const apiKey = /incorrect api key|invalid_api_key|invalid api key/i.test(text) || (inAction && !chatgpt);
+        if (chatgpt) throw new LoginError(inAction ? loginFailureMessage(process.env.SECRET_NAME || undefined) : "Codex's ChatGPT login couldn't be refreshed. Run codex login and sign in again.");
+        if (apiKey) throw new LoginError(inAction ? "The OpenAI API key didn't work. Check the OPENAI_API_KEY secret." : "OpenAI rejected the API key Codex uses. Replace it, or run codex login to sign in with ChatGPT.", "OpenAI");
+        throw new LoginError("Codex's login didn't work: run codex login and sign in again, or check the OpenAI API key it uses.", "Codex");
       }
       throw new Error(`Codex exited with code ${result.code}.${opts.logFile ? ` Log: ${opts.logFile}` : ""}\n${tail}`);
     }

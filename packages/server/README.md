@@ -152,6 +152,8 @@ gh api users/<login> --jq .id
 DATABASE_URL=postgres://... node dist/admin.js connect <github-account-id> <login>
 ```
 
+Jobs (see [docs/jobs.md](../../docs/jobs.md)) is part of a paid plan. Until payments exist, `JOBS_ORGS` on the server lists the orgs whose plan includes it, as GitHub account ids with commas between them. A jobs run asks the server before it runs any job, and runs none for an org that isn't listed. Taking an org out of the list turns its jobs off at the next start. An entry that isn't an id stops the start.
+
 Then set the Action's input in the workflow:
 
 ```yaml

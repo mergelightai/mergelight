@@ -43,16 +43,23 @@ export async function claudeAvailable(): Promise<boolean> {
 
 /**
  * Runs the user's own logged-in Claude Code CLI, headless.
- * Only Read, Grep and Glob are available, confined to the checkout (--restricted).
+ * Only Read, Grep and Glob are available, confined to the checkout (--restricted). A job also gets Edit
+ * and Write, confined the same way.
  * Plugins, hooks, MCP servers, skills and CLAUDE.md auto-loading are off (--safe-mode),
  * and anything that would ask for permission is denied. Login and plan are the user's own.
  */
 export async function runClaude(opts: ModelOptions): Promise<ModelResult> {
+  // A run whose time is up never starts: its kill timer would only fire after the job was given up.
+  if (opts.deadline && opts.deadline <= Date.now()) throw new Error("there was no time left to start the AI");
   const args = [
     "-p",
     "--output-format", "json",
     "--json-schema", JSON.stringify(opts.schema),
-    "--tools", TOOLS,
+    // A job may edit files in its folder: --restricted keeps the file tools inside it, and acceptEdits lets
+    // them write there without a prompt that nobody could answer.
+    "--tools", opts.edit ? `${TOOLS},Edit,Write` : TOOLS,
+    ...(opts.edit ? ["--permission-mode", "acceptEdits"] : []),
+    ...(opts.readDirs ?? []).flatMap((dir) => ["--add-dir", dir]),
     "--restricted",
     "--safe-mode",
     "--strict-mcp-config",
@@ -65,11 +72,24 @@ export async function runClaude(opts: ModelOptions): Promise<ModelResult> {
   const result = await run("claude", args, {
     cwd: opts.cwd,
     input: opts.prompt,
-    timeoutMs: opts.timeoutMs ?? 25 * 60_000,
+    timeoutMs: opts.deadline ? Math.max(1, opts.deadline - Date.now()) : (opts.timeoutMs ?? 25 * 60_000),
     env: claudeEnv(),
   });
   const checkLogin = (text: string) => {
-    if (process.env.MERGELIGHT_PROVIDER === "claude" && LOGIN_FAILURE.test(text)) throw new LoginError(claudeLoginMessage(), "Claude");
+    // A rejected login is said plainly, whether Claude reviews or checks, and a checker's lets the reviewer
+    // check instead (review.ts). In the Action the login is the repository's secret; elsewhere, your own.
+    if (LOGIN_FAILURE.test(text)) {
+      // Claude Code uses a plan's token before an API key (claudeEnv), and either before its own login.
+      // Unsetting the plan's token makes an API key set next to it the login, billed per use: say so.
+      const local = process.env.CLAUDE_CODE_OAUTH_TOKEN
+        ? process.env.ANTHROPIC_API_KEY
+          ? "Claude rejected the CLAUDE_CODE_OAUTH_TOKEN set here. Replace it with a new one from claude setup-token. Unsetting it would use the ANTHROPIC_API_KEY set here instead, billed per use."
+          : "Claude rejected the CLAUDE_CODE_OAUTH_TOKEN set here. Replace it with a new one from claude setup-token, or unset it to use Claude Code's own login."
+        : process.env.ANTHROPIC_API_KEY
+          ? "Claude rejected the ANTHROPIC_API_KEY set here. Replace it, or unset it to use Claude Code's own login."
+          : "Claude Code's login didn't work. Run claude and log in again.";
+      throw new LoginError(process.env.GITHUB_ACTIONS === "true" ? claudeLoginMessage() : local, "Claude");
+    }
   };
   if (opts.logFile) {
     mkdirSync(join(opts.logFile, ".."), { recursive: true });

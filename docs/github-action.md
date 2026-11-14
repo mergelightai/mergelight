@@ -20,6 +20,17 @@ If the review itself can't run, for example because the login expired, the check
 | **Claude plan** (`claude-code-oauth-token`) | Any | Your Claude plan |
 | **Anthropic API key** (`anthropic-api-key`) | Any | Billed per use |
 
+### Two AIs: one reviews, the other checks
+
+`provider` says who reviews, and `verify-with` says who checks the findings, which drops the ones it can disprove. A value you set always wins. Left empty:
+
+- **Who reviews:** Claude when the repository has only a Claude login, and Codex otherwise.
+- **Who checks:** when both AIs have a login, the one that doesn't review, so two AIs look at every finding. With one login, the reviewer checks its own findings.
+
+When `provider: claude` is set and there's no Claude login yet, a pull request from the repository itself shows the Claude link to mergelight.dev, the same way a missing ChatGPT login shows a code.
+
+When the checker has no login yet, a pull request from the repository itself asks to connect it, the same way as the reviewer's login: a ChatGPT code, or a Claude link to mergelight.dev. The review waits for it at most 15 minutes. If nobody connects it, or it can't be asked (a fork, Dependabot, no app to save the login, or a reviewer's ChatGPT login that couldn't be refreshed and has too little time left to wait), the reviewer checks instead and the summary says so. Only a private repository shows a ChatGPT code for the checker, since anyone who can see the pull request could enter it. Elsewhere, save a login of its own yourself, never the one your own Codex uses, as the two would use up each other's tokens: `export CODEX_HOME=$(mktemp -d); codex login; gh secret set CODEX_AUTH_JSON --repo <owner/repo> < $CODEX_HOME/auth.json`. Claude's link goes through mergelight.dev, where you sign in, so it is still shown. The summary's last line names both AIs.
+
 Pull requests from forks and from Dependabot aren't reviewed, because GitHub gives their runs no secrets. On a public repository everyone can see the pull request, so the comment that connects a plan names the account that connected.
 
 ## Set it up
@@ -126,7 +137,8 @@ Mergelight also checks each `.github/instructions/*.instructions.md` file as a r
 | `auth-secret-name` | `CODEX_AUTH_JSON` | The secret the refreshed login is saved to |
 | `model` | Codex default | Model to review with |
 | `effort` | `high` | Reasoning effort: `low`, `medium` or `high` |
-| `verify-with` | `codex` | Who checks the findings: `codex`, or `claude` on a runner with Claude Code logged in |
+| `provider` | | Who reviews: `claude` or `codex`. Empty: Claude with only a Claude login, Codex otherwise |
+| `verify-with` | | Who checks the findings: `claude` or `codex`. Empty: the AI that doesn't review when both have a login, the reviewer otherwise. See [Two AIs](#two-ais-one-reviews-the-other-checks) |
 | `auto-approve` | `true` | When a review is 🟢 and every one of your team's own checks passed, Mergelight approves the PR like a reviewer would, and takes the approval back when a later review isn't 🟢. `false` turns that off: it never approves, and takes back an approval it gave before on each PR's next review. For PRs that are already open, dismiss Mergelight's approval by hand |
 | `yellow-blocks` | `false` | Let the check hold merges: 🟡 waits for an approval and 🔴 fails until the code changes. Your team's own checks from the dashboard follow it too: on, one that failed, couldn't tell or couldn't run holds the merge, and off, it ends neutral. A check that was skipped, because none of its files changed, never holds a merge. For teams: GitHub doesn't let you approve your own PR |
 | `codex-version` | `0.166.0` | Codex CLI version |
@@ -143,6 +155,7 @@ Mergelight also checks each `.github/instructions/*.instructions.md` file as a r
 - **Same finding, next push:** every review checks what earlier reviews found again, so a finding stays one comment even if it's worded differently or points at other lines.
 - **Handled comments:** when a finding's code changed and the finding is gone, or the review drops it after someone resolved its thread, the next review edits that comment to a ✅ with the original behind a dropdown, and moves it to a Handled section in the summary. Nothing new gets posted. Reopen a thread and the comment comes back. GitHub Actions can't react to a thread being resolved, so that shows on the next push.
 - **Resolving a thread is a decision:** it tells the next review your team decided to leave that finding, and the review respects that. The one exception is a major bug that can still happen as described: it stays listed and keeps counting toward the check, so resolving a thread can't wave a real bug through. Only resolves by people with write access count.
+- **Jobs:** tasks your team writes in `.mergelight/jobs`, such as translating new texts or updating docs, which the AI does on each pull request that needs them and pushes as one commit. Off unless you turn them on. See [Jobs](jobs.md).
 - **Fixing findings:** your coding agent can read the findings and mark them handled through the [MCP server and skill](agents.md). No extra workflow permissions: marks are comments under your own login.
 - **Resolving threads:** GitHub only lets a token resolve a thread if it may also change the code, and Mergelight's can only read it. So when a finding is fixed, Mergelight folds its comment away instead: GitHub shows "This comment was marked as resolved", with the ✅ and the original behind "Show comment". The thread itself stays open for a person to resolve. If the finding comes back, the comment unfolds. Reopening a folded thread doesn't unfold it; "Show comment" still opens it. To have threads resolved too, give the workflow `contents: write`, but know that the review then holds a token that can push code.
 - **Your code:** the review runs inside your own GitHub Actions runner with your own Codex login. Your code and your login are never sent to Mergelight. To post as the Mergelight AI app, a run sends GitHub's signed pass for the run to Mergelight's token server, which keeps nothing; see the [privacy policy](https://mergelight.dev/privacy/).

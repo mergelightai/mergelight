@@ -1,0 +1,125 @@
+# Mergelight review, with your team's jobs. It runs in your GitHub Actions, on your AI plan.
+# Use it in place of mergelight.yml. Jobs are tasks you write in .mergelight/jobs: on each pull request
+# that needs one, the AI does it and Mergelight pushes one commit to the pull request's branch.
+# See https://github.com/mergelightai/mergelight/blob/main/docs/jobs.md
+name: Mergelight
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+
+# Each job says what it may do. Only push-jobs may push, and it runs no AI.
+permissions: {}
+
+# A new push cancels the older run of the same pull request. An edit that changes only the title or
+# description starts nothing, so it gets a group of its own and never cancels a run that is working.
+# A run started again by hand waits for the one going instead of cancelling it.
+concurrency:
+  group: mergelight-pr-${{ github.event.pull_request.number }}${{ (github.event.action == 'edited' && !github.event.changes.base) && '-edit' || '' }}
+  cancel-in-progress: ${{ github.run_attempt == 1 }}
+
+jobs:
+  # The AI does the jobs, with a token that can only read, and writes what they changed to a file.
+  run-jobs:
+    # Forks and Dependabot get no secrets, and drafts aren't ready. An edit only counts when the target
+    # branch changed, so a new title starts nothing.
+    if: >
+      (github.event.action != 'edited' || github.event.changes.base) &&
+      !github.event.pull_request.draft &&
+      github.actor != 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write # Lets it save a refreshed ChatGPT login through the Mergelight AI app, if installed.
+    outputs:
+      changes: ${{ steps.jobs.outputs.jobs-changes }}
+    steps:
+      # Not pinned, on purpose. @v0 moves to each new release, so fixes reach you without
+      # merging anything. The catch: this step can read your AI login, so you're trusting each
+      # release as it comes. To check every update yourself, pin it with the line from a release:
+      # https://github.com/mergelightai/mergelight/releases
+      - uses: mergelightai/mergelight@v0
+        id: jobs
+        with:
+          run: jobs
+          # Jobs is part of a paid plan. Mergelight's server says whether your org's plan includes it.
+          # It is shown GitHub's signed pass for the run, which names the repository, branch, workflow
+          # and who started it. Nothing about your code is sent.
+          server: https://mergelight-server.onrender.com
+          codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        # Also when every job failed: the result says why, for the review's summary.
+        if: ${{ !cancelled() && steps.jobs.outputs.jobs-result != '' }}
+        with:
+          name: mergelight-jobs
+          path: ${{ steps.jobs.outputs.jobs-result }}
+          retention-days: 1
+          if-no-files-found: ignore
+          # Run again, the run's file from the first try is replaced, not a reason to fail.
+          overwrite: true
+
+  # No AI and no AI login: checks the file again against your jobs, and pushes one commit.
+  push-jobs:
+    needs: run-jobs
+    if: needs.run-jobs.outputs.changes != '' && needs.run-jobs.outputs.changes != '0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: read
+    outputs:
+      commit: ${{ steps.push.outputs.commit }}
+      why: ${{ steps.push.outputs.why }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mergelight-jobs
+          path: ${{ runner.temp }}/mergelight-jobs
+      - uses: mergelightai/mergelight/push-jobs@v0
+        id: push
+        with:
+          result: ${{ runner.temp }}/mergelight-jobs/mergelight-jobs.json
+
+  # The review, as in mergelight.yml, of the commit the jobs pushed when they pushed one.
+  review:
+    needs: [run-jobs, push-jobs]
+    # Also after jobs that failed or had nothing to push, but not in a run a newer push cancelled.
+    if: >
+      !cancelled() &&
+      (github.event.action != 'edited' || github.event.changes.base) &&
+      !github.event.pull_request.draft &&
+      github.actor != 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    # Room for the first login, which can wait up to 16 minutes, and then a long review.
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      pull-requests: write
+      checks: write
+      id-token: write # Lets it post as the Mergelight AI app, if installed.
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        # No file when no job ran. Not when the jobs didn't run in this try: a file from an earlier try
+        # would tell about other jobs.
+        if: needs.run-jobs.result != 'skipped'
+        continue-on-error: true
+        with:
+          name: mergelight-jobs
+          path: ${{ runner.temp }}/mergelight-jobs
+      - uses: mergelightai/mergelight@v0
+        with:
+          codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          commit: ${{ needs.push-jobs.outputs.commit }}
+          jobs-result: ${{ runner.temp }}/mergelight-jobs/mergelight-jobs.json
+          jobs-commit: ${{ needs.push-jobs.outputs.commit }}
+          jobs-why: ${{ needs.push-jobs.outputs.why }}

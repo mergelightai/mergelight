@@ -34,6 +34,8 @@ export interface SetupOptions {
   yes?: boolean;
   /** Pin to the latest release's commit, which is the default. False follows @v0 and gets each release by itself. */
   pin?: boolean;
+  /** Also run the team's jobs from .mergelight/jobs: the workflow gets a job that may push, with no AI in it. */
+  jobs?: boolean;
 }
 
 export interface SetupDeps {
@@ -45,24 +47,28 @@ export interface SetupDeps {
   log: (message: string) => void;
 }
 
-/** The workflow files, adjusted for this repository, and pinned to a release if one is given. */
-export function workflowFiles(skipBranches: string[] = [], pin?: Pin): { name: string; content: string }[] {
+/**
+ * The workflow files, adjusted for this repository, and pinned to a release if one is given. With jobs,
+ * mergelight.yml is the workflow that also runs the team's jobs.
+ */
+export function workflowFiles(skipBranches: string[] = [], pin?: Pin, jobs = false): { name: string; content: string }[] {
   const dir = join(dirname(fileURLToPath(import.meta.url)), "..", "templates");
   return WORKFLOWS.map((name) => {
-    let content = readFileSync(join(dir, name), "utf8");
+    let content = readFileSync(join(dir, name === "mergelight.yml" && jobs ? "mergelight-jobs.yml" : name), "utf8");
     if (name === "mergelight.yml" && skipBranches.length) {
       if (!content.includes(SKIP_MARKER)) throw new Error(`${name} has changed: can't add the branches to skip.`);
       // GitHub expressions quote strings with single quotes, doubled inside, and fromJSON needs double quotes.
       const json = JSON.stringify(skipBranches).replace(/'/g, "''");
-      // A function, so a $ in a branch name stays a $.
-      content = content.replace(SKIP_MARKER, () => `${SKIP_MARKER} &&\n      !contains(fromJSON('${json}'), github.head_ref)`);
+      // A function, so a $ in a branch name stays a $. Every job that has the line gets it: with jobs, two do.
+      content = content.replaceAll(SKIP_MARKER, () => `${SKIP_MARKER} &&\n      !contains(fromJSON('${json}'), github.head_ref)`);
     }
     if (pin) {
       if (!content.includes(`${ACTION}@v0`)) throw new Error(`${name} has changed: can't pin it.`);
       content = content.replace(NOT_PINNED_NOTE, (note) => {
         const indent = note.match(/^[ \t]*/)![0];
         return `${indent}# Pinned to a release, so new code only runs here once you merge an update.\n${indent}# Mergelight says on your pull requests when a new version is out.\n`;
-      }).replaceAll(`${ACTION}@v0`, () => `${ACTION}@${pin.sha} # ${pin.tag}`);
+      }).replaceAll(`${ACTION}@v0`, () => `${ACTION}@${pin.sha} # ${pin.tag}`)
+        .replaceAll(`${ACTION}/push-jobs@v0`, () => `${ACTION}/push-jobs@${pin.sha} # ${pin.tag}`);
     }
     return { name, content };
   });
@@ -101,7 +107,7 @@ async function hasFile(deps: SetupDeps, repo: string, path: string, ref: string)
 /** Puts the workflows on a branch and opens a pull request. Returns its URL, or null if there's nothing to add. */
 async function openWorkflowPr(deps: SetupDeps, opts: SetupOptions, base: string): Promise<string | null> {
   const { repo } = opts;
-  const files = workflowFiles(opts.skipBranches, opts.pin !== false ? await latestPin(deps) : undefined);
+  const files = workflowFiles(opts.skipBranches, opts.pin !== false ? await latestPin(deps) : undefined, opts.jobs);
 
   const missing: typeof files = [];
   for (const f of files) {

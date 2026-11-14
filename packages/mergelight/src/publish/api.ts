@@ -23,7 +23,8 @@ async function gh(args: string[], input?: string): Promise<string> {
     const result = await run("gh", args, { input });
     if (result.code === 0) return result.stdout;
     lastError = (result.stderr || result.stdout).trim();
-    if (!TRANSIENT.test(lastError)) break;
+    // GitHub's "Pull and try again" for a branch that moved isn't one that passes: the answer stays the same.
+    if (!TRANSIENT.test(lastError) || /STALE_DATA|expected branch to point to/i.test(lastError)) break;
   }
   throw new Error(`gh ${args.slice(0, 4).join(" ")} failed: ${lastError.split("\n").slice(-3).join(" ")}`);
 }

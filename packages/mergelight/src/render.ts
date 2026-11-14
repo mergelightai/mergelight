@@ -1,3 +1,4 @@
+import { checkerMissedLine } from "./publish/markdown.js";
 import type { Finding, Review } from "./types.js";
 
 const useColor = process.stdout.isTTY && !process.env.NO_COLOR;
@@ -73,6 +74,8 @@ export function renderTerminal(r: Review): string {
   const words = (...parts: (string | null | undefined)[]) => parts.filter(Boolean).join(" ");
   const hunters = words(r.provider.name, r.provider.model, r.provider.effort);
   const checker = r.verifier && r.verifier.name !== r.provider.name ? `, checked by ${words(r.verifier.name, r.verifier.model)}` : "";
+  // The other AI was meant to check, and couldn't: said here as on GitHub.
+  const missed = checkerMissedLine(r);
 
   const out: string[] = [];
   out.push(`${bold("Mergelight")} ${dim("·")} ${r.pr.owner}/${r.pr.repo}#${r.pr.number} ${dim("·")} ${r.pr.title}`);
@@ -81,6 +84,7 @@ export function renderTerminal(r: Review): string {
   );
   const checked = r.trace.candidates.length;
   out.push(dim(`Checked ${checked} candidate${checked === 1 ? "" : "s"}, rejected ${r.trace.rejected.length}${r.trace.failed_hunters.length ? `, hunters failed: ${r.trace.failed_hunters.join(", ")}` : ""}`));
+  if (missed) out.push(missed);
   out.push("");
   out.push(wrap(r.summary, ""));
 

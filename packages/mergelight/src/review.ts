@@ -18,7 +18,7 @@ import {
   type TeamRule,
   usedMemories,
 } from "./prompt.js";
-import { LimitError, LoginError } from "./providers/codex.js";
+import { LimitError, LoginError, SandboxError } from "./providers/codex.js";
 import { MAX_REPO_RULES } from "./repo-rules.js";
 import { claudeAvailable, runModel as runOneModel, TOOLING, type ModelOptions, type ModelResult, type ProviderName } from "./providers/index.js";
 import { candidateSchema, checkSchema, reviewSchema, reviewSchemaWithDecisions } from "./schema.js";
@@ -31,6 +31,8 @@ import type { WrittenSkill } from "./skills.js";
 export interface ReviewOptions {
   /** Review this commit of the PR instead of its latest one. */
   at?: string;
+  /** The commit the team's jobs wrote just before this review, and which jobs, so the reviewers know. */
+  jobCommit?: { sha: string; jobs: string[] };
   /** Who hunts for problems: codex, the default, or claude. */
   provider?: ProviderName;
   model?: string;
@@ -328,6 +330,8 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
       // Matched against every path the pull request touches, exactly as git has it.
       skills: teamSkills,
       conventions: ws.conventions,
+      // Only when it is the commit under review: an older job commit is part of the diff like any other.
+      ...(opts.jobCommit && opts.jobCommit.sha === ws.headSha ? { jobCommit: opts.jobCommit } : {}),
       // The dashboard's rules, then the ones written in the repository.
       rules: [...(opts.rules ?? []), ...ws.rules].filter((r) => r.kind === "rule" && ruleApplies(r, ws.touchedPaths)).slice(0, MAX_RULES),
     };
@@ -344,7 +348,8 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
     }
     // Who checks is known before the hunt, so the first reviewer that answers can name both models.
     const verifyWith = opts.verifyWith ?? (provider === "claude" || (await claudeAvailable()) ? "claude" : "codex");
-    const verifyModel = verifyWith === "codex" ? (opts.verifyModel ?? opts.model) : (opts.verifyModel ?? "opus");
+    // The reviewer's model only carries over to the same AI: a Claude model name means nothing to Codex.
+    const verifyModel = verifyWith === "codex" ? (opts.verifyModel ?? (provider === "codex" ? opts.model : undefined)) : (opts.verifyModel ?? "opus");
     let named = false;
     const nameModels = (reviewerModel: string | null) => {
       if (named) return;
@@ -445,13 +450,34 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
     // Opus checks better than Codex: in the eval it posted a third less and kept the same finds.
     if (!opts.verifyWith && verifyWith === "codex") progress("Claude Code isn't installed, so Codex checks the findings");
     progress(`Checking ${found.length} candidate${found.length === 1 ? "" : "s"}${verifyWith === "codex" ? "" : ` with ${verifyWith}`}`);
-    const verified = await verifyCandidates(ws.dir, input, found, {
-      provider: verifyWith,
-      model: verifyModel,
-      effort,
-      logFile: log("verify"),
-      onCommand: (cmd) => progress(`Checking ${found.length} candidates: ${cmd.replace(/\s+/g, " ").slice(0, 80)}`, true),
-    });
+    const servedModelSoFar = () => {
+      const first = hunts.find((h) => h.status === "fulfilled");
+      return first?.status === "fulfilled" ? first.value.model : null;
+    };
+    const verifyWithAi = (ai: ProviderName, model: string | undefined) =>
+      verifyCandidates(ws.dir, input, found, {
+        provider: ai,
+        model,
+        effort,
+        logFile: log(ai === verifyWith ? "verify" : "verify-fallback"),
+        onCommand: (cmd) => progress(`Checking ${found.length} candidates: ${cmd.replace(/\s+/g, " ").slice(0, 80)}`, true),
+      });
+    // The other AI checking is extra: when its login doesn't work or its plan is used up, the reviewer's
+    // own AI checks instead, and the summary says why. The reviewer's own failures still stop the review.
+    let checkerFailed: "login-failed" | "limit" | "sandbox" | undefined;
+    let verified: Awaited<ReturnType<typeof verifyCandidates>>;
+    try {
+      verified = await verifyWithAi(verifyWith, verifyModel);
+    } catch (err) {
+      if (verifyWith === provider || !(err instanceof LoginError || err instanceof LimitError || err instanceof SandboxError)) throw err;
+      checkerFailed = err instanceof LimitError ? "limit" : err instanceof SandboxError ? "sandbox" : "login-failed";
+      progress(`${verifyWith === "codex" ? "Codex" : "Claude"} couldn't check (${err.message.slice(0, 120)}), so ${provider === "codex" ? "Codex" : "Claude"} checks the findings`);
+      const fallbackModel = provider === "codex" ? opts.model : (opts.model ?? "opus");
+      // The live comment names the AI that checks now.
+      opts.onModels?.({ reviewer: { name: provider, model: servedModelSoFar() }, checker: { name: provider, model: fallbackModel ?? null } });
+      verified = await verifyWithAi(provider, fallbackModel);
+    }
+    const checkedBy: ProviderName = checkerFailed ? provider : verifyWith;
     // Every path the pull request touches counts here, the lockfiles and generated files the reviewers skip included.
     const needsHuman = filesNeedingHuman(opts.rules, ws.touchedPaths);
     const team_checks = teamChecks ? await teamChecks.done : null;
@@ -473,7 +499,8 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
         head_sha: ws.headSha,
       },
       provider: { name: provider, model: servedModel, effort },
-      verifier: { name: verifyWith, model: verified.model, effort, cost_usd: verified.cost_usd },
+      verifier: { name: checkedBy, model: verified.model, effort, cost_usd: verified.cost_usd },
+      ...(checkerFailed ? { checker_missed: verifyWith, checker_missed_why: checkerFailed } : {}),
       light: lightWith(verified.findings, needsHuman),
       summary: summaryWith(verified.summary, needsHuman, opts.rulesUnread === true),
       ...(needsHuman.length ? { needs_human: needsHuman } : {}),

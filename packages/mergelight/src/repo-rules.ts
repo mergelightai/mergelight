@@ -26,33 +26,74 @@ export const MAX_REPO_RULE_CHARS = 30_000;
  * out of code review.
  */
 export function frontMatter(text: string): { paths: string[]; body: string; scoped: boolean; forReview: boolean } {
+  const block = frontMatterBlock(text);
+  if (!block) return { paths: [], body: text, scoped: false, forReview: true };
+  const forReview = !/^excludeAgent[ \t]*:.*\bcode-review\b/m.test(block.fm);
+  const patterns = listValue(block.fm, "applyTo|globs") ?? [];
+  // "**" anywhere in the list means every file.
+  const paths = patterns.some((p) => p === "**" || p === "*" || p === "**/*") ? [] : patterns;
+  return { paths, body: block.body, scoped: patterns.length > 0, forReview };
+}
+
+/** The front matter of a Markdown file and the text after it, or null when it has none. */
+export function frontMatterBlock(text: string): { fm: string; body: string } | null {
   // The block between the first two "---" lines, which may be empty: an empty one must not reach on to a
   // later "---" divider and take the rules before it.
   const m = /^---[ \t]*\r?\n(?:([\s\S]*?)\r?\n)??---[ \t]*(?:\r?\n|$)/.exec(text);
-  if (!m) return { paths: [], body: text, scoped: false, forReview: true };
-  const fm = m[1] ?? "";
-  const forReview = !/^excludeAgent[ \t]*:.*\bcode-review\b/m.test(fm);
-  const line = /^(?:applyTo|globs)[ \t]*:[ \t]*(.*)$/m.exec(fm);
-  // A YAML comment after the value isn't part of it: applyTo: "src/billing/**" # billing only.
-  let value = (line?.[1] ?? "").replace(/(?:^|[ \t])#.*$/, "").trim();
-  if (line && !value) {
-    // A YAML list on the lines below the key: "applyTo:" then "  - src/billing/**".
+  return m ? { fm: m[1] ?? "", body: text.slice(m[0].length) } : null;
+}
+
+/**
+ * Without a YAML comment after it: applyTo: "src/billing/**" # billing only. A # inside quotes is part of
+ * the value, as in YAML.
+ */
+function withoutYamlComment(value: string): string {
+  let quote: string | null = null;
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i]!;
+    if (quote) {
+      // A quote closes only where YAML would end the value: at the end, or before a space, a comma or ].
+      if (ch === quote && (i + 1 === value.length || /[\s,\]]/.test(value[i + 1]!))) quote = null;
+      // A quote opens only where a value or an item starts, as in YAML: one inside a word, like don't, is a letter.
+    } else if ((ch === '"' || ch === "'") && (i === 0 || /[\s,[]/.test(value[i - 1]!))) quote = ch;
+    else if (ch === "#" && (i === 0 || value[i - 1] === " " || value[i - 1] === "\t")) return value.slice(0, i).trim();
+  }
+  // A quote that never closes isn't a quote: cut at the first comment, as before quotes were read.
+  return quote ? value.replace(/(?:^|[ \t])#.*$/, "").trim() : value.trim();
+}
+
+/** The value of a one-line key, without quotes or a comment, or null when the key isn't there. */
+export function scalarValue(fm: string, key: string): string | null {
+  const line = new RegExp(`^(?:${key})[ \\t]*:[ \\t]*(.*)$`, "m").exec(fm);
+  return line ? withoutYamlComment(line[1] ?? "").replace(/^(["'])(.*)\1$/, "$2").trim() : null;
+}
+
+/**
+ * The patterns a key names: a comma list, a [list], or a YAML list on the lines below it, with braces
+ * expanded. Null when the key isn't there. keys is one name, or names joined with "|".
+ */
+export function listValue(fm: string, keys: string): string[] | null {
+  const line = new RegExp(`^(?:${keys})[ \\t]*:[ \\t]*(.*)$`, "m").exec(fm);
+  if (!line) return null;
+  const unquote = (p: string) => p.trim().replace(/^["']|["']$/g, "").trim();
+  const value = withoutYamlComment(line[1] ?? "");
+  // An inline value, or a YAML list on the lines below the key: "applyTo:" then "  - src/billing/**".
+  // Teams write comma lists inside one item too ("- **/*.ts,**/*.tsx"), so every item is split on its
+  // commas, as Copilot reads it.
+  const items = value ? [value.replace(/^\[([\s\S]*)\]$/, "$1").replace(/^["']|["']$/g, "")] : [];
+  if (!value) {
     const after = fm.slice(line.index + line[0].length).split(/\r?\n/).slice(1);
-    const items: string[] = [];
     for (const l of after) {
+      // A blank line or a comment between the items doesn't end the list.
+      if (/^[ \t]*(?:#.*)?$/.test(l)) continue;
       const item = /^[ \t]*-[ \t]*(.+)$/.exec(l);
       if (!item) break;
-      items.push(item[1]!.replace(/(?:^|[ \t])#.*$/, "").trim());
+      // An item can be a [list] of its own, as the inline value can. Brackets go before quotes, so a
+      // quoted "[locale]" keeps its brackets, as it does inline.
+      items.push(unquote(withoutYamlComment(item[1]!).replace(/^\[([\s\S]*)\]$/, "$1")));
     }
-    value = items.join(",");
   }
-  const patterns = splitOutsideBraces(value.trim().replace(/^\[([\s\S]*)\]$/, "$1").replace(/^["']|["']$/g, ""))
-    .map((p) => p.trim().replace(/^["']|["']$/g, "").trim())
-    .flatMap(expandBraces)
-    .filter(Boolean);
-  // "**" anywhere in the list means every file.
-  const paths = patterns.some((p) => p === "**" || p === "*" || p === "**/*") ? [] : patterns;
-  return { paths, body: text.slice(m[0].length), scoped: patterns.length > 0, forReview };
+  return items.flatMap(splitOutsideBraces).map(unquote).flatMap(expandBraces).filter(Boolean);
 }
 
 /** Splits on commas, but not on the ones inside braces, as in "**\/*.{ts,tsx},*.sql". */

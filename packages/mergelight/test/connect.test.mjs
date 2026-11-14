@@ -6,8 +6,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { claudeSetupLink, connect, connectBody, connectedAccount, connectedBody, connectFailedBody, githubConnect, installAppBody, parseDeviceLogin, withState } from "../dist/connect.js";
-import { claudeCodeRef, parseClaudeLink, parseClaudeToken, readCodeRef, readPastedCode, shareClaudeToken, startClaudeSignIn, waitForPastedCode } from "../dist/connect-claude.js";
+import { askForApp, chatgptInputMissing, checkWaitingTitle, CLAUDE_INPUT_MISSING, claudeInWorkflow, claudeSetupLink, connect, connectBody, connectCheckBody, connectedAccount, connectedBody, connectFailedBody, githubConnect, installAppBody, parseDeviceLogin, withState } from "../dist/connect.js";
+import { claudeCodeRef, parseClaudeLink, parseClaudeToken, readCodeRef, readPastedCode, scriptArgs, shareClaudeToken, startClaudeSignIn, waitForPastedCode } from "../dist/connect-claude.js";
 import { isPendingSummary, PENDING_MARKER, SUMMARY_MARKER } from "../dist/publish/markdown.js";
 import { ownSummary } from "../dist/publish/publish.js";
 import { decodeState, encodeState } from "../dist/publish/state.js";
@@ -222,6 +222,45 @@ test("a failed comment doesn't stop the check from finishing, and it doesn't thr
   assert.ok(logs.some((l) => l.startsWith("Couldn't update the comment")));
 });
 
+test("a sign-in that fails takes back Mergelight's approval of an earlier commit, not of this one", async () => {
+  const api = fakeApi(() => false);
+  const approval = (id, commit_id) => ({ id, state: "APPROVED", commit_id, body: "<!-- mergelight:approval -->\nok", user: { login: "mergelight-ai[bot]" } });
+  const list = api.list;
+  api.list = async (path) => (path.endsWith("/reviews") ? [approval(31, "old"), approval(32, "abc")] : list(path));
+  await githubConnect(api, 7, "abc", () => {}, { GH_TOKEN: "app" }).failed("The code ran out.");
+  const dismissed = api.writes.filter((w) => w.path.endsWith("/dismissals")).map((w) => w.path);
+  assert.deepEqual(dismissed, ["pulls/7/reviews/31/dismissals"]);
+});
+
+test("a sign-in that fails leaves approvals alone once a newer commit has its own run", async () => {
+  const api = fakeApi(() => false);
+  const logs = [];
+  api.get = async (path) => (path === "pulls/7" ? { head: { sha: "newer" } } : {});
+  const list = api.list;
+  api.list = async (path) => (path.endsWith("/reviews") ? [{ id: 33, state: "APPROVED", commit_id: "newer", body: "<!-- mergelight:approval -->", user: { login: "mergelight-ai[bot]" } }] : list(path));
+  await githubConnect(api, 7, "abc", (l) => logs.push(l), { GH_TOKEN: "app" }).failed("The code ran out.");
+  assert.ok(!api.writes.some((w) => w.path.endsWith("/dismissals")));
+  assert.ok(logs.some((l) => /newer commit \(newer\) has its own run/.test(l)));
+});
+
+test("asking for the app takes back Mergelight's approval of an earlier commit", async () => {
+  const api = fakeApi(() => false);
+  const list = api.list;
+  api.list = async (path) => (path.endsWith("/reviews") ? [{ id: 34, state: "APPROVED", commit_id: "old", body: "<!-- mergelight:approval -->", user: { login: "github-actions[bot]" } }] : list(path));
+  await askForApp(api, 7, "abc", "Claude");
+  assert.deepEqual(api.writes.filter((w) => w.path.endsWith("/dismissals")).map((w) => w.path), ["pulls/7/reviews/34/dismissals"]);
+  assert.ok(api.writes.some((w) => w.path === "check-runs" && w.body.conclusion === "neutral"));
+});
+
+test("a checker sign-in that fails takes no approval back: the review still runs", async () => {
+  const api = fakeApi(() => false);
+  let asked = false;
+  const list = api.list;
+  api.list = async (path) => (path.endsWith("/reviews") ? ((asked = true), []) : list(path));
+  await githubConnect(api, 7, "abc", () => {}, { GH_TOKEN: "app" }, { purpose: "check", ai: "codex", reviewer: "claude" }).failed("The code ran out.");
+  assert.equal(asked, false);
+});
+
 test("other errors don't switch tokens", async () => {
   const env = { GH_TOKEN: "app", GITHUB_WORKFLOW_TOKEN: "workflow" };
   const api = fakeApi(() => false);
@@ -273,6 +312,13 @@ function codeWait(values) {
 
 test("waits until the setup page has left a whole code, past any failed read", async () => {
   assert.equal(await codeWait([null, new Error("GitHub hiccup"), CODE]), CODE);
+});
+
+test("a read GitHub never answers doesn't hold the wait past its end", async () => {
+  const started = Date.now();
+  const code = await waitForPastedCode({ read: () => new Promise(() => {}) }, 50, 10);
+  assert.equal(code, null);
+  assert.ok(Date.now() - started < 2_000);
 });
 
 test("anything that isn't a whole code never counts, and the wait ends", async () => {
@@ -336,7 +382,7 @@ test("the sign-in gives its link, sends the code, and ends with the token", asyn
   const s = await signIn;
   assert.equal(s.url, LINK);
   assert.equal(spawned[0], "script");
-  assert.match(spawned[2], /claude setup-token/);
+  assert.match(spawned.join(" "), /claude setup-token/);
   assert.equal(await s.finish("abcdef123456"), TOKEN);
   assert.deepEqual(written, ["abcdef123456", "\r"]);
   assert.ok(child.killed, "nothing is left running");
@@ -417,4 +463,252 @@ test("the comment sends Claude to the setup page, and shows no code to paste", (
 test("a value can't end the hidden line early", () => {
   const line = connectBody(null, undefined, "https://claude.com/a-->b").split("\n").find((l) => l.startsWith("<!-- mergelight:connect:v1"));
   assert.equal(line.match(/-->/g).length, 1, "only the end of the line closes it");
+});
+
+test("connecting the AI that checks says so, names who reviews, and that the review won't wait for ever", () => {
+  const device = { url: "https://auth.openai.com/d", code: "AAAA-BBBB" };
+  const chatgpt = connectCheckBody("codex", "claude", device, "https://github.com/run", undefined, claudeSetupLink("acme/api", 7));
+  assert.match(chatgpt, /^### 🔌 Connect ChatGPT to check this review$/m);
+  assert.match(chatgpt, /^\[Open ChatGPT\]\(https:\/\/auth\.openai\.com\/d\) and enter `AAAA-BBBB`\. Claude's review then starts by itself, and Codex checks its findings\.$/m);
+  assert.match(chatgpt, /If nobody connects it within 15 minutes, the review starts anyway, checked by Claude\./);
+  assert.match(chatgpt, /Checks use the plan of whoever connects it/);
+  assert.ok(isPendingSummary(chatgpt), "the review replaces it");
+  assert.match(chatgpt, /"for":"check"/, "the setup page can tell a checker's login from a reviewer's");
+  assert.doesNotMatch(chatgpt, /Connect on mergelight\.dev/, "Claude already reviews, so only ChatGPT is offered");
+  const claude = connectCheckBody("claude", "codex", null, undefined, LINK, claudeSetupLink("acme/api", 7));
+  assert.match(claude, /^### 🔌 Connect Claude to check this review$/m);
+  assert.match(claude, /\[Connect on mergelight\.dev\]\(https:\/\/mergelight\.dev\/setup\/\?repo=acme\/api&pr=7&connect=claude\)\. Codex's review then starts by itself, and Claude checks its findings\./);
+  assert.doesNotMatch(claude, /ChatGPT security settings/);
+  assert.equal(checkWaitingTitle("codex"), "Waiting for you to connect ChatGPT to check the review");
+});
+
+test("connecting a checker that nobody finishes holds nothing up, and leaves the reviewer as it is", async () => {
+  const env = { GH_TOKEN: "app", MERGELIGHT_PROVIDER: "claude" };
+  const api = fakeApi(() => false);
+  const logs = [];
+  const deps = githubConnect(api, 7, "abc", (l) => logs.push(l), env, { purpose: "check", ai: "codex", reviewer: "claude" });
+  assert.equal(await deps.startClaude(), null, "only ChatGPT is offered");
+  // No prompt posted: the last review's summary stays as it is.
+  await deps.failed("The code ran out.");
+  assert.ok(!api.writes.some((w) => w.path.startsWith("issues/")));
+  // A prompt posted: it stays until the review that starts now replaces it, as changing the comment here
+  // could overwrite a newer run's finished review.
+  const shown = githubConnect(api, 7, "abc", () => {}, env, { purpose: "check", ai: "codex", reviewer: "claude" });
+  await shown.showCode({ url: "https://auth.openai.com/d", code: "AAAA-BBBB" });
+  const before = api.writes.filter((w) => w.path.startsWith("issues/")).length;
+  await shown.failed("The code ran out.");
+  assert.equal(api.writes.filter((w) => w.path.startsWith("issues/")).length, before);
+  // The review goes on, so its check does too: updated, not finished.
+  const check = api.writes.find((w) => w.path.startsWith("check-runs/") && w.body.output?.title === "ChatGPT wasn't connected");
+  assert.equal(check.body.status, "in_progress");
+  assert.equal(check.body.output.title, "ChatGPT wasn't connected");
+  assert.match(check.body.output.summary, /The review goes on, checked by Claude\./);
+  // Connecting Claude to check offers no ChatGPT code, and says why when it ends.
+  const claudeOnly = githubConnect(api, 7, "abc", () => {}, env, { purpose: "check", ai: "claude", reviewer: "codex" });
+  assert.equal(claudeOnly.only, "claude");
+  assert.equal(await claudeOnly.startLogin(() => {}), 1);
+  const d = raced({ codexExit: 1, claudeOk: false, codexOutput: [] });
+  d.only = "claude";
+  assert.equal(await connect(d), 1);
+  assert.match(d.events.at(-1), /^failed The Claude link ran out before anyone finished signing in\.$/);
+});
+
+test("a Claude login connected to check leaves the reviewer as it is", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-share-check-"));
+  const file = join(dir, "env");
+  writeFileSync(file, "");
+  shareClaudeToken(TOKEN, { GITHUB_ENV: file }, () => {}, false);
+  assert.equal(readFileSync(file, "utf8"), `MERGELIGHT_CLAUDE_TOKEN=${TOKEN}\n`);
+});
+
+test("Claude set to review with no login yet: only Claude's link is offered, and a miss says Claude", async () => {
+  const api = fakeApi(() => false);
+  const deps = githubConnect(api, 7, "abc", () => {}, { GH_TOKEN: "app" }, { purpose: "review", ai: "claude" });
+  assert.equal(deps.only, "claude");
+  assert.equal(await deps.startLogin(() => {}), 1, "no ChatGPT code");
+  await deps.failed("The Claude link ran out before anyone finished signing in.");
+  const comment = api.writes.find((w) => w.path === "issues/comments/5");
+  assert.match(comment.body.body, /couldn't connect to Claude/);
+  assert.match(comment.body.body, /Push a new commit to get a new link\./);
+  assert.match(installAppBody("Claude"), /saves your Claude login/);
+  assert.match(installAppBody(), /saves your ChatGPT login/);
+  const body = connectBody(null, "https://github.com/run", LINK, claudeSetupLink("acme/api", 7));
+  assert.match(body, /^### 🔌 Connect Claude to start reviews$/m);
+});
+
+test("the sign-in gets a terminal from script, in the form each system's script takes", () => {
+  assert.deepEqual(scriptArgs("linux"), ["-qfc", "stty cols 3000 rows 50; exec claude setup-token", "/dev/null"]);
+  assert.deepEqual(scriptArgs("darwin"), ["-qF", "/dev/null", "sh", "-c", "stty cols 3000 rows 50; exec claude setup-token"]);
+});
+
+test("Claude is asked for only where the workflow can pass its login on to later runs", async () => {
+  const step = (inputs) => `jobs:\n  review:\n    steps:\n      - uses: mergelightai/mergelight@v0\n        with:\n${inputs}`;
+  assert.equal(claudeInWorkflow(step("          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n")), "yes");
+  assert.equal(claudeInWorkflow(step("          codex-auth-json: x\n")), "no");
+  assert.equal(claudeInWorkflow("jobs:\n  review:\n    uses: acme/ci/.github/workflows/mergelight.yml@main\n    secrets: inherit\n"), "unknown", "a reusable workflow may pass it on");
+  assert.equal(claudeInWorkflow(null), "unknown");
+  // Only this job's Mergelight step: another job passing the input on says nothing about this one.
+  const twoJobs = "jobs:\n  build:\n    steps:\n      - run: echo\n        env:\n          claude-code-oauth-token: x\n  review:\n    steps:\n      - name: Review\n        uses: mergelightai/mergelight@v0\n        with:\n          codex-auth-json: x\n";
+  assert.equal(claudeInWorkflow(twoJobs, "claude-code-oauth-token", "review"), "no");
+  assert.equal(claudeInWorkflow(twoJobs, "codex-auth-json", "review"), "yes");
+  // Asked for by name in a workflow that doesn't pass it on: the reason says what to add.
+  const d = raced({ codexExit: 1, claudeOk: false, codexOutput: [] });
+  d.only = "claude";
+  d.startClaude = async () => null;
+  d.claudeUnavailable = () => CLAUDE_INPUT_MISSING;
+  assert.equal(await connect(d), 1);
+  assert.match(d.events.at(-1), /claude-code-oauth-token: \$\{\{ secrets\.CLAUDE_CODE_OAUTH_TOKEN \}\}/);
+});
+
+test("a checker's ChatGPT login is asked for only where the workflow passes it on, and the reason says what to add", async () => {
+  assert.equal(claudeInWorkflow("    - uses: mergelightai/mergelight@v0\n      with:\n        claude-code-oauth-token: x\n", "codex-auth-json"), "no");
+  assert.equal(claudeInWorkflow("    - uses: mergelightai/mergelight@v0\n      with:\n        # codex-auth-json: x\n", "codex-auth-json"), "no", "a line commented out passes nothing on");
+  assert.equal(claudeInWorkflow("    - uses: ./.github/actions/review\n      with:\n        chatgpt: x\n", "codex-auth-json"), "unknown", "a composite action of the team's own may pass it on");
+  assert.equal(claudeInWorkflow("    - uses: mergelightai/mergelight@v0\n      with:\n        \"codex-auth-json\": x\n", "codex-auth-json"), "yes", "a quoted name");
+  assert.equal(claudeInWorkflow("    - uses: mergelightai/mergelight@v0\n      with: {codex-auth-json: x, provider: claude}\n", "codex-auth-json"), "yes", "a flow mapping");
+  assert.equal(claudeInWorkflow("    - uses: acme/mergelight-wrapper@v1\n      with:\n        chatgpt: x\n", "codex-auth-json"), "unknown", "a wrapper with another name may pass it on");
+  assert.equal(claudeInWorkflow("    - uses: mergelightai/mergelight@v0\n      with:\n        codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}\n", "codex-auth-json"), "yes");
+  const d = deps([], 1);
+  d.chatgptUnavailable = () => chatgptInputMissing("MY_LOGIN");
+  assert.equal(await connect(d), 1);
+  assert.match(d.events.at(-1), /codex-auth-json: \$\{\{ secrets\.MY_LOGIN \}\}/);
+});
+
+test("a ChatGPT login connected to check counts as one, so a rejected one lets the reviewer check", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-connected-check-"));
+  const file = join(dir, "env");
+  writeFileSync(file, "");
+  const api = fakeApi(() => false);
+  await githubConnect(api, 7, "abc", () => {}, { GH_TOKEN: "app", GITHUB_ENV: file, CODEX_HOME: dir }, { purpose: "check", ai: "codex", reviewer: "claude" }).connected("chatgpt");
+  assert.equal(readFileSync(file, "utf8"), "MERGELIGHT_CHATGPT=1\n");
+});
+
+test("every Mergelight step of the job must pass the login on, and YAML's shared parts can't be read", () => {
+  const job = (steps) => `jobs:\n  review:\n    steps:\n${steps}`;
+  const two = job("      - if: github.event_name == 'pull_request'\n        uses: mergelightai/mergelight@v0\n        with:\n          codex-auth-json: x\n      - if: github.event_name != 'pull_request'\n        uses: mergelightai/mergelight@v0\n");
+  // Which one runs can't be told: a login saved for the one that doesn't pass it on would replace another's.
+  assert.equal(claudeInWorkflow(two, "codex-auth-json", "review"), "no");
+  assert.equal(claudeInWorkflow(job("      - uses: mergelightai/mergelight@v0\n        with: *inputs\n"), "codex-auth-json", "review"), "unknown");
+  assert.equal(claudeInWorkflow(job("      - uses: mergelightai/mergelight@v0\n        with:\n          <<: *inputs\n"), "codex-auth-json", "review"), "unknown");
+});
+
+test("a connect hands its check on to the review, so none stands finished in between", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-handon-"));
+  const file = join(dir, "env");
+  writeFileSync(file, "");
+  const api = fakeApi(() => false);
+  const env = { GH_TOKEN: "app", GITHUB_ENV: file, CODEX_HOME: dir, MERGELIGHT_PROVIDER: "claude" };
+  const deps = githubConnect(api, 7, "abc", () => {}, env, { purpose: "check", ai: "codex", reviewer: "claude" });
+  await deps.showCode({ url: "https://auth.openai.com/d", code: "AAAA-BBBB" });
+  await deps.connected("chatgpt");
+  const checks = api.writes.filter((w) => w.path.startsWith("check-runs"));
+  assert.ok(checks.every((w) => w.body.status !== "completed"), JSON.stringify(checks.map((w) => w.body.status)));
+  assert.match(readFileSync(file, "utf8"), /MERGELIGHT_CHECK_RUN=9\n/);
+});
+
+test("outside the Action no review takes the check on, so a connect ends it, and not as passed", async () => {
+  const api = fakeApi(() => false);
+  const deps = githubConnect(api, 7, "abc", () => {}, { GH_TOKEN: "app", CODEX_HOME: tmpdir() });
+  await deps.showCode({ url: "https://auth.openai.com/d", code: "AAAA-BBBB" });
+  await deps.connected("chatgpt");
+  const last = api.writes.filter((w) => w.path.startsWith("check-runs")).pop();
+  assert.equal(last.body.status, "completed");
+  assert.equal(last.body.conclusion, "cancelled");
+  assert.match(last.body.output.summary, /Push a commit/);
+});
+
+test("asking for the app on a commit that isn't the newest any more leaves the newer one's approval", async () => {
+  const api = fakeApi(() => false);
+  api.get = async () => ({ head: { sha: "newer" } });
+  const list = api.list;
+  api.list = async (path) => (path.endsWith("/reviews") ? [{ id: 35, state: "APPROVED", commit_id: "newer", body: "<!-- mergelight:approval -->", user: { login: "github-actions[bot]" } }] : list(path));
+  await askForApp(api, 7, "abc", "Claude");
+  assert.ok(!api.writes.some((w) => w.path.endsWith("/dismissals")));
+});
+
+test("an approval-only Mergelight step needs no login, and the input must read the secret the login is saved to", () => {
+  const job = (steps) => `jobs:\n  review:\n    steps:\n${steps}`;
+  const withApproval = job("      - if: github.event_name != 'pull_request_review'\n        uses: mergelightai/mergelight@v0\n        with:\n          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n      - if: github.event_name == 'pull_request_review'\n        uses: mergelightai/mergelight@v0\n");
+  assert.equal(claudeInWorkflow(withApproval, "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "yes");
+  const other = job("      - uses: mergelightai/mergelight@v0\n        with:\n          claude-code-oauth-token: ${{ secrets.CLAUDE_LOGIN }}\n");
+  assert.equal(claudeInWorkflow(other, "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "no", "a login saved as CLAUDE_CODE_OAUTH_TOKEN never reaches it");
+});
+
+test("a secret named in brackets or another letter case is read as GitHub reads it", () => {
+  const job = (value) => `jobs:\n  review:\n    steps:\n      - uses: mergelightai/mergelight@v0\n        with:\n          codex-auth-json: ${value}\n`;
+  assert.equal(claudeInWorkflow(job("${{ secrets['OTHER_CODEX_AUTH'] }}"), "codex-auth-json", "review", "CODEX_AUTH_JSON"), "no");
+  assert.equal(claudeInWorkflow(job("${{ secrets.codex_auth_json }}"), "codex-auth-json", "review", "CODEX_AUTH_JSON"), "yes");
+  assert.equal(claudeInWorkflow(job("${{ secrets[\"CODEX_AUTH_JSON\"] }}"), "codex-auth-json", "review", "CODEX_AUTH_JSON"), "yes");
+});
+
+test("a secret fallback naming the save secret passes the login on", () => {
+  const job = (value) => `jobs:\n  review:\n    steps:\n      - uses: mergelightai/mergelight@v0\n        with:\n          claude-code-oauth-token: ${value}\n`;
+  assert.equal(claudeInWorkflow(job("${{ secrets.CLAUDE_LOGIN || secrets.CLAUDE_CODE_OAUTH_TOKEN }}"), "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "yes");
+  assert.equal(claudeInWorkflow(job("${{ secrets.CLAUDE_LOGIN || secrets.OTHER }}"), "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "no");
+});
+
+test("an approval-only condition written over several lines is read whole", () => {
+  const job = `jobs:\n  review:\n    steps:\n      - uses: mergelightai/mergelight@v0\n        with:\n          claude-code-oauth-token: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n      - if: >-\n          github.event_name == 'pull_request_review'\n        uses: mergelightai/mergelight@v0\n`;
+  assert.equal(claudeInWorkflow(job, "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "yes");
+});
+
+test("a step that runs only for a submitted review needs no login, also without naming the event", () => {
+  const job = (condition) => `jobs:\n  review:\n    steps:\n      - uses: mergelightai/mergelight@v0\n        with:\n          claude-code-oauth-token: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n      - if: ${condition}\n        uses: mergelightai/mergelight@v0\n`;
+  const read = (condition) => claudeInWorkflow(job(condition), "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN");
+  assert.equal(read("github.event.review.state == 'approved'"), "yes");
+  assert.equal(read(">-\n          github.event.review.state == 'approved' &&\n          github.actor != 'dependabot[bot]'"), "yes", "over several lines");
+  assert.equal(read("${{ github.event.review.state == 'approved' }}"), "yes");
+  // Each of these can run on a pull request, so the step must pass the login on.
+  assert.equal(read("github.event.review.state == 'approved' || github.event_name == 'pull_request'"), "no");
+  assert.equal(read("!(github.event.review.state == 'approved')"), "no");
+  assert.equal(read("!github.event.review.state == 'approved'"), "no");
+  assert.equal(read("github.event.review.state != 'approved'"), "no");
+  assert.equal(read("github.event.review.state == ''"), "no", "no review compares equal to an empty word");
+  assert.equal(read("github.event.review.state == '0'"), "no", "nor to a number");
+});
+
+test("a job with an anchor is found, and one that can't be found can't be told", () => {
+  const anchored = "jobs:\n  review: &review\n    steps:\n      - uses: mergelightai/mergelight@v0\n        with:\n          claude-code-oauth-token: x\n  other:\n    steps:\n      - uses: mergelightai/mergelight@v0\n        with:\n          codex-auth-json: x\n";
+  assert.equal(claudeInWorkflow(anchored, "claude-code-oauth-token", "review"), "yes");
+  assert.equal(claudeInWorkflow(anchored, "claude-code-oauth-token", "missing"), "unknown");
+});
+
+test("an empty login input passes nothing on, and a value over several lines is read whole", () => {
+  const job = (value) => `jobs:\n  review:\n    steps:\n      - uses: mergelightai/mergelight@v0\n        with:\n          claude-code-oauth-token: ${value}\n          provider: claude\n`;
+  for (const empty of ['""', "''", ""]) assert.equal(claudeInWorkflow(job(empty), "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "no", JSON.stringify(empty));
+  assert.equal(claudeInWorkflow(job(">-\n            ${{ secrets.CLAUDE_LOGIN }}"), "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "no", "the folded value names another secret");
+  assert.equal(claudeInWorkflow(job(">-\n            ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}"), "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "yes");
+  // A plain or quoted value carried on over the lines below is read whole too.
+  assert.equal(claudeInWorkflow(job("${{\n            secrets.CLAUDE_LOGIN }}"), "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "no", "a plain value over two lines names another secret");
+  assert.equal(claudeInWorkflow(job("\"${{\n            secrets.CLAUDE_LOGIN }}\""), "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "no", "so does a quoted one");
+  assert.equal(claudeInWorkflow(job("${{\n            secrets.CLAUDE_CODE_OAUTH_TOKEN }}"), "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "yes");
+  // Its value on the line below, set in further, is its value, as YAML reads it.
+  assert.equal(claudeInWorkflow(job("\n            ${{ secrets.CLAUDE_LOGIN }}"), "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "no");
+});
+
+test("a step that runs only on other events, such as a schedule, needs no login", () => {
+  const job = "jobs:\n  review:\n    steps:\n      - if: github.event_name == 'pull_request'\n        uses: mergelightai/mergelight@v0\n        with:\n          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n      - if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'\n        uses: mergelightai/mergelight@v0\n        with:\n          codex-auth-json: x\n";
+  assert.equal(claudeInWorkflow(job, "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "yes");
+});
+
+test("a branch comparison isn't read as an event, and a workflow input named like the job is never taken for it", () => {
+  const step = "        uses: mergelightai/mergelight@v0\n        with:\n          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n";
+  const branch = `jobs:\n  review:\n    steps:\n      - if: github.event_name != 'schedule' && github.base_ref == 'main'\n${step}`;
+  assert.equal(claudeInWorkflow(branch, "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "yes");
+  const otherBranch = `jobs:\n  review:\n    steps:\n      - if: github.base_ref == 'main'\n        uses: mergelightai/mergelight@v0\n        with:\n          codex-auth-json: x\n      - uses: mergelightai/mergelight@v0\n        with:\n          claude-code-oauth-token: x\n`;
+  assert.equal(claudeInWorkflow(otherBranch, "claude-code-oauth-token", "review"), "no", "a step on a branch condition still runs on pull requests");
+  const input = `on:\n  workflow_dispatch:\n    inputs:\n      review:\n        type: string\njobs:\n  review:\n    steps:\n      -${step.slice(7)}`;
+  assert.equal(claudeInWorkflow(input, "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "yes");
+});
+
+test("a step whose condition can also be true on a pull request still counts", () => {
+  const job = "jobs:\n  review:\n    steps:\n      - uses: mergelightai/mergelight@v0\n        with:\n          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n      - if: github.event_name == 'schedule' || github.base_ref == 'main'\n        uses: mergelightai/mergelight@v0\n        with:\n          codex-auth-json: x\n";
+  assert.equal(claudeInWorkflow(job, "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "no", "the second part runs on pull requests to main");
+  assert.equal(claudeInWorkflow(job.replace(" || github.base_ref == 'main'", " || github.event_name == 'workflow_dispatch'"), "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "yes");
+});
+
+test("a step that only runs the jobs doesn't count for the checker's login", () => {
+  const job = "jobs:\n  review:\n    steps:\n      - uses: mergelightai/mergelight@v0\n        with:\n          run: jobs\n          claude-code-oauth-token: x\n      - uses: mergelightai/mergelight@v0\n        with:\n          codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}\n          claude-code-oauth-token: x\n";
+  assert.equal(claudeInWorkflow(job, "codex-auth-json", "review", "CODEX_AUTH_JSON", true), "yes");
+  assert.equal(claudeInWorkflow(job, "codex-auth-json", "review", "CODEX_AUTH_JSON"), "no", "for the reviewer's login it does count");
 });
