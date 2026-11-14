@@ -1,10 +1,10 @@
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, renameSync, rmSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, posix } from "node:path";
 import { run, runOk } from "./run.js";
 import { importSkills, SKILL_GIT_TIMEOUT_MS, SKILL_IMPORT_TIMEOUT_MS, writeSkills, type TeamSkill, type WrittenSkill } from "./skills.js";
 import type { Convention, TeamRule } from "./prompt.js";
-import { guardedFolders, JOB_FILE, MAX_JOB_FILES, readJobs, refusedPath, type Job, type JobProblem } from "./jobs.js";
+import { folded, guardedFolders, JOB_FILE, MAX_JOB_FILES, readJobs, refusedPath, type Job, type JobProblem } from "./jobs.js";
 import { parseRuleFile, repoRules, RULE_FILE } from "./repo-rules.js";
 import type { PullRequest } from "./types.js";
 
@@ -234,7 +234,7 @@ async function baseTree(mirror: string, base: string): Promise<{ paths: string[]
  * The repository's jobs, as the base branch has them, and every job file that was left out with the
  * reason. A pull request can't add a job or widen one for itself: its own copies don't count.
  */
-export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs: Job[]; problems: JobProblem[]; guarded: string[]; incomplete?: string }> {
+export async function jobFilesFor(mirror: string, base: string, guardFor?: Job[]): Promise<{ jobs: Job[]; problems: JobProblem[]; guarded: string[]; incomplete?: string }> {
   const tree = await baseTree(mirror, base);
   if (!tree) return { jobs: [], problems: [], guarded: [], incomplete: "The base branch couldn't be read this time, so no job runs. The next push tries again." };
   const problems: JobProblem[] = [];
@@ -304,33 +304,81 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
   // followed in turn, until nothing new turns up. If that can't be worked out in full, no job runs: the
   // guard is never quietly smaller than it should be.
   const sorted = [...parsed.problems, ...problems, ...unread, ...past].map(({ source, problem }) => ({ source, problem })).sort((a, b) => a.source.localeCompare(b.source));
-  if (!parsed.jobs.length) return { jobs: [], problems: sorted, guarded: [] };
+  // guardFor: the guard of this tree for those jobs, the base branch's, whatever jobs the tree itself has.
+  const guarding = guardFor ?? parsed.jobs;
+  if (!guarding.length) return { jobs: [], problems: sorted, guarded: [] };
   const targets = new Set<string>();
-  const folders = guardedFolders(tree.paths, parsed.jobs);
-  const inGuard = (p: string) => refusedPath(p) || [...folders, ...targets].some((t) => p === t || p.startsWith(`${t}/`));
+  const folders = guardedFolders(tree.paths, guarding);
+  // In any letter case, as a disk that ignores it opens Docs and docs as one folder: links and instruction
+  // files under either spelling are followed.
+  const inGuard = (p: string) => {
+    const f = folded(p);
+    return refusedPath(p) || [...folders, ...targets].some((t) => f === folded(t) || f.startsWith(`${folded(t)}/`));
+  };
   /**
    * A path with every link in it and in its folders followed, part by part, the way the file system does:
    * a link is followed before a ".." after it is applied. Where it ends is guarded. Null when it leaves
    * the repository; "deep" past the limit of links, or at the repository's root.
    */
+  /** Every file, link and folder of the tree by its name in any letter case, built once. */
+  let byCase: Map<string, string[]> | undefined;
+  const caseFits = (path: string): string[] => {
+    if (!byCase) {
+      const index = new Map<string, Set<string>>();
+      for (const p of tree.paths) {
+        const parts = p.split("/");
+        for (let i = 1; i <= parts.length; i++) {
+          const at = parts.slice(0, i).join("/");
+          const key = folded(at);
+          index.set(key, (index.get(key) ?? new Set()).add(at));
+        }
+      }
+      byCase = new Map([...index].map(([k, v]) => [k, [...v]]));
+    }
+    return byCase.get(folded(path)) ?? [];
+  };
   const resolve = async (path: string, guard = true): Promise<string | null | "unread" | "deep"> => {
     const done: string[] = [];
     let rest = path.split("/");
     let hops = 0;
+    /** Folders that hold a link on the way. No job may take a link away, so they stay folders. */
+    const held = new Set<string>();
     while (rest.length) {
       const part = rest.shift()!;
       if (part === "" || part === ".") continue;
       if (part === "..") {
         if (!done.length) return null;
+        // The folder it steps back out of must stay a folder for the path to lead anywhere: a job that
+        // emptied it would make a protected file disappear. So it is guarded too, along with all in it,
+        // unless a link sits in it, as when a link's own target starts with "..".
+        const leaving = done.join("/");
+        if (guard && !held.has(leaving)) targets.add(leaving);
         done.pop();
         continue;
       }
-      const at = [...done, part].join("/");
+      let at = [...done, part].join("/");
+      // A disk that ignores letter case opens docs/alias.md for Docs/alias.md: the guard follows it there
+      // too. When two names fit, it can't tell which one is opened, so it gives up rather than guess.
+      // A name spelled exactly so is that one. Otherwise two that fit can't be told apart: it gives up
+      // rather than guess. Files whose names differ only in letter case are guarded alike anyway, as
+      // the guard compares names in any letter case.
+      if (tree.mode(at) === undefined) {
+        const fits = caseFits(at);
+        if (fits.length && !fits.includes(at)) {
+          if (fits.length > 1) return "deep";
+          at = fits[0]!;
+          // The folders on the way as the tree spells them, such as docs for Docs, so the file guarded
+          // and read for its imports is the real one.
+          done.splice(0, done.length, ...at.split("/").slice(0, -1));
+        }
+      }
+      const real = at.split("/").pop()!;
       if (tree.mode(at) !== "120000") {
-        done.push(part);
+        done.push(real);
         continue;
       }
       if (++hops > MAX_LINK_HOPS) return "deep";
+      for (let i = 1; i <= done.length; i++) held.add(done.slice(0, i).join("/"));
       const content = await tree.linkContent(at);
       if (content === "unread") return "unread";
       // A link to an absolute path leads out of the repository. One to another link goes on from where it sits.
@@ -414,7 +462,7 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
       }
       if (typeof end !== "string" || end === "deep") continue;
       for (const p of markdown) {
-        if (!p.startsWith(`${end}/`)) continue;
+        if (!folded(p).startsWith(`${folded(end)}/`)) continue;
         const through = `${link}/${p.slice(end.length + 1)}`;
         if (guardedLink || isInstructions(p) || refusedPath(through)) enqueue(p, [posix.dirname(through)], 0);
       }
@@ -422,13 +470,16 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
     const imported = new Set<string>();
     while (queue.length && !incomplete) {
       const { path, dirs, depth } = queue.shift()!;
-      const file = await tree.readOrFail(path, MAX_INSTRUCTIONS_BYTES);
+      // A file that isn't Markdown, such as a package-lock.json named with @, is read up to a much higher
+      // limit: its imports count all the same, and it is often larger than any instruction file.
+      const limit = /\.mdc?$/i.test(path) ? MAX_INSTRUCTIONS_BYTES : MAX_IMPORTED_FILE_BYTES;
+      const file = await tree.readOrFail(path, limit);
       if (file === FAILED) {
         incomplete = `${path} couldn't be read this time, so no job runs. The next push tries again.`;
         break;
       }
       // Too large to read for its imports: no job runs rather than one with a smaller guard.
-      if (file === null && ((await tree.size(path)) ?? 0) > MAX_INSTRUCTIONS_BYTES) {
+      if (file === null && ((await tree.size(path)) ?? 0) > limit) {
         incomplete = `${path} is too large to check what it imports, so no job runs.`;
         break;
       }
@@ -461,6 +512,17 @@ export async function jobFilesFor(mirror: string, base: string): Promise<{ jobs:
   return incomplete ? { jobs: [], problems: sorted, guarded, incomplete } : { jobs: parsed.jobs, problems: sorted, guarded };
 }
 
+/**
+ * What the head guards: the files its own links and instruction files lead to, worked out the way the
+ * base branch's are. A pull request can only add to the guard this way, never take from it, and the
+ * jobs on the head never count. A head that can't be worked out in full says why.
+ */
+export async function headGuarded(mirror: string, head: string, jobs: Job[]): Promise<{ guarded: string[] } | { why: string }> {
+  const { guarded, incomplete } = await jobFilesFor(mirror, head, jobs);
+  if (incomplete) return { why: `The pull request's own links and instruction files couldn't be checked in full: ${incomplete.replace(/^The base branch/, "The pull request")}` };
+  return { guarded };
+}
+
 /** The largest SKILL.md the skill copy takes (skills.ts). */
 const MAX_SKILL_FILE_BYTES = 60_000;
 
@@ -471,6 +533,8 @@ const MAX_LINK_HOPS = 10;
 const MAX_IMPORT_DEPTH = 5;
 const MAX_IMPORTS = 20_000;
 const MAX_INSTRUCTIONS_BYTES = 4_000_000;
+/** How large any other file named with @ may be and still be read for its imports. */
+const MAX_IMPORTED_FILE_BYTES = 64_000_000;
 
 /** How many rule files are read at most. */
 const MAX_RULE_FILES = 100;
@@ -594,6 +658,44 @@ export interface Workspace {
   /** The instruction and rule files couldn't be read in time, so none are used. */
   teamFilesLate: boolean;
   cleanup: () => Promise<void>;
+}
+
+/**
+ * The mirror with the pull request's head and its base branch fetched, for the push step, which reads the
+ * team's files and the head's file modes but checks nothing out. The team's files come from the base
+ * branch as it is now. When it can't be fetched, this throws: an older commit could hold jobs the team
+ * has since taken out, so the push never falls back to one.
+ */
+export async function fetchMirror(pr: PullRequest): Promise<{ mirror: string; teamBase: string }> {
+  const mirror = join(cacheDir(), "repos", pr.owner, `${pr.repo}.git`);
+  mkdirSync(join(cacheDir(), "repos", pr.owner), { recursive: true });
+  if (!existsSync(mirror)) {
+    // Cloned beside it and moved into place in one step: the lock lives in the mirror, so two runs on a
+    // shared cache can't both be cloning into the same folder. The one that comes second keeps the first's.
+    const fresh = mkdtempSync(`${mirror}.new-`);
+    try {
+      await git(["clone", "--bare", "--filter=blob:none", "--quiet", `https://github.com/${pr.owner}/${pr.repo}.git`, fresh]);
+      try {
+        renameSync(fresh, mirror);
+      } catch {
+        // Another run put its clone there first.
+      }
+    } finally {
+      rmSync(fresh, { recursive: true, force: true });
+    }
+  }
+  return withLock(mirror, async () => {
+    const fetch = (...refspecs: string[]) => git(["fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "origin", ...refspecs], mirror);
+    await fetch(`+refs/pull/${pr.number}/head:refs/mergelight/pull/${pr.number}`);
+    if (!(await hasCommit(mirror, pr.headSha))) await fetch(pr.headSha);
+    // Into a ref of this pull request's own: a cached ref of an older branch, such as base/release when
+    // the base is now release/2, can't block it.
+    const ref = `refs/mergelight/push/${pr.number}/base`;
+    await fetch(`+refs/heads/${pr.baseRef}:${ref}`);
+    // Pinned to one commit under the lock, as the jobs step does, so a later fetch can't move it.
+    const pinned = (await git(["rev-parse", "--verify", `${ref}^{commit}`], mirror)).stdout.trim();
+    return { mirror, teamBase: pinned };
+  });
 }
 
 /**

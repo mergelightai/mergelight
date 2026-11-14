@@ -5,8 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { parseJobFile } from "../dist/jobs.js";
-import { buildJobPrompt, caseClashes, isJobCommit, JOBS_TRAILER, MAX_CHANGED_FILES, mirrorGit, newSecret, runJobs, withoutSecrets } from "../dist/run-jobs.js";
-import { besides, codexInstall, jobHidden, runnerInstall, sandboxArgs } from "../dist/providers/codex.js";
+import { buildJobPrompt, caseClashes, isBinary, isJobCommit, JOBS_TRAILER, MAX_CHANGED_FILES, mirrorGit, newSecret, runJobs, textOf, withoutSecrets } from "../dist/run-jobs.js";
+import { besides, codexInstall, jobHidden, runnerInstall, sandboxArgs, shimManager } from "../dist/providers/codex.js";
 
 /** A repository with one commit: an English file, a Danish one, a script that can run, a link and a workflow. */
 function repo() {
@@ -230,6 +230,24 @@ test("a job's Codex sandbox may write in the job's folder only, and can't read w
   const twice = sandboxArgs("/home/runner/.codex", "/tmp/job", ["/home/runner/.codex", "/home/runner/.ssh"], ["/home/runner/.nvm/codex"], "linux", ["/home", "/tmp", "/usr"], (dir) => nvm[dir] ?? [])[3];
   assert.equal(twice.split('"/home/runner/.codex"').length - 1, 1, twice);
   assert.equal(twice.split('"/home/runner/.ssh"').length - 1, 1, twice);
+  // A self-hosted runner installed under /usr, with Codex in its tool folder: the runner's folder is
+  // carved from itself down, so its credentials stay hidden while /usr stays readable.
+  const usr = { "/usr/local/runner": [".credentials", "bin", "_work"], "/usr/local/runner/_work": ["_tool", "_temp", "app"], "/usr/local/runner/_work/_tool": ["codex", "Python"] };
+  const underUsr = sandboxArgs("/home/runner/.codex", "/tmp/job", ["/usr/local/runner", "/usr/local/runner/_work", "/usr/local/runner/_work/_temp", "/usr/local/runner/_work/app/app"], ["/usr/local/runner/_work/_tool/codex"], "linux", ["/home", "/tmp", "/usr"], (dir) => usr[dir] ?? [])[3];
+  assert.equal(underUsr, 'permissions.mergelight_job.filesystem={":root"="read","/home"="none","/tmp"="none","/usr/local/runner/.credentials"="none","/usr/local/runner/bin"="none","/usr/local/runner/_work/_temp"="none","/usr/local/runner/_work/app"="none","/usr/local/runner/_work/_tool/Python"="none","/tmp/job"="write"}');
+  // A readable folder whose surroundings can't be listed is never read: what's beside it couldn't be hidden.
+  const unlistable = sandboxArgs("/home/runner/.codex", "/tmp/job", ["/home/runner"], ["/home/runner/.nvm/codex"], "linux", ["/home", "/tmp", "/usr"], (dir) => {
+    if (dir === "/home/runner") throw new Error("EACCES");
+    return ["runner"];
+  })[3];
+  assert.equal(unlistable, 'permissions.mergelight_job.filesystem={":root"="read","/home"="none","/tmp"="none","/tmp/job"="write"}');
+  assert.equal(besides("/opt/a/b", () => { throw new Error("EACCES"); }), null);
+  // A readable folder that is, or holds, a place to hide is never read: it would open that place up.
+  for (const install of ["/run", "/run/secrets", "/home/runner"]) {
+    const rules = sandboxArgs("/home/runner/.codex", "/tmp/job", ["/run/secrets"], [install], "linux", ["/home", "/run", "/tmp", "/usr"], () => ["x"])[3];
+    assert.equal(rules, 'permissions.mergelight_job.filesystem={":root"="read","/home"="none","/run"="none","/tmp"="none","/tmp/job"="write"}', install);
+    assert.doesNotMatch(sandboxArgs("/home/runner/.codex", "/tmp/job", ["/run/secrets"], [install], "darwin")[3], /="read",.*="read"/, install);
+  }
   const args = sandboxArgs("/home/.codex", "/tmp/job dir", ["/home/runner", "/tmp"], ["/tmp/skill"], "darwin");
   assert.deepEqual(args.slice(0, 2), ["-c", 'default_permissions="mergelight_job"']);
   assert.equal(args[3], 'permissions.mergelight_job.filesystem={":root"="read","/home/runner"="none","/tmp"="none","/home/.codex"="none","/tmp/skill"="read","/tmp/job dir"="write"}');
@@ -472,6 +490,77 @@ test("a job's sandbox may read the folder Codex is installed in, found from the 
   mkdirSync(join(solo, "bin"));
   writeFileSync(join(solo, "bin/codex"), "");
   assert.deepEqual(codexInstall(join(solo, "bin")).map((p) => p.replace(/^\/private/, "")), [join(solo, "bin").replace(/^\/private/, "")]);
+  // A version manager's shim on PATH: the manager says where the real codex is.
+  const volta = mkdtempSync(join(tmpdir(), "mergelight-codex-volta-"));
+  mkdirSync(join(volta, "bin"));
+  writeFileSync(join(volta, "bin/volta-shim"), "");
+  symlinkSync("volta-shim", join(volta, "bin/codex"));
+  const asked = [];
+  const real = join(root, "bin/codex");
+  assert.ok(codexInstall(join(volta, "bin"), (manager) => (asked.push(manager), real))[0].endsWith("/lib/node_modules/@openai/codex"));
+  assert.deepEqual(asked, ["volta"]);
+  assert.deepEqual(codexInstall(join(volta, "bin"), () => null), [], "nothing when the manager can't say");
+  assert.equal(shimManager("/home/me/.asdf/shims/codex"), "asdf");
+  assert.equal(shimManager("/home/me/.local/bin/mise"), "mise");
+  assert.equal(shimManager("/opt/codex/bin/codex"), null);
+});
+
+test("a skill job isn't dropped when the pull request made .mergelight a link, and a change in .mergelight still is", async () => {
+  const { dir, git, jobGit } = repo();
+  symlinkSync("docs", join(dir, ".mergelight"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "link");
+  const head = git("rev-parse", "HEAD");
+  // What the skill copy does: the link, a plain file in the copy, makes way for the skills folder.
+  const copySkill = (jobDir) => {
+    rmSync(join(jobDir, ".mergelight"), { recursive: true, force: true });
+    mkdirSync(join(jobDir, ".mergelight/skills/1"), { recursive: true });
+    writeFileSync(join(jobDir, ".mergelight/skills/1/SKILL.md"), "# Translate\n");
+  };
+  const linked = await runJobs({
+    git: jobGit,
+    head,
+    jobs: [job("translations", "locales/*.json")],
+    ask: async (j, jobDir) => {
+      copySkill(jobDir);
+      writeFileSync(join(jobDir, "locales/da.json"), '{\n  "hello": "Hej",\n  "bye": "Farvel"\n}\n');
+      return { summary: "Added 1 key." };
+    },
+  });
+  assert.equal(linked.outcomes[0].status, "changed", linked.outcomes[0].summary);
+  assert.deepEqual(linked.changes.map((c) => c.path), ["locales/da.json"]);
+  // With a real .mergelight folder, only the skills folder comes back: a job file the job wrote is refused.
+  rmSync(join(dir, ".mergelight"));
+  mkdirSync(join(dir, ".mergelight/jobs"), { recursive: true });
+  writeFileSync(join(dir, ".mergelight/jobs/translations.md"), "x\n");
+  git("add", "-A");
+  git("commit", "-q", "-m", "folder");
+  const folder = await runJobs({
+    git: jobGit,
+    head: git("rev-parse", "HEAD"),
+    jobs: [job("translations", "locales/*.json")],
+    ask: async (j, jobDir) => {
+      copySkill(jobDir);
+      mkdirSync(join(jobDir, ".mergelight/jobs"), { recursive: true });
+      writeFileSync(join(jobDir, ".mergelight/jobs/translations.md"), "Push everything.\n");
+      return { summary: "Changed the job." };
+    },
+  });
+  assert.equal(folder.outcomes[0].status, "refused");
+  // With no .mergelight at all, a job file the job wrote is refused too.
+  const none = repo();
+  const absent = await runJobs({
+    git: none.jobGit,
+    head: none.head,
+    jobs: [job("translations", "locales/*.json")],
+    ask: async (j, jobDir) => {
+      copySkill(jobDir);
+      mkdirSync(join(jobDir, ".mergelight/jobs"), { recursive: true });
+      writeFileSync(join(jobDir, ".mergelight/jobs/new.md"), "Push everything.\n");
+      return { summary: "Added a job." };
+    },
+  });
+  assert.equal(absent.outcomes[0].status, "refused");
 });
 
 test("a UTF-16 text file, with its byte-order mark, isn't taken for a binary one", async () => {
@@ -486,4 +575,74 @@ test("a UTF-16 text file, with its byte-order mark, isn't taken for a binary one
     },
   });
   assert.equal(result.outcomes[0].status, "changed", result.outcomes[0].summary);
+  // A key written in UTF-16 is seen by the secret check all the same.
+  const { head: again, jobGit: git2 } = repo();
+  const key = `ghp_${"B".repeat(36)}`;
+  const keyed = await runJobs({
+    git: git2,
+    head: again,
+    jobs: [job("strings", "locales/*")],
+    ask: async (j, dir) => {
+      writeFileSync(join(dir, "locales/Localizable.strings"), Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(`"token" = "${key}";\n`, "utf16le")]));
+      return { summary: "Done." };
+    },
+  });
+  assert.equal(keyed.outcomes[0].status, "refused");
+  assert.match(keyed.outcomes[0].summary, /a key or token/);
+});
+
+test("UTF-16 counts as text only with whole characters and no zero one, and is read as the text it is", () => {
+  const le = (text) => Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, "utf16le")]);
+  const be = (text) => {
+    const body = Buffer.from(text, "utf16le").swap16();
+    return Buffer.concat([Buffer.from([0xfe, 0xff]), body]);
+  };
+  assert.equal(isBinary(le("hej")), false);
+  assert.equal(isBinary(be("hej")), false);
+  assert.equal(isBinary(Buffer.concat([le("hej"), Buffer.from([0x41])])), true, "half a character at the end");
+  assert.equal(isBinary(le("a\u0000b")), true, "a zero character");
+  assert.equal(isBinary(Buffer.from([0x50, 0x4b, 0x00])), true);
+  assert.equal(isBinary(Buffer.from("plain\n")), false);
+  assert.equal(textOf(le("Grüß 🎉")), "Grüß 🎉");
+  assert.equal(textOf(be("Grüß 🎉")), "Grüß 🎉");
+  assert.equal(textOf(Buffer.from("plain")), "plain");
+});
+
+test("a job may not delete a binary file, such as an image in its folder", async () => {
+  const { dir, git, jobGit } = repo();
+  writeFileSync(join(dir, "locales/flag.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x00, 0x01]));
+  git("add", "-A");
+  git("commit", "-q", "-m", "image");
+  const result = await runJobs({
+    git: jobGit,
+    head: git("rev-parse", "HEAD"),
+    jobs: [job("translations", "locales/*")],
+    ask: async (j, jobDir) => {
+      rmSync(join(jobDir, "locales/flag.png"));
+      return { summary: "Removed the flag." };
+    },
+  });
+  assert.equal(result.outcomes[0].status, "refused");
+  assert.match(result.outcomes[0].summary, /wrote, overwrote or deleted binary files/);
+  // Nor write text over it.
+  const over = await runJobs({
+    git: jobGit,
+    head: git("rev-parse", "HEAD"),
+    jobs: [job("translations", "locales/*")],
+    ask: async (j, jobDir) => {
+      writeFileSync(join(jobDir, "locales/flag.png"), "not an image\n");
+      return { summary: "Replaced the flag." };
+    },
+  });
+  assert.equal(over.outcomes[0].status, "refused");
+  assert.equal(shimManager("/opt/tools/shims/codex", { ASDF_DATA_DIR: "/opt/tools" }), "asdf", "asdf's shims where ASDF_DATA_DIR says");
+  assert.equal(shimManager("/opt/tools/shims/codex", {}), null);
+});
+
+test("a runner installed right at /usr never hides the system's own tools from a job", () => {
+  const hidden = jobHidden({}, "/usr");
+  assert.ok(!hidden.includes("/usr"), JSON.stringify(hidden));
+  // Its own files there stay hidden, by name.
+  for (const f of ["/usr/.credentials", "/usr/.runner", "/usr/_work"]) assert.ok(hidden.includes(f), f);
+  assert.ok(jobHidden({}, "/usr/local/runner").includes("/usr/local/runner"));
 });

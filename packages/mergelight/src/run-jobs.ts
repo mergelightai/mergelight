@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -66,6 +66,8 @@ export interface JobsResult {
 export interface JobGit {
   run(args: string[], env?: Record<string, string>): Promise<RunResult>;
   bytes(args: string[]): Promise<Buffer | null>;
+  /** The first bytes of what git prints, at most max of them: enough to tell text from binary in a file of any size. */
+  head?(args: string[], max: number): Promise<Buffer | null>;
 }
 
 /**
@@ -83,6 +85,34 @@ export function mirrorGit(mirror: string): JobGit {
     bytes: (args) =>
       new Promise((resolve) => {
         execFile("git", [...base, ...args], { env, encoding: "buffer", maxBuffer: 64 * 1024 * 1024, timeout: 120_000 }, (err, stdout) => resolve(err ? null : stdout));
+      }),
+    head: (args, max) =>
+      new Promise((resolve) => {
+        const child = spawn("git", [...base, ...args], { env, stdio: ["ignore", "pipe", "ignore"] });
+        const chunks: Buffer[] = [];
+        let size = 0;
+        let done = false;
+        const finish = (out: Buffer | null) => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          resolve(out);
+        };
+        const timer = setTimeout(() => {
+          child.kill("SIGKILL");
+          finish(null);
+        }, 120_000);
+        child.stdout.on("data", (chunk: Buffer) => {
+          chunks.push(chunk);
+          size += chunk.length;
+          // Enough read: the rest isn't needed, however large the file is.
+          if (size >= max) {
+            child.kill("SIGKILL");
+            finish(Buffer.concat(chunks).subarray(0, max));
+          }
+        });
+        child.on("error", () => finish(null));
+        child.on("close", (code) => finish(code === 0 ? Buffer.concat(chunks) : null));
       }),
   };
 }
@@ -174,6 +204,54 @@ async function readBack(git: JobGit, dir: string, index: string, from: string, k
   return (await must(git, ["write-tree"], { GIT_INDEX_FILE: index })).trim();
 }
 
+/** Which UTF-16 byte-order mark the bytes start with, if any. */
+function utf16Mark(bytes: Uint8Array): "le" | "be" | null {
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) return "le";
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) return "be";
+  return null;
+}
+
+/** A file's text: UTF-16 when it starts with that byte-order mark, UTF-8 otherwise. The secret checks read it this way. */
+export function textOf(bytes: Uint8Array): string {
+  const mark = utf16Mark(bytes);
+  if (!mark) return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("utf8");
+  // A copy, as swapping the bytes of big-endian text changes it in place. A last odd byte is no character.
+  const body = Buffer.from(bytes.subarray(2, 2 + ((bytes.length - 2) & ~1)));
+  if (mark === "be") body.swap16();
+  return body.toString("utf16le");
+}
+
+/**
+ * Git's own test for a binary file: a zero byte near the start. Text in UTF-16, which starts with its
+ * byte-order mark, has zero bytes too, such as an older iOS project's Localizable.strings: it counts as
+ * text only when it has whole characters and none of them is zero. The push step uses the same test, so
+ * a file the jobs keep is one it pushes.
+ */
+export function isBinary(bytes: Uint8Array): boolean {
+  if (utf16Mark(bytes)) return bytes.length % 2 !== 0 || textOf(bytes.subarray(0, 8000)).includes("\u0000");
+  return bytes.subarray(0, 8000).includes(0);
+}
+
+/**
+ * Whether a file git keeps is binary, read from its start only, so a file of any size can be told: the
+ * same test as isBinary, with its size for UTF-16's whole characters. Null when git can't read it.
+ */
+export async function blobIsBinary(git: JobGit, blob: string): Promise<boolean | null> {
+  const sized = await git.run(["cat-file", "-s", blob]);
+  const size = Number(sized.stdout.trim());
+  if (sized.code !== 0 || !Number.isFinite(size)) return null;
+  const start = git.head ? await git.head(["cat-file", "blob", blob], 8002) : await git.bytes(["cat-file", "blob", blob]);
+  if (!start) return null;
+  if ((start[0] === 0xff && start[1] === 0xfe) || (start[0] === 0xfe && start[1] === 0xff)) return size % 2 !== 0 || textOf(start.subarray(0, 8000)).includes("\u0000");
+  return start.subarray(0, 8000).includes(0);
+}
+
+/** Whether the tree has something at path that isn't a folder, such as a link or a file. */
+async function notFolder(git: JobGit, tree: string, path: string): Promise<boolean> {
+  const line = await must(git, ["ls-tree", "--full-tree", tree, "--", path]);
+  return line.trim() !== "" && !/^040000 tree /.test(line);
+}
+
 interface Entry {
   oldMode: string;
   newMode: string;
@@ -233,21 +311,29 @@ async function whyRefused(git: JobGit, job: Job, guarded: string[], headLinks: S
     bytes += Number.isFinite(size) ? size : Infinity;
   }
   if (bytes > MAX_CHANGE_BYTES) return `With it, the jobs would write ${Math.ceil(bytes / 1000).toLocaleString("en-US")} KB, over the limit of ${MAX_CHANGE_BYTES / 1000} KB.`;
+  // Nor delete one, or write text over one, such as an image in its docs folder: a job only ever handles text.
   const binary: string[] = [];
   for (const e of mine) {
-    if (e.status === "D") continue;
-    const head = await git.bytes(["cat-file", "blob", e.newSha]);
-    // Git's own test for a binary file: a zero byte near the start. Text in UTF-16, which starts with its
-    // byte-order mark, has zero bytes too, such as an older iOS project's Localizable.strings.
-    const utf16 = head && ((head[0] === 0xff && head[1] === 0xfe) || (head[0] === 0xfe && head[1] === 0xff));
-    if (!head || (!utf16 && head.subarray(0, 8000).includes(0))) binary.push(e.path);
+    const shas = [...(e.status === "D" ? [] : [e.newSha]), ...(/^0+$/.test(e.oldSha) ? [] : [e.oldSha])];
+    for (const sha of shas) {
+      // A file that can't be told is taken for binary.
+      if ((await blobIsBinary(git, sha)) !== false) {
+        binary.push(e.path);
+        break;
+      }
+    }
   }
-  if (binary.length) return `It wrote binary files, which a job may never write: ${some(binary)}.`;
+  if (binary.length) return `It wrote, overwrote or deleted binary files, which a job may never do: ${some(binary)}.`;
   // A job's files get pushed: one that holds a secret the file didn't have before is never kept.
   for (const e of mine) {
     if (e.status === "D") continue;
-    const next = (await git.bytes(["cat-file", "blob", e.newSha]))?.toString("utf8") ?? "";
-    const before = /^0+$/.test(e.oldSha) ? "" : ((await git.bytes(["cat-file", "blob", e.oldSha]))?.toString("utf8") ?? "");
+    // Read as the text it is, so a key in a UTF-16 file is seen too.
+    const read = async (sha: string) => {
+      const bytes = await git.bytes(["cat-file", "blob", sha]);
+      return bytes ? textOf(bytes) : "";
+    };
+    const next = await read(e.newSha);
+    const before = /^0+$/.test(e.oldSha) ? "" : await read(e.oldSha);
     const secret = newSecret(next, before);
     if (secret) return `It wrote what looks like ${secret === "a key or token" ? "a key or token" : `the runner's ${secret}`} into ${e.path}.`;
   }
@@ -356,7 +442,9 @@ export async function runJobs(o: RunJobsOptions): Promise<JobsResult> {
         clearTimeout(timer);
       }
       // The skill folders come back from the tree: the job's own skill was copied to .mergelight/skills.
-      const tree = await readBack(git, dir, index, current, [...AGENT_SKILL_FOLDERS, ".mergelight/skills"]);
+      // Where the tree has a link or a file at .mergelight, put there by the pull request, the copy replaced
+      // it, so all of .mergelight comes back. Anything else the job wrote under .mergelight still counts.
+      const tree = await readBack(git, dir, index, current, [...AGENT_SKILL_FOLDERS, (await notFolder(git, current, ".mergelight")) ? ".mergelight" : ".mergelight/skills"]);
       const mine = await changed(git, current, tree);
       const summary = summaryOf(answer);
       if (!mine.length) {

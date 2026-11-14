@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { guardedFolders, JOB_FILE, jobsToRun, MAX_JOB_FILES, MAX_JOB_TASK_CHARS, MAX_JOBS, mayChange, parseJobFile, readJobs, refusedPath } from "../dist/jobs.js";
-import { jobFilesFor } from "../dist/workspace.js";
+import { headGuarded, jobFilesFor } from "../dist/workspace.js";
 
 const TRANSLATIONS = "---\nname: translations\non: locales/en.json\nmay-change: locales/*.json\n---\nWhen en.json gets new keys, add each one to every other file in locales/, translated.\n";
 
@@ -150,6 +150,9 @@ test("a job may change only its own paths, and never workflows, Mergelight's fil
     assert.ok(!mayChange(job, p), p);
   }
   assert.ok(mayChange(job, "src/index.ts"));
+  // Build services that run a command from their settings, in any folder, and Heroku's app.json at the root only.
+  for (const p of ["netlify.yml", "site/netlify.yaml", "netlify.json", "vercel.mjs", "apps/web/vercel.js", "vercel.cjs", "vercel.mts", "app.json", "App.JSON", "./app.json"]) assert.ok(refusedPath(p), p);
+  for (const p of ["public/locales/da/app.json", "apps/mobile/app.json"]) assert.ok(mayChange(job, p), p);
   // A refused file name is only the file itself: a folder with that name is ordinary.
   for (const p of ["src/main/resources/templates/owners/ownerDetails.html", "app/views/agent.md/x.md", "docs/codeowners-guide/a.md", "src/integrations/buildkite/client.ts"]) assert.ok(mayChange(job, p), p);
   for (const p of ["src/../package.json", "src/./index.ts", "src//index.ts"]) assert.ok(!mayChange(job, p), p);
@@ -487,4 +490,124 @@ test("an ordinary link to the repository's root doesn't turn jobs off", async ()
   git("add", "-A");
   git("commit", "-q", "-m", "base");
   assert.equal((await jobFilesFor(dir, "main")).incomplete, undefined);
+});
+
+test("a large file that isn't Markdown, named with @, is guarded but doesn't turn jobs off; a large Markdown one does", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-jobs-bigimport-"));
+  const git = (...args) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t.test", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
+  git("init", "-q", "-b", "main");
+  mkdirSync(join(dir, ".mergelight/jobs"), { recursive: true });
+  writeFileSync(join(dir, ".mergelight/jobs/translations.md"), TRANSLATIONS);
+  writeFileSync(join(dir, "package-lock.json"), `{"x":"${"a".repeat(4_100_000)}"}\n`);
+  writeFileSync(join(dir, "CLAUDE.md"), "Versions are in @package-lock.json.\n");
+  git("add", "-A");
+  git("commit", "-q", "-m", "base");
+  const { guarded, incomplete, jobs } = await jobFilesFor(dir, "main");
+  assert.equal(incomplete, undefined);
+  assert.equal(jobs.length, 1);
+  assert.ok(guarded.includes("package-lock.json"));
+  writeFileSync(join(dir, "big.md"), `${"a".repeat(4_100_000)}\n`);
+  writeFileSync(join(dir, "CLAUDE.md"), "Read @big.md.\n");
+  git("add", "-A");
+  git("commit", "-q", "-m", "big markdown");
+  assert.match((await jobFilesFor(dir, "main")).incomplete, /big\.md is too large to check what it imports/);
+});
+
+test("the pull request's own links into protected places are guarded too, and its jobs never count", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-jobs-headguard-"));
+  const git = (...args) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t.test", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
+  git("init", "-q", "-b", "main");
+  mkdirSync(join(dir, "docs"), { recursive: true });
+  writeFileSync(join(dir, "docs/guide.md"), "Guide\n");
+  writeFileSync(join(dir, "AGENTS.md"), "Be kind.\n");
+  git("add", "-A");
+  git("commit", "-q", "-m", "base");
+  // The pull request makes AGENTS.md a link to a file a docs job may change.
+  rmSync(join(dir, "AGENTS.md"));
+  symlinkSync("docs/guide.md", join(dir, "AGENTS.md"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "head");
+  const docs = parseJobFile(".mergelight/jobs/docs.md", "---\non: src\nmay-change: docs\n---\nWrite docs.").job;
+  const head = await headGuarded(dir, "HEAD", [docs]);
+  assert.ok(head.guarded.includes("docs/guide.md"), JSON.stringify(head));
+  assert.ok(!(await jobFilesFor(dir, "HEAD~1", [docs])).guarded.includes("docs/guide.md"), "the base branch alone doesn't guard it");
+  assert.deepEqual((await jobFilesFor(dir, "HEAD")).jobs, [], "the head's own jobs never count");
+});
+
+test("a link that steps out of a folder keeps that folder guarded, and accents count either way", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-jobs-dotdot-"));
+  const git = (...args) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t.test", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
+  git("init", "-q", "-b", "main");
+  mkdirSync(join(dir, "docs/old"), { recursive: true });
+  writeFileSync(join(dir, "docs/old/keep.md"), "x\n");
+  writeFileSync(join(dir, "guide.md"), "Guide\n");
+  symlinkSync("docs/old/../../guide.md", join(dir, "AGENTS.md"));
+  mkdirSync(join(dir, ".mergelight/jobs"), { recursive: true });
+  writeFileSync(join(dir, ".mergelight/jobs/translations.md"), TRANSLATIONS);
+  git("add", "-A");
+  git("commit", "-q", "-m", "base");
+  const { guarded } = await jobFilesFor(dir, "main");
+  assert.ok(guarded.includes("docs/old"), JSON.stringify(guarded));
+  assert.ok(guarded.includes("guide.md"));
+  const { job } = parseJobFile(".mergelight/jobs/x.md", '---\non: src\nmay-change: "**"\n---\nTask.');
+  assert.ok(!mayChange(job, "docs/old/keep.md", guarded), "emptying the folder would make AGENTS.md lead nowhere");
+  // macOS takes é as one character and as e with an accent for the same name.
+  assert.ok(!mayChange(job, "notes/re\u0301sume\u0301.md", ["notes/r\u00e9sum\u00e9.md"]));
+});
+
+test("the guard follows a link in any letter case, as a disk that ignores it opens it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-jobs-case-"));
+  const git = (...args) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t.test", "-c", "core.ignorecase=false", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
+  git("init", "-q", "-b", "main");
+  mkdirSync(join(dir, "docs"), { recursive: true });
+  writeFileSync(join(dir, "docs/guide.md"), "Guide\n");
+  symlinkSync("guide.md", join(dir, "docs/alias.md"));
+  symlinkSync("Docs/alias.md", join(dir, "AGENTS.md"));
+  mkdirSync(join(dir, ".mergelight/jobs"), { recursive: true });
+  writeFileSync(join(dir, ".mergelight/jobs/translations.md"), TRANSLATIONS);
+  git("add", "-A");
+  git("commit", "-q", "-m", "base");
+  const { guarded, incomplete } = await jobFilesFor(dir, "main");
+  assert.equal(incomplete, undefined);
+  assert.ok(guarded.includes("docs/guide.md"), JSON.stringify(guarded));
+});
+
+test("an import spelled in another letter case is read where the tree really has it, imports and all", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-jobs-twocase-"));
+  const git = (...args) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t.test", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
+  git("init", "-q", "-b", "main");
+  // Written with git itself: a disk that ignores letter case can't hold both Docs and docs.
+  const add = (path, text) => {
+    const sha = execFileSync("git", ["-C", dir, "hash-object", "-w", "--stdin"], { input: text, encoding: "utf8" }).trim();
+    git("update-index", "--add", "--cacheinfo", `100644,${sha},${path}`);
+  };
+  add("Docs/keep.txt", "x\n");
+  add("docs/guide.md", "Read @payload.md.\n");
+  add("CLAUDE.md", "See @Docs/guide.md.\n");
+  add(".mergelight/jobs/translations.md", TRANSLATIONS);
+  git("commit", "-q", "-m", "base");
+  const { incomplete, guarded } = await jobFilesFor(dir, "main");
+  assert.equal(incomplete, undefined);
+  assert.ok(guarded.includes("docs/guide.md"), JSON.stringify(guarded));
+  assert.ok(guarded.includes("docs/payload.md"), "what the real guide imports is guarded too");
+});
+
+test("links under a guarded folder are followed in any letter case of its name", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-jobs-caselinks-"));
+  const git = (...args) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t.test", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
+  git("init", "-q", "-b", "main");
+  // Written with git itself: a disk that ignores letter case can't hold both Docs and docs.
+  const add = (path, text, mode = "100644") => {
+    const sha = execFileSync("git", ["-C", dir, "hash-object", "-w", "--stdin"], { input: text, encoding: "utf8" }).trim();
+    git("update-index", "--add", "--cacheinfo", `${mode},${sha},${path}`);
+  };
+  add(".cursor", "Docs", "120000");
+  add("Docs/keep.md", "x\n");
+  add("docs/rules/style.mdc", "../../locales/da.json", "120000");
+  add("locales/da.json", "{}\n");
+  add(".mergelight/jobs/translations.md", TRANSLATIONS);
+  git("commit", "-q", "-m", "base");
+  const { incomplete, guarded } = await jobFilesFor(dir, "main");
+  assert.equal(incomplete, undefined);
+  assert.ok(guarded.includes("locales/da.json"), JSON.stringify(guarded));
 });

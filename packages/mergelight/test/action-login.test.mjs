@@ -256,9 +256,17 @@ test("the review checks with the other AI when it has a login, and with the revi
 test("action.yml is valid YAML, so GitHub can load the action at all", (t) => {
   // GitHub reads action.yml only when a workflow uses the action: a broken one fails in every customer's
   // run, and in no test of this repository. Ruby's YAML parser is on GitHub's runners and on macOS.
-  const ruby = spawnSync("ruby", ["-ryaml", "-e", "YAML.load_file(ARGV[0])", join(root, "action.yml")], { encoding: "utf8" });
-  if (ruby.error) return t.skip("ruby isn't installed here; the tests on GitHub check this too");
-  assert.equal(ruby.status, 0, ruby.stderr.split("\n")[0]);
+  for (const file of ["action.yml", "push-jobs/action.yml"]) {
+    const ruby = spawnSync("ruby", ["-ryaml", "-e", "YAML.load_file(ARGV[0])", join(root, file)], { encoding: "utf8" });
+    if (ruby.error) return t.skip("ruby isn't installed here; the tests on GitHub check this too");
+    assert.equal(ruby.status, 0, `${file}: ${ruby.stderr.split("\n")[0]}`);
+  }
+});
+
+test("the push step for jobs installs no AI and is given no AI login", () => {
+  const push = readFileSync(join(root, "push-jobs/action.yml"), "utf8");
+  assert.doesNotMatch(push, /codex|claude|anthropic|openai|auth-json|oauth/i);
+  assert.match(push, /push-jobs "\$GITHUB_REPOSITORY#\$PR" --from "\$RESULT"/);
 });
 
 test("only the Codex login this Action set up is ever saved", () => {

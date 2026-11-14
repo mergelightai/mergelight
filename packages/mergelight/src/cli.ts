@@ -13,6 +13,7 @@ import { limitNotice, loginNotice } from "./publish/markdown.js";
 import { renderRejected, renderTerminal } from "./render.js";
 import { reviewPullRequest } from "./review.js";
 import { jobsCommand } from "./jobs-command.js";
+import { pushJobs } from "./push-jobs.js";
 import { askForApp, connect, githubConnect } from "./connect.js";
 import { init, realInitDeps } from "./init.js";
 import { realDeps, setup } from "./setup.js";
@@ -30,6 +31,9 @@ Usage
   mergelight connect <pr>                In the Action: connect ChatGPT from the pull request
   mergelight jobs <pr> [--out <file>]    Run the team's jobs from .mergelight/jobs on a pull request, and
                                          write what they changed to a file. Nothing is pushed or posted
+  mergelight push-jobs <pr> --from <file>
+                                         Check a jobs file again against the base branch, and push it as
+                                         one commit to the pull request's branch. Runs no AI
 
   <pr> is a pull request URL, owner/repo#123, or a number inside a clone.
 
@@ -129,6 +133,7 @@ async function main(): Promise<number> {
       reviewer: { type: "string" },
       "verify-missed": { type: "string" },
       "verify-missed-why": { type: "string" },
+      from: { type: "string" },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -174,7 +179,7 @@ async function main(): Promise<number> {
     await serve();
     return 0;
   }
-  if (!["review", "post", "approve", "connect", "jobs"].includes(command) || !target) {
+  if (!["review", "post", "approve", "connect", "jobs", "push-jobs"].includes(command) || !target) {
     process.stderr.write(HELP);
     return 1;
   }
@@ -218,6 +223,19 @@ async function main(): Promise<number> {
       return 1;
     } finally {
       progress.stop();
+    }
+  }
+
+  if (command === "push-jobs") {
+    if (!values.from) {
+      log("push-jobs needs --from <file>, the file mergelight jobs wrote");
+      return 1;
+    }
+    try {
+      return await pushJobs(ref, { from: values.from, dryRun, log });
+    } catch (err) {
+      log(`mergelight: ${err instanceof Error ? err.message : String(err)}`);
+      return 1;
     }
   }
 
