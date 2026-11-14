@@ -265,7 +265,8 @@ export async function pushJobs(ref: PrRef, o: PushJobsOptions): Promise<number> 
         tip &&
         tip.parents.length === 1 &&
         tip.parents[0]?.sha === (result as JobsResult).head &&
-        (tip.commit.message.trim().split("\n").pop() ?? "").startsWith(`${JOBS_TRAILER}:`) &&
+        // The jobs line names the very jobs whose changes these are, as commitMessage writes it.
+        (tip.commit.message.trim().split("\n").pop() ?? "") === `${JOBS_TRAILER}: ${(result as JobsResult).outcomes.filter((o) => o?.status === "changed" && Array.isArray(o.files) && o.files.some((f) => changes.some((c) => c.path === f))).map((o) => o.name).join(", ")}` &&
         changed.size === changes.length &&
         changes.every(sameChange);
       if (ours) {

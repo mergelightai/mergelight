@@ -642,5 +642,7 @@ test("a job may not delete a binary file, such as an image in its folder", async
 test("a runner installed right at /usr never hides the system's own tools from a job", () => {
   const hidden = jobHidden({}, "/usr");
   assert.ok(!hidden.includes("/usr"), JSON.stringify(hidden));
+  // Its own files there stay hidden, by name.
+  for (const f of ["/usr/.credentials", "/usr/.runner", "/usr/_work"]) assert.ok(hidden.includes(f), f);
   assert.ok(jobHidden({}, "/usr/local/runner").includes("/usr/local/runner"));
 });
