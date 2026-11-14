@@ -246,7 +246,7 @@ export async function writeCheck(api: GitHub, id: number | null | undefined, hea
  * Shows a live "Reviewing" check right away, so people and agents can see work is
  * happening. A login that can't write checks hears about it once, from the last write.
  */
-export async function startCheck(api: GitHub, headSha: string, provider?: string, handedOver?: number): Promise<number | null> {
+export async function startCheck(api: GitHub, headSha: string, provider?: string, handedOver?: number, started?: (id: number) => void): Promise<number | null> {
   const tool = provider === "claude" ? "Claude" : provider === "codex" ? "Codex" : null;
   // Always a check of the review's own, for the commit it reads: approvals and verdicts then go to the
   // check this review made, never to an older one.
@@ -258,6 +258,8 @@ export async function startCheck(api: GitHub, headSha: string, provider?: string
       summary: `Mergelight is reviewing this pull request${tool ? ` with ${tool}` : ""} on your own plan. This usually takes 2 to 15 minutes.`,
     },
   });
+  // Known before anything else is asked, so a run cancelled from here on still finishes it.
+  if (run?.id) started?.(run.id);
   // A connect's check left going for this review is closed only now, with this one already going, so
   // there is no moment without a running check, and none with both. Only a check still running: a
   // finished one's verdict stands. It is this run's own, made for this pull request, so also when a push

@@ -277,9 +277,19 @@ export async function askForApp(api: GitHub, number: number, headSha: string, lo
     completed_at: new Date().toISOString(),
     output: { title: "Install the Mergelight AI app", summary: `Install it, then push a new commit: ${INSTALL_URL}` },
   });
-  // No review runs: an approval Mergelight gave an earlier commit must not count for this one, next to a
-  // check that a branch rule takes for passed.
-  await syncApproval(api, number, "yellow", headSha, undefined, { why: UNREVIEWED, otherCommitsOnly: true });
+  await takeBackOlderApprovals(api, number, headSha);
+}
+
+/**
+ * No review runs for this commit: an approval Mergelight gave an earlier one must not count for it, next
+ * to a check that a branch rule takes for passed. Only while this commit is still the newest: a newer run
+ * may have reviewed and approved the newest one meanwhile. One that can't be read is taken for the
+ * newest, as a merge can't be taken back.
+ */
+async function takeBackOlderApprovals(api: GitHub, number: number, headSha: string, log: (line: string) => void = () => {}): Promise<void> {
+  const newest = await (async () => (await api.get<{ head: { sha: string } }>(`pulls/${number}`)).head.sha)().catch(() => headSha);
+  if (newest === headSha) await syncApproval(api, number, "yellow", headSha, log, { why: UNREVIEWED, otherCommitsOnly: true });
+  else log(`A newer commit (${newest.slice(0, 7)}) has its own run, so Mergelight's approvals are left to it.`);
 }
 
 /** The summary holds what earlier rounds found, so a login prompt on a reviewed pull request has to keep that. */
@@ -455,6 +465,12 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
    */
   const handOn = async (title: string, summary: string) => {
     if (!checkId) return;
+    // Outside the Action, no review follows in this run to take the check on. It ends here, cancelled, not
+    // neutral: no review ran, so a branch rule must not take it for passed.
+    if (!env.MERGELIGHT_PROVIDER) {
+      await writeCheck(api, checkId, headSha, { status: "completed", conclusion: "cancelled", completed_at: new Date().toISOString(), output: { title, summary: "No review ran with this. Push a commit, and Mergelight reviews it." } }, log);
+      return;
+    }
     await writeCheck(api, checkId, headSha, { status: "in_progress", output: { title, summary } }, log);
     if (env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, `MERGELIGHT_CHECK_RUN=${checkId}\n`);
   };
@@ -623,13 +639,8 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
       );
       // Finished here: nothing is left for the run's last step to finish. Not finished: it still is.
       if (finished && env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, "MERGELIGHT_CHECK_RUN=\n");
-      // No review runs, as when one fails: an approval Mergelight gave an earlier commit must not count
-      // for this one, next to a check that a branch rule takes for passed. Only while this commit is still
-      // the newest: a newer run may have reviewed and approved the newest one while this one waited. One
-      // that can't be read is taken for the newest, as a merge can't be taken back.
-      const newest = await (async () => (await api.get<{ head: { sha: string } }>(`pulls/${number}`)).head.sha)().catch(() => headSha);
-      if (newest === headSha) await syncApproval(api, number, "yellow", headSha, log, { why: UNREVIEWED, otherCommitsOnly: true });
-      else log(`A newer commit (${newest.slice(0, 7)}) has its own run, so Mergelight's approvals are left to it.`);
+      // No review runs, as when one fails.
+      await takeBackOlderApprovals(api, number, headSha, log);
       log(reason);
     },
   };

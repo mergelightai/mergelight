@@ -483,7 +483,7 @@ test("connecting the AI that checks says so, names who reviews, and that the rev
 });
 
 test("connecting a checker that nobody finishes holds nothing up, and leaves the reviewer as it is", async () => {
-  const env = { GH_TOKEN: "app" };
+  const env = { GH_TOKEN: "app", MERGELIGHT_PROVIDER: "claude" };
   const api = fakeApi(() => false);
   const logs = [];
   const deps = githubConnect(api, 7, "abc", (l) => logs.push(l), env, { purpose: "check", ai: "codex", reviewer: "claude" });
@@ -597,13 +597,33 @@ test("a connect hands its check on to the review, so none stands finished in bet
   const file = join(dir, "env");
   writeFileSync(file, "");
   const api = fakeApi(() => false);
-  const env = { GH_TOKEN: "app", GITHUB_ENV: file, CODEX_HOME: dir };
+  const env = { GH_TOKEN: "app", GITHUB_ENV: file, CODEX_HOME: dir, MERGELIGHT_PROVIDER: "claude" };
   const deps = githubConnect(api, 7, "abc", () => {}, env, { purpose: "check", ai: "codex", reviewer: "claude" });
   await deps.showCode({ url: "https://auth.openai.com/d", code: "AAAA-BBBB" });
   await deps.connected("chatgpt");
   const checks = api.writes.filter((w) => w.path.startsWith("check-runs"));
   assert.ok(checks.every((w) => w.body.status !== "completed"), JSON.stringify(checks.map((w) => w.body.status)));
   assert.match(readFileSync(file, "utf8"), /MERGELIGHT_CHECK_RUN=9\n/);
+});
+
+test("outside the Action no review takes the check on, so a connect ends it, and not as passed", async () => {
+  const api = fakeApi(() => false);
+  const deps = githubConnect(api, 7, "abc", () => {}, { GH_TOKEN: "app", CODEX_HOME: tmpdir() });
+  await deps.showCode({ url: "https://auth.openai.com/d", code: "AAAA-BBBB" });
+  await deps.connected("chatgpt");
+  const last = api.writes.filter((w) => w.path.startsWith("check-runs")).pop();
+  assert.equal(last.body.status, "completed");
+  assert.equal(last.body.conclusion, "cancelled");
+  assert.match(last.body.output.summary, /Push a commit/);
+});
+
+test("asking for the app on a commit that isn't the newest any more leaves the newer one's approval", async () => {
+  const api = fakeApi(() => false);
+  api.get = async () => ({ head: { sha: "newer" } });
+  const list = api.list;
+  api.list = async (path) => (path.endsWith("/reviews") ? [{ id: 35, state: "APPROVED", commit_id: "newer", body: "<!-- mergelight:approval -->", user: { login: "github-actions[bot]" } }] : list(path));
+  await askForApp(api, 7, "abc", "Claude");
+  assert.ok(!api.writes.some((w) => w.path.endsWith("/dismissals")));
 });
 
 test("an approval-only Mergelight step needs no login, and the input must read the secret the login is saved to", () => {
