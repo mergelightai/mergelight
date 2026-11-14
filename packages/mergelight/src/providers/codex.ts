@@ -412,9 +412,16 @@ export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
       const tail = scrubSecrets((result.stderr || result.stdout).trim().split("\n").slice(-6).join("\n"));
       const limit = limitFrom(`${result.stderr}\n${failures.join("\n")}`, "ChatGPT");
       if (limit) throw limit;
-      // Only a ChatGPT login: a refused API key has a different fix.
-      if (process.env.MERGELIGHT_CHATGPT === "1" && LOGIN_FAILURE.test(`${result.stderr}\n${failures.join("\n")}`)) {
-        throw new LoginError(loginFailureMessage(process.env.SECRET_NAME || undefined));
+      // A refused login, whether Codex reviews or checks: a checker's lets the reviewer check instead
+      // (review.ts). Each kind of login has its own fix.
+      if (LOGIN_FAILURE.test(`${result.stderr}\n${failures.join("\n")}`)) {
+        const fix =
+          process.env.MERGELIGHT_CHATGPT === "1"
+            ? loginFailureMessage(process.env.SECRET_NAME || undefined)
+            : process.env.GITHUB_ACTIONS === "true"
+              ? "The OpenAI login didn't work. With an API key, check the OPENAI_API_KEY secret; with a ChatGPT login, connect it again."
+              : "Codex's login didn't work. Run codex login and sign in again.";
+        throw new LoginError(fix);
       }
       throw new Error(`Codex exited with code ${result.code}.${opts.logFile ? ` Log: ${opts.logFile}` : ""}\n${tail}`);
     }

@@ -45,10 +45,12 @@ test("code that mentions a 401 isn't a login problem", async () => {
   assert.ok(!(err instanceof LoginError));
 });
 
-test("a refused API key isn't a ChatGPT login problem", async () => {
+test("a refused API key is a login problem with its own fix, not a ChatGPT one", async () => {
+  // A login error either way, so a checker's lets the reviewer check instead.
   const err = await failingCodex("unexpected status 401 Unauthorized: Incorrect API key", { chatgpt: "0" });
-  assert.ok(!(err instanceof LoginError));
-  assert.match(err.message, /Incorrect API key/);
+  assert.ok(err instanceof LoginError);
+  assert.match(err.message, /OPENAI_API_KEY|codex login/);
+  assert.doesNotMatch(err.message, /CODEX_AUTH_JSON/);
 });
 
 test("other failures keep their own message", async () => {
@@ -118,11 +120,16 @@ async function fakeClaude(stdout, extraEnv = {}) {
 
 const refused = JSON.stringify({ type: "result", subtype: "success", is_error: true, result: "Invalid API key. Please run /login" });
 
-test("a Claude login that doesn't work becomes a clear message", async () => {
-  const { result } = await fakeClaude(refused, { MERGELIGHT_PROVIDER: "claude" });
+test("a Claude login that doesn't work becomes a clear message, whether Claude reviews or checks", async () => {
+  const { result } = await fakeClaude(refused, { MERGELIGHT_PROVIDER: "claude", GITHUB_ACTIONS: "true" });
   assert.ok(result instanceof LoginError);
   assert.match(result.message, /claude setup-token/);
   assert.match(result.message, /CLAUDE_CODE_OAUTH_TOKEN/);
+  const checking = await fakeClaude(refused, { MERGELIGHT_PROVIDER: "codex", GITHUB_ACTIONS: "true" });
+  assert.ok(checking.result instanceof LoginError, "Claude checking a Codex review");
+  const local = await fakeClaude(refused, { GITHUB_ACTIONS: "" });
+  assert.ok(local.result instanceof LoginError);
+  assert.match(local.result.message, /Run claude and log in again/);
 });
 
 test("a Claude plan that hit its limit says so, and when it comes back", async () => {

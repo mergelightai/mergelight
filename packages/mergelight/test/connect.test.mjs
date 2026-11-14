@@ -494,10 +494,15 @@ test("the sign-in gets a terminal from script, in the form each system's script 
 });
 
 test("Claude is asked for only where the workflow can pass its login on to later runs", async () => {
-  assert.equal(claudeInWorkflow("    with:\n      claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n"), "yes");
-  assert.equal(claudeInWorkflow("    steps:\n      - uses: mergelightai/mergelight@v0\n        with:\n          codex-auth-json: x\n"), "no");
+  const step = (inputs) => `jobs:\n  review:\n    steps:\n      - uses: mergelightai/mergelight@v0\n        with:\n${inputs}`;
+  assert.equal(claudeInWorkflow(step("          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n")), "yes");
+  assert.equal(claudeInWorkflow(step("          codex-auth-json: x\n")), "no");
   assert.equal(claudeInWorkflow("jobs:\n  review:\n    uses: acme/ci/.github/workflows/mergelight.yml@main\n    secrets: inherit\n"), "unknown", "a reusable workflow may pass it on");
   assert.equal(claudeInWorkflow(null), "unknown");
+  // Only this job's Mergelight step: another job passing the input on says nothing about this one.
+  const twoJobs = "jobs:\n  build:\n    steps:\n      - run: echo\n        env:\n          claude-code-oauth-token: x\n  review:\n    steps:\n      - name: Review\n        uses: mergelightai/mergelight@v0\n        with:\n          codex-auth-json: x\n";
+  assert.equal(claudeInWorkflow(twoJobs, "claude-code-oauth-token", "review"), "no");
+  assert.equal(claudeInWorkflow(twoJobs, "codex-auth-json", "review"), "yes");
   // Asked for by name in a workflow that doesn't pass it on: the reason says what to add.
   const d = raced({ codexExit: 1, claudeOk: false, codexOutput: [] });
   d.only = "claude";
@@ -514,7 +519,7 @@ test("a checker's ChatGPT login is asked for only where the workflow passes it o
   assert.equal(claudeInWorkflow("    - uses: mergelightai/mergelight@v0\n      with:\n        \"codex-auth-json\": x\n", "codex-auth-json"), "yes", "a quoted name");
   assert.equal(claudeInWorkflow("    - uses: mergelightai/mergelight@v0\n      with: {codex-auth-json: x, provider: claude}\n", "codex-auth-json"), "yes", "a flow mapping");
   assert.equal(claudeInWorkflow("    - uses: acme/mergelight-wrapper@v1\n      with:\n        chatgpt: x\n", "codex-auth-json"), "unknown", "a wrapper with another name may pass it on");
-  assert.equal(claudeInWorkflow("  with:\n    codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}\n", "codex-auth-json"), "yes");
+  assert.equal(claudeInWorkflow("    - uses: mergelightai/mergelight@v0\n      with:\n        codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}\n", "codex-auth-json"), "yes");
   const d = deps([], 1);
   d.chatgptUnavailable = () => chatgptInputMissing("MY_LOGIN");
   assert.equal(await connect(d), 1);

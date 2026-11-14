@@ -297,28 +297,44 @@ export function withState(body: string, previous: string | undefined): string {
  * doesn't, so connecting Claude there would only ask again next time: "no". A workflow that calls a
  * reusable one may pass it on in a file this can't tell, and one that can't be read can't say: "unknown".
  */
-export function claudeInWorkflow(text: string | null, input = "claude-code-oauth-token"): "yes" | "no" | "unknown" {
+export function claudeInWorkflow(text: string | null, input = "claude-code-oauth-token", job?: string): "yes" | "no" | "unknown" {
   if (text === null) return "unknown";
   // Lines that are code, not comments: a line commented out passes nothing on.
-  const code = text
-    .split("\n")
-    .map((line) => line.replace(/(^|\s)#.*$/, ""))
-    .join("\n");
-  // The name may be quoted, as YAML allows.
-  if (new RegExp(`(^|[\\s{,])["']?${input}["']?\\s*:`, "m").test(code)) return "yes";
-  // A sure "no" only where the workflow uses Mergelight itself, in plain sight. A reusable workflow or a
-  // composite action of the team's own may pass the login on in a file this can't see.
-  // Mergelight itself, or a fork of it: a repository named mergelight. A wrapper with another name may pass it on.
-  const direct = /^\s*(?:-\s*)?uses:\s*["']?[^\s"'/]+\/mergelight@/im.test(code);
-  const wrapped = /^\s*(?:-\s*)?uses:\s*["']?(?:\.\/|[^\s"']*\.github\/workflows\/)/m.test(code);
-  return direct && !wrapped ? "no" : "unknown";
+  let lines = text.split("\n").map((line) => line.replace(/(^|\s)#.*$/, ""));
+  const indent = (line: string) => line.match(/^\s*/)![0].length;
+  // Only this run's job: an input another job passes on doesn't reach this one.
+  if (job) {
+    const at = lines.findIndex((line) => new RegExp(`^\\s+["']?${job.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}["']?\\s*:\\s*$`).test(line));
+    if (at >= 0) {
+      let end = at + 1;
+      while (end < lines.length && (!lines[end]!.trim() || indent(lines[end]!) > indent(lines[at]!))) end++;
+      lines = lines.slice(at, end);
+    }
+  }
+  // Each step that uses Mergelight itself, or a fork of it (a repository named mergelight), from its "-" on.
+  const steps: string[] = [];
+  lines.forEach((line, i) => {
+    if (!/^\s*(?:-\s*)?uses:\s*["']?[^\s"'/]+\/mergelight@/i.test(line)) return;
+    let start = i;
+    while (start > 0 && !/^\s*-\s/.test(lines[start]!)) start--;
+    const dash = indent(lines[start]!);
+    let end = start + 1;
+    while (end < lines.length && (!lines[end]!.trim() || indent(lines[end]!) > dash)) end++;
+    steps.push(lines.slice(start, end).join("\n"));
+  });
+  // A reusable workflow or a composite action of the team's own may pass the login on in a file this
+  // can't see: unless Mergelight is used here in plain sight, it can't say.
+  if (!steps.length) return "unknown";
+  // The name may be quoted, or in a flow mapping, as YAML allows. Every Mergelight step here must pass it.
+  const passes = (step: string) => new RegExp(`(^|[\\s{,])["']?${input}["']?\\s*:`, "m").test(step);
+  return steps.every(passes) ? "yes" : "no";
 }
 
 async function workflowHasClaude(api: GitHub, env: NodeJS.ProcessEnv, input = "claude-code-oauth-token"): Promise<"yes" | "no" | "unknown"> {
   const [, path, ref] = (env.GITHUB_WORKFLOW_REF ?? "").match(/^[^/]+\/[^/]+\/(.+?)@(.+)$/) ?? [];
   if (!path || !ref) return "unknown";
   const text = await api.get<{ content: string }>(`contents/${path}?ref=${encodeURIComponent(env.GITHUB_SHA ?? ref)}`).then((f) => Buffer.from(f.content, "base64").toString("utf8"), () => null);
-  return claudeInWorkflow(text, input);
+  return claudeInWorkflow(text, input, env.GITHUB_JOB);
 }
 
 /** The same for a ChatGPT login: a workflow that doesn't pass codex-auth-json would never see one saved now. */

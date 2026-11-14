@@ -76,9 +76,9 @@ export async function runClaude(opts: ModelOptions): Promise<ModelResult> {
     env: claudeEnv(),
   });
   const checkLogin = (text: string) => {
-    // In the Action, Claude's login is the repository's, whether Claude reviews or checks: a rejected one is
-    // said plainly, and a checker's lets the reviewer check instead (review.ts).
-    if ((process.env.MERGELIGHT_PROVIDER === "claude" || process.env.MERGELIGHT_VERIFY === "claude") && LOGIN_FAILURE.test(text)) throw new LoginError(claudeLoginMessage(), "Claude");
+    // A rejected login is said plainly, whether Claude reviews or checks, and a checker's lets the reviewer
+    // check instead (review.ts). In the Action the login is the repository's secret; elsewhere, your own.
+    if (LOGIN_FAILURE.test(text)) throw new LoginError(process.env.GITHUB_ACTIONS === "true" ? claudeLoginMessage() : "Claude Code's login didn't work. Run claude and log in again.", "Claude");
   };
   if (opts.logFile) {
     mkdirSync(join(opts.logFile, ".."), { recursive: true });
