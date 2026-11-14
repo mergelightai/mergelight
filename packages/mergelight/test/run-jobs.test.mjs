@@ -645,4 +645,6 @@ test("a runner installed right at /usr never hides the system's own tools from a
   // Its own files there stay hidden, by name.
   for (const f of ["/usr/.credentials", "/usr/.runner", "/usr/_work"]) assert.ok(hidden.includes(f), f);
   assert.ok(jobHidden({}, "/usr/local/runner").includes("/usr/local/runner"));
+  // A credential a tool is pointed at stays hidden, even in a system folder.
+  assert.ok(jobHidden({ GH_CONFIG_DIR: "/etc/gh" }, null).includes("/etc/gh"));
 });

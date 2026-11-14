@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { appendFileSync, readFileSync } from "node:fs";
 import { fetchPullRequest, type PrRef } from "./github.js";
-import { jobsToRun, mayChange, type Job } from "./jobs.js";
+import { folded as sameName, jobsToRun, mayChange, type Job } from "./jobs.js";
 import { GitHub } from "./publish/api.js";
 import { blobIsBinary, isBinary, isJobCommit, JOBS_TRAILER, MAX_CHANGE_BYTES, MAX_CHANGED_FILES, mirrorGit, newSecret, textOf, withoutSecrets, type JobsResult } from "./run-jobs.js";
 import { fetchMirror, headGuarded, jobFilesFor } from "./workspace.js";
@@ -39,7 +39,7 @@ function plainPath(path: unknown): path is string {
 }
 
 /** A path as macOS and Windows compare it: letter case and Unicode composition don't count. As run-jobs.ts does. */
-const folded = (path: string) => path.normalize("NFC").toUpperCase().toLowerCase();
+const folded = sameName;
 
 /**
  * Checks a jobs result against the jobs that this pull request starts on the base branch, and against
