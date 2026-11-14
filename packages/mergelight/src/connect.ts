@@ -326,10 +326,11 @@ export function claudeInWorkflow(text: string | null, input = "claude-code-oauth
   // can't see: unless Mergelight is used here in plain sight, it can't say. Nor through YAML's shared
   // parts (an alias like *inputs, or a << merge), which this doesn't follow.
   if (!steps.length || steps.some((step) => /(^|[\s:{,\[])\*[\w-]+|<<\s*:/m.test(step))) return "unknown";
-  // The name may be quoted, or in a flow mapping, as YAML allows. One step of this job passing it on is
-  // enough: a job can hold Mergelight steps that run on other conditions, and they share the secret.
+  // The name may be quoted, or in a flow mapping, as YAML allows. Every Mergelight step of this job must
+  // pass it on: which one runs now can't be told from here, and a login saved for a step that doesn't
+  // pass it on would replace the one another step uses. The message then says what to add.
   const passes = (step: string) => new RegExp(`(^|[\\s{,])["']?${input}["']?\\s*:`, "m").test(step);
-  return steps.some(passes) ? "yes" : "no";
+  return steps.every(passes) ? "yes" : "no";
 }
 
 async function workflowHasClaude(api: GitHub, env: NodeJS.ProcessEnv, input = "claude-code-oauth-token"): Promise<"yes" | "no" | "unknown"> {
@@ -439,7 +440,8 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
       return new Promise<number>((resolve, reject) => {
         const child = spawn("codex", ["login", "--device-auth"], { stdio: ["ignore", "pipe", "pipe"] });
         running = child;
-        const timer = setTimeout(() => child.kill("SIGTERM"), LOGIN_TIMEOUT_MS);
+        // A checker's prompt promises the review starts after 15 minutes.
+        const timer = setTimeout(() => child.kill("SIGTERM"), checker ? CHECK_WAIT_MS : LOGIN_TIMEOUT_MS);
         child.stdout.setEncoding("utf8").on("data", onOutput);
         child.stderr.setEncoding("utf8").on("data", onOutput);
         child.on("error", (err) => {
@@ -508,6 +510,8 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
       } catch {
         // Without the file the note just doesn't name the account.
       }
+      // A ChatGPT login now, as one from the secret would be, so a rejected one is called that.
+      if (env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, "MERGELIGHT_CHATGPT=1\n");
       await api.write("POST", `issues/${number}/comments`, { body: connectedBody(connectedAccount(auth), env.SECRET_NAME || "CODEX_AUTH_JSON") });
       await finish("Connected to ChatGPT", "Starting the review.");
       log("Connected to ChatGPT.");

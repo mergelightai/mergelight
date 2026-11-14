@@ -187,10 +187,11 @@ runs:
           if [ "$checker" = claude ]; then checker_has="$HAS_CLAUDE"; else checker_has="$HAS_CODEX"; fi
           if [ "$provider" = claude ]; then reviewer_has="$HAS_CLAUDE"; else reviewer_has="$HAS_CODEX"; fi
           if [ -z "$checker_has" ] && [ -n "$can_ask" ] && [ -n "$reviewer_has" ]; then
-            if [ "$checker" = codex ] && [ "${VISIBILITY:-}" = public ]; then
+            if [ "$checker" = codex ] && [ "${VISIBILITY:-}" != private ]; then
               # Anyone who can see the pull request could enter a ChatGPT code shown there, and pick whose
-              # account checks. Claude's link instead goes through mergelight.dev, where you sign in.
-              echo "::notice::Codex is set to check, but on a public repository anyone could enter a ChatGPT code shown here, so none is shown. Save the ChatGPT login as the CODEX_AUTH_JSON secret yourself (npx @mergelight/cli setup $GITHUB_REPOSITORY --relogin). This review is checked by $provider."
+              # account checks: only a private repository shows one, and one that can't be told doesn't.
+              # Claude's link instead goes through mergelight.dev, where you sign in.
+              echo "::notice::Codex is set to check, but only a private repository shows a ChatGPT code, as anyone who can see the pull request could enter it. Save the ChatGPT login as the CODEX_AUTH_JSON secret yourself (npx @mergelight/cli setup $GITHUB_REPOSITORY --relogin). This review is checked by $provider."
             elif [ "$checker" = codex ] && [ -z "$WANTED" ]; then
               # Claude reviews only because it has the one login: with a ChatGPT login saved too, the next
               # run would pick Codex to review. So the sign-in waits for the workflow to say who reviews.
@@ -296,7 +297,15 @@ runs:
           sha256sum "$CODEX_HOME/auth.json" | cut -d' ' -f1 > "$RUNNER_TEMP/codex-auth.sha256"
           echo "MERGELIGHT_CHATGPT=1" >> "$GITHUB_ENV"
         elif [ -n "$API_KEY" ]; then
-          printf '%s' "$API_KEY" | codex login --with-api-key
+          if ! printf '%s' "$API_KEY" | codex login --with-api-key; then
+            # Codex only checking: the reviewer checks instead, and the review goes on.
+            if [ "${MERGELIGHT_PROVIDER:-codex}" != codex ]; then
+              echo "::warning::Codex couldn't log in with the OpenAI API key, so $MERGELIGHT_PROVIDER checks this review."
+              echo "MERGELIGHT_USES_CODEX=0" >> "$GITHUB_ENV"
+            else
+              exit 1
+            fi
+          fi
         elif [ "${MERGELIGHT_PROVIDER:-codex}" != codex ]; then
           # Codex only checks. Without a login it is connected further on when it can be, and otherwise
           # the reviewer checks: the review itself goes ahead either way.

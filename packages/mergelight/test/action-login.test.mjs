@@ -315,7 +315,9 @@ test("a checker that can't be installed lets the reviewer check, and a reviewer 
 test("on a public repository no ChatGPT code is shown for a checker, and Claude's link still is", () => {
   const open = choose({ wanted: "claude", claude: "1", checker: "codex", visibility: "public" });
   assert.equal(open.env.MERGELIGHT_CONNECT_CHECK, "");
-  assert.match(open.out, /anyone could enter a ChatGPT code/);
+  assert.match(open.out, /anyone who can see the pull request could enter it/);
+  // Only a private repository shows one: an internal one, or one that can't be told, doesn't.
+  for (const visibility of ["internal", ""]) assert.equal(choose({ wanted: "claude", claude: "1", checker: "codex", visibility }).env.MERGELIGHT_CONNECT_CHECK, "", visibility);
   assert.equal(open.env.MERGELIGHT_USES_CODEX, "0");
   assert.equal(choose({ wanted: "codex", codex: "1", checker: "claude", visibility: "public" }).env.MERGELIGHT_CONNECT_CHECK, "claude", "Claude's link goes through mergelight.dev, where you sign in");
 });
