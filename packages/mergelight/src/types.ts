@@ -114,6 +114,8 @@ export interface Review {
   team_checks?: TeamCheckResult[];
   /** Actions a changed workflow uses whose code the reviewers couldn't see. */
   not_read?: { uses: string; why: "program" | "unreadable" }[];
+  /** What the team's jobs did on this pull request just before the review, when any ran. */
+  jobs?: JobsReport;
   stats: {
     duration_ms: number;
     diff_chars: number;
@@ -149,4 +151,19 @@ export interface TeamCheckResult {
   summary: string;
   /** Where the pull request breaks the check. line is 0 when no one line stands for it. */
   problems: { file: string; line: number; note: string }[];
+}
+
+/** What the team's jobs did, for the summary. Built from the jobs step's file and the push step's answer. */
+export interface JobsReport {
+  /** The commit the jobs pushed, when they pushed one. */
+  commit?: string;
+  /** Why what the jobs changed wasn't pushed, when it wasn't. */
+  notPushed?: string;
+  outcomes: { name: string; status: "changed" | "nothing" | "refused" | "failed"; files: number; summary: string }[];
+  /** Job files that were left out, and why. */
+  problems: { source: string; problem: string }[];
+  /** How many more job files were left out than the list holds. */
+  moreProblems?: number;
+  /** Whether this review read the commit the jobs pushed. */
+  reviewed?: boolean;
 }
