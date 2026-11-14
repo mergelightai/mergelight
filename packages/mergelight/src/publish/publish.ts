@@ -258,8 +258,10 @@ export async function startCheck(api: GitHub, headSha: string, provider?: string
     },
   });
   // A connect's check left going for this review is closed only now, with this one already going, so
-  // there is no moment without a running check, and none with both.
-  if (handedOver) {
+  // there is no moment without a running check, and none with both. Only a check still running, for
+  // this very commit: never a finished one, whose verdict stands, nor another commit's.
+  const old = handedOver ? await api.get<{ status: string; head_sha: string }>(`check-runs/${handedOver}`).catch(() => null) : null;
+  if (handedOver && old && old.status !== "completed" && old.head_sha === headSha) {
     await writeCheck(api, handedOver, headSha, {
       status: "completed",
       conclusion: "neutral",

@@ -679,13 +679,19 @@ test("a failed review keeps what earlier rounds found, when it replaces a pendin
 
 test("the review starts a check of its own, and closes a connect's check only once its own is going", async () => {
   const writes = [];
-  const api = { write: async (method, path, body) => (writes.push({ path, body }), { id: path === "check-runs" ? 10 : 9 }) };
-  assert.equal(await startCheck(api, "new", "codex", 9), 10);
+  const api = (old) => ({ get: async () => old, write: async (method, path, body) => (writes.push({ path, body }), { id: path === "check-runs" ? 10 : 9 }) });
+  assert.equal(await startCheck(api({ status: "in_progress", head_sha: "new" }), "new", "codex", 9), 10);
   // Its own first, then the connect's closed: there is no moment with neither, and none with both.
   assert.deepEqual(writes.map((w) => [w.path, w.body.conclusion ?? w.body.status]), [["check-runs", "in_progress"], ["check-runs/9", "neutral"]]);
   writes.length = 0;
-  assert.equal(await startCheck(api, "new", "codex"), 10);
+  assert.equal(await startCheck(api(null), "new", "codex"), 10);
   assert.equal(writes.length, 1);
+  // A finished verdict, or another commit's check, is never touched.
+  for (const old of [{ status: "completed", head_sha: "new" }, { status: "in_progress", head_sha: "other" }, null]) {
+    writes.length = 0;
+    await startCheck(api(old), "new", "codex", 9);
+    assert.ok(!writes.some((w) => w.path === "check-runs/9"), JSON.stringify(old));
+  }
 });
 
 

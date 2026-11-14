@@ -530,8 +530,9 @@ runs:
       env:
         GH_TOKEN: ${{ steps.app.outputs.token || inputs.github-token }}
       run: |
+        # Only a check known to be still running: a finished verdict stands, and one that can't be read is left.
         status="$(gh api "repos/$GITHUB_REPOSITORY/check-runs/$MERGELIGHT_CHECK_RUN" --jq .status 2>/dev/null || echo unknown)"
-        [ "$status" = completed ] && exit 0
+        if [ "$status" != in_progress ] && [ "$status" != queued ]; then exit 0; fi
         gh api -X PATCH "repos/$GITHUB_REPOSITORY/check-runs/$MERGELIGHT_CHECK_RUN" \
           -f status=completed -f conclusion=neutral \
           -f "output[title]=Couldn't review this pull request: the run stopped first" \

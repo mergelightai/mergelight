@@ -396,6 +396,8 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
   let claudeOffered = false;
   /** Whether the prompt reached the pull request: only then is there a prompt to replace. */
   let prompted = false;
+  /** What tells this run's prompt apart from another run's. */
+  let promptMark = "";
   /** Why Claude isn't offered, when the workflow is the reason. */
   let claudeMissing: string | undefined;
   let chatgptMissing: string | undefined;
@@ -505,6 +507,7 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
       // What tells this run's prompt apart from any other: its code, or its Claude link as the hidden line
       // keeps it, with "--" escaped. The review that starts after it replaces this one, and no other.
       const mark = login?.code ?? (claudeUrl ? JSON.stringify(claudeUrl).slice(1, -1).replace(/--/g, "\\u002d\\u002d") : "");
+      promptMark = mark;
       if (mark && env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, `MERGELIGHT_PROMPT=${mark}\n`);
       // What tells this run's prompt apart from any other: its code, or its Claude link.
       await upsertSummary(api, number, checker ? connectCheckBody(checker, reviewer, login, runUrl, claudeUrl, setupLink) : connectBody(login, runUrl, claudeUrl, setupLink));
@@ -526,8 +529,10 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
       }
     },
     connected: async (via = "chatgpt") => {
-      // A comment that can't be updated mustn't leave the check waiting.
-      await updateSummary(pendingSummaryBody()).catch((err) => log(`Couldn't update the comment: ${err instanceof Error ? err.message : String(err)}`));
+      // Only while the summary is still this run's prompt: another run may have posted its own since. A
+      // comment that can't be updated mustn't leave the check waiting.
+      const { summary } = await readPrReviewState(api, number).catch(() => ({ summary: undefined }));
+      if (!promptMark || summary?.body?.includes(promptMark)) await updateSummary(pendingSummaryBody()).catch((err) => log(`Couldn't update the comment: ${err instanceof Error ? err.message : String(err)}`));
       if (checker) {
         let account: string | null = null;
         if (checker === "codex") {
