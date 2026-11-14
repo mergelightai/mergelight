@@ -21,14 +21,15 @@ export class LoginError extends Error {
 }
 
 /** Whose login: a ChatGPT plan, a Claude plan, or an OpenAI API key. */
-export type Plan = "ChatGPT" | "Claude" | "OpenAI" | "Codex";
+export type Plan = "ChatGPT" | "Claude" | "OpenAI" | "Anthropic" | "Codex";
 
 /** The plan has no usage left. Nothing is broken, so the person only needs to know that and when it comes back. */
 export class LimitError extends Error {
   plan: Plan;
   resets: string | null;
   constructor(plan: Plan, resets: string | null) {
-    super(`Your ${plan} plan hit its usage limit.${resets ? ` Resets: ${resets}.` : ""}`);
+    // An API key's credit is no plan: it says so, so nobody looks for usage on a plan that has some.
+    super(plan === "OpenAI" || plan === "Anthropic" ? `The ${plan} API key has no credit left.` : `Your ${plan} plan hit its usage limit.${resets ? ` Resets: ${resets}.` : ""}`);
     this.plan = plan;
     this.resets = resets;
   }
@@ -43,7 +44,7 @@ const API_BALANCE = /insufficient_quota|exceeded your current quota|credit balan
 export function limitFrom(text: string, plan: Plan): LimitError | null {
   const line = text.split("\n").find((l) => LIMIT_HIT.test(l));
   // An API key's balance used up is a limit too: OpenAI's "insufficient_quota", Anthropic's "credit balance is too low".
-  if (!line) return API_BALANCE.test(text) ? new LimitError(plan === "ChatGPT" ? "OpenAI" : plan, null) : null;
+  if (!line) return API_BALANCE.test(text) ? new LimitError(plan === "Claude" ? "Anthropic" : "OpenAI", null) : null;
   const resets = line.match(new RegExp(`\\bresets\\s+(${WHEN})`, "i"))?.[1]?.trim();
   if (resets) return new LimitError(plan, resets);
   const retry = line.match(new RegExp(`\\btry again at\\s+(${WHEN})`, "i"))?.[1]?.trim();

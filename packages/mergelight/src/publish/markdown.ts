@@ -26,8 +26,8 @@ export function checkerMissedLine(r: Pick<Review, "checker_missed" | "checker_mi
     "not-installed": `${name(r.checker_missed)} couldn't be installed on this run`,
     // Codex's could be a ChatGPT login or an OpenAI API key: the run log says which.
     "login-failed": r.checker_missed === "codex" ? "its login didn't work" : `its ${login} login didn't work`,
-    // Codex's could be a ChatGPT plan or an API key's credit.
-    limit: r.checker_missed === "codex" ? "it hit its usage limit" : `its ${login} plan hit its usage limit`,
+    // A plan's usage or an API key's credit: it can be either.
+    limit: "it hit its usage limit",
     sandbox: `${name(r.checker_missed)}'s sandbox couldn't start on this runner`,
   }[r.checker_missed_why ?? "no-login"];
   return `⚠️ ${name(r.checker_missed)} was set to check this review, but ${why}, so ${name(r.provider.name)} checked it.`;
@@ -128,6 +128,10 @@ export interface FailureNotice {
 export const loginNotice = (plan: string, reason: string): FailureNotice => ({ heading: `⚠️ Mergelight: the ${plan} login didn't work`, body: reason });
 
 export function limitNotice(plan: string, resets: string | null): FailureNotice {
+  // An API key's credit, not a plan: the fix is adding credit.
+  if (plan === "OpenAI" || plan === "Anthropic") {
+    return { heading: `⏳ Mergelight: the ${plan} API key has no credit left`, body: `This pull request wasn't reviewed, because the ${plan} API key has no credit left. Add credit to its account, then push a new commit, and the review runs again.` };
+  }
   const reason = `This pull request wasn't reviewed, because your ${plan} plan has no usage left.`;
   return {
     heading: `⏳ Mergelight: your ${plan} plan hit its limit`,
@@ -268,7 +272,9 @@ export function summaryBody({ review: r, state, urls, marks = new Map(), handled
   const done = state.findings.filter((f) => dropped.includes(f) || (f.status === "gone" && handled.has(f.id)));
   const gone = state.round > 1 ? state.findings.filter((f) => f.status === "gone" && f.tier !== "hardening" && !done.includes(f)) : [];
 
-  const out: string[] = [SUMMARY_MARKER, ...(update ? updateBanner(update) : []), `### ${light.dot} Mergelight: ${light.label}`, "", clean(r.summary), "", `**${headline(r, done.length)}**`];
+  // The other AI not checking is said up top, where a long summary never cuts it.
+  const missed = checkerMissedLine(r);
+  const out: string[] = [SUMMARY_MARKER, ...(update ? updateBanner(update) : []), `### ${light.dot} Mergelight: ${light.label}`, "", clean(r.summary), ...(missed ? ["", missed] : []), "", `**${headline(r, done.length)}**`];
 
   if (top.length) {
     out.push("", "#### To fix");
@@ -320,8 +326,7 @@ export function summaryBody({ review: r, state, urls, marks = new Map(), handled
 
   const unread = notReadLine(r.not_read);
   if (unread) out.push("", unread);
-  const missed = checkerMissedLine(r);
-  if (missed) out.push("", missed);
+
 
   const reviewer = modelLabel(r.provider.name, r.provider.model);
   const checker = r.verifier ? modelLabel(r.verifier.name, r.verifier.model) : reviewer;

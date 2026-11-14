@@ -337,10 +337,10 @@ export function claudeInWorkflow(text: string | null, input = "claude-code-oauth
   const passes = (step: string) => {
     const value = new RegExp(`(?:^|[\\s{,])["']?${input}["']?\\s*:\\s*([^\\n,}]*)`, "m").exec(step)?.[1];
     if (value === undefined) return false;
-    // secrets.NAME or secrets['NAME'], in any letter case, as GitHub reads secret names.
-    const ref = /secrets(?:\.([A-Za-z0-9_]+)|\[\s*["']([A-Za-z0-9_]+)["']\s*\])/i.exec(value);
-    const named = ref?.[1] ?? ref?.[2];
-    return !secret || !named || named.toUpperCase() === secret.toUpperCase();
+    // secrets.NAME or secrets['NAME'], in any letter case, as GitHub reads secret names. With a fallback,
+    // like secrets.A || secrets.B, one of them being the secret is enough.
+    const named = [...value.matchAll(/secrets(?:\.([A-Za-z0-9_]+)|\[\s*["']([A-Za-z0-9_]+)["']\s*\])/gi)].map((m) => (m[1] ?? m[2])!.toUpperCase());
+    return !secret || !named.length || named.includes(secret.toUpperCase());
   };
   return steps.every(passes) ? "yes" : "no";
 }
@@ -493,6 +493,8 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
             : { title: onlyClaude ? "Waiting for you to connect Claude" : claudeUrl ? "Waiting for you to connect your AI" : "Waiting for you to connect ChatGPT", summary: "Follow the steps in the pull request's Mergelight comment." },
         }, log);
         checkId = run?.id ?? null;
+        // Known from now on: if the run is cancelled while it waits, its last step finishes this check.
+        if (checkId && env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, `MERGELIGHT_CHECK_RUN=${checkId}\n`);
       } catch (err) {
         log(`Couldn't show the waiting check: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -559,6 +561,8 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
       // One failed write mustn't stop the other. Only the app that made a check can finish it.
       await updateSummary(connectFailedBody(reason, claudeOffered, onlyClaude)).catch((err) => log(`Couldn't update the comment: ${err instanceof Error ? err.message : String(err)}`));
       await finish(CHECK_FAILED_TITLE, reason).catch((err) => log(`Couldn't finish the check: ${err instanceof Error ? err.message : String(err)}`));
+      // Finished here: nothing is left for the run's last step to finish.
+      if (env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, "MERGELIGHT_CHECK_RUN=\n");
       log(reason);
     },
   };

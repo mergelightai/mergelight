@@ -690,3 +690,10 @@ test("a check a connect left going is carried on only for the commit it was made
   assert.equal(await startCheck(api("old"), "new", "codex", 9), 10);
   assert.deepEqual(writes.map((w) => [w.path, w.body.conclusion ?? w.body.status]), [["check-runs/9", "neutral"], ["check-runs", "in_progress"]]);
 });
+
+test("an API key with no credit is said to have no credit, not a plan with no usage", () => {
+  const notice = limitNotice("Anthropic", null);
+  assert.match(notice.heading, /the Anthropic API key has no credit left/);
+  assert.match(notice.body, /Add credit to its account/);
+  assert.match(limitNotice("Claude", "9am").heading, /your Claude plan hit its limit/);
+});

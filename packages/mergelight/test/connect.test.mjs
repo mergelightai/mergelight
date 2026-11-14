@@ -574,3 +574,9 @@ test("a secret named in brackets or another letter case is read as GitHub reads 
   assert.equal(claudeInWorkflow(job("${{ secrets.codex_auth_json }}"), "codex-auth-json", "review", "CODEX_AUTH_JSON"), "yes");
   assert.equal(claudeInWorkflow(job("${{ secrets[\"CODEX_AUTH_JSON\"] }}"), "codex-auth-json", "review", "CODEX_AUTH_JSON"), "yes");
 });
+
+test("a secret fallback naming the save secret passes the login on", () => {
+  const job = (value) => `jobs:\n  review:\n    steps:\n      - uses: mergelightai/mergelight@v0\n        with:\n          claude-code-oauth-token: ${value}\n`;
+  assert.equal(claudeInWorkflow(job("${{ secrets.CLAUDE_LOGIN || secrets.CLAUDE_CODE_OAUTH_TOKEN }}"), "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "yes");
+  assert.equal(claudeInWorkflow(job("${{ secrets.CLAUDE_LOGIN || secrets.OTHER }}"), "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "no");
+});

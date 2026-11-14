@@ -519,10 +519,12 @@ runs:
         esac
         node "$GITHUB_ACTION_PATH/packages/mergelight/dist/cli.js" "${args[@]}"
 
-    # A connect left its check going for the review to carry on. When the review never started, such as
-    # when saving the new login failed, the check is finished here, so it doesn't wait for ever.
+    # A connect's check that nobody took over: the review takes it over and clears this, and a connect
+    # that finishes its own check does too. Left over, as when saving the new login failed, the review
+    # failed before it started, or the run was cancelled during the sign-in, it is finished here, so it
+    # doesn't wait for ever.
     - name: Finish a check the review didn't carry on
-      if: always() && github.event_name != 'pull_request_review' && env.MERGELIGHT_CHECK_RUN != '' && steps.review.outcome != 'success' && steps.review.outcome != 'failure'
+      if: always() && github.event_name != 'pull_request_review' && env.MERGELIGHT_CHECK_RUN != ''
       shell: bash
       env:
         GH_TOKEN: ${{ steps.app.outputs.token || inputs.github-token }}
@@ -530,7 +532,7 @@ runs:
         gh api -X PATCH "repos/$GITHUB_REPOSITORY/check-runs/$MERGELIGHT_CHECK_RUN" \
           -f status=completed -f conclusion=neutral \
           -f "output[title]=The review didn't start" \
-          -f "output[summary]=The login was connected, but a step before the review failed. The workflow log has the details. Push a commit to try again." > /dev/null \
+          -f "output[summary]=The review didn't start: a step before it failed, or the run was cancelled. The workflow log has the details. Push a commit to try again." > /dev/null \
           || echo "::warning::Couldn't finish the Mergelight check."
 
     # Codex may have refreshed the login during the run. Save the new one, or the next run
