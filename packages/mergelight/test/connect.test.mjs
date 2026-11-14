@@ -567,3 +567,10 @@ test("an approval-only Mergelight step needs no login, and the input must read t
   const other = job("      - uses: mergelightai/mergelight@v0\n        with:\n          claude-code-oauth-token: ${{ secrets.CLAUDE_LOGIN }}\n");
   assert.equal(claudeInWorkflow(other, "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "no", "a login saved as CLAUDE_CODE_OAUTH_TOKEN never reaches it");
 });
+
+test("a secret named in brackets or another letter case is read as GitHub reads it", () => {
+  const job = (value) => `jobs:\n  review:\n    steps:\n      - uses: mergelightai/mergelight@v0\n        with:\n          codex-auth-json: ${value}\n`;
+  assert.equal(claudeInWorkflow(job("${{ secrets['OTHER_CODEX_AUTH'] }}"), "codex-auth-json", "review", "CODEX_AUTH_JSON"), "no");
+  assert.equal(claudeInWorkflow(job("${{ secrets.codex_auth_json }}"), "codex-auth-json", "review", "CODEX_AUTH_JSON"), "yes");
+  assert.equal(claudeInWorkflow(job("${{ secrets[\"CODEX_AUTH_JSON\"] }}"), "codex-auth-json", "review", "CODEX_AUTH_JSON"), "yes");
+});

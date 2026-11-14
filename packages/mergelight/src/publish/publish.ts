@@ -254,10 +254,22 @@ export async function startCheck(api: GitHub, headSha: string, provider?: string
       summary: `Mergelight is reviewing this pull request${tool ? ` with ${tool}` : ""} on your own plan. This usually takes 2 to 15 minutes.`,
     },
   };
-  // The check a connect left going, when there is one: a new one is made only when that one can't be written.
+  // The check a connect left going, when it is for this very commit: a push while the connect waited
+  // moves the review to a newer one, and a verdict must never land on a commit it didn't read. The old
+  // check is then closed as superseded. A new one is made whenever the old can't be carried on.
   if (carryOn) {
-    const going = await writeCheck(api, carryOn, headSha, body).catch(() => null);
-    if (going) return going.id;
+    const old = await api.get<{ id: number; head_sha: string }>(`check-runs/${carryOn}`).catch(() => null);
+    if (old?.head_sha === headSha) {
+      const going = await writeCheck(api, carryOn, headSha, body).catch(() => null);
+      if (going) return going.id;
+    } else if (old) {
+      await writeCheck(api, carryOn, old.head_sha, {
+        status: "completed",
+        conclusion: "neutral",
+        completed_at: new Date().toISOString(),
+        output: { title: "Superseded", summary: `A newer commit was pushed while Mergelight waited, so it reviews ${headSha.slice(0, 7)} instead.` },
+      }).catch(() => null);
+    }
   }
   const run = await writeCheck(api, null, headSha, {
     status: "in_progress",

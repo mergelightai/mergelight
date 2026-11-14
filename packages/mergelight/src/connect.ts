@@ -337,8 +337,10 @@ export function claudeInWorkflow(text: string | null, input = "claude-code-oauth
   const passes = (step: string) => {
     const value = new RegExp(`(?:^|[\\s{,])["']?${input}["']?\\s*:\\s*([^\\n,}]*)`, "m").exec(step)?.[1];
     if (value === undefined) return false;
-    const named = /secrets\.([A-Za-z0-9_]+)/.exec(value)?.[1];
-    return !secret || !named || named === secret;
+    // secrets.NAME or secrets['NAME'], in any letter case, as GitHub reads secret names.
+    const ref = /secrets(?:\.([A-Za-z0-9_]+)|\[\s*["']([A-Za-z0-9_]+)["']\s*\])/i.exec(value);
+    const named = ref?.[1] ?? ref?.[2];
+    return !secret || !named || named.toUpperCase() === secret.toUpperCase();
   };
   return steps.every(passes) ? "yes" : "no";
 }
@@ -370,6 +372,7 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
   let claudeOffered = false;
   /** Whether the prompt reached the pull request: only then is there a prompt to replace. */
   let prompted = false;
+  let promptMark = "mergelight:connect:v1";
   /** Why Claude isn't offered, when the workflow is the reason. */
   let claudeMissing: string | undefined;
   let chatgptMissing: string | undefined;
@@ -476,6 +479,8 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
     showCode: async (login, claudeUrl) => {
       const setupLink = claudeSetupLink(env.GITHUB_REPOSITORY, number);
       prompted = true;
+      // What tells this run's prompt apart from any other: its code, or its Claude link.
+      promptMark = login?.code ?? claudeUrl ?? "mergelight:connect:v1";
       await upsertSummary(api, number, checker ? connectCheckBody(checker, reviewer, login, runUrl, claudeUrl, setupLink) : connectBody(login, runUrl, claudeUrl, setupLink));
       log("Posted the link and code on the pull request. Waiting for the login.");
       // The comment is what people need. A check that can't be written shouldn't end a login that can still work.
@@ -541,7 +546,11 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
       if (checker) {
         // The prompt's code or link is dead now, and the review is about to start: the summary says that.
         // With no prompt posted, the last review's summary stays until this one replaces it.
-        if (prompted) await updateSummary(pendingSummaryBody()).catch((err) => log(`Couldn't update the comment: ${err instanceof Error ? err.message : String(err)}`));
+        // Only while the summary is still this prompt: a newer run may have posted its review since.
+        if (prompted) {
+          const { summary } = await readPrReviewState(api, number).catch(() => ({ summary: undefined }));
+          if (summary?.body?.includes(promptMark)) await updateSummary(pendingSummaryBody()).catch((err) => log(`Couldn't update the comment: ${err instanceof Error ? err.message : String(err)}`));
+        }
         // The review goes on, so the check does too: it isn't finished in between.
         await handOn(`${loginName(checker)} wasn't connected`, `${reason} The review goes on, checked by ${aiName(reviewer)}.`).catch((err) => log(`Couldn't update the check: ${err instanceof Error ? err.message : String(err)}`));
         log(`${reason} The review goes on, checked by ${aiName(reviewer)}.`);

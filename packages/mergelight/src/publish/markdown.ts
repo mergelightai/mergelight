@@ -26,7 +26,8 @@ export function checkerMissedLine(r: Pick<Review, "checker_missed" | "checker_mi
     "not-installed": `${name(r.checker_missed)} couldn't be installed on this run`,
     // Codex's could be a ChatGPT login or an OpenAI API key: the run log says which.
     "login-failed": r.checker_missed === "codex" ? "its login didn't work" : `its ${login} login didn't work`,
-    limit: `its ${login} plan hit its usage limit`,
+    // Codex's could be a ChatGPT plan or an API key's credit.
+    limit: r.checker_missed === "codex" ? "it hit its usage limit" : `its ${login} plan hit its usage limit`,
     sandbox: `${name(r.checker_missed)}'s sandbox couldn't start on this runner`,
   }[r.checker_missed_why ?? "no-login"];
   return `⚠️ ${name(r.checker_missed)} was set to check this review, but ${why}, so ${name(r.provider.name)} checked it.`;

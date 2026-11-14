@@ -10,7 +10,7 @@ import { parsePatch, place } from "../dist/publish/diff-lines.js";
 import { mergeLight, tierOf } from "../dist/review.js";
 import { closedBody, patchTouches, readClosed, reopenedBody, resolvedByPeople, threadAction } from "../dist/publish/closed.js";
 import { checkerMissedLine, clean, failedSummaryBody, isFailedSummary, limitNotice, notReadLine, loginNotice, FINDING_MARKER_RE, inlineBody, isPendingSummary, pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "../dist/publish/markdown.js";
-import { APPROVAL_MARKER, approvalHold, approvalLight, failSummary, UNREVIEWED, checkConclusion, isYellowCheck, syncApproval, trustedComment, CHECK_FAILED_TITLE, checkLimitTitle, checkLoginTitle, isFailedCheckTitle } from "../dist/publish/publish.js";
+import { APPROVAL_MARKER, approvalHold, approvalLight, failSummary, startCheck, UNREVIEWED, checkConclusion, isYellowCheck, syncApproval, trustedComment, CHECK_FAILED_TITLE, checkLimitTitle, checkLoginTitle, isFailedCheckTitle } from "../dist/publish/publish.js";
 import { decodeState, encodeState, nextState } from "../dist/publish/state.js";
 import { buildVerifierPrompt } from "../dist/prompt.js";
 import { assignIds } from "../dist/review.js";
@@ -658,7 +658,7 @@ test("the summary says when the AI set to check had no login yet, so the reviewe
   const claudeReviews = { name: "claude", model: null, effort: "high" };
   assert.match(checkerMissedLine({ checker_missed: "codex", checker_missed_why: "not-installed", provider: claudeReviews }), /but Codex couldn't be installed on this run, so Claude checked it/);
   assert.match(checkerMissedLine({ checker_missed: "codex", checker_missed_why: "login-failed", provider: claudeReviews }), /but its login didn't work, so Claude checked it/);
-  assert.match(checkerMissedLine({ checker_missed: "codex", checker_missed_why: "limit", provider: claudeReviews }), /but its ChatGPT plan hit its usage limit/);
+  assert.match(checkerMissedLine({ checker_missed: "codex", checker_missed_why: "limit", provider: claudeReviews }), /but it hit its usage limit, so Claude checked it/);
   assert.match(checkerMissedLine({ checker_missed: "codex", checker_missed_why: "sandbox", provider: claudeReviews }), /but Codex's sandbox couldn't start on this runner/);
 });
 
@@ -675,4 +675,18 @@ test("a failed review keeps what earlier rounds found, when it replaces a pendin
   assert.ok(isFailedSummary(writes[0].body.body));
   assert.ok(writes[0].body.body.endsWith(state), "the state block is still there");
   assert.equal(decodeState(writes[0].body.body)?.round, 3);
+});
+
+test("a check a connect left going is carried on only for the commit it was made for", async () => {
+  const writes = [];
+  const api = (headSha) => ({
+    get: async () => ({ id: 9, head_sha: headSha }),
+    write: async (method, path, body) => (writes.push({ method, path, body }), { id: path === "check-runs" ? 10 : 9 }),
+  });
+  assert.equal(await startCheck(api("aaa"), "aaa", "codex", 9), 9);
+  assert.equal(writes.at(-1).path, "check-runs/9");
+  writes.length = 0;
+  // A push while the connect waited: the old check is closed as superseded, and a new one made.
+  assert.equal(await startCheck(api("old"), "new", "codex", 9), 10);
+  assert.deepEqual(writes.map((w) => [w.path, w.body.conclusion ?? w.body.status]), [["check-runs/9", "neutral"], ["check-runs", "in_progress"]]);
 });

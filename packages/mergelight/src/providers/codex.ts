@@ -21,7 +21,7 @@ export class LoginError extends Error {
 }
 
 /** Whose login: a ChatGPT plan, a Claude plan, or an OpenAI API key. */
-export type Plan = "ChatGPT" | "Claude" | "OpenAI";
+export type Plan = "ChatGPT" | "Claude" | "OpenAI" | "Codex";
 
 /** The plan has no usage left. Nothing is broken, so the person only needs to know that and when it comes back. */
 export class LimitError extends Error {
@@ -422,9 +422,13 @@ export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
         // Action, one that isn't ChatGPT's is an OpenAI API key, and the title says so. Elsewhere it can't
         // be told, so the advice fits both.
         const text = `${result.stderr}\n${failures.join("\n")}`;
-        if (process.env.MERGELIGHT_CHATGPT === "1" || /access token could not be refreshed/i.test(text)) throw new LoginError(loginFailureMessage(process.env.SECRET_NAME || undefined));
-        if (process.env.MERGELIGHT_PROVIDER) throw new LoginError("The OpenAI API key didn't work. Check the OPENAI_API_KEY secret.", "OpenAI");
-        throw new LoginError("Codex's login didn't work: run codex login and sign in again, or check the OpenAI API key it uses.");
+        // The Action sets these: a run started elsewhere gets advice for a login of its own.
+        const inAction = Boolean(process.env.MERGELIGHT_PROVIDER) || process.env.MERGELIGHT_CHATGPT === "1";
+        const chatgpt = process.env.MERGELIGHT_CHATGPT === "1" || /access token could not be refreshed/i.test(text);
+        const apiKey = /incorrect api key|invalid_api_key|invalid api key/i.test(text) || (inAction && !chatgpt);
+        if (chatgpt) throw new LoginError(inAction ? loginFailureMessage(process.env.SECRET_NAME || undefined) : "Codex's ChatGPT login couldn't be refreshed. Run codex login and sign in again.");
+        if (apiKey) throw new LoginError(inAction ? "The OpenAI API key didn't work. Check the OPENAI_API_KEY secret." : "OpenAI rejected the API key Codex uses. Replace it, or run codex login to sign in with ChatGPT.", "OpenAI");
+        throw new LoginError("Codex's login didn't work: run codex login and sign in again, or check the OpenAI API key it uses.", "Codex");
       }
       throw new Error(`Codex exited with code ${result.code}.${opts.logFile ? ` Log: ${opts.logFile}` : ""}\n${tail}`);
     }

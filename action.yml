@@ -223,6 +223,7 @@ runs:
           echo "MERGELIGHT_USES_CODEX=$uses_codex"
           echo "MERGELIGHT_USES_CLAUDE=$uses_claude"
           echo "MERGELIGHT_CHECKER_NOT_INSTALLED=0"
+          echo "MERGELIGHT_CHECK_RUN="
           echo "MERGELIGHT_CHATGPT=0"
           echo "MERGELIGHT_CONNECT=0"
           echo "MERGELIGHT_NO_LOGIN=$no_login"
@@ -468,6 +469,7 @@ runs:
         exit 1
 
     - name: Review
+      id: review
       if: (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && env.MERGELIGHT_NO_LOGIN != '1'
       shell: bash
       env:
@@ -503,8 +505,8 @@ runs:
         args=(review "$GITHUB_REPOSITORY#$PR" --post --provider "$MERGELIGHT_PROVIDER" --verify-with "$verify" --out "$RUNNER_TEMP/mergelight-review.json")
         [ -n "$missed" ] && args+=(--verify-missed "$missed")
         [ -n "$missed" ] && [ "${MERGELIGHT_CHECKER_NOT_INSTALLED:-0}" = 1 ] && args+=(--verify-missed-why not-installed)
-        # A saved ChatGPT login that couldn't be refreshed is one that stopped working, not one never connected.
-        [ "$missed" = codex ] && [ "${MERGELIGHT_CHECKER_NOT_INSTALLED:-0}" != 1 ] && [ "${MERGELIGHT_LOGIN_LOST:-0}" = 1 ] && args+=(--verify-missed-why login-failed)
+        # A saved ChatGPT login that couldn't be refreshed or read is one that stopped working, not one never connected.
+        [ "$missed" = codex ] && [ "${MERGELIGHT_CHECKER_NOT_INSTALLED:-0}" != 1 ] && { [ "${MERGELIGHT_LOGIN_LOST:-0}" = 1 ] || [ "${MERGELIGHT_CHATGPT:-0}" = 1 ]; } && args+=(--verify-missed-why login-failed)
         [ -n "$MODEL" ] && args+=(--model "$MODEL")
         [ -n "$EFFORT" ] && args+=(--effort "$EFFORT")
         [ "$YELLOW_BLOCKS" = "true" ] && args+=(--yellow-blocks)
@@ -516,6 +518,20 @@ runs:
           *) echo "::warning::auto-approve is \"$AUTO_APPROVE\", which isn't true or false, so Mergelight won't approve." ; args+=(--no-approve) ;;
         esac
         node "$GITHUB_ACTION_PATH/packages/mergelight/dist/cli.js" "${args[@]}"
+
+    # A connect left its check going for the review to carry on. When the review never started, such as
+    # when saving the new login failed, the check is finished here, so it doesn't wait for ever.
+    - name: Finish a check the review didn't carry on
+      if: always() && github.event_name != 'pull_request_review' && env.MERGELIGHT_CHECK_RUN != '' && steps.review.outcome != 'success' && steps.review.outcome != 'failure'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.app.outputs.token || inputs.github-token }}
+      run: |
+        gh api -X PATCH "repos/$GITHUB_REPOSITORY/check-runs/$MERGELIGHT_CHECK_RUN" \
+          -f status=completed -f conclusion=neutral \
+          -f "output[title]=The review didn't start" \
+          -f "output[summary]=The login was connected, but a step before the review failed. The workflow log has the details. Push a commit to try again." > /dev/null \
+          || echo "::warning::Couldn't finish the Mergelight check."
 
     # Codex may have refreshed the login during the run. Save the new one, or the next run
     # starts from tokens that no longer work. An API key's login is never saved over a ChatGPT one.
