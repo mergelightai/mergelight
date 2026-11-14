@@ -655,6 +655,10 @@ test("the summary says when the AI set to check had no login yet, so the reviewe
   );
   assert.equal(checkerMissedLine({ checker_missed: "claude", provider: { name: "codex", model: null, effort: "high" } }), "⚠️ Claude was set to check this review, but it has no Claude login yet, so Codex checked it.");
   assert.equal(checkerMissedLine({ provider: { name: "codex", model: null, effort: "high" } }), null);
+  const claudeReviews = { name: "claude", model: null, effort: "high" };
+  assert.match(checkerMissedLine({ checker_missed: "codex", checker_missed_why: "not-installed", provider: claudeReviews }), /but Codex couldn't be installed on this run, so Claude checked it/);
+  assert.match(checkerMissedLine({ checker_missed: "codex", checker_missed_why: "login-failed", provider: claudeReviews }), /but its ChatGPT login didn't work/);
+  assert.match(checkerMissedLine({ checker_missed: "codex", checker_missed_why: "limit", provider: claudeReviews }), /but its ChatGPT plan hit its usage limit/);
 });
 
 test("a failed review keeps what earlier rounds found, when it replaces a pending summary", async () => {

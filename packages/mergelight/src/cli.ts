@@ -128,6 +128,7 @@ async function main(): Promise<number> {
       ai: { type: "string" },
       reviewer: { type: "string" },
       "verify-missed": { type: "string" },
+      "verify-missed-why": { type: "string" },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -331,7 +332,10 @@ async function main(): Promise<number> {
       onProgress: progress.onProgress,
     });
     progress.stop();
-    if (verifyMissed && verifyMissed !== review.verifier?.name) review.checker_missed = verifyMissed;
+    if (verifyMissed && verifyMissed !== review.verifier?.name && !review.checker_missed) {
+      review.checker_missed = verifyMissed;
+      if (values["verify-missed-why"] === "not-installed") review.checker_missed_why = "not-installed";
+    }
 
     const json = JSON.stringify(review, null, 2);
     if (values.out) writeFileSync(values.out, `${json}\n`);

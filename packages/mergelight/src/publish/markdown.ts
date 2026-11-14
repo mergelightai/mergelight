@@ -17,11 +17,17 @@ const MAX_BODY = 65_000;
  * markers or ping people.
  */
 /** Says when the AI the team asked to check had no login yet, so the reviewer's own AI checked instead. */
-export function checkerMissedLine(r: Pick<Review, "checker_missed" | "provider">): string | null {
+export function checkerMissedLine(r: Pick<Review, "checker_missed" | "checker_missed_why" | "provider">): string | null {
   if (!r.checker_missed || r.checker_missed === r.provider.name) return null;
   const name = (ai: "codex" | "claude") => (ai === "codex" ? "Codex" : "Claude");
   const login = r.checker_missed === "codex" ? "ChatGPT" : "Claude";
-  return `⚠️ ${name(r.checker_missed)} was set to check this review, but it has no ${login} login yet, so ${name(r.provider.name)} checked it.`;
+  const why = {
+    "no-login": `it has no ${login} login yet`,
+    "not-installed": `${name(r.checker_missed)} couldn't be installed on this run`,
+    "login-failed": `its ${login} login didn't work`,
+    limit: `its ${login} plan hit its usage limit`,
+  }[r.checker_missed_why ?? "no-login"];
+  return `⚠️ ${name(r.checker_missed)} was set to check this review, but ${why}, so ${name(r.provider.name)} checked it.`;
 }
 
 export function clean(text: string): string {

@@ -216,6 +216,7 @@ runs:
           echo "MERGELIGHT_CONNECT_CLAUDE=$connect_claude"
           echo "MERGELIGHT_USES_CODEX=$uses_codex"
           echo "MERGELIGHT_USES_CLAUDE=$uses_claude"
+          echo "MERGELIGHT_CHECKER_NOT_INSTALLED=0"
           echo "MERGELIGHT_CHATGPT=0"
           echo "MERGELIGHT_CONNECT=0"
           echo "MERGELIGHT_NO_LOGIN=$no_login"
@@ -230,7 +231,7 @@ runs:
         # Claude only checking: the reviewer checks instead, and the review goes on.
         if [ "$MERGELIGHT_PROVIDER" != claude ]; then
           echo "::warning::Couldn't install Claude Code, so $MERGELIGHT_PROVIDER checks this review."
-          { echo "MERGELIGHT_USES_CLAUDE=0"; [ "${MERGELIGHT_CONNECT_CHECK:-}" != claude ] || echo "MERGELIGHT_CONNECT_CHECK="; } >> "$GITHUB_ENV"
+          { echo "MERGELIGHT_USES_CLAUDE=0"; echo "MERGELIGHT_CHECKER_NOT_INSTALLED=1"; [ "${MERGELIGHT_CONNECT_CHECK:-}" != claude ] || echo "MERGELIGHT_CONNECT_CHECK="; } >> "$GITHUB_ENV"
           exit 0
         fi
         exit 1
@@ -243,7 +244,7 @@ runs:
         # Codex only checking: the reviewer checks instead, and the review goes on.
         if [ "$MERGELIGHT_PROVIDER" != codex ]; then
           echo "::warning::Couldn't install Codex, so $MERGELIGHT_PROVIDER checks this review."
-          { echo "MERGELIGHT_USES_CODEX=0"; [ "${MERGELIGHT_CONNECT_CHECK:-}" != codex ] || echo "MERGELIGHT_CONNECT_CHECK="; } >> "$GITHUB_ENV"
+          { echo "MERGELIGHT_USES_CODEX=0"; echo "MERGELIGHT_CHECKER_NOT_INSTALLED=1"; [ "${MERGELIGHT_CONNECT_CHECK:-}" != codex ] || echo "MERGELIGHT_CONNECT_CHECK="; } >> "$GITHUB_ENV"
           exit 0
         fi
         exit 1
@@ -487,6 +488,7 @@ runs:
         fi
         args=(review "$GITHUB_REPOSITORY#$PR" --post --provider "$MERGELIGHT_PROVIDER" --verify-with "$verify" --out "$RUNNER_TEMP/mergelight-review.json")
         [ -n "$missed" ] && args+=(--verify-missed "$missed")
+        [ -n "$missed" ] && [ "${MERGELIGHT_CHECKER_NOT_INSTALLED:-0}" = 1 ] && args+=(--verify-missed-why not-installed)
         [ -n "$MODEL" ] && args+=(--model "$MODEL")
         [ -n "$EFFORT" ] && args+=(--effort "$EFFORT")
         [ "$YELLOW_BLOCKS" = "true" ] && args+=(--yellow-blocks)

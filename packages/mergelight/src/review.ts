@@ -446,13 +446,27 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
     // Opus checks better than Codex: in the eval it posted a third less and kept the same finds.
     if (!opts.verifyWith && verifyWith === "codex") progress("Claude Code isn't installed, so Codex checks the findings");
     progress(`Checking ${found.length} candidate${found.length === 1 ? "" : "s"}${verifyWith === "codex" ? "" : ` with ${verifyWith}`}`);
-    const verified = await verifyCandidates(ws.dir, input, found, {
-      provider: verifyWith,
-      model: verifyModel,
-      effort,
-      logFile: log("verify"),
-      onCommand: (cmd) => progress(`Checking ${found.length} candidates: ${cmd.replace(/\s+/g, " ").slice(0, 80)}`, true),
-    });
+    const verifyWithAi = (ai: ProviderName, model: string | undefined) =>
+      verifyCandidates(ws.dir, input, found, {
+        provider: ai,
+        model,
+        effort,
+        logFile: log(ai === verifyWith ? "verify" : "verify-fallback"),
+        onCommand: (cmd) => progress(`Checking ${found.length} candidates: ${cmd.replace(/\s+/g, " ").slice(0, 80)}`, true),
+      });
+    // The other AI checking is extra: when its login doesn't work or its plan is used up, the reviewer's
+    // own AI checks instead, and the summary says why. The reviewer's own failures still stop the review.
+    let checkerFailed: "login-failed" | "limit" | undefined;
+    let verified: Awaited<ReturnType<typeof verifyCandidates>>;
+    try {
+      verified = await verifyWithAi(verifyWith, verifyModel);
+    } catch (err) {
+      if (verifyWith === provider || !(err instanceof LoginError || err instanceof LimitError)) throw err;
+      checkerFailed = err instanceof LimitError ? "limit" : "login-failed";
+      progress(`${verifyWith === "codex" ? "Codex" : "Claude"} couldn't check (${err.message.slice(0, 120)}), so ${provider === "codex" ? "Codex" : "Claude"} checks the findings`);
+      verified = await verifyWithAi(provider, provider === "codex" ? opts.model : (opts.model ?? "opus"));
+    }
+    const checkedBy: ProviderName = checkerFailed ? provider : verifyWith;
     // Every path the pull request touches counts here, the lockfiles and generated files the reviewers skip included.
     const needsHuman = filesNeedingHuman(opts.rules, ws.touchedPaths);
     const team_checks = teamChecks ? await teamChecks.done : null;
@@ -474,7 +488,8 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
         head_sha: ws.headSha,
       },
       provider: { name: provider, model: servedModel, effort },
-      verifier: { name: verifyWith, model: verified.model, effort, cost_usd: verified.cost_usd },
+      verifier: { name: checkedBy, model: verified.model, effort, cost_usd: verified.cost_usd },
+      ...(checkerFailed ? { checker_missed: verifyWith, checker_missed_why: checkerFailed } : {}),
       light: lightWith(verified.findings, needsHuman),
       summary: summaryWith(verified.summary, needsHuman, opts.rulesUnread === true),
       ...(needsHuman.length ? { needs_human: needsHuman } : {}),

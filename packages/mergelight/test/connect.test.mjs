@@ -442,11 +442,17 @@ test("connecting a checker that nobody finishes holds nothing up, and leaves the
   const logs = [];
   const deps = githubConnect(api, 7, "abc", (l) => logs.push(l), env, { purpose: "check", ai: "codex", reviewer: "claude" });
   assert.equal(await deps.startClaude(), null, "only ChatGPT is offered");
+  // No prompt posted: the last review's summary stays as it is.
   await deps.failed("The code ran out.");
-  const prompt = api.writes.find((w) => w.path === "issues/comments/5");
+  assert.ok(!api.writes.some((w) => w.path.startsWith("issues/")));
+  // A prompt posted: its dead code gives way to the review that is starting.
+  const shown = githubConnect(api, 7, "abc", () => {}, env, { purpose: "check", ai: "codex", reviewer: "claude" });
+  await shown.showCode({ url: "https://auth.openai.com/d", code: "AAAA-BBBB" });
+  await shown.failed("The code ran out.");
+  const prompt = api.writes.filter((w) => w.path === "issues/comments/5").at(-1);
   assert.ok(prompt && isPendingSummary(prompt.body.body), "the dead code gives way to the review that is starting");
   assert.doesNotMatch(prompt.body.body, /couldn't connect/);
-  const check = api.writes.find((w) => w.path === "check-runs");
+  const check = api.writes.find((w) => w.path === "check-runs" && w.body.output?.title === "ChatGPT wasn't connected");
   assert.equal(check.body.output.title, "ChatGPT wasn't connected");
   assert.match(check.body.output.summary, /The review goes on, checked by Claude\./);
   // Connecting Claude to check offers no ChatGPT code, and says why when it ends.
@@ -505,6 +511,7 @@ test("a checker's ChatGPT login is asked for only where the workflow passes it o
   assert.equal(claudeInWorkflow("    - uses: mergelightai/mergelight@v0\n      with:\n        claude-code-oauth-token: x\n", "codex-auth-json"), "no");
   assert.equal(claudeInWorkflow("    - uses: mergelightai/mergelight@v0\n      with:\n        # codex-auth-json: x\n", "codex-auth-json"), "no", "a line commented out passes nothing on");
   assert.equal(claudeInWorkflow("    - uses: ./.github/actions/review\n      with:\n        chatgpt: x\n", "codex-auth-json"), "unknown", "a composite action of the team's own may pass it on");
+  assert.equal(claudeInWorkflow("    - uses: mergelightai/mergelight@v0\n      with:\n        \"codex-auth-json\": x\n", "codex-auth-json"), "yes", "a quoted name");
   assert.equal(claudeInWorkflow("  with:\n    codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}\n", "codex-auth-json"), "yes");
   const d = deps([], 1);
   d.chatgptUnavailable = () => chatgptInputMissing("MY_LOGIN");

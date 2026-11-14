@@ -304,7 +304,8 @@ export function claudeInWorkflow(text: string | null, input = "claude-code-oauth
     .split("\n")
     .map((line) => line.replace(/(^|\s)#.*$/, ""))
     .join("\n");
-  if (new RegExp(`(^|\\s)${input}\\s*:`, "m").test(code)) return "yes";
+  // The name may be quoted, as YAML allows.
+  if (new RegExp(`(^|\\s)["']?${input}["']?\\s*:`, "m").test(code)) return "yes";
   // A sure "no" only where the workflow uses Mergelight itself, in plain sight. A reusable workflow or a
   // composite action of the team's own may pass the login on in a file this can't see.
   const direct = /^\s*(?:-\s*)?uses:\s*["']?[^\s"']*mergelight[^\s"']*@/im.test(code);
@@ -337,6 +338,8 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
   let checkId: number | null = null;
   let running: ChildProcess | null = null;
   let claudeOffered = false;
+  /** Whether the prompt reached the pull request: only then is there a prompt to replace. */
+  let prompted = false;
   /** Why Claude isn't offered, when the workflow is the reason. */
   let claudeMissing: string | undefined;
   let chatgptMissing: string | undefined;
@@ -432,6 +435,7 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
     },
     showCode: async (login, claudeUrl) => {
       const setupLink = claudeSetupLink(env.GITHUB_REPOSITORY, number);
+      prompted = true;
       await upsertSummary(api, number, checker ? connectCheckBody(checker, reviewer, login, runUrl, claudeUrl, setupLink) : connectBody(login, runUrl, claudeUrl, setupLink));
       log("Posted the link and code on the pull request. Waiting for the login.");
       // The comment is what people need. A check that can't be written shouldn't end a login that can still work.
@@ -491,7 +495,8 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
       // and its summary says so. The comment it replaces is the connect one, so it is left for the review.
       if (checker) {
         // The prompt's code or link is dead now, and the review is about to start: the summary says that.
-        await updateSummary(pendingSummaryBody()).catch((err) => log(`Couldn't update the comment: ${err instanceof Error ? err.message : String(err)}`));
+        // With no prompt posted, the last review's summary stays until this one replaces it.
+        if (prompted) await updateSummary(pendingSummaryBody()).catch((err) => log(`Couldn't update the comment: ${err instanceof Error ? err.message : String(err)}`));
         await finish(`${loginName(checker)} wasn't connected`, `${reason} The review goes on, checked by ${aiName(reviewer)}.`).catch((err) => log(`Couldn't finish the check: ${err instanceof Error ? err.message : String(err)}`));
         log(`${reason} The review goes on, checked by ${aiName(reviewer)}.`);
         return;
