@@ -255,15 +255,19 @@ export async function startCheck(api: GitHub, headSha: string, provider?: string
     },
   };
   // The check a connect left going, when it is for this very commit: a push while the connect waited
-  // moves the review to a newer one, and a verdict must never land on a commit it didn't read. The old
-  // check is then closed as superseded. A new one is made whenever the old can't be carried on.
+  // moves the review to a newer one, and a verdict must never land on a commit it didn't read.
+  let old: { id: number; head_sha: string } | null = null;
   if (carryOn) {
-    const old = await api.get<{ id: number; head_sha: string }>(`check-runs/${carryOn}`).catch(() => null);
+    old = await api.get<{ id: number; head_sha: string }>(`check-runs/${carryOn}`).catch(() => null);
     if (old?.head_sha === headSha) {
       const going = await writeCheck(api, carryOn, headSha, body).catch(() => null);
       if (going) return going.id;
     }
-    // Not carried on: closed, so it doesn't stay running next to the new one, whatever commit it is for.
+  }
+  const run = await writeCheck(api, null, headSha, body);
+  // Not carried on: the old one is closed, and only now, with the new one already going, so there is no
+  // moment with neither, and none with it running next to the new one.
+  if (carryOn) {
     const moved = old && old.head_sha !== headSha;
     await writeCheck(api, carryOn, old?.head_sha ?? headSha, {
       status: "completed",
@@ -272,14 +276,6 @@ export async function startCheck(api: GitHub, headSha: string, provider?: string
       output: { title: "Superseded", summary: moved ? `A newer commit was pushed while Mergelight waited, so it reviews ${headSha.slice(0, 7)} instead.` : "Mergelight carries on this review in a new check." },
     }).catch(() => null);
   }
-  const run = await writeCheck(api, null, headSha, {
-    status: "in_progress",
-    started_at: new Date().toISOString(),
-    output: {
-      title: "Reviewing",
-      summary: `Mergelight is reviewing this pull request${tool ? ` with ${tool}` : ""} on your own plan. This usually takes 2 to 15 minutes.`,
-    },
-  });
   return run?.id ?? null;
 }
 

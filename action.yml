@@ -191,7 +191,7 @@ runs:
               # Anyone who can see the pull request could enter a ChatGPT code shown there, and pick whose
               # account checks: only a private repository shows one, and one that can't be told doesn't.
               # Claude's link instead goes through mergelight.dev, where you sign in.
-              echo "::notice::Codex is set to check, but only a private repository shows a ChatGPT code, as anyone who can see the pull request could enter it. Save the ChatGPT login as the CODEX_AUTH_JSON secret yourself (npx @mergelight/cli setup $GITHUB_REPOSITORY --relogin). This review is checked by $provider."
+              echo "::notice::Codex is set to check, but only a private repository shows a ChatGPT code, as anyone who can see the pull request could enter it. Save a ChatGPT login as the CODEX_AUTH_JSON secret yourself: run codex login, then gh secret set CODEX_AUTH_JSON --repo $GITHUB_REPOSITORY < ~/.codex/auth.json. This review is checked by $provider."
             elif [ "$checker" = codex ] && [ -z "$WANTED" ]; then
               # Claude reviews only because it has the one login: with a ChatGPT login saved too, the next
               # run would pick Codex to review. So the sign-in waits for the workflow to say who reviews.
@@ -223,6 +223,7 @@ runs:
           echo "MERGELIGHT_USES_CODEX=$uses_codex"
           echo "MERGELIGHT_USES_CLAUDE=$uses_claude"
           echo "MERGELIGHT_CHECKER_NOT_INSTALLED=0"
+          echo "MERGELIGHT_CHECKER_LOGIN_FAILED=0"
           echo "MERGELIGHT_CHECK_RUN="
           echo "MERGELIGHT_CHATGPT=0"
           echo "MERGELIGHT_CONNECT=0"
@@ -302,7 +303,7 @@ runs:
             # Codex only checking: the reviewer checks instead, and the review goes on.
             if [ "${MERGELIGHT_PROVIDER:-codex}" != codex ]; then
               echo "::warning::Codex couldn't log in with the OpenAI API key, so $MERGELIGHT_PROVIDER checks this review."
-              echo "MERGELIGHT_USES_CODEX=0" >> "$GITHUB_ENV"
+              { echo "MERGELIGHT_USES_CODEX=0"; echo "MERGELIGHT_CHECKER_LOGIN_FAILED=1"; } >> "$GITHUB_ENV"
             else
               exit 1
             fi
@@ -506,7 +507,7 @@ runs:
         [ -n "$missed" ] && args+=(--verify-missed "$missed")
         [ -n "$missed" ] && [ "${MERGELIGHT_CHECKER_NOT_INSTALLED:-0}" = 1 ] && args+=(--verify-missed-why not-installed)
         # A saved ChatGPT login that couldn't be refreshed or read is one that stopped working, not one never connected.
-        [ "$missed" = codex ] && [ "${MERGELIGHT_CHECKER_NOT_INSTALLED:-0}" != 1 ] && { [ "${MERGELIGHT_LOGIN_LOST:-0}" = 1 ] || [ "${MERGELIGHT_CHATGPT:-0}" = 1 ]; } && args+=(--verify-missed-why login-failed)
+        [ "$missed" = codex ] && [ "${MERGELIGHT_CHECKER_NOT_INSTALLED:-0}" != 1 ] && { [ "${MERGELIGHT_LOGIN_LOST:-0}" = 1 ] || [ "${MERGELIGHT_CHATGPT:-0}" = 1 ] || [ "${MERGELIGHT_CHECKER_LOGIN_FAILED:-0}" = 1 ]; } && args+=(--verify-missed-why login-failed)
         [ -n "$MODEL" ] && args+=(--model "$MODEL")
         [ -n "$EFFORT" ] && args+=(--effort "$EFFORT")
         [ "$YELLOW_BLOCKS" = "true" ] && args+=(--yellow-blocks)
@@ -531,7 +532,7 @@ runs:
       run: |
         gh api -X PATCH "repos/$GITHUB_REPOSITORY/check-runs/$MERGELIGHT_CHECK_RUN" \
           -f status=completed -f conclusion=neutral \
-          -f "output[title]=The review didn't start" \
+          -f "output[title]=Couldn't review this pull request: the review didn't start" \
           -f "output[summary]=The review didn't start: a step before it failed, or the run was cancelled. The workflow log has the details. Push a commit to try again." > /dev/null \
           || echo "::warning::Couldn't finish the Mergelight check."
 

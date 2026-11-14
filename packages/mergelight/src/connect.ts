@@ -304,12 +304,12 @@ export function claudeInWorkflow(text: string | null, input = "claude-code-oauth
   const indent = (line: string) => line.match(/^\s*/)![0].length;
   // Only this run's job: an input another job passes on doesn't reach this one.
   if (job) {
-    const at = lines.findIndex((line) => new RegExp(`^\\s+["']?${job.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}["']?\\s*:\\s*$`).test(line));
-    if (at >= 0) {
-      let end = at + 1;
-      while (end < lines.length && (!lines[end]!.trim() || indent(lines[end]!) > indent(lines[at]!))) end++;
-      lines = lines.slice(at, end);
-    }
+    // The job's key, with an anchor after it or not (review: &review). One that can't be found can't be told.
+    const at = lines.findIndex((line) => new RegExp(`^\\s+["']?${job.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}["']?\\s*:\\s*(?:&[\\w-]+\\s*)?$`).test(line));
+    if (at < 0) return "unknown";
+    let end = at + 1;
+    while (end < lines.length && (!lines[end]!.trim() || indent(lines[end]!) > indent(lines[at]!))) end++;
+    lines = lines.slice(at, end);
   }
   // Each step that uses Mergelight itself, or a fork of it (a repository named mergelight), from its "-" on.
   const steps: string[] = [];
@@ -381,7 +381,6 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
   let claudeOffered = false;
   /** Whether the prompt reached the pull request: only then is there a prompt to replace. */
   let prompted = false;
-  let promptMark = "mergelight:connect:v1";
   /** Why Claude isn't offered, when the workflow is the reason. */
   let claudeMissing: string | undefined;
   let chatgptMissing: string | undefined;
@@ -489,8 +488,6 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
       const setupLink = claudeSetupLink(env.GITHUB_REPOSITORY, number);
       prompted = true;
       // What tells this run's prompt apart from any other: its code, or its Claude link.
-      // The Claude link is kept in the hidden line as connectData writes it, with "--" escaped.
-      promptMark = login?.code ?? (claudeUrl ? JSON.stringify(claudeUrl).slice(1, -1).replace(/--/g, "\\u002d\\u002d") : "mergelight:connect:v1");
       await upsertSummary(api, number, checker ? connectCheckBody(checker, reviewer, login, runUrl, claudeUrl, setupLink) : connectBody(login, runUrl, claudeUrl, setupLink));
       log("Posted the link and code on the pull request. Waiting for the login.");
       // The comment is what people need. A check that can't be written shouldn't end a login that can still work.
@@ -556,13 +553,8 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
       // A checker that wasn't connected holds nothing up: the review starts, checked by the reviewer's AI,
       // and its summary says so. The comment it replaces is the connect one, so it is left for the review.
       if (checker) {
-        // The prompt's code or link is dead now, and the review is about to start: the summary says that.
-        // With no prompt posted, the last review's summary stays until this one replaces it.
-        // Only while the summary is still this prompt: a newer run may have posted its review since.
-        if (prompted) {
-          const { summary } = await readPrReviewState(api, number).catch(() => ({ summary: undefined }));
-          if (summary?.body?.includes(promptMark)) await updateSummary(pendingSummaryBody()).catch((err) => log(`Couldn't update the comment: ${err instanceof Error ? err.message : String(err)}`));
-        }
+        // The prompt stays until the review that starts now replaces it: changing the comment here could
+        // overwrite a newer run's finished review, as reading it first doesn't stop that.
         // The review goes on, so the check does too: it isn't finished in between.
         await handOn(`${loginName(checker)} wasn't connected`, `${reason} The review goes on, checked by ${aiName(reviewer)}.`).catch((err) => log(`Couldn't update the check: ${err instanceof Error ? err.message : String(err)}`));
         log(`${reason} The review goes on, checked by ${aiName(reviewer)}.`);
@@ -570,9 +562,12 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
       }
       // One failed write mustn't stop the other. Only the app that made a check can finish it.
       await updateSummary(connectFailedBody(reason, claudeOffered, onlyClaude)).catch((err) => log(`Couldn't update the comment: ${err instanceof Error ? err.message : String(err)}`));
-      await finish(CHECK_FAILED_TITLE, reason).catch((err) => log(`Couldn't finish the check: ${err instanceof Error ? err.message : String(err)}`));
-      // Finished here: nothing is left for the run's last step to finish.
-      if (env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, "MERGELIGHT_CHECK_RUN=\n");
+      const finished = await finish(CHECK_FAILED_TITLE, reason).then(
+        () => true,
+        (err) => (log(`Couldn't finish the check: ${err instanceof Error ? err.message : String(err)}`), false),
+      );
+      // Finished here: nothing is left for the run's last step to finish. Not finished: it still is.
+      if (finished && env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, "MERGELIGHT_CHECK_RUN=\n");
       log(reason);
     },
   };

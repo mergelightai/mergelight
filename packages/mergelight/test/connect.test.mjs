@@ -445,13 +445,13 @@ test("connecting a checker that nobody finishes holds nothing up, and leaves the
   // No prompt posted: the last review's summary stays as it is.
   await deps.failed("The code ran out.");
   assert.ok(!api.writes.some((w) => w.path.startsWith("issues/")));
-  // A prompt posted: its dead code gives way to the review that is starting.
+  // A prompt posted: it stays until the review that starts now replaces it, as changing the comment here
+  // could overwrite a newer run's finished review.
   const shown = githubConnect(api, 7, "abc", () => {}, env, { purpose: "check", ai: "codex", reviewer: "claude" });
   await shown.showCode({ url: "https://auth.openai.com/d", code: "AAAA-BBBB" });
+  const before = api.writes.filter((w) => w.path.startsWith("issues/")).length;
   await shown.failed("The code ran out.");
-  const prompt = api.writes.filter((w) => w.path === "issues/comments/5").at(-1);
-  assert.ok(prompt && isPendingSummary(prompt.body.body), "the dead code gives way to the review that is starting");
-  assert.doesNotMatch(prompt.body.body, /couldn't connect/);
+  assert.equal(api.writes.filter((w) => w.path.startsWith("issues/")).length, before);
   // The review goes on, so its check does too: updated, not finished.
   const check = api.writes.find((w) => w.path.startsWith("check-runs/") && w.body.output?.title === "ChatGPT wasn't connected");
   assert.equal(check.body.status, "in_progress");
@@ -584,4 +584,10 @@ test("a secret fallback naming the save secret passes the login on", () => {
 test("an approval-only condition written over several lines is read whole", () => {
   const job = `jobs:\n  review:\n    steps:\n      - uses: mergelightai/mergelight@v0\n        with:\n          claude-code-oauth-token: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n      - if: >-\n          github.event_name == 'pull_request_review'\n        uses: mergelightai/mergelight@v0\n`;
   assert.equal(claudeInWorkflow(job, "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "yes");
+});
+
+test("a job with an anchor is found, and one that can't be found can't be told", () => {
+  const anchored = "jobs:\n  review: &review\n    steps:\n      - uses: mergelightai/mergelight@v0\n        with:\n          claude-code-oauth-token: x\n  other:\n    steps:\n      - uses: mergelightai/mergelight@v0\n        with:\n          codex-auth-json: x\n";
+  assert.equal(claudeInWorkflow(anchored, "claude-code-oauth-token", "review"), "yes");
+  assert.equal(claudeInWorkflow(anchored, "claude-code-oauth-token", "missing"), "unknown");
 });

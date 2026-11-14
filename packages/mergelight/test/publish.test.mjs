@@ -688,12 +688,13 @@ test("a check a connect left going is carried on only for the commit it was made
   writes.length = 0;
   // A push while the connect waited: the old check is closed as superseded, and a new one made.
   assert.equal(await startCheck(api("old"), "new", "codex", 9), 10);
-  assert.deepEqual(writes.map((w) => [w.path, w.body.conclusion ?? w.body.status]), [["check-runs/9", "neutral"], ["check-runs", "in_progress"]]);
+  // The new one first, then the old one closed: there is no moment with neither going.
+  assert.deepEqual(writes.map((w) => [w.path, w.body.conclusion ?? w.body.status]), [["check-runs", "in_progress"], ["check-runs/9", "neutral"]]);
   // One that can't be read is closed too, rather than left running.
   writes.length = 0;
   const unread = { get: async () => { throw new Error("HTTP 502"); }, write: async (method, path, body) => (writes.push({ path, body }), { id: path === "check-runs" ? 10 : 9 }) };
   assert.equal(await startCheck(unread, "new", "codex", 9), 10);
-  assert.equal(writes[0].body.conclusion, "neutral");
+  assert.equal(writes.find((w) => w.path === "check-runs/9").body.conclusion, "neutral");
 });
 
 test("an API key with no credit is said to have no credit, not a plan with no usage", () => {
