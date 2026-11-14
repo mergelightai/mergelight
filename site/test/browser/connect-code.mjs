@@ -294,7 +294,7 @@ await scenario('comment-from-an-older-release', { comments: [comment(BOT, OLD_CO
 });
 
 // A Claude reviewer with no login yet: the run offers Claude's link alone, with no ChatGPT code.
-await scenario('only-claude-on-this-run', { comments: [comment(BOT, withState(connectBody(null, 'https://github.com/acme/api/actions/runs/1', CLAUDE, claudeSetupLink('acme/api', 7)), undefined))], checks: { headsha: { status: 'in_progress', conclusion: null, output: { title: 'Waiting for you to connect Claude' } } } }, async ({ page, until, reach, shot }) => {
+await scenario('only-claude-on-this-run', { comments: [comment(BOT, withState(connectBody(null, 'https://github.com/acme/api/actions/runs/1', CLAUDE, claudeSetupLink('acme/api', 7)), undefined))], checks: { headsha: { status: 'in_progress', conclusion: null, output: { title: 'Waiting for you to connect Claude' } } } }, async ({ page, until, click, reach, shot }) => {
   await reach();
   const t = await until((x) => /Open Claude/.test(x), "Claude's link");
   expect(/Connect Claude/.test(t) && !/Connect your AI/.test(t), 'names Claude as the AI to connect');
@@ -303,6 +303,12 @@ await scenario('only-claude-on-this-run', { comments: [comment(BOT, withState(co
   expect(!/Enter this code|Enable device code/.test(t), 'and nothing about a ChatGPT code');
   await new Promise((r) => setTimeout(r, 700));
   await shot('only-claude');
+  // Only this run's ChatGPT sign-in failed: an OpenAI key still works, as nothing asked for Claude in particular.
+  await click('label', 'API key');
+  const keys = await until((x) => /OPENAI_API_KEY|ANTHROPIC_API_KEY/.test(x), 'the API key steps');
+  const tiles = await page.evaluate(() => [...document.querySelectorAll('[role=radiogroup][aria-label="Which AI"] label')].map((l) => l.textContent));
+  expect(tiles.includes('OpenAI') && tiles.includes('Anthropic'), `an API key offers both AIs again (${tiles.join(', ')})`);
+  expect(/Connect your AI/.test(keys), 'and the step is for either AI');
 });
 
 await scenario('claude-button-and-paste', { comments: [CLAUDE_COMMENT()], checks: { headsha: WAITING } }, async ({ page, world, click, reach, until }) => {

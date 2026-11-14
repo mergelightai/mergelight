@@ -32,6 +32,8 @@ export interface Repo {
   accountId: number;
   avatarUrl: string;
   isPrivate: boolean;
+  /** Internal is neither: everyone in the enterprise can see it. */
+  visibility: 'public' | 'private' | 'internal';
   defaultBranch: string;
   /** Where to change which repos this install can reach. */
   accessUrl: string;
@@ -61,6 +63,8 @@ export interface RepoDetails {
   hasLogin: boolean;
   /** The secrets a run gets, the repo's own and those its organization shares with it. Only their names can be read. */
   secretNames: string[];
+  /** Those of them that are the organization's, with no secret of the repo's own by the same name. */
+  sharedSecrets: string[];
   /**
    * Whether every secret a run gets was seen. One an organization shares with the repo only shows once that list can
    * be read, and without it a login may be missing here that the Action still gets.
@@ -89,29 +93,35 @@ export interface WorkflowFile {
   edit?: (current: string) => string | null;
   /** Only added where it's missing. One that's there already stays exactly as it is. */
   keep?: boolean;
-  /** Made from what the review workflow ends up as on the branch, so it runs the same version of the Action. */
-  follow?: (review: string) => string;
 }
 
 /** What a pull request from this page is for. */
 export type Change = { kind: 'setup' } | { kind: 'update'; release: Release } | { kind: 'roles'; roles: Roles };
 
 /**
- * The workflow wasn't there to change, its Mergelight step couldn't be found in it, or it's set up in a way this page
- * doesn't change. Nothing was written.
+ * The workflow wasn't there to change, its Mergelight step couldn't be found in it, or it changed since the page read
+ * it. Nothing was written.
  */
 export class WorkflowEditError extends Error {
-  reason: 'no-file' | 'no-step' | 'custom';
-  constructor(reason: 'no-file' | 'no-step' | 'custom') {
-    super(reason === 'no-file' ? 'The workflow file is missing.' : reason === 'no-step' ? "The workflow's Mergelight step can't be found." : 'The workflow is set up its own way.');
+  reason: 'no-file' | 'no-step' | 'changed';
+  constructor(reason: 'no-file' | 'no-step' | 'changed') {
+    super(reason === 'no-file' ? 'The workflow file is missing.' : reason === 'no-step' ? "The workflow's Mergelight step can't be found." : 'The workflow changed since it was read.');
     this.reason = reason;
   }
 }
 
-/** What a file should hold on a branch that holds `current` now. `review` is what the review workflow will hold there. */
-function wanted(file: WorkflowFile, current: string | null, review: string | null): string {
+/** A pull request that changes the workflow is open already, and this change doesn't go into it. Nothing was written. */
+export class OpenPrError extends Error {
+  pr: SetupPr;
+  constructor(pr: SetupPr) {
+    super(`Pull request #${pr.number} changes the workflow already.`);
+    this.pr = pr;
+  }
+}
+
+/** What a file should hold on a branch that holds `current` now. */
+function wanted(file: WorkflowFile, current: string | null): string {
   if (file.keep && current !== null) return current;
-  if (file.follow && review !== null) return file.follow(review);
   if (!file.edit) return file.content;
   if (current === null) throw new WorkflowEditError('no-file');
   const next = file.edit(current);
@@ -160,8 +170,6 @@ export interface SetupPr {
   number: number;
   url: string;
   headSha: string;
-  /** What its branch holds now for each file this page asked for, which on a pull request that was open already can be more. */
-  wrote?: Record<string, string>;
 }
 
 export interface CheckStatus {
@@ -189,14 +197,16 @@ export interface GitHubClient {
    * `change` says what it's for, which sets its title.
    */
   proposeWorkflows(repo: Repo, branch: string, files: WorkflowFile[], change: Change): Promise<SetupPr | null>;
-  /** The open pull request that adds the workflow, once someone has made it. */
-  findSetupPr(repo: Repo): Promise<SetupPr | null>;
+  /** The open pull request that changes the workflow, once someone has made it. With `base`, only one into that branch. */
+  findSetupPr(repo: Repo, base?: string): Promise<SetupPr | null>;
   hasWorkflow(repo: Repo, branch: string): Promise<boolean>;
+  /** The review workflow at a branch or commit. Null when it isn't there, and throws when it can't be read. */
+  workflowAt(repo: Repo, ref: string): Promise<string | null>;
   /**
    * The names of the secrets a run gets, the repo's own and those its organization shares with it. The values can't
    * be read. `complete` is false when a list couldn't be read.
    */
-  secrets(repo: Repo): Promise<{ names: string[]; complete: boolean }>;
+  secrets(repo: Repo): Promise<{ names: string[]; shared: string[]; complete: boolean }>;
   /** The Mergelight check on this commit, if a review has started. */
   checkStatus(repo: Repo, sha: string): Promise<CheckStatus | null>;
   /** The code for connecting ChatGPT and the link for Claude, while the pull request is waiting for someone to use them. */
@@ -224,13 +234,15 @@ const SETUP_BODY = [
 
 const SETUP_CHANGED = 'Update the Mergelight workflow';
 const updateTitle = (release: Release) => `Update Mergelight to ${release.tag}`;
-const updateBody = (release: Release, addsRefresh: boolean) =>
-  `Moves the workflow to [${release.tag}](https://github.com/mergelightai/mergelight/releases/tag/${release.tag}), pinned to its exact commit. Only the Mergelight version lines change.${addsRefresh ? ' It also adds a small job that keeps a ChatGPT login fresh.' : ''} This pull request reviews itself with the new version.`;
+/** Scheduled jobs only run from the default branch, so a job added to another branch says so. */
+const refreshNote = (repo: Repo, branch: string) => ` It also adds a small job that keeps a ChatGPT login fresh.${branch === repo.defaultBranch ? '' : ` That job only runs on a schedule from ${repo.defaultBranch}, so merge it there too.`}`;
+const updateBody = (release: Release, refresh: string) =>
+  `Moves the workflow to [${release.tag}](https://github.com/mergelightai/mergelight/releases/tag/${release.tag}), pinned to its exact commit. Only the Mergelight version lines change.${refresh} This pull request reviews itself with the new version.`;
 /** Says nothing about which AI, so it stays true when a second change lands on the same pull request. */
 const ROLES_TITLE = 'Set who reviews and who checks in Mergelight';
-const rolesBody = (addsRefresh: boolean) =>
+const rolesBody = (refresh: string) =>
   [
-    `Sets which AI reviews your pull requests in [Mergelight](https://mergelight.dev), and which AI checks what the review found. Only the \`provider\` and \`verify-with\` lines in the workflow change.${addsRefresh ? ' It also adds a small job that keeps a ChatGPT login fresh.' : ''}`,
+    `Sets which AI reviews your pull requests in [Mergelight](https://mergelight.dev), and which AI checks what the review found. Only the \`provider\` and \`verify-with\` lines in the workflow change.${refresh}`,
     '',
     'This pull request is reviewed the new way, so you can see it work. Merge it to keep it.',
   ].join('\n');
@@ -406,7 +418,7 @@ export function realClient(token: string): GitHubClient {
   /** With `base`, only one into that branch: a change made on one into another branch would never reach this one. */
   const openSetupPull = async (repo: Repo, base?: string) => {
     const into = base ? `&base=${encodeURIComponent(base)}` : '';
-    const pulls = await get<{ number: number; html_url: string; base: { ref: string }; head: { sha: string; ref: string; repo: { full_name: string } | null } }[]>(`/repos/${repo.fullName}/pulls?state=open&sort=created&direction=desc&per_page=5${into}`);
+    const pulls = await get<{ number: number; html_url: string; title: string; base: { ref: string }; head: { sha: string; ref: string; repo: { full_name: string } | null } }[]>(`/repos/${repo.fullName}/pulls?state=open&sort=created&direction=desc&per_page=5${into}`);
     for (const pull of pulls) {
       // A fork's pull request isn't ours to update.
       if (pull.head.repo?.full_name !== repo.fullName) continue;
@@ -416,8 +428,8 @@ export function realClient(token: string): GitHubClient {
     }
     return null;
   };
-  const findSetupPr = async (repo: Repo): Promise<SetupPr | null> => {
-    const pull = await openSetupPull(repo);
+  const findSetupPr = async (repo: Repo, base?: string): Promise<SetupPr | null> => {
+    const pull = await openSetupPull(repo, base);
     return pull && { number: pull.number, url: pull.html_url, headSha: pull.head.sha };
   };
   /** Only our server can ask GitHub this, and it needs the person's token to show they can see the repo. */
@@ -434,10 +446,12 @@ export function realClient(token: string): GitHubClient {
    * The names of the secrets a run gets: the repo's own, and those its organization shares with it. `complete` is
    * false when a list couldn't be read. GitHub answers 422 for the organization's list on a repo a person owns.
    */
-  const secretNames = async (repo: Repo): Promise<{ names: string[]; complete: boolean }> => {
+  const secretNames = async (repo: Repo): Promise<{ names: string[]; shared: string[]; complete: boolean }> => {
     const names = (path: string) => get<{ secrets: { name: string }[] }>(`/repos/${repo.fullName}/actions/${path}?per_page=100`).then(({ secrets }) => secrets.map((s) => s.name));
-    const [own, shared] = await Promise.all([names('secrets').catch(() => null), names('organization-secrets').catch((err) => (err instanceof GitHubError && err.status === 422 ? [] : null))]);
-    return { names: [...(own ?? []), ...(shared ?? [])], complete: own !== null && shared !== null };
+    const [own, org] = await Promise.all([names('secrets').catch(() => null), names('organization-secrets').catch((err) => (err instanceof GitHubError && err.status === 422 ? [] : null))]);
+    // A secret of the repo's own wins over the organization's of the same name.
+    const shared = (org ?? []).filter((n) => !own?.includes(n));
+    return { names: [...(own ?? []), ...shared], shared, complete: own !== null && org !== null };
   };
 
   return {
@@ -445,10 +459,10 @@ export function realClient(token: string): GitHubClient {
       const { installations } = await get<{ installations: { id: number; html_url: string; account: { id: number; login: string; avatar_url: string } }[] }>('/user/installations?per_page=100');
       const lists = await Promise.all(
         installations.map(async (install) => {
-          const { repositories } = await get<{ repositories: { id: number; full_name: string; private: boolean; default_branch: string; archived: boolean }[] }>(`/user/installations/${install.id}/repositories?per_page=100`);
+          const { repositories } = await get<{ repositories: { id: number; full_name: string; private: boolean; visibility?: string; default_branch: string; archived: boolean }[] }>(`/user/installations/${install.id}/repositories?per_page=100`);
           return repositories
             .filter((r) => !r.archived)
-            .map((r): Repo => ({ id: r.id, fullName: r.full_name, account: install.account.login, accountId: install.account.id, avatarUrl: install.account.avatar_url, isPrivate: r.private, defaultBranch: r.default_branch, accessUrl: install.html_url }));
+            .map((r): Repo => ({ id: r.id, fullName: r.full_name, account: install.account.login, accountId: install.account.id, avatarUrl: install.account.avatar_url, isPrivate: r.private, visibility: r.visibility === 'internal' || r.visibility === 'public' || r.visibility === 'private' ? r.visibility : r.private ? 'private' : 'public', defaultBranch: r.default_branch, accessUrl: install.html_url }));
         }),
       );
       return lists.flat().sort((a, b) => a.fullName.localeCompare(b.fullName));
@@ -472,6 +486,7 @@ export function realClient(token: string): GitHubClient {
         skip: pickSkip(names),
         hasLogin: secrets.some((n) => LOGIN_SECRETS.includes(n)),
         secretNames: secrets,
+        sharedSecrets: seen.shared,
         allSecretsSeen: seen.complete,
         hasApiKey: secrets.some((n) => NO_REFRESH_SECRETS.includes(n)),
         installed,
@@ -485,19 +500,13 @@ export function realClient(token: string): GitHubClient {
       const update = change.kind === 'update' ? change.release : null;
       /**
        * What each file should hold on this branch, all worked out before anything is written, so a change that can't be
-       * made writes nothing at all. The review workflow comes first, as other files can follow it.
+       * made writes nothing at all.
        */
       const plan = async (head: string) => {
         const current = await Promise.all(files.map((f) => workflowOn(repo, head, f.name)));
-        let review: string | null = null;
-        return files.map((file, i) => {
-          const content = wanted(file, current[i]?.content ?? null, review);
-          if (file.name === 'mergelight.yml') review = content;
-          return { file, current: current[i] ?? null, content };
-        });
+        return files.map((file, i) => ({ file, current: current[i] ?? null, content: wanted(file, current[i]?.content ?? null) }));
       };
       type Plan = Awaited<ReturnType<typeof plan>>;
-      const wrote = (planned: Plan) => Object.fromEntries(planned.map(({ file, content }) => [file.name, content]));
       /** Writes the files that differ on this branch. Returns the last commit, if anything changed. */
       const write = async (head: string, message: string, planned: Plan): Promise<string | null> => {
         let commit: string | null = null;
@@ -517,9 +526,11 @@ export function realClient(token: string): GitHubClient {
       // One that's open already gets brought up to date, however old the version it was opened with.
       const open = await openSetupPull(repo, branch);
       if (open) {
+        // A change of AI is a pull request of its own, and an update never goes into one: each says only what it changes.
+        if (change.kind === 'roles' || (change.kind === 'update' && open.title === ROLES_TITLE)) throw new OpenPrError({ number: open.number, url: open.html_url, headSha: open.head.sha });
         const planned = await plan(open.head.ref);
         const commit = await write(open.head.ref, commitFor(change), planned);
-        return { number: open.number, url: open.html_url, headSha: commit ?? open.head.sha, wrote: wrote(planned) };
+        return { number: open.number, url: open.html_url, headSha: commit ?? open.head.sha };
       }
 
       // A change that can't be made stops here, before there's a branch to clean up. A new branch starts with what this one holds.
@@ -532,10 +543,10 @@ export function realClient(token: string): GitHubClient {
       try {
         await write(head, change.kind === 'roles' ? commitFor(change) : title, planned);
         // A file the branch doesn't have yet is one this pull request adds.
-        const adds = planned.some(({ current }) => !current);
-        const body = update ? updateBody(update, adds) : change.kind === 'roles' ? rolesBody(adds) : SETUP_BODY;
+        const refresh = planned.some(({ current }) => !current) ? refreshNote(repo, branch) : '';
+        const body = update ? updateBody(update, refresh) : change.kind === 'roles' ? rolesBody(refresh) : SETUP_BODY;
         const pull = await call<{ number: number; html_url: string; head: { sha: string } }>('POST', `${r}/pulls`, { title, head, base: branch, body });
-        return { number: pull.number, url: pull.html_url, headSha: pull.head.sha, wrote: wrote(planned) };
+        return { number: pull.number, url: pull.html_url, headSha: pull.head.sha };
       } catch (err) {
         // Don't leave an empty branch behind in their repo.
         await call('DELETE', `${r}/git/refs/heads/${head}`).catch(() => undefined);
@@ -544,6 +555,7 @@ export function realClient(token: string): GitHubClient {
     },
     findSetupPr,
     hasWorkflow,
+    workflowAt: async (repo, ref) => (await workflowOn(repo, ref))?.content ?? null,
     secrets: secretNames,
     checkStatus: async (repo, sha) => {
       const { check_runs } = await get<{ check_runs: { status: string; conclusion: string | null; output: { title: string | null } }[] }>(`/repos/${repo.fullName}/commits/${sha}/check-runs?check_name=Mergelight`);
@@ -576,7 +588,7 @@ export function realClient(token: string): GitHubClient {
 export function mockClient(): GitHubClient {
   const accessUrl = 'https://github.com/organizations/acme/settings/installations/1';
   const avatarUrl = '/logo.png';
-  const repo = (name: string, isPrivate = true): Repo => ({ id: name.length, fullName: `acme/${name}`, account: 'acme', accountId: 1, avatarUrl, isPrivate, defaultBranch: 'main', accessUrl });
+  const repo = (name: string, isPrivate = true): Repo => ({ id: name.length, fullName: `acme/${name}`, account: 'acme', accountId: 1, avatarUrl, isPrivate, visibility: isPrivate ? 'private' : 'public', defaultBranch: 'main', accessUrl });
   let finds = 0;
   let checks = 0;
   const later = <T,>(value: T) => new Promise<T>((r) => setTimeout(() => r(value), 300));
@@ -601,9 +613,9 @@ export function mockClient(): GitHubClient {
     details: (r) =>
       later<RepoDetails>({ reviewApp: r.fullName !== 'acme/docs', ...(
         r.fullName === 'acme/docs'
-          ? { branches: ['main'], base: 'main', skip: ['main'], hasLogin: false, secretNames: namesOf(r.fullName), allSecretsSeen: true, hasApiKey: false, installed: null, refresh: null, release }
+          ? { branches: ['main'], base: 'main', skip: ['main'], hasLogin: false, secretNames: namesOf(r.fullName), sharedSecrets: [], allSecretsSeen: true, hasApiKey: false, installed: null, refresh: null, release }
           : r.fullName === 'acme/site'
-          ? { branches: ['main', 'feat/new-landing'], base: 'main', skip: ['main'], hasLogin: false, secretNames: namesOf(r.fullName), allSecretsSeen: true, hasApiKey: false, installed: null, refresh: null, release }
+          ? { branches: ['main', 'feat/new-landing'], base: 'main', skip: ['main'], hasLogin: false, secretNames: namesOf(r.fullName), sharedSecrets: [], allSecretsSeen: true, hasApiKey: false, installed: null, refresh: null, release }
           : {
               branches: ['main', 'staging', 'development', 'feat/billing-export', 'fix/invoice-rounding'],
               base: 'staging',
@@ -611,6 +623,7 @@ export function mockClient(): GitHubClient {
               hasLogin: loginsOf(r.fullName).claude || loginsOf(r.fullName).codex,
               hasApiKey: loginsOf(r.fullName).claude,
               secretNames: namesOf(r.fullName),
+              sharedSecrets: [],
               allSecretsSeen: true,
               installed: installedFor(r.fullName),
               refresh: null,
@@ -618,10 +631,11 @@ export function mockClient(): GitHubClient {
             }) }),
     // acme/site plays an install that hasn't approved the access, to show the way around it.
     proposeWorkflows: (r) => (r.fullName === 'acme/site' ? Promise.reject(new GitHubError(403)) : new Promise((done) => setTimeout(() => done({ number: 128, url: 'https://github.com/acme/api/pull/128', headSha: 'abc' }), 900))),
-    findSetupPr: () => later(++finds > 1 ? { number: 128, url: 'https://github.com/acme/api/pull/128', headSha: 'abc' } : null),
+    findSetupPr: (_, base) => later(!base && ++finds > 1 ? { number: 128, url: 'https://github.com/acme/api/pull/128', headSha: 'abc' } : null),
     hasWorkflow: () => later(false),
+    workflowAt: (r) => later(installedFor(r.fullName)?.content ?? null),
     // ChatGPT shows up on acme/claude once its code has been used, like a run saving the login.
-    secrets: (r) => later({ names: namesOf(r.fullName, r.fullName === 'acme/claude' && checks >= 4 ? ['CODEX_AUTH_JSON'] : []), complete: true }),
+    secrets: (r) => later({ names: namesOf(r.fullName, r.fullName === 'acme/claude' && checks >= 4 ? ['CODEX_AUTH_JSON'] : []), shared: [], complete: true }),
     checkStatus: () => {
       checks += 1;
       if (checks < 2) return later(null);

@@ -216,6 +216,18 @@ export function isStandard(content: string): boolean {
   });
 }
 
+/**
+ * The input that ties the review to the AI that reviews now: a model, which the reviewer gets as it is and only its own
+ * AI takes, or an effort other than low, medium or high, which both AIs take. The checker uses neither. Null when none.
+ */
+export function reviewerFixedBy(content: string): 'model' | 'effort' | null {
+  const step = locate(content);
+  if (!step) return null;
+  if (step.entries.some((e) => e.key === 'model')) return 'model';
+  if (!step.entries.some((e) => e.key === 'effort')) return null;
+  return /^(low|medium|high)$/.test(readValue(step, 'effort') ?? '') ? null : 'effort';
+}
+
 /** The login inputs the Mergelight step has. In a standard step each one reads its own secret. */
 export function loginInputs(content: string): string[] {
   const step = locate(content);

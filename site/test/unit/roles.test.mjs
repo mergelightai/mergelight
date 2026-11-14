@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { connectsAfterMerge, isStandard, loginsFrom, loginsIn, passesLogin, readRoles, rolesFor, withInputs, withRoles } from '../../src/setup/roles.ts';
+import { connectsAfterMerge, isStandard, loginsFrom, loginsIn, passesLogin, readRoles, reviewerFixedBy, rolesFor, withInputs, withRoles } from '../../src/setup/roles.ts';
 
 const template = readFileSync(new URL('../../../examples/mergelight.yml', import.meta.url), 'utf8');
 const both = { claude: true, codex: true };
@@ -208,4 +208,12 @@ test('passesLogin tells whether the Mergelight step has any login input for an A
   assert.equal(passesLogin(step(['claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}']), 'codex'), false);
   assert.equal(passesLogin('steps:\n  - uses: mergelightai/mergelight@v0\n', 'claude'), false, 'a step without with: passes nothing');
   assert.equal(passesLogin('name: x\n', 'claude'), false, 'without the step, nothing');
+});
+
+test('reviewerFixedBy: a model, or an effort only one AI takes, ties the review to its AI', () => {
+  assert.equal(reviewerFixedBy(template), null);
+  assert.equal(reviewerFixedBy(step(['model: opus'])), 'model');
+  assert.equal(reviewerFixedBy(step(['effort: high'])), null, 'both AIs take low, medium and high');
+  assert.equal(reviewerFixedBy(step(['effort: xhigh'])), 'effort');
+  assert.equal(reviewerFixedBy(step(['effort: ${{ vars.EFFORT }}'])), 'effort', "an effort that can't be read counts too");
 });
