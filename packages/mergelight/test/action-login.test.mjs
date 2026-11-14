@@ -255,3 +255,21 @@ test("action.yml is valid YAML, so GitHub can load the action at all", (t) => {
   if (ruby.error) return t.skip("ruby isn't installed here; the tests on GitHub check this too");
   assert.equal(ruby.status, 0, ruby.stderr.split("\n")[0]);
 });
+
+test("only the Codex login this Action set up is ever saved", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-save-"));
+  const bin = join(dir, "bin");
+  mkdirSync(bin);
+  const asked = join(dir, "gh-asked");
+  writeFileSync(join(bin, "gh"), `#!/usr/bin/env bash\necho "$*" >> "${asked}"\n`);
+  chmodSync(join(bin, "gh"), 0o755);
+  const other = join(dir, "runner-own-codex");
+  mkdirSync(other);
+  writeFileSync(join(other, "auth.json"), "{}");
+  const r = spawnSync("bash", [join(root, "packages/mergelight/scripts/save-login.sh")], {
+    encoding: "utf8",
+    env: { PATH: `${bin}:${process.env.PATH}`, CODEX_HOME: other, RUNNER_TEMP: dir, SECRET_NAME: "CODEX_AUTH_JSON", SECRETS_TOKEN: "t", GITHUB_REPOSITORY: "acme/widgets" },
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(existsSync(asked), false, "nothing was saved");
+});

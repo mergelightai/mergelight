@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { checkWaitingTitle, claudeSetupLink, connect, connectBody, connectCheckBody, connectedAccount, connectedBody, connectFailedBody, githubConnect, installAppBody, parseDeviceLogin, withState } from "../dist/connect.js";
+import { checkWaitingTitle, CLAUDE_INPUT_MISSING, claudeInWorkflow, claudeSetupLink, connect, connectBody, connectCheckBody, connectedAccount, connectedBody, connectFailedBody, githubConnect, installAppBody, parseDeviceLogin, withState } from "../dist/connect.js";
 import { claudeCodeRef, parseClaudeLink, parseClaudeToken, readCodeRef, readPastedCode, scriptArgs, shareClaudeToken, startClaudeSignIn, waitForPastedCode } from "../dist/connect-claude.js";
 import { isPendingSummary, PENDING_MARKER, SUMMARY_MARKER } from "../dist/publish/markdown.js";
 import { ownSummary } from "../dist/publish/publish.js";
@@ -485,4 +485,18 @@ test("Claude set to review with no login yet: only Claude's link is offered, and
 test("the sign-in gets a terminal from script, in the form each system's script takes", () => {
   assert.deepEqual(scriptArgs("linux"), ["-qfc", "stty cols 3000 rows 50; exec claude setup-token", "/dev/null"]);
   assert.deepEqual(scriptArgs("darwin"), ["-qF", "/dev/null", "sh", "-c", "stty cols 3000 rows 50; exec claude setup-token"]);
+});
+
+test("Claude is asked for only where the workflow can pass its login on to later runs", async () => {
+  assert.equal(claudeInWorkflow("    with:\n      claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n"), "yes");
+  assert.equal(claudeInWorkflow("    steps:\n      - uses: mergelightai/mergelight@v0\n        with:\n          codex-auth-json: x\n"), "no");
+  assert.equal(claudeInWorkflow("jobs:\n  review:\n    uses: acme/ci/.github/workflows/mergelight.yml@main\n    secrets: inherit\n"), "unknown", "a reusable workflow may pass it on");
+  assert.equal(claudeInWorkflow(null), "unknown");
+  // Asked for by name in a workflow that doesn't pass it on: the reason says what to add.
+  const d = raced({ codexExit: 1, claudeOk: false, codexOutput: [] });
+  d.only = "claude";
+  d.startClaude = async () => null;
+  d.claudeUnavailable = () => CLAUDE_INPUT_MISSING;
+  assert.equal(await connect(d), 1);
+  assert.match(d.events.at(-1), /claude-code-oauth-token: \$\{\{ secrets\.CLAUDE_CODE_OAUTH_TOKEN \}\}/);
 });

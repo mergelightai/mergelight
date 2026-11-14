@@ -187,6 +187,8 @@ export interface ClaudeConnect {
 export interface ConnectDeps {
   /** Only this sign-in is offered: Claude's, with no ChatGPT code. */
   only?: "claude";
+  /** Why Claude can't be offered, when there is a reason to tell, such as the workflow not passing its login on. */
+  claudeUnavailable?: () => string | undefined;
   /** Starts the Claude sign-in, when this repository can use it. Null if it can't. */
   startClaude?: () => Promise<ClaudeConnect | null>;
   /** Runs the login and resolves with its exit code. */
@@ -252,7 +254,7 @@ export async function connect(deps: ConnectDeps): Promise<number> {
     deps.only === "claude"
       ? claude
         ? "The Claude link ran out before anyone finished signing in."
-        : "Claude's sign-in couldn't start on this run."
+        : (deps.claudeUnavailable?.() ?? "Claude's sign-in couldn't start on this run.")
       : claude
       ? "The ChatGPT code and the Claude link both ran out before anyone finished signing in."
       : shown
@@ -286,14 +288,27 @@ export function withState(body: string, previous: string | undefined): string {
 }
 
 /** The real thing: Codex on this runner, and the pull request as the place to show the code. */
-/** A repository set up before Claude support doesn't pass the login on, so connecting it would only ask again next time. */
-async function workflowHasClaude(api: GitHub, env: NodeJS.ProcessEnv): Promise<boolean> {
-  const [, path, ref] = (env.GITHUB_WORKFLOW_REF ?? "").match(/^[^/]+\/[^/]+\/(.+?)@(.+)$/) ?? [];
-  if (!path || !ref) return false;
-  return api
-    .get<{ content: string }>(`contents/${path}?ref=${encodeURIComponent(env.GITHUB_SHA ?? ref)}`)
-    .then((f) => Buffer.from(f.content, "base64").toString("utf8").includes("claude-code-oauth-token"), () => false);
+/**
+ * Whether the workflow passes a Claude login on to Mergelight. A repository set up before Claude support
+ * doesn't, so connecting Claude there would only ask again next time: "no". A workflow that calls a
+ * reusable one may pass it on in a file this can't tell, and one that can't be read can't say: "unknown".
+ */
+export function claudeInWorkflow(text: string | null): "yes" | "no" | "unknown" {
+  if (text === null) return "unknown";
+  if (text.includes("claude-code-oauth-token")) return "yes";
+  return /^\s*(?:-\s*)?uses:\s*["']?[^\s"'#]*\.github\/workflows\//m.test(text) ? "unknown" : "no";
 }
+
+async function workflowHasClaude(api: GitHub, env: NodeJS.ProcessEnv): Promise<"yes" | "no" | "unknown"> {
+  const [, path, ref] = (env.GITHUB_WORKFLOW_REF ?? "").match(/^[^/]+\/[^/]+\/(.+?)@(.+)$/) ?? [];
+  if (!path || !ref) return "unknown";
+  const text = await api.get<{ content: string }>(`contents/${path}?ref=${encodeURIComponent(env.GITHUB_SHA ?? ref)}`).then((f) => Buffer.from(f.content, "base64").toString("utf8"), () => null);
+  return claudeInWorkflow(text);
+}
+
+/** What to do when the workflow doesn't pass a Claude login on: a login saved now would never reach a later run. */
+export const CLAUDE_INPUT_MISSING =
+  "The workflow doesn't pass a Claude login to Mergelight, so one connected now would never reach a later run. Add `claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}` under `with:` where the workflow uses Mergelight, then push a commit.";
 
 export function githubConnect(api: GitHub, number: number, headSha: string, log: (line: string) => void, env = process.env, mode: ConnectMode = { purpose: "review" }): ConnectDeps {
   const checker = mode.purpose === "check" && mode.ai ? mode.ai : null;
@@ -304,6 +319,8 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
   let checkId: number | null = null;
   let running: ChildProcess | null = null;
   let claudeOffered = false;
+  /** Why Claude isn't offered, when the workflow is the reason. */
+  let claudeMissing: string | undefined;
   /**
    * The app's token dies if the app is removed during the login, which can wait 15 minutes. The comment
    * still has to change, or it keeps offering a dead code, and the workflow's own token can do that.
@@ -323,13 +340,19 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
     writeCheck(api, checkId, headSha, { status: "completed", conclusion: "neutral", completed_at: new Date().toISOString(), output: { title, summary } }, log);
   return {
     ...(onlyClaude ? { only: "claude" as const } : {}),
+    claudeUnavailable: () => claudeMissing,
     stopLogin: () => running?.kill("SIGTERM"),
     startClaude: async () => {
       // Connecting ChatGPT to check a Claude review offers only ChatGPT: Claude already has a login.
       if (checker === "codex") return null;
-      // Beside ChatGPT, Claude is offered only where the workflow passes its login on. Asked for by name,
-      // the run already knows it wants Claude, and a reusable workflow passes it on where this can't see.
-      if (!onlyClaude && !(await workflowHasClaude(api, env))) return null;
+      // Claude is offered only where the workflow passes its login on. Beside ChatGPT, only when that is
+      // sure. Asked for by name, also when a reusable workflow may pass it on where this can't see.
+      const passes = await workflowHasClaude(api, env);
+      if (passes === "no") {
+        claudeMissing = CLAUDE_INPUT_MISSING;
+        return null;
+      }
+      if (!onlyClaude && passes !== "yes") return null;
       const signIn = await startClaudeSignIn();
       if (!signIn) {
         log("Claude's sign-in didn't start, so only ChatGPT is offered.");
@@ -411,7 +434,10 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
         }
         const who = checker === "claude" ? "the Claude plan that confirmed the sign-in" : account ? `the ChatGPT account \`${account}\`` : "the ChatGPT account that entered the code";
         const secret = checker === "claude" ? "CLAUDE_CODE_OAUTH_TOKEN" : env.SECRET_NAME || "CODEX_AUTH_JSON";
-        await api.write("POST", `issues/${number}/comments`, { body: `🔌 ${aiName(checker)} now checks reviews on this repository, with ${who}. If that isn't yours, remove the \`${secret}\` secret and push a commit to connect again.` });
+        // The note failing to post mustn't leave the check waiting.
+        await api
+          .write("POST", `issues/${number}/comments`, { body: `🔌 ${aiName(checker)} now checks reviews on this repository, with ${who}. If that isn't yours, remove the \`${secret}\` secret and push a commit to connect again.` })
+          .catch((err) => log(`Couldn't post who connected: ${err instanceof Error ? err.message : String(err)}`));
         await finish(`Connected to ${loginName(checker)}`, `Starting the review, checked by ${aiName(checker)}.`);
         log(`Connected to ${loginName(checker)} to check the review.`);
         return;
