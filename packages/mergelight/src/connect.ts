@@ -344,8 +344,23 @@ export function claudeInWorkflow(text: string | null, input = "claude-code-oauth
   // And from the secret the login is saved to: a login saved as CLAUDE_CODE_OAUTH_TOKEN never reaches
   // a step that reads another secret.
   const passes = (step: string) => {
-    const value = new RegExp(`(?:^|[\\s{,])["']?${input}["']?\\s*:\\s*([^\\n,}]*)`, "m").exec(step)?.[1];
-    if (value === undefined) return false;
+    // Spaces only after the colon: a value left empty mustn't take the next line for its own.
+    const found = new RegExp(`(?:^|[\\s{,])["']?${input}["']?[ \\t]*:[ \\t]*([^\\n,}]*)`, "m").exec(step);
+    if (!found) return false;
+    let value = found[1]!.trim();
+    // A value that goes on over the lines below, as with >- or |: those lines are the value.
+    if (/^[>|][-+0-9]*$/.test(value)) {
+      const rest = step.slice(found.index + found[0].length).split("\n").slice(1);
+      const own = indent(step.slice(0, found.index + found[0].length).split("\n").pop()!);
+      const more: string[] = [];
+      for (const l of rest) {
+        if (l.trim() && indent(l) <= own) break;
+        more.push(l.trim());
+      }
+      value = more.join(" ").trim();
+    }
+    // An empty value passes nothing on: a login saved now would never reach a later run.
+    if (!value || /^(["'])\1$/.test(value) || value === "~" || value === "null") return false;
     // secrets.NAME or secrets['NAME'], in any letter case, as GitHub reads secret names. With a fallback,
     // like secrets.A || secrets.B, one of them being the secret is enough.
     const named = [...value.matchAll(/secrets(?:\.([A-Za-z0-9_]+)|\[\s*["']([A-Za-z0-9_]+)["']\s*\])/gi)].map((m) => (m[1] ?? m[2])!.toUpperCase());

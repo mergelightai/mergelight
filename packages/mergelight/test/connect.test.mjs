@@ -591,3 +591,10 @@ test("a job with an anchor is found, and one that can't be found can't be told",
   assert.equal(claudeInWorkflow(anchored, "claude-code-oauth-token", "review"), "yes");
   assert.equal(claudeInWorkflow(anchored, "claude-code-oauth-token", "missing"), "unknown");
 });
+
+test("an empty login input passes nothing on, and a value over several lines is read whole", () => {
+  const job = (value) => `jobs:\n  review:\n    steps:\n      - uses: mergelightai/mergelight@v0\n        with:\n          claude-code-oauth-token: ${value}\n          provider: claude\n`;
+  for (const empty of ['""', "''", ""]) assert.equal(claudeInWorkflow(job(empty), "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "no", JSON.stringify(empty));
+  assert.equal(claudeInWorkflow(job(">-\n            ${{ secrets.CLAUDE_LOGIN }}"), "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "no", "the folded value names another secret");
+  assert.equal(claudeInWorkflow(job(">-\n            ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}"), "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "yes");
+});

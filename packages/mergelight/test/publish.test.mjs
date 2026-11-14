@@ -10,7 +10,7 @@ import { parsePatch, place } from "../dist/publish/diff-lines.js";
 import { mergeLight, tierOf } from "../dist/review.js";
 import { closedBody, patchTouches, readClosed, reopenedBody, resolvedByPeople, threadAction } from "../dist/publish/closed.js";
 import { checkerMissedLine, clean, failedSummaryBody, isFailedSummary, limitNotice, notReadLine, loginNotice, FINDING_MARKER_RE, inlineBody, isPendingSummary, pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "../dist/publish/markdown.js";
-import { APPROVAL_MARKER, approvalHold, approvalLight, checkLimitTitle as limitTitle, failSummary, startCheck, UNREVIEWED, checkConclusion, isYellowCheck, syncApproval, trustedComment, CHECK_FAILED_TITLE, checkLimitTitle, checkLoginTitle, isFailedCheckTitle } from "../dist/publish/publish.js";
+import { APPROVAL_MARKER, approvalHold, approvalLight, checkLimitTitle as limitTitle, failSummary, startCheck, startSummary, UNREVIEWED, checkConclusion, isYellowCheck, syncApproval, trustedComment, CHECK_FAILED_TITLE, checkLimitTitle, checkLoginTitle, isFailedCheckTitle } from "../dist/publish/publish.js";
 import { decodeState, encodeState, nextState } from "../dist/publish/state.js";
 import { buildVerifierPrompt } from "../dist/prompt.js";
 import { assignIds } from "../dist/review.js";
@@ -705,4 +705,19 @@ test("an API key with no credit is said to have no credit, not a plan with no us
   assert.match(limitNotice("OpenAI", null).body, /credit ran out, or its account reached its spending limit/);
   assert.match(limitTitle("OpenAI"), /the OpenAI API key has no usage left/);
   assert.match(limitNotice("Claude", "9am").heading, /your Claude plan hit its limit/);
+});
+
+test("a dead prompt to connect the checking AI gives way to the review when it starts", async () => {
+  const { connectCheckBody } = await import("../dist/connect.js");
+  const prompt = connectCheckBody("codex", "claude", { url: "https://auth.openai.com/d", code: "AAAA-BBBB" });
+  const writes = [];
+  const api = {
+    list: async (path) => (path.startsWith("issues/") ? [{ id: 5, user: { login: "mergelight-ai[bot]", type: "Bot" }, author_association: "NONE", body: prompt }] : []),
+    viewer: async () => null,
+    write: async (method, path, body) => writes.push({ method, path, body }),
+  };
+  await startSummary(api, 7, { reviewer: { name: "claude", model: "opus" } });
+  assert.equal(writes.length, 1);
+  assert.match(writes[0].body.body, /Mergelight: Reviewing/);
+  assert.doesNotMatch(writes[0].body.body, /AAAA-BBBB/);
 });

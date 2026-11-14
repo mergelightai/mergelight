@@ -80,8 +80,11 @@ export async function runClaude(opts: ModelOptions): Promise<ModelResult> {
     // check instead (review.ts). In the Action the login is the repository's secret; elsewhere, your own.
     if (LOGIN_FAILURE.test(text)) {
       // Claude Code uses a plan's token before an API key (claudeEnv), and either before its own login.
+      // Unsetting the plan's token makes an API key set next to it the login, billed per use: say so.
       const local = process.env.CLAUDE_CODE_OAUTH_TOKEN
-        ? "Claude rejected the CLAUDE_CODE_OAUTH_TOKEN set here. Replace it with a new one from claude setup-token, or unset it to use Claude Code's own login."
+        ? process.env.ANTHROPIC_API_KEY
+          ? "Claude rejected the CLAUDE_CODE_OAUTH_TOKEN set here. Replace it with a new one from claude setup-token. Unsetting it would use the ANTHROPIC_API_KEY set here instead, billed per use."
+          : "Claude rejected the CLAUDE_CODE_OAUTH_TOKEN set here. Replace it with a new one from claude setup-token, or unset it to use Claude Code's own login."
         : process.env.ANTHROPIC_API_KEY
           ? "Claude rejected the ANTHROPIC_API_KEY set here. Replace it, or unset it to use Claude Code's own login."
           : "Claude Code's login didn't work. Run claude and log in again.";
