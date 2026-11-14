@@ -354,11 +354,17 @@ export async function jobFilesFor(mirror: string, base: string, guardFor?: Job[]
       let at = [...done, part].join("/");
       // A disk that ignores letter case opens docs/alias.md for Docs/alias.md: the guard follows it there
       // too. When two names fit, it can't tell which one is opened, so it gives up rather than guess.
+      // A name spelled exactly so is that one. Otherwise two that fit can't be told apart: it gives up
+      // rather than guess. Files whose names differ only in letter case are guarded alike anyway, as
+      // the guard compares names in any letter case.
       if (tree.mode(at) === undefined) {
         const fits = caseFits(at);
         if (fits.length && !fits.includes(at)) {
           if (fits.length > 1) return "deep";
           at = fits[0]!;
+          // The folders on the way as the tree spells them, such as docs for Docs, so the file guarded
+          // and read for its imports is the real one.
+          done.splice(0, done.length, ...at.split("/").slice(0, -1));
         }
       }
       const real = at.split("/").pop()!;

@@ -571,3 +571,23 @@ test("the guard follows a link in any letter case, as a disk that ignores it ope
   assert.equal(incomplete, undefined);
   assert.ok(guarded.includes("docs/guide.md"), JSON.stringify(guarded));
 });
+
+test("an import spelled in another letter case is read where the tree really has it, imports and all", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-jobs-twocase-"));
+  const git = (...args) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t.test", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
+  git("init", "-q", "-b", "main");
+  // Written with git itself: a disk that ignores letter case can't hold both Docs and docs.
+  const add = (path, text) => {
+    const sha = execFileSync("git", ["-C", dir, "hash-object", "-w", "--stdin"], { input: text, encoding: "utf8" }).trim();
+    git("update-index", "--add", "--cacheinfo", `100644,${sha},${path}`);
+  };
+  add("Docs/keep.txt", "x\n");
+  add("docs/guide.md", "Read @payload.md.\n");
+  add("CLAUDE.md", "See @Docs/guide.md.\n");
+  add(".mergelight/jobs/translations.md", TRANSLATIONS);
+  git("commit", "-q", "-m", "base");
+  const { incomplete, guarded } = await jobFilesFor(dir, "main");
+  assert.equal(incomplete, undefined);
+  assert.ok(guarded.includes("docs/guide.md"), JSON.stringify(guarded));
+  assert.ok(guarded.includes("docs/payload.md"), "what the real guide imports is guarded too");
+});
