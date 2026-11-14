@@ -222,6 +222,25 @@ test("a failed comment doesn't stop the check from finishing, and it doesn't thr
   assert.ok(logs.some((l) => l.startsWith("Couldn't update the comment")));
 });
 
+test("a sign-in that fails takes back Mergelight's approval of an earlier commit, not of this one", async () => {
+  const api = fakeApi(() => false);
+  const approval = (id, commit_id) => ({ id, state: "APPROVED", commit_id, body: "<!-- mergelight:approval -->\nok", user: { login: "mergelight-ai[bot]" } });
+  const list = api.list;
+  api.list = async (path) => (path.endsWith("/reviews") ? [approval(31, "old"), approval(32, "abc")] : list(path));
+  await githubConnect(api, 7, "abc", () => {}, { GH_TOKEN: "app" }).failed("The code ran out.");
+  const dismissed = api.writes.filter((w) => w.path.endsWith("/dismissals")).map((w) => w.path);
+  assert.deepEqual(dismissed, ["pulls/7/reviews/31/dismissals"]);
+});
+
+test("a checker sign-in that fails takes no approval back: the review still runs", async () => {
+  const api = fakeApi(() => false);
+  let asked = false;
+  const list = api.list;
+  api.list = async (path) => (path.endsWith("/reviews") ? ((asked = true), []) : list(path));
+  await githubConnect(api, 7, "abc", () => {}, { GH_TOKEN: "app" }, { purpose: "check", ai: "codex", reviewer: "claude" }).failed("The code ran out.");
+  assert.equal(asked, false);
+});
+
 test("other errors don't switch tokens", async () => {
   const env = { GH_TOKEN: "app", GITHUB_WORKFLOW_TOKEN: "workflow" };
   const api = fakeApi(() => false);
@@ -273,6 +292,13 @@ function codeWait(values) {
 
 test("waits until the setup page has left a whole code, past any failed read", async () => {
   assert.equal(await codeWait([null, new Error("GitHub hiccup"), CODE]), CODE);
+});
+
+test("a read GitHub never answers doesn't hold the wait past its end", async () => {
+  const started = Date.now();
+  const code = await waitForPastedCode({ read: () => new Promise(() => {}) }, 50, 10);
+  assert.equal(code, null);
+  assert.ok(Date.now() - started < 2_000);
 });
 
 test("anything that isn't a whole code never counts, and the wait ends", async () => {

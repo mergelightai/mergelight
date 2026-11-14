@@ -346,6 +346,30 @@ test("a check left running when the run ends is cancelled, so an older approval 
   assert.match(step, /"\$status" != in_progress \] && \[ "\$status" != queued/, "only a check known to be running");
 });
 
+test("the last step finishes the connect's check too, when the review couldn't close it", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-finish-"));
+  const bin = join(dir, "bin");
+  mkdirSync(bin);
+  const calls = join(dir, "calls");
+  // The review's own check 10 has its verdict; the connect's check 9 still runs.
+  writeFileSync(join(bin, "gh"), `#!/usr/bin/env bash\necho "$*" >> "${calls}"\ncase "$*" in *check-runs/10\\ --jq*) echo completed ;; *check-runs/9\\ --jq*) echo in_progress ;; esac\n`);
+  chmodSync(join(bin, "gh"), 0o755);
+  const r = spawnSync("bash", ["-c", stepScript("Finish a check left running")], { encoding: "utf8", env: { PATH: `${bin}:${process.env.PATH}`, GITHUB_REPOSITORY: "acme/widgets", MERGELIGHT_CHECK_RUN: "10 9" } });
+  assert.equal(r.status, 0, r.stderr);
+  const patched = readFileSync(calls, "utf8").split("\n").filter((l) => l.includes("PATCH"));
+  assert.equal(patched.length, 1);
+  assert.match(patched[0], /check-runs\/9 .*conclusion=cancelled/);
+});
+
+test("a reviewer's ChatGPT login that couldn't be refreshed isn't spent waiting for the checker's sign-in", () => {
+  const r = spawnSync("bash", ["-c", stepScript("Connect the checker")], { encoding: "utf8", env: { PATH: process.env.PATH, MERGELIGHT_LOGIN_SHORT: "1", MERGELIGHT_CONNECT_CHECK: "claude", MERGELIGHT_PROVIDER: "codex", GITHUB_ACTION_PATH: "/nowhere" } });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /::warning::.*too little time left/);
+  // Nor is its used refresh token tried a second time, with no sign-in in between.
+  const again = action.slice(action.indexOf("- name: Refresh the Codex login again after the sign-in"));
+  assert.match(again.slice(0, again.indexOf("shell:")), /env\.MERGELIGHT_LOGIN_SHORT != '1'/);
+});
+
 test("the notice for saving a checker's login names the secret this workflow reads", () => {
   const r = spawnSync("bash", ["-c", stepScript("Choose who reviews and who checks")], {
     encoding: "utf8",

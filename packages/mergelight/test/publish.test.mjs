@@ -662,6 +662,21 @@ test("the summary says when the AI set to check had no login yet, so the reviewe
   assert.match(checkerMissedLine({ checker_missed: "codex", checker_missed_why: "sandbox", provider: claudeReviews }), /but Codex's sandbox couldn't start on this runner/);
 });
 
+test("a summary too long for GitHub still says the AI set to check didn't", () => {
+  const review = {
+    pr: { owner: "o", repo: "r", number: 1, title: "t", head_sha: "abcdef1234", base_sha: "b", diff_files: 1 },
+    provider: { name: "claude", model: null, effort: "high" },
+    checker_missed: "codex",
+    light: "green",
+    summary: "Long. ".repeat(20_000),
+    findings: [],
+    stats: { duration_ms: 1000 },
+  };
+  const body = summaryBody({ review, state: nextState(null, [], "abcdef1234", "green", new Map()), urls: new Map() });
+  assert.match(body, /Summary cut short/);
+  assert.match(body, /Codex was set to check this review/);
+});
+
 test("a failed review keeps what earlier rounds found, when it replaces a pending summary", async () => {
   const state = encodeState({ v: 1, round: 3, findings: [] });
   const writes = [];
@@ -686,12 +701,18 @@ test("the review starts a check of its own, and closes a connect's check only on
   writes.length = 0;
   assert.equal(await startCheck(api(null), "new", "codex"), 10);
   assert.equal(writes.length, 1);
-  // A finished verdict, or another commit's check, is never touched.
-  for (const old of [{ status: "completed", head_sha: "new" }, { status: "in_progress", head_sha: "other" }, null]) {
+  // A finished verdict is never touched, nor a check that can't be read: the Action's last step finishes that one.
+  for (const old of [{ status: "completed", head_sha: "new" }, null]) {
     writes.length = 0;
     await startCheck(api(old), "new", "codex", 9);
     assert.ok(!writes.some((w) => w.path === "check-runs/9"), JSON.stringify(old));
   }
+  // The connect's check on the commit it waited on, after a push moved the review to a newer one: closed, and it says why.
+  writes.length = 0;
+  await startCheck(api({ status: "in_progress", head_sha: "older" }), "newer00", "codex", 9);
+  const closed = writes.find((w) => w.path === "check-runs/9");
+  assert.equal(closed?.body.conclusion, "neutral");
+  assert.match(closed.body.output.summary, /newer commit was pushed.*newer00/);
 });
 
 

@@ -169,7 +169,14 @@ export async function waitForPastedCode(deps: WaitDeps, timeoutMs = WAIT_MS, pol
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const end = now() + timeoutMs;
   while (now() < end && !deps.stopped?.()) {
-    const code = readPastedCode((await deps.read().catch(() => null)) ?? "");
+    // A read GitHub never answers mustn't hold the wait past its end: the review waits for it.
+    let timer: NodeJS.Timeout | undefined;
+    const late = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), Math.max(0, end - now()));
+    });
+    const text = await Promise.race([deps.read().catch(() => null), late]);
+    clearTimeout(timer);
+    const code = readPastedCode(text ?? "");
     if (code) return code;
     await sleep(pollMs);
   }

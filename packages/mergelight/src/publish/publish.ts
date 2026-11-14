@@ -259,15 +259,18 @@ export async function startCheck(api: GitHub, headSha: string, provider?: string
     },
   });
   // A connect's check left going for this review is closed only now, with this one already going, so
-  // there is no moment without a running check, and none with both. Only a check still running, for
-  // this very commit: never a finished one, whose verdict stands, nor another commit's.
+  // there is no moment without a running check, and none with both. Only a check still running: a
+  // finished one's verdict stands. It is this run's own, made for this pull request, so also when a push
+  // during the sign-in moved the review to a newer commit. One that can't be read or closed here is
+  // finished by the Action's last step.
   const old = handedOver ? await api.get<{ status: string; head_sha: string }>(`check-runs/${handedOver}`).catch(() => null) : null;
-  if (handedOver && old && old.status !== "completed" && old.head_sha === headSha) {
-    await writeCheck(api, handedOver, headSha, {
+  if (handedOver && old && old.status !== "completed") {
+    const moved = old.head_sha !== headSha;
+    await writeCheck(api, handedOver, old.head_sha, {
       status: "completed",
       conclusion: "neutral",
       completed_at: new Date().toISOString(),
-      output: { title: "Superseded", summary: "The review goes on in a new check." },
+      output: { title: "Superseded", summary: moved ? `A newer commit was pushed while Mergelight waited, so it reviews ${headSha.slice(0, 7)} instead.` : "The review goes on in a new check." },
     }).catch(() => null);
   }
   return run?.id ?? null;

@@ -308,9 +308,9 @@ export function summaryBody({ review: r, state, urls, marks = new Map(), handled
   const done = state.findings.filter((f) => dropped.includes(f) || (f.status === "gone" && handled.has(f.id)));
   const gone = state.round > 1 ? state.findings.filter((f) => f.status === "gone" && f.tier !== "hardening" && !done.includes(f)) : [];
 
-  // The other AI not checking is said up top, where a long summary never cuts it.
+  // The other AI not checking is said first, above the AI's own summary, so a cut never takes it.
   const missed = checkerMissedLine(r);
-  const out: string[] = [SUMMARY_MARKER, ...(update ? updateBanner(update) : []), `### ${light.dot} Mergelight: ${light.label}`, "", clean(r.summary), ...(missed ? ["", missed] : []), "", `**${headline(r, done.length)}**`];
+  const out: string[] = [SUMMARY_MARKER, ...(update ? updateBanner(update) : []), `### ${light.dot} Mergelight: ${light.label}`, "", ...(missed ? [missed, ""] : []), clean(r.summary), "", `**${headline(r, done.length)}**`];
 
   if (top.length) {
     out.push("", "#### To fix");

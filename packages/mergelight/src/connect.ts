@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { ProviderName } from "./providers/index.js";
 import type { GitHub } from "./publish/api.js";
 import { FAILED_MARKER, PENDING_MARKER, pendingSummaryBody, SUMMARY_MARKER } from "./publish/markdown.js";
-import { CHECK_FAILED_TITLE, readPrReviewState, writeCheck } from "./publish/publish.js";
+import { CHECK_FAILED_TITLE, readPrReviewState, syncApproval, UNREVIEWED, writeCheck } from "./publish/publish.js";
 import { stateBlock } from "./publish/state.js";
 import { claudeCodeRef, readCodeRef, shareClaudeToken, startClaudeSignIn, waitForPastedCode } from "./connect-claude.js";
 
@@ -614,6 +614,9 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
       );
       // Finished here: nothing is left for the run's last step to finish. Not finished: it still is.
       if (finished && env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, "MERGELIGHT_CHECK_RUN=\n");
+      // No review runs, as when one fails: an approval Mergelight gave an earlier commit must not count
+      // for this one, next to a check that a branch rule takes for passed.
+      await syncApproval(api, number, "yellow", headSha, log, { why: UNREVIEWED, otherCommitsOnly: true });
       log(reason);
     },
   };

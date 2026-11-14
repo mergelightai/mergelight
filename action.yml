@@ -271,6 +271,7 @@ runs:
           echo "MERGELIGHT_CONNECT=0"
           echo "MERGELIGHT_NO_LOGIN=$no_login"
           echo "MERGELIGHT_LOGIN_LOST=0"
+          echo "MERGELIGHT_LOGIN_SHORT=0"
         } >> "$GITHUB_ENV"
 
     - name: Install Claude Code
@@ -334,6 +335,7 @@ runs:
           echo "MERGELIGHT_CHATGPT=0"
           echo "MERGELIGHT_CONNECT=0"
           echo "MERGELIGHT_LOGIN_LOST=0"
+          echo "MERGELIGHT_LOGIN_SHORT=0"
         } >> "$GITHUB_ENV"
         if [ -n "$AUTH_JSON" ]; then
           printf 'cli_auth_credentials_store = "file"\n' > "$CODEX_HOME/config.toml"
@@ -467,13 +469,20 @@ runs:
         CAN_SAVE: ${{ steps.saving.outputs.can_save }}
         SECRET_NAME: ${{ inputs.auth-secret-name }}
       run: |
+        # A ChatGPT login this run couldn't refresh has only its last stretch left: the review needs it more
+        # than the checker's sign-in, which can wait 15 minutes.
+        if [ "${MERGELIGHT_LOGIN_SHORT:-0}" = 1 ]; then
+          echo "::warning::The reviewer's ChatGPT login couldn't be refreshed and has too little time left to wait for a sign-in, so the reviewer checks this time."
+          exit 0
+        fi
         args=(connect "$GITHUB_REPOSITORY#$PR" --for check --ai "$MERGELIGHT_CONNECT_CHECK" --reviewer "$MERGELIGHT_PROVIDER")
         [ "$CAN_SAVE" = "true" ] || args+=(--no-save)
         node "$GITHUB_ACTION_PATH/packages/mergelight/dist/cli.js" "${args[@]}" || echo "::warning::Connecting the checker didn't finish, so the reviewer checks this time."
 
     # The sign-in for the checker can take 15 minutes, which a Codex reviewer's login may not have left.
+    # Not when the first refresh failed: there was no sign-in, and its used token would only fail again.
     - name: Refresh the Codex login again after the sign-in
-      if: env.MERGELIGHT_CHATGPT == '1' && env.MERGELIGHT_CONNECT_CHECK != ''
+      if: env.MERGELIGHT_CHATGPT == '1' && env.MERGELIGHT_CONNECT_CHECK != '' && env.MERGELIGHT_LOGIN_SHORT != '1'
       shell: bash
       env:
         SECRETS_TOKEN: ${{ inputs.secrets-token }}
@@ -627,7 +636,7 @@ runs:
         [ -n "$EFFORT" ] && args+=(--effort "$EFFORT")
         node "$GITHUB_ACTION_PATH/packages/mergelight/dist/cli.js" "${args[@]}"
 
-    # The check that stands for this run: a connect's, until the review takes over with its own. Whatever
+    # The checks that stand for this run: a connect's, until the review takes over with its own. Whatever
     # is still running when the run ends, as when the review never started or the run was cancelled, is
     # finished here, so it doesn't wait for ever. A finished one is left as it is.
     - name: Finish a check left running
@@ -636,16 +645,19 @@ runs:
       env:
         GH_TOKEN: ${{ steps.app.outputs.token || inputs.github-token }}
       run: |
-        # Only a check known to be still running: a finished verdict stands, and one that can't be read is left.
-        status="$(gh api "repos/$GITHUB_REPOSITORY/check-runs/$MERGELIGHT_CHECK_RUN" --jq .status 2>/dev/null || echo unknown)"
-        if [ "$status" != in_progress ] && [ "$status" != queued ]; then exit 0; fi
-        # Cancelled, not neutral: no review ran and no approval was taken back, so the check must not pass
-        # next to an approval Mergelight gave an older commit.
-        gh api -X PATCH "repos/$GITHUB_REPOSITORY/check-runs/$MERGELIGHT_CHECK_RUN" \
-          -f status=completed -f conclusion=cancelled \
-          -f "output[title]=Couldn't review this pull request: the run stopped first" \
-          -f "output[summary]=A step before the review failed, or the run was cancelled. The workflow log has the details. Push a commit, or run it again, to review." > /dev/null \
-          || echo "::warning::Couldn't finish the Mergelight check."
+        # The review's check, and the connect's it took over when there was one.
+        for id in $MERGELIGHT_CHECK_RUN; do
+          # Only a check known to be still running: a finished verdict stands, and one that can't be read is left.
+          status="$(gh api "repos/$GITHUB_REPOSITORY/check-runs/$id" --jq .status 2>/dev/null || echo unknown)"
+          if [ "$status" != in_progress ] && [ "$status" != queued ]; then continue; fi
+          # Cancelled, not neutral: no review ran and no approval was taken back, so the check must not pass
+          # next to an approval Mergelight gave an older commit.
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/check-runs/$id" \
+            -f status=completed -f conclusion=cancelled \
+            -f "output[title]=Couldn't review this pull request: the run stopped first" \
+            -f "output[summary]=A step before the review failed, or the run was cancelled. The workflow log has the details. Push a commit, or run it again, to review." > /dev/null \
+            || echo "::warning::Couldn't finish the Mergelight check."
+        done
 
     # Codex may have refreshed the login during the run. Save the new one, or the next run
     # starts from tokens that no longer work. An API key's login is never saved over a ChatGPT one.

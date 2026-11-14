@@ -341,10 +341,13 @@ async function main(): Promise<number> {
     headSha ??= (await fetchPullRequest(ref)).headSha;
     // A connect earlier in this run left its check going: the review carries it on, so no check stands
     // finished in between, which a branch rule could take for a review that passed.
-    checkRunId = await startCheck(api, headSha, provider ?? "codex", process.env.MERGELIGHT_PROVIDER ? Number(process.env.MERGELIGHT_CHECK_RUN) || undefined : undefined);
+    const handedOver = process.env.MERGELIGHT_PROVIDER ? Number(process.env.MERGELIGHT_CHECK_RUN) || undefined : undefined;
+    checkRunId = await startCheck(api, headSha, provider ?? "codex", handedOver);
     // The review's own check from here: the Action's last step finishes it if the review is cancelled
-    // first. Only in the Action, so another review later in a workflow never takes it for its own.
-    if (process.env.MERGELIGHT_PROVIDER && process.env.GITHUB_ENV) appendFileSync(process.env.GITHUB_ENV, `MERGELIGHT_CHECK_RUN=${checkRunId ?? ""}\n`);
+    // first. Only in the Action, so another review later in a workflow never takes it for its own. The
+    // connect's check stays on the list too: the last step leaves it alone once it is finished, and
+    // finishes it when closing it here failed.
+    if (process.env.MERGELIGHT_PROVIDER && process.env.GITHUB_ENV) appendFileSync(process.env.GITHUB_ENV, `MERGELIGHT_CHECK_RUN=${[checkRunId, handedOver].filter(Boolean).join(" ")}\n`);
     // Says which AI reviews from the start. The models' exact names follow once the first reviewer answers.
     // Without --provider the review runs on Codex, as reviewPullRequest decides.
     const firstGuess = values.model ?? (provider === "claude" ? "opus" : configuredModel());
