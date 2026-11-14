@@ -35,6 +35,10 @@ A docs job looks the same with other paths: `on: src` and `may-change: docs`.
 
 **Jobs are read from your base branch,** like rules. A pull request can't add a job, or change one, for itself: a new or changed job counts from the pull request after it is merged.
 
+## Your plan
+
+Jobs is part of a paid plan. Before any job runs, the jobs step asks Mergelight's server whether your org's plan includes Jobs. It shows the server GitHub's signed pass for the run, which names the repository, branch, workflow and who started it. Nothing about your code is sent. With no plan, no server set, or no answer, no job runs, the review runs as always, and its summary says why the jobs didn't run.
+
 ## Turn jobs on
 
 Run `npx @mergelight/cli setup owner/repo --with-jobs`, or use [`examples/mergelight-jobs.yml`](../examples/mergelight-jobs.yml) in place of `mergelight.yml`. A repository with Mergelight's plain workflow runs no jobs, and holds no token that can push.

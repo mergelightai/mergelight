@@ -12,13 +12,16 @@
 //                  split by commas. Default: mergelight-ai,mergelight-setup
 //   CONNECT_ORGS   Orgs to turn the dashboard on for at start, as "id:login,id:login" with GitHub's
 //                  number for each account. It stands in until sign-in exists.
+//   JOBS_ORGS      Orgs whose plan includes Jobs, as "id,id" with GitHub's number for each account. A
+//                  run of the team's jobs asks first, and runs none for any other org. It stands in
+//                  until payments exist. Taking an org out turns its jobs off at the next start.
 //
 // This server holds no GitHub key. The app's private key stays on the token server.
 
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { fileURLToPath } from "node:url";
 import { createApi, MAX_BODY } from "./api.js";
-import { assertRowRulesHold, connectOrg, createPool, migrate, parseConnectOrgs, purgeExpiredMemories } from "./db.js";
+import { assertRowRulesHold, connectOrg, createPool, migrate, parseConnectOrgs, parseJobsOrgs, purgeExpiredMemories } from "./db.js";
 import { parseOrigins } from "./people.js";
 
 async function readBody(req: IncomingMessage): Promise<Buffer> {
@@ -65,7 +68,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const pool = createPool(DATABASE_URL);
   let api: (request: Request) => Promise<Response>;
   try {
-    api = createApi({ pool, publicUrl: PUBLIC_URL, origins: parseOrigins(process.env.DASHBOARD_ORIGINS), signInApp: process.env.SIGN_IN_APP || undefined });
+    api = createApi({ pool, publicUrl: PUBLIC_URL, origins: parseOrigins(process.env.DASHBOARD_ORIGINS), signInApp: process.env.SIGN_IN_APP || undefined, jobsOrgs: parseJobsOrgs(process.env.JOBS_ORGS) });
     const orgs = parseConnectOrgs(process.env.CONNECT_ORGS);
     await assertRowRulesHold(pool);
     await migrate(pool);

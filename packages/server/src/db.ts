@@ -138,6 +138,23 @@ export function parseConnectOrgs(value: string | undefined): { id: number; login
     });
 }
 
+/**
+ * Orgs whose plan includes Jobs: "id,id", with GitHub's number for each account. It stands in until
+ * payments exist. A value that can't be read stops the start, so a typo isn't taken for "no orgs".
+ */
+export function parseJobsOrgs(value: string | undefined): Set<number> {
+  const ids = (value ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const id = /^\d{1,18}$/.test(entry) ? Number(entry) : NaN;
+      if (!isId(id)) throw new Error(`JOBS_ORGS has an entry that isn't a GitHub account id: ${entry.slice(0, 60)}`);
+      return id;
+    });
+  return new Set(ids);
+}
+
 /** Removes everything stored for an org: its repositories and reviews go with it. Returns whether anything was there. */
 export async function deleteOrg(pool: Pool, orgId: number): Promise<boolean> {
   return withOrg(pool, orgId, async (db) => ((await db.query("delete from orgs where id = $1", [orgId])).rowCount ?? 0) > 0);

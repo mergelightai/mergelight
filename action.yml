@@ -422,6 +422,8 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ steps.app.outputs.token || inputs.github-token }}
+        # Jobs is part of a paid plan: the org's Mergelight server says whether it is on.
+        MERGELIGHT_SERVER: ${{ inputs.server }}
         PR: ${{ github.event.pull_request.number }}
         MODEL: ${{ inputs.model }}
         EFFORT: ${{ inputs.effort }}

@@ -2,6 +2,7 @@ import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { run } from "./run.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fetchContext, type CloudContext } from "./cloud.js";
 import { fetchPullRequest, type PrRef } from "./github.js";
 import { jobsToRun } from "./jobs.js";
 import { runModel, TOOLING, type ProviderName } from "./providers/index.js";
@@ -19,6 +20,25 @@ export interface JobsCommandOptions {
   keep?: boolean;
   log: (line: string) => void;
   onProgress?: (message: string) => void;
+  /** Asks the org's Mergelight server what this repository may use. For tests. */
+  context?: typeof fetchContext;
+}
+
+/** Where a team turns on the plan that includes Jobs. */
+export const JOBS_PLAN_URL = "https://mergelight.dev/dashboard/";
+
+/**
+ * Why no job may run for this org, or null when they may. Jobs is part of a paid plan, and only the
+ * org's Mergelight server can say yes: no server, no answer, or no yes, and no job runs.
+ */
+export function jobsGate(ctx: CloudContext, ownRepository = true): string | null {
+  // The server's yes is for the run's own repository: GitHub signed the pass for it. Jobs for another
+  // repository don't run on it.
+  if (!ownRepository) return "Jobs run only from the repository's own workflow, so no job ran.";
+  if (ctx.failed) return "The Mergelight server couldn't be asked whether your plan includes Jobs, so no job ran. The next push asks again.";
+  if (ctx.jobs === true) return null;
+  if (!ctx.answered && !ctx.connected) return `Jobs is part of a paid plan, and needs your org's Mergelight server: set server in the workflow. No job ran. ${JOBS_PLAN_URL}`;
+  return `Your org's plan doesn't include Jobs, or the org isn't set up on Mergelight's server yet, so no job ran. ${JOBS_PLAN_URL}`;
 }
 
 /**
@@ -40,12 +60,13 @@ async function gitVersion(): Promise<[number, number] | null> {
 export function describeJobs(result: JobsResult): string[] {
   const lines: string[] = [];
   if (result.skipped) lines.push(result.skipped);
+  if (result.notRun) lines.push(result.notRun);
   for (const p of result.problems) lines.push(`Left out ${p.source}: ${p.problem}.`);
   for (const o of result.outcomes) {
     const what = { changed: `changed ${o.files.length} file${o.files.length === 1 ? "" : "s"}`, nothing: "changed nothing", refused: "was dropped", failed: "failed" }[o.status];
     lines.push(`Job "${o.name}" ${what}. ${o.summary}`);
   }
-  if (!result.skipped) lines.push(result.changes.length ? `${result.changes.length} file${result.changes.length === 1 ? "" : "s"} to push.` : "Nothing to push.");
+  if (!result.skipped && !result.notRun) lines.push(result.changes.length ? `${result.changes.length} file${result.changes.length === 1 ? "" : "s"} to push.` : "Nothing to push.");
   return lines;
 }
 
@@ -94,7 +115,7 @@ export async function jobsCommand(ref: PrRef, o: JobsCommandOptions): Promise<nu
     const teamBase = ws.teamBase;
     const { jobs, problems, guarded: baseGuard, incomplete } = await jobFilesFor(ws.mirror, teamBase);
     // The guard couldn't be worked out in full: no job runs rather than one with a smaller guard.
-    if (incomplete) return finish({ ...empty, problems, skipped: incomplete });
+    if (incomplete) return finish({ ...empty, problems, notRun: incomplete });
     if (!jobs.length) return finish({ ...empty, problems, skipped: `There are no jobs in .mergelight/jobs on ${pr.baseRef}.` });
     // On a disk that ignores letter case, two files that differ only in it would be written as one.
     if (caseBlindDisk()) {
@@ -103,6 +124,10 @@ export async function jobsCommand(ref: PrRef, o: JobsCommandOptions): Promise<nu
     }
     const toRun = jobsToRun(jobs, ws.touchedPaths);
     if (!toRun.length) return finish({ ...empty, problems, skipped: "This pull request changes none of the files that start a job." });
+    // Asked only when a job would run, so a repository without jobs never calls the server for them.
+    const ownRepository = (process.env.GITHUB_REPOSITORY ?? "").toLowerCase() === `${ref.owner}/${ref.repo}`.toLowerCase();
+    const closed = jobsGate(await (o.context ?? fetchContext)({ log: o.log }), ownRepository);
+    if (closed) return finish({ ...empty, problems, notRun: closed });
     // The pull request's own links and imports are guarded too: one that makes AGENTS.md a link to a
     // file a job may change would carry the job's change into what agents read. Its jobs never count.
     const headGuard = await headGuarded(ws.mirror, ws.headSha, jobs);

@@ -60,6 +60,8 @@ export interface JobsResult {
   changes: FileChange[];
   /** Why no job ran at all, when that's the case. */
   skipped?: string;
+  /** Why jobs that this pull request starts didn't run, such as a plan without Jobs. Shown in the summary. */
+  notRun?: string;
 }
 
 /** Git on one repository: text output, and exact bytes for a file's contents. */
@@ -595,6 +597,8 @@ export function jobsReport(result: unknown, push: { commit?: string; why?: strin
   // Why no job ran, when that is something to fix, such as a file the guard couldn't read. Not the
   // everyday reasons: no jobs on the base branch, none started by this pull request, a commit jobs made.
   const skipped = !outcomes.length && typeof r.skipped === "string" && r.skipped.includes("so no job runs") && !r.skipped.startsWith("The newest commit is one that jobs made") ? line(r.skipped, 300) : undefined;
-  if (!outcomes.length && !problems.length && !skipped) return null;
-  return { ...(commit ? { commit } : {}), ...(notPushed ? { notPushed } : {}), ...(skipped ? { skipped } : {}), outcomes, problems, ...(allProblems.length > problems.length ? { moreProblems: allProblems.length - problems.length } : {}) };
+  // Why no job ran when the org's plan or its server said so (jobsGate).
+  const notRun = line(r.notRun, 300) || undefined;
+  if (!outcomes.length && !problems.length && !skipped && !notRun) return null;
+  return { ...(commit ? { commit } : {}), ...(notPushed ? { notPushed } : {}), ...(skipped ? { skipped } : {}), ...(notRun ? { notRun } : {}), outcomes, problems, ...(allProblems.length > problems.length ? { moreProblems: allProblems.length - problems.length } : {}) };
 }

@@ -159,6 +159,8 @@ export interface JobsReport {
   commit?: string;
   /** Why what the jobs changed wasn't pushed, when it wasn't. */
   notPushed?: string;
+  /** Why the jobs this pull request starts didn't run, such as a plan without Jobs. */
+  notRun?: string;
   outcomes: { name: string; status: "changed" | "nothing" | "refused" | "failed"; files: number; summary: string }[];
   /** Job files that were left out, and why. */
   problems: { source: string; problem: string }[];
