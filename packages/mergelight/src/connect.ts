@@ -387,17 +387,17 @@ export function claudeInWorkflow(text: string | null, input = "claude-code-oauth
     const found = new RegExp(`(?:^|[\\s{,])["']?${input}["']?[ \\t]*:[ \\t]*([^\\n,}]*)`, "m").exec(step);
     if (!found) return false;
     let value = found[1]!.trim();
-    // A value that goes on over the lines below, as with >- or |: those lines are the value.
-    if (/^[>|][-+0-9]*$/.test(value)) {
-      const rest = step.slice(found.index + found[0].length).split("\n").slice(1);
-      const own = indent(step.slice(0, found.index + found[0].length).split("\n").pop()!);
-      const more: string[] = [];
-      for (const l of rest) {
-        if (l.trim() && indent(l) <= own) break;
-        more.push(l.trim());
-      }
-      value = more.join(" ").trim();
+    // A value goes on over the lines below that are set in further than its name, as YAML reads it: after
+    // >- or |, those lines are the value; after anything else, they carry it on, as with "${{" alone on
+    // the first line.
+    const rest = step.slice(found.index + found[0].length).split("\n").slice(1);
+    const own = indent(step.slice(0, found.index + found[0].length).split("\n").pop()!);
+    const more: string[] = [];
+    for (const l of rest) {
+      if (l.trim() && indent(l) <= own) break;
+      more.push(l.trim());
     }
+    value = (/^[>|][-+0-9]*$/.test(value) ? more : [value, ...more]).join(" ").trim();
     // An empty value passes nothing on: a login saved now would never reach a later run.
     if (!value || /^(["'])\1$/.test(value) || value === "~" || value === "null") return false;
     // secrets.NAME or secrets['NAME'], in any letter case, as GitHub reads secret names. With a fallback,
@@ -408,10 +408,20 @@ export function claudeInWorkflow(text: string | null, input = "claude-code-oauth
   return steps.every(passes) ? "yes" : "no";
 }
 
+/** How long reading the workflow file may take before it counts as one that can't be read. */
+const WORKFLOW_READ_MS = 60_000;
+
 async function workflowHasClaude(api: GitHub, env: NodeJS.ProcessEnv, input = "claude-code-oauth-token", secret = "CLAUDE_CODE_OAUTH_TOKEN", forCheck = false): Promise<"yes" | "no" | "unknown"> {
   const [, path, ref] = (env.GITHUB_WORKFLOW_REF ?? "").match(/^[^/]+\/[^/]+\/(.+?)@(.+)$/) ?? [];
   if (!path || !ref) return "unknown";
-  const text = await api.get<{ content: string }>(`contents/${path}?ref=${encodeURIComponent(env.GITHUB_SHA ?? ref)}`).then((f) => Buffer.from(f.content, "base64").toString("utf8"), () => null);
+  const read = api.get<{ content: string }>(`contents/${path}?ref=${encodeURIComponent(env.GITHUB_SHA ?? ref)}`).then((f) => Buffer.from(f.content, "base64").toString("utf8"), () => null);
+  // A read GitHub never answers mustn't hold the sign-in, and the review after it, up: it can't be told then.
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), WORKFLOW_READ_MS);
+  });
+  const text = await Promise.race([read, late]);
+  clearTimeout(timer);
   return claudeInWorkflow(text, input, env.GITHUB_JOB, secret, forCheck);
 }
 

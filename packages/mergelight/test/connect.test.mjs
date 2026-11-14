@@ -678,6 +678,12 @@ test("an empty login input passes nothing on, and a value over several lines is 
   for (const empty of ['""', "''", ""]) assert.equal(claudeInWorkflow(job(empty), "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "no", JSON.stringify(empty));
   assert.equal(claudeInWorkflow(job(">-\n            ${{ secrets.CLAUDE_LOGIN }}"), "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "no", "the folded value names another secret");
   assert.equal(claudeInWorkflow(job(">-\n            ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}"), "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "yes");
+  // A plain or quoted value carried on over the lines below is read whole too.
+  assert.equal(claudeInWorkflow(job("${{\n            secrets.CLAUDE_LOGIN }}"), "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "no", "a plain value over two lines names another secret");
+  assert.equal(claudeInWorkflow(job("\"${{\n            secrets.CLAUDE_LOGIN }}\""), "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "no", "so does a quoted one");
+  assert.equal(claudeInWorkflow(job("${{\n            secrets.CLAUDE_CODE_OAUTH_TOKEN }}"), "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "yes");
+  // Its value on the line below, set in further, is its value, as YAML reads it.
+  assert.equal(claudeInWorkflow(job("\n            ${{ secrets.CLAUDE_LOGIN }}"), "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "no");
 });
 
 test("a step that runs only on other events, such as a schedule, needs no login", () => {
