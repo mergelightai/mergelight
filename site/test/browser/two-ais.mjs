@@ -46,8 +46,12 @@ async function scenario(name, start, body) {
   await page.setViewport({ width: 1280, height: 900, deviceScaleFactor: 2 });
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
-  const world = { file: TEMPLATE, refresh: null, secrets: [], comments: [], checks: {}, head: 'rolesha', merged: false, open: null, branchFile: null, branchRefresh: null, fileGone: false, writes: [], ...start };
+  const world = { isPrivate: true, file: TEMPLATE, refresh: null, secrets: [], comments: [], checks: {}, head: 'rolesha', merged: false, open: null, branchFile: null, branchRefresh: null, fileGone: false, writes: [], ...start };
   const json = (req, data, code = 200) => req.respond({ status: code, contentType: 'application/json', headers: cors, body: JSON.stringify(data) });
+  await page.evaluateOnNewDocument(() => {
+    window.__copied = [];
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText: async (t) => { window.__copied.push(t); } } });
+  });
   await page.setRequestInterception(true);
   page.on('request', (req) => {
     const u = new URL(req.url());
@@ -81,7 +85,7 @@ async function scenario(name, start, body) {
         return json(req, {}, 404);
       }
       if (u.pathname === '/user/installations') return json(req, { installations: [{ id: 1, html_url: 'https://github.com/settings/installations/1', account: { id: 1, login: 'acme', avatar_url: `${base}/logo.png` } }] });
-      if (u.pathname === '/user/installations/1/repositories') return json(req, { repositories: [{ id: 2, full_name: 'acme/api', private: true, default_branch: 'main', archived: false }, { id: 3, full_name: 'acme/zzz-other', private: true, default_branch: 'main', archived: false }] });
+      if (u.pathname === '/user/installations/1/repositories') return json(req, { repositories: [{ id: 2, full_name: 'acme/api', private: world.isPrivate, default_branch: 'main', archived: false }, { id: 3, full_name: 'acme/zzz-other', private: true, default_branch: 'main', archived: false }] });
       if (p === '/branches') return json(req, [{ name: 'main' }]);
       if (p === '/pulls' && u.searchParams.get('state') === 'open') return json(req, world.open ? [{ number: world.open.number, html_url: world.open.html_url, head: { sha: world.head, ref: world.open.ref, repo: { full_name: 'acme/api' } } }] : []);
       if (p === '/pulls') return json(req, []);
@@ -214,6 +218,7 @@ await scenario('claude-only-adds-chatgpt', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'
   t = await until((x) => x.includes(CODE), 'the code from the run');
   expect(/Enter this code at OpenAI/.test(t), 'shows the code from the run on that pull request');
   expect(/Connect ChatGPT to check reviews/.test(t) && !/Open Claude|claude setup-token/.test(t), 'and still only ChatGPT');
+  expect(!/npx @mergelight\/cli|repo is public/.test(t), 'a private repo connects with the code, as before');
   await shot('connect-chatgpt');
 
   world.secrets.push('CODEX_AUTH_JSON');
@@ -298,6 +303,30 @@ await scenario('refresh-job-already-there', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN
   await until((x) => /Connect ChatGPT to check reviews/.test(x), 'the connect step');
   const puts = world.writes.filter((w) => w.m === 'PUT');
   expect(puts.length === 1 && puts[0].p.endsWith('/mergelight.yml'), 'changes only the workflow, and leaves their job alone');
+});
+
+await scenario('public-repo-adds-chatgpt-checker', { isPrivate: false, secrets: ['CLAUDE_CODE_OAUTH_TOKEN'] }, async ({ page, world, until, click, shot, reachLive, choose }) => {
+  await reachLive();
+  let t = await choose('Add ChatGPT');
+  expect(/This repo is public, so anyone who can see your PR could enter a ChatGPT code\. Next, you save the login from your own computer/.test(t), 'the choice says why the login comes from their computer');
+  await click('button', 'Open PR');
+  t = await until((x) => /Connect ChatGPT to check reviews/.test(x), 'the connect step');
+  const command = 'npx @mergelight/cli setup acme/api --relogin';
+  expect(t.includes(command), 'shows the command, with this repo filled in');
+  expect(/This repo is public, so anyone who can see your PR could enter a ChatGPT code/.test(t), 'and says why');
+  expect(/close that PR/.test(t) && /merging it would undo this change/.test(t), 'warns about the extra PR the command opens');
+  expect(/Until it's saved, Claude checks its own reviews/.test(t), 'says what happens until then');
+  await click('button', 'Copy');
+  await until((x) => /Copied/.test(x), 'the copied label');
+  expect((await page.evaluate(() => window.__copied)).at(-1) === command, 'Copy copies the command');
+  world.checks.rolesha = { status: 'in_progress', conclusion: null, output: { title: 'Reviewing' } };
+  await wait(6000);
+  t = await page.evaluate(() => document.querySelector('main').innerText.replace(/\s+/g, ' '));
+  expect(!/Getting your code|Enter the code|Enter this code|Couldn't connect/.test(t), 'never waits for a code, and never calls it a failure');
+  await shot('connect-public-checker', true);
+  await click('button', 'Continue');
+  t = await until((x) => /Mergelight is on/.test(x), 'back to live');
+  expect(/Merge PR #9 to review with Claude and check with ChatGPT/.test(t), 'with the pull request linked');
 });
 
 await scenario('chatgpt-only-adds-claude', { secrets: ['CODEX_AUTH_JSON'] }, async ({ page, world, until, click, shot, reachLive, choose }) => {

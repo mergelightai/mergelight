@@ -365,6 +365,8 @@ export default function Setup() {
   const rolesRunEnded = Boolean(rolesChange?.need && status && !logins[rolesChange.need] && !/^connected/i.test(status.title ?? '') && (status.status === 'completed' || /^review/i.test(status.title ?? '')));
   /** What a change of AI asks the run for: one AI, for the review or for checking another AI's review. */
   const rolesAsk = rolesChange?.need ? { ai: rolesChange.need, forCheck: rolesChange.need === rolesChange.roles.checker && rolesChange.need !== rolesChange.roles.reviewer } : null;
+  /** On a public repo, the run shows no ChatGPT code for a checker: anyone who can see the PR could enter it. */
+  const publicCheck = Boolean(rolesAsk?.forCheck && rolesAsk.ai === 'codex' && repo && !repo.isPrivate);
 
   const openRoles = () => {
     setRolesFrom(view);
@@ -455,9 +457,9 @@ export default function Setup() {
                 <AddStep repo={repo} details={details} ai={yourAi} fileCount={files.length} branch={branch} setBranch={setBranch} scope={scope} setScope={setScope} fileOpen={fileOpen} onToggleFile={() => setFileOpen((v) => !v)} adding={adding} failed={addFailed} detailsFailed={detailsFailed} onRetry={() => choose(repo)} update={update} onAdd={() => void addToRepo()} fileUrl={fileUrl} onBack={adding ? () => undefined : back.add!} onByHand={() => { setFileOpen(false); setView('finish'); }} onContinue={afterAdding} />
               )}
               {view === 'finish' && repo && <FinishStep repo={repo} branch={branch} fileUrl={fileUrl} pr={pr} onBack={back.finish!} />}
-              {view === 'connect' && repo && <ConnectStep repo={repo} pr={pr} status={status} code={connectCode} ask={rolesAsk} ended={rolesRunEnded || Boolean(pr && missedSha === pr.headSha)} onBack={back.connect!} onSkip={() => setView('live')} startOnClaude={startOnClaude || rolesChange?.need === 'claude'} onClaudeCode={(url, c) => client!.sendClaudeCode(repo, url, c)} />}
+              {view === 'connect' && repo && <ConnectStep repo={repo} pr={pr} status={status} code={connectCode} ask={rolesAsk} publicCheck={publicCheck} ended={rolesRunEnded || Boolean(pr && missedSha === pr.headSha)} onBack={back.connect!} onSkip={() => setView('live')} startOnClaude={startOnClaude || rolesChange?.need === 'claude'} onClaudeCode={(url, c) => client!.sendClaudeCode(repo, url, c)} />}
               {view === 'live' && repo && <LiveStep repo={repo} pr={shownPr} backTo={startOnClaude ? pr : null} status={status} hasLogin={hasLogin} merged={merged} updatedTo={startOnClaude ? null : (update?.tag ?? null)} ai={yourAi} onAnother={anotherRepo} />}
-              {view === 'roles' && repo && liveFile && currentRoles && <RolesStep current={currentRoles} logins={logins} refreshMissing={!refreshLive} file={liveFile} branch={branch} changing={changingRoles} failed={rolesFailed} accessUrl={repo.accessUrl} onBack={back.roles!} onConfirm={(r) => void changeRoles(r)} />}
+              {view === 'roles' && repo && liveFile && currentRoles && <RolesStep current={currentRoles} logins={logins} isPrivate={repo.isPrivate} refreshMissing={!refreshLive} file={liveFile} branch={branch} changing={changingRoles} failed={rolesFailed} accessUrl={repo.accessUrl} onBack={back.roles!} onConfirm={(r) => void changeRoles(r)} />}
             </Stage>
             <p className="mt-6 flex items-center justify-center gap-1.5 text-center text-[13px] text-faint">
               <LockIcon className="size-3.5 shrink-0" />
@@ -1299,7 +1301,7 @@ function FinishStep({ repo, branch, fileUrl, pr, onBack }: { repo: Repo; branch:
  * `ended` is a run that finished without the login this step is for, which its check title alone can't tell. `ask` is
  * what the page knows the run asks for before it says so: one AI, for the review or for checking another AI's review.
  */
-function ConnectStep({ repo, pr, status, code: found, ask = null, ended = false, onBack, onSkip, startOnClaude, onClaudeCode }: { repo: Repo; pr: SetupPr | null; status: CheckStatus | null; code: ConnectCode | null; ask?: { ai: Ai; forCheck: boolean } | null; ended?: boolean; onBack: () => void; onSkip: () => void; startOnClaude: boolean; onClaudeCode: (url: string, code: string) => Promise<void> }) {
+function ConnectStep({ repo, pr, status, code: found, ask = null, publicCheck = false, ended = false, onBack, onSkip, startOnClaude, onClaudeCode }: { repo: Repo; pr: SetupPr | null; status: CheckStatus | null; code: ConnectCode | null; ask?: { ai: Ai; forCheck: boolean } | null; publicCheck?: boolean; ended?: boolean; onBack: () => void; onSkip: () => void; startOnClaude: boolean; onClaudeCode: (url: string, code: string) => Promise<void> }) {
   const code = found?.code ? found : null;
   const claudeUrl = found?.claudeUrl ?? null;
   const [pasted, setPasted] = useState('');
@@ -1320,6 +1322,9 @@ function ConnectStep({ repo, pr, status, code: found, ask = null, ended = false,
     if (found.purpose === 'check') setForCheck(true);
   }, [found]);
   const checking = forCheck && only;
+  // On a public repo no code comes for a ChatGPT checker, so the login is saved from their own computer.
+  const byCommand = publicCheck && billing === 'plan' && provider === 'openai';
+  const command = `npx @mergelight/cli setup ${repo.fullName} --relogin`;
   const mode = billing === 'plan' ? (provider === 'openai' ? 'chatgpt' : 'claude') : provider === 'openai' ? 'apikey' : 'anthropic';
   const [copied, setCopied] = useState<string | null>(null);
   const prUrl = pr?.url ?? `https://github.com/${repo.fullName}/pulls`;
@@ -1333,9 +1338,9 @@ function ConnectStep({ repo, pr, status, code: found, ask = null, ended = false,
   // With a pull request open, the run that makes the code is on its way or already going.
   const coming = Boolean(pr) && !failed && !waiting;
   const noteEnded = 'This link has ended';
-  const note = mode !== 'chatgpt' ? "We'll move on when you're connected" : code ? 'Waiting for you to enter the code' : failed ? "Couldn't connect. Check that step 1 is on." : waiting ? 'Your code is ready on the pull request' : "We'll move on when you're connected";
+  const note = byCommand ? "Until it's saved, Claude checks its own reviews" : mode !== 'chatgpt' ? "We'll move on when you're connected" : code ? 'Waiting for you to enter the code' : failed ? "Couldn't connect. Check that step 1 is on." : waiting ? 'Your code is ready on the pull request' : "We'll move on when you're connected";
   // The run takes a little while to make the code, so this has to look busy, not stuck.
-  const gettingCode = mode === 'chatgpt' && coming && !code;
+  const gettingCode = mode === 'chatgpt' && coming && !code && !byCommand;
   // The run offers Claude too. Once it has posted without a Claude link, none is coming: the repo was set up before that existed.
   const gettingClaude = mode === 'claude' && Boolean(pr) && !failed && !found;
   // A pull request's link means its run offered Claude, so no link now means that run has ended.
@@ -1375,14 +1380,31 @@ function ConnectStep({ repo, pr, status, code: found, ask = null, ended = false,
       <BackButton onClick={onBack} />
       <Heading
         title={checking ? `Connect ${aiName(checking)} to check reviews` : only ? `Connect ${aiName(only)}` : 'Connect your AI'}
-        sub={checking ? `${aiName(otherAi(checking))}'s review then starts by itself, and ${aiName(checking)} checks its findings.` : billing === 'plan' ? 'Reviews use the subscription you already have.' : 'You pay your AI provider for each review.'}
+        sub={byCommand ? 'This repo is public, so anyone who can see your PR could enter a ChatGPT code. Save the login from your own computer instead.' : checking ? `${aiName(otherAi(checking))}'s review then starts by itself, and ${aiName(checking)} checks its findings.` : billing === 'plan' ? 'Reviews use the subscription you already have.' : 'You pay your AI provider for each review.'}
       />
 
       <Segment label="How to pay" options={[{ id: 'plan' as const, title: 'Your plan' }, { id: 'key' as const, title: 'API key' }]} value={billing} onChange={setBilling} />
       {!only && <Choices label="Which AI" options={providers} value={provider} onChange={setProvider} top="mt-3" />}
       {mode === 'claude' && !checking && <p className="mt-3 text-[13px] leading-snug text-muted [text-wrap:pretty]">Reviews run on Opus, which uses a lot of a Claude plan. On a small plan, a few reviews can use up the week.</p>}
 
-      {mode === 'chatgpt' ? (
+      {byCommand ? (
+        <ol className="mt-6 space-y-4">
+          <Numbered n={1}>
+            On your computer, run
+            <span className={`${WELL} mt-2 flex items-center justify-between gap-3 py-2 pl-4 pr-2`}>
+              <code className="min-w-0 select-all break-words font-mono text-[13px] text-fg">{command}</code>
+              <button type="button" onClick={() => copy(command)} className="shrink-0 rounded-lg px-2.5 py-1.5 text-[13px] text-muted transition-[background-color,color,transform] duration-100 hover:bg-white/[0.06] hover:text-fg active:scale-[0.97]">
+                {copied === command ? 'Copied' : 'Copy'}
+              </button>
+            </span>
+            <span className="mt-1 block text-[13.5px] text-muted [text-wrap:pretty]">It signs in to ChatGPT and saves the login in {repo.fullName.split('/')[1]}. It needs Node, the GitHub CLI and Codex on your computer.</span>
+          </Numbered>
+          <Numbered n={2}>
+            If it opens a PR with Mergelight's standard files, close that PR
+            <span className="mt-1 block text-[13.5px] text-muted [text-wrap:pretty]">You don't need it, and merging it would undo this change.</span>
+          </Numbered>
+        </ol>
+      ) : mode === 'chatgpt' ? (
         <ol className="mt-6 space-y-4">
           <Numbered n={1}>
             Turn on <Strong>Enable device code sign-in</Strong>
@@ -1499,13 +1521,19 @@ function ConnectStep({ repo, pr, status, code: found, ask = null, ended = false,
               <span className="min-w-0 text-[14px] text-muted">Getting your code. Almost ready, hang tight.</span>
             </span>
           ) : (
-            <Pulse tone={claudeEnded || (mode === 'chatgpt' && (code || failed || waiting)) ? 'risk' : 'lilac'}>{claudeEnded ? noteEnded : note}</Pulse>
+            <Pulse tone={claudeEnded || (mode === 'chatgpt' && !byCommand && (code || failed || waiting)) ? 'risk' : 'lilac'}>{claudeEnded ? noteEnded : note}</Pulse>
           )}
         </div>
       </div>
-      <button type="button" onClick={onSkip} className="mx-auto mt-4 block text-[13px] text-faint transition-colors hover:text-muted">
-        I've done this
-      </button>
+      {byCommand ? (
+        <button type="button" onClick={onSkip} className={`${PRIMARY} mt-5`}>
+          Continue
+        </button>
+      ) : (
+        <button type="button" onClick={onSkip} className="mx-auto mt-4 block text-[13px] text-faint transition-colors hover:text-muted">
+          I've done this
+        </button>
+      )}
     </div>
   );
 }
@@ -1654,8 +1682,8 @@ function YourAi({ roles, logins, pending, onChange }: { roles: Roles | null; log
 }
 
 /** Picks who reviews and who checks. Two different AIs is the default, since the second one catches more. */
-function RolesStep(props: { current: Roles; logins: Logins; refreshMissing: boolean; file: string; branch: string; changing: boolean; failed: RolesFailure | null; accessUrl: string; onBack: () => void; onConfirm: (roles: Roles) => void }) {
-  const { current, logins, refreshMissing, file, branch, changing, failed, accessUrl, onBack, onConfirm } = props;
+function RolesStep(props: { current: Roles; logins: Logins; isPrivate: boolean; refreshMissing: boolean; file: string; branch: string; changing: boolean; failed: RolesFailure | null; accessUrl: string; onBack: () => void; onConfirm: (roles: Roles) => void }) {
+  const { current, logins, isPrivate, refreshMissing, file, branch, changing, failed, accessUrl, onBack, onConfirm } = props;
   const [reviewer, setReviewer] = useState<Ai>(current.reviewer);
   const [checker, setChecker] = useState<Ai>(otherAi(current.reviewer));
   const pick = { reviewer, checker };
@@ -1687,7 +1715,12 @@ function RolesStep(props: { current: Roles; logins: Logins; refreshMissing: bool
         <Fact icon={<Check className="size-4" />}>Two AIs from different companies catch more than one.</Fact>
         {need.map((ai) => (
           <Fact key={ai} icon={<span className="size-1.5 rounded-full bg-lilac" />}>
-            {aiName(ai)} isn't connected yet. {ai === checker && ai !== reviewer ? 'Next, you connect it to check reviews.' : 'You connect it next.'}
+            {aiName(ai)} isn't connected yet.{' '}
+            {ai === checker && ai !== reviewer
+              ? ai === 'codex' && !isPrivate
+                ? 'This repo is public, so anyone who can see your PR could enter a ChatGPT code. Next, you save the login from your own computer.'
+                : 'Next, you connect it to check reviews.'
+              : 'You connect it next.'}
           </Fact>
         ))}
         {refreshMissing && need.includes('codex') && <Fact icon={<Check className="size-4" />}>Adds the small job that keeps a ChatGPT login fresh</Fact>}
