@@ -258,7 +258,7 @@ export function jobHidden(env: NodeJS.ProcessEnv = process.env, install: string 
   // Never a folder the system's own tools are in, such as /usr for a runner installed right there: hiding
   // it would leave a job without bash. The runner's credentials sit elsewhere then, under its own name.
   const system = (p: string) => LINUX_KEEP.includes(p.replace(/\/+$/, ""));
-  const places = [homedir(), dirname(homedir()), "/root", "/run/secrets", "/var/run/secrets", env.MERGELIGHT_CACHE, env.RUNNER_TEMP, env.GITHUB_WORKSPACE, deepEnough(work), deepEnough(workParent), deepEnough(install ?? undefined), ...named, tmpdir(), "/tmp"].filter((p): p is string => Boolean(p) && p !== "/" && !system(p));
+  const places = [homedir(), dirname(homedir()), "/root", "/run/secrets", "/var/run/secrets", env.MERGELIGHT_CACHE, env.RUNNER_TEMP, env.GITHUB_WORKSPACE, deepEnough(work), deepEnough(workParent), deepEnough(install ?? undefined), ...named, tmpdir(), "/tmp"].filter((p): p is string => typeof p === "string" && p !== "" && p !== "/" && !system(p));
   const real = places.map((p) => {
     try {
       return realpathSync(p);
