@@ -244,8 +244,21 @@ export async function writeCheck(api: GitHub, id: number | null | undefined, hea
  * Shows a live "Reviewing" check right away, so people and agents can see work is
  * happening. A login that can't write checks hears about it once, from the last write.
  */
-export async function startCheck(api: GitHub, headSha: string, provider?: string): Promise<number | null> {
+export async function startCheck(api: GitHub, headSha: string, provider?: string, carryOn?: number): Promise<number | null> {
   const tool = provider === "claude" ? "Claude" : provider === "codex" ? "Codex" : null;
+  const body = {
+    status: "in_progress",
+    started_at: new Date().toISOString(),
+    output: {
+      title: "Reviewing",
+      summary: `Mergelight is reviewing this pull request${tool ? ` with ${tool}` : ""} on your own plan. This usually takes 2 to 15 minutes.`,
+    },
+  };
+  // The check a connect left going, when there is one: a new one is made only when that one can't be written.
+  if (carryOn) {
+    const going = await writeCheck(api, carryOn, headSha, body).catch(() => null);
+    if (going) return going.id;
+  }
   const run = await writeCheck(api, null, headSha, {
     status: "in_progress",
     started_at: new Date().toISOString(),

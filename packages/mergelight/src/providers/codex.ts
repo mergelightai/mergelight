@@ -37,11 +37,13 @@ export class LimitError extends Error {
 /** Both programs start this sentence the same way. Only pass in their own errors: code under review can say anything. */
 const LIMIT_HIT = /you['\u2019]ve hit your\b[^\n]{0,40}\blimit\b/i;
 const WHEN = "[\\w :,()+-]{1,60}";
+const API_BALANCE = /insufficient_quota|exceeded your current quota|credit balance is too low/i;
 
 /** The limit in a program's error output, if that's what the error is. Claude says "resets 9am (UTC)", Codex "try again at 3:14 PM". */
 export function limitFrom(text: string, plan: Plan): LimitError | null {
   const line = text.split("\n").find((l) => LIMIT_HIT.test(l));
-  if (!line) return null;
+  // An API key's balance used up is a limit too: OpenAI's "insufficient_quota", Anthropic's "credit balance is too low".
+  if (!line) return API_BALANCE.test(text) ? new LimitError(plan === "ChatGPT" ? "OpenAI" : plan, null) : null;
   const resets = line.match(new RegExp(`\\bresets\\s+(${WHEN})`, "i"))?.[1]?.trim();
   if (resets) return new LimitError(plan, resets);
   const retry = line.match(new RegExp(`\\btry again at\\s+(${WHEN})`, "i"))?.[1]?.trim();
@@ -416,10 +418,13 @@ export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
       // A refused login, whether Codex reviews or checks: a checker's lets the reviewer check instead
       // (review.ts). Each kind of login has its own fix.
       if (LOGIN_FAILURE.test(`${result.stderr}\n${failures.join("\n")}`)) {
-        // In the Action, a login that isn't ChatGPT's is an OpenAI API key, and the title says so.
-        if (process.env.MERGELIGHT_CHATGPT === "1") throw new LoginError(loginFailureMessage(process.env.SECRET_NAME || undefined));
-        if (process.env.GITHUB_ACTIONS === "true") throw new LoginError("The OpenAI API key didn't work. Check the OPENAI_API_KEY secret.", "OpenAI");
-        throw new LoginError("Codex's login didn't work. Run codex login and sign in again.");
+        // A ChatGPT login says so in its own words: one that couldn't be refreshed. In the Mergelight
+        // Action, one that isn't ChatGPT's is an OpenAI API key, and the title says so. Elsewhere it can't
+        // be told, so the advice fits both.
+        const text = `${result.stderr}\n${failures.join("\n")}`;
+        if (process.env.MERGELIGHT_CHATGPT === "1" || /access token could not be refreshed/i.test(text)) throw new LoginError(loginFailureMessage(process.env.SECRET_NAME || undefined));
+        if (process.env.MERGELIGHT_PROVIDER) throw new LoginError("The OpenAI API key didn't work. Check the OPENAI_API_KEY secret.", "OpenAI");
+        throw new LoginError("Codex's login didn't work: run codex login and sign in again, or check the OpenAI API key it uses.");
       }
       throw new Error(`Codex exited with code ${result.code}.${opts.logFile ? ` Log: ${opts.logFile}` : ""}\n${tail}`);
     }

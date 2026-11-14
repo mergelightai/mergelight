@@ -452,7 +452,9 @@ test("connecting a checker that nobody finishes holds nothing up, and leaves the
   const prompt = api.writes.filter((w) => w.path === "issues/comments/5").at(-1);
   assert.ok(prompt && isPendingSummary(prompt.body.body), "the dead code gives way to the review that is starting");
   assert.doesNotMatch(prompt.body.body, /couldn't connect/);
-  const check = api.writes.find((w) => w.path === "check-runs" && w.body.output?.title === "ChatGPT wasn't connected");
+  // The review goes on, so its check does too: updated, not finished.
+  const check = api.writes.find((w) => w.path.startsWith("check-runs/") && w.body.output?.title === "ChatGPT wasn't connected");
+  assert.equal(check.body.status, "in_progress");
   assert.equal(check.body.output.title, "ChatGPT wasn't connected");
   assert.match(check.body.output.summary, /The review goes on, checked by Claude\./);
   // Connecting Claude to check offers no ChatGPT code, and says why when it ends.
@@ -542,4 +544,26 @@ test("every Mergelight step of the job must pass the login on, and YAML's shared
   assert.equal(claudeInWorkflow(two, "codex-auth-json", "review"), "no");
   assert.equal(claudeInWorkflow(job("      - uses: mergelightai/mergelight@v0\n        with: *inputs\n"), "codex-auth-json", "review"), "unknown");
   assert.equal(claudeInWorkflow(job("      - uses: mergelightai/mergelight@v0\n        with:\n          <<: *inputs\n"), "codex-auth-json", "review"), "unknown");
+});
+
+test("a connect hands its check on to the review, so none stands finished in between", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-handon-"));
+  const file = join(dir, "env");
+  writeFileSync(file, "");
+  const api = fakeApi(() => false);
+  const env = { GH_TOKEN: "app", GITHUB_ENV: file, CODEX_HOME: dir };
+  const deps = githubConnect(api, 7, "abc", () => {}, env, { purpose: "check", ai: "codex", reviewer: "claude" });
+  await deps.showCode({ url: "https://auth.openai.com/d", code: "AAAA-BBBB" });
+  await deps.connected("chatgpt");
+  const checks = api.writes.filter((w) => w.path.startsWith("check-runs"));
+  assert.ok(checks.every((w) => w.body.status !== "completed"), JSON.stringify(checks.map((w) => w.body.status)));
+  assert.match(readFileSync(file, "utf8"), /MERGELIGHT_CHECK_RUN=9\n/);
+});
+
+test("an approval-only Mergelight step needs no login, and the input must read the secret the login is saved to", () => {
+  const job = (steps) => `jobs:\n  review:\n    steps:\n${steps}`;
+  const withApproval = job("      - if: github.event_name != 'pull_request_review'\n        uses: mergelightai/mergelight@v0\n        with:\n          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n      - if: github.event_name == 'pull_request_review'\n        uses: mergelightai/mergelight@v0\n");
+  assert.equal(claudeInWorkflow(withApproval, "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "yes");
+  const other = job("      - uses: mergelightai/mergelight@v0\n        with:\n          claude-code-oauth-token: ${{ secrets.CLAUDE_LOGIN }}\n");
+  assert.equal(claudeInWorkflow(other, "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "no", "a login saved as CLAUDE_CODE_OAUTH_TOKEN never reaches it");
 });

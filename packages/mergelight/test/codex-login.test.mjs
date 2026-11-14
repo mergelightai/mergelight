@@ -52,16 +52,23 @@ test("a refused API key is a login problem with its own fix, not a ChatGPT one",
   assert.match(err.message, /OPENAI_API_KEY|codex login/);
   assert.doesNotMatch(err.message, /CODEX_AUTH_JSON/);
   // In the Action, the title names the API key's kind of login.
-  const saved = process.env.GITHUB_ACTIONS;
-  process.env.GITHUB_ACTIONS = "true";
+  const saved = process.env.MERGELIGHT_PROVIDER;
+  process.env.MERGELIGHT_PROVIDER = "claude";
   try {
     const inAction = await failingCodex("unexpected status 401 Unauthorized: Incorrect API key", { chatgpt: "0" });
     assert.equal(inAction.plan, "OpenAI");
     assert.match(inAction.message, /OPENAI_API_KEY/);
+    // A ChatGPT login says so in its own words, flag or not.
+    const chatgpt = await failingCodex("Your access token could not be refreshed", { chatgpt: "0" });
+    assert.equal(chatgpt.plan, "ChatGPT");
   } finally {
-    if (saved === undefined) delete process.env.GITHUB_ACTIONS;
-    else process.env.GITHUB_ACTIONS = saved;
+    if (saved === undefined) delete process.env.MERGELIGHT_PROVIDER;
+    else process.env.MERGELIGHT_PROVIDER = saved;
   }
+  // An API key's used-up balance is a limit, so a checker's lets the reviewer check.
+  const quota = await failingCodex("unexpected status 429: insufficient_quota", { chatgpt: "0" });
+  assert.ok(quota instanceof LimitError);
+  assert.equal(quota.plan, "OpenAI");
 });
 
 test("other failures keep their own message", async () => {

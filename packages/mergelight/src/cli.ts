@@ -47,9 +47,9 @@ Options
   --model <name>        Model for the hunters (default: your Codex config, or opus on Claude)
   --effort <level>      Reasoning effort: low, medium, high (default: high)
   --verify-with <name>  Who checks the findings: claude or codex
+                        (default: claude when Claude Code is installed)
   --verify-missed <name>
                         The AI that was meant to check but had no login: the summary says so
-                        (default: claude when Claude Code is installed)
   --verify-model <name> Model for the checker (default for claude: opus)
   --keep                Keep the temporary checkout
   --by <login>          Who approved, for approve
@@ -282,7 +282,9 @@ async function main(): Promise<number> {
   let headSha = values.at ?? null;
   if (values.post) {
     headSha ??= (await fetchPullRequest(ref)).headSha;
-    checkRunId = await startCheck(api, headSha, provider ?? "codex");
+    // A connect earlier in this run left its check going: the review carries it on, so no check stands
+    // finished in between, which a branch rule could take for a review that passed.
+    checkRunId = await startCheck(api, headSha, provider ?? "codex", Number(process.env.MERGELIGHT_CHECK_RUN) || undefined);
     // Says which AI reviews from the start. The models' exact names follow once the first reviewer answers.
     // Without --provider the review runs on Codex, as reviewPullRequest decides.
     const firstGuess = values.model ?? (provider === "claude" ? "opus" : configuredModel());

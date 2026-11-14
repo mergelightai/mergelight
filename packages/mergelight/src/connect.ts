@@ -297,7 +297,7 @@ export function withState(body: string, previous: string | undefined): string {
  * doesn't, so connecting Claude there would only ask again next time: "no". A workflow that calls a
  * reusable one may pass it on in a file this can't tell, and one that can't be read can't say: "unknown".
  */
-export function claudeInWorkflow(text: string | null, input = "claude-code-oauth-token", job?: string): "yes" | "no" | "unknown" {
+export function claudeInWorkflow(text: string | null, input = "claude-code-oauth-token", job?: string, secret?: string): "yes" | "no" | "unknown" {
   if (text === null) return "unknown";
   // Lines that are code, not comments: a line commented out passes nothing on.
   let lines = text.split("\n").map((line) => line.replace(/(^|\s)#.*$/, ""));
@@ -320,7 +320,10 @@ export function claudeInWorkflow(text: string | null, input = "claude-code-oauth
     const dash = indent(lines[start]!);
     let end = start + 1;
     while (end < lines.length && (!lines[end]!.trim() || indent(lines[end]!) > dash)) end++;
-    steps.push(lines.slice(start, end).join("\n"));
+    const step = lines.slice(start, end).join("\n");
+    // A step that runs only when someone approves needs no AI login: it only turns the check green.
+    if (/^\s*(?:-\s*)?if:[^\n]*==\s*["']pull_request_review["']/m.test(step) && !/pull_request["']/.test(step.replace(/pull_request_review["']/g, ""))) return;
+    steps.push(step);
   });
   // A reusable workflow or a composite action of the team's own may pass the login on in a file this
   // can't see: unless Mergelight is used here in plain sight, it can't say. Nor through YAML's shared
@@ -329,15 +332,22 @@ export function claudeInWorkflow(text: string | null, input = "claude-code-oauth
   // The name may be quoted, or in a flow mapping, as YAML allows. Every Mergelight step of this job must
   // pass it on: which one runs now can't be told from here, and a login saved for a step that doesn't
   // pass it on would replace the one another step uses. The message then says what to add.
-  const passes = (step: string) => new RegExp(`(^|[\\s{,])["']?${input}["']?\\s*:`, "m").test(step);
+  // And from the secret the login is saved to: a login saved as CLAUDE_CODE_OAUTH_TOKEN never reaches
+  // a step that reads another secret.
+  const passes = (step: string) => {
+    const value = new RegExp(`(?:^|[\\s{,])["']?${input}["']?\\s*:\\s*([^\\n,}]*)`, "m").exec(step)?.[1];
+    if (value === undefined) return false;
+    const named = /secrets\.([A-Za-z0-9_]+)/.exec(value)?.[1];
+    return !secret || !named || named === secret;
+  };
   return steps.every(passes) ? "yes" : "no";
 }
 
-async function workflowHasClaude(api: GitHub, env: NodeJS.ProcessEnv, input = "claude-code-oauth-token"): Promise<"yes" | "no" | "unknown"> {
+async function workflowHasClaude(api: GitHub, env: NodeJS.ProcessEnv, input = "claude-code-oauth-token", secret = "CLAUDE_CODE_OAUTH_TOKEN"): Promise<"yes" | "no" | "unknown"> {
   const [, path, ref] = (env.GITHUB_WORKFLOW_REF ?? "").match(/^[^/]+\/[^/]+\/(.+?)@(.+)$/) ?? [];
   if (!path || !ref) return "unknown";
   const text = await api.get<{ content: string }>(`contents/${path}?ref=${encodeURIComponent(env.GITHUB_SHA ?? ref)}`).then((f) => Buffer.from(f.content, "base64").toString("utf8"), () => null);
-  return claudeInWorkflow(text, input, env.GITHUB_JOB);
+  return claudeInWorkflow(text, input, env.GITHUB_JOB, secret);
 }
 
 /** The same for a ChatGPT login: a workflow that doesn't pass codex-auth-json would never see one saved now. */
@@ -380,6 +390,15 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
   };
   const finish = (title: string, summary: string) =>
     writeCheck(api, checkId, headSha, { status: "completed", conclusion: "neutral", completed_at: new Date().toISOString(), output: { title, summary } }, log);
+  /**
+   * Connected: the check stays going and the review carries it on. A check finished now would stand
+   * neutral until the review starts, and a branch rule takes neutral for passed.
+   */
+  const handOn = async (title: string, summary: string) => {
+    if (!checkId) return;
+    await writeCheck(api, checkId, headSha, { status: "in_progress", output: { title, summary } }, log);
+    if (env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, `MERGELIGHT_CHECK_RUN=${checkId}\n`);
+  };
   return {
     ...(onlyClaude ? { only: "claude" as const } : {}),
     claudeUnavailable: () => claudeMissing,
@@ -433,7 +452,7 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
       // Connecting Claude alone starts no ChatGPT sign-in.
       if (onlyClaude) return 1;
       // A checker's ChatGPT login is asked for only where the workflow passes it on to later runs.
-      if (checker === "codex" && (await workflowHasClaude(api, env, "codex-auth-json")) === "no") {
+      if (checker === "codex" && (await workflowHasClaude(api, env, "codex-auth-json", env.SECRET_NAME || "CODEX_AUTH_JSON")) === "no") {
         chatgptMissing = chatgptInputMissing(env.SECRET_NAME || "CODEX_AUTH_JSON");
         return 1;
       }
@@ -494,13 +513,13 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
         await api
           .write("POST", `issues/${number}/comments`, { body: `🔌 ${aiName(checker)} now checks reviews on this repository, with ${who}. If that isn't yours, remove the \`${secret}\` secret and push a commit to connect again.` })
           .catch((err) => log(`Couldn't post who connected: ${err instanceof Error ? err.message : String(err)}`));
-        await finish(`Connected to ${loginName(checker)}`, `Starting the review, checked by ${aiName(checker)}.`);
+        await handOn(`Connected to ${loginName(checker)}`, `Starting the review, checked by ${aiName(checker)}.`);
         log(`Connected to ${loginName(checker)} to check the review.`);
         return;
       }
       if (via === "claude") {
         await api.write("POST", `issues/${number}/comments`, { body: "🔌 Reviews on this repository now use the Claude plan that confirmed the sign-in. If that isn't yours, remove the `CLAUDE_CODE_OAUTH_TOKEN` secret and push a commit to connect again." });
-        await finish("Connected to Claude", "Starting the review.");
+        await handOn("Connected to Claude", "Starting the review.");
         log("Connected to Claude.");
         return;
       }
@@ -513,7 +532,7 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
       // A ChatGPT login now, as one from the secret would be, so a rejected one is called that.
       if (env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, "MERGELIGHT_CHATGPT=1\n");
       await api.write("POST", `issues/${number}/comments`, { body: connectedBody(connectedAccount(auth), env.SECRET_NAME || "CODEX_AUTH_JSON") });
-      await finish("Connected to ChatGPT", "Starting the review.");
+      await handOn("Connected to ChatGPT", "Starting the review.");
       log("Connected to ChatGPT.");
     },
     failed: async (reason) => {
@@ -523,7 +542,8 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
         // The prompt's code or link is dead now, and the review is about to start: the summary says that.
         // With no prompt posted, the last review's summary stays until this one replaces it.
         if (prompted) await updateSummary(pendingSummaryBody()).catch((err) => log(`Couldn't update the comment: ${err instanceof Error ? err.message : String(err)}`));
-        await finish(`${loginName(checker)} wasn't connected`, `${reason} The review goes on, checked by ${aiName(reviewer)}.`).catch((err) => log(`Couldn't finish the check: ${err instanceof Error ? err.message : String(err)}`));
+        // The review goes on, so the check does too: it isn't finished in between.
+        await handOn(`${loginName(checker)} wasn't connected`, `${reason} The review goes on, checked by ${aiName(reviewer)}.`).catch((err) => log(`Couldn't update the check: ${err instanceof Error ? err.message : String(err)}`));
         log(`${reason} The review goes on, checked by ${aiName(reviewer)}.`);
         return;
       }

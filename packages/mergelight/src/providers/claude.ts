@@ -79,7 +79,8 @@ export async function runClaude(opts: ModelOptions): Promise<ModelResult> {
     // A rejected login is said plainly, whether Claude reviews or checks, and a checker's lets the reviewer
     // check instead (review.ts). In the Action the login is the repository's secret; elsewhere, your own.
     if (LOGIN_FAILURE.test(text)) {
-      const local = process.env.ANTHROPIC_API_KEY
+      // Claude Code uses a plan's token before an API key (claudeEnv), so the key is to blame only without one.
+      const local = process.env.ANTHROPIC_API_KEY && !process.env.CLAUDE_CODE_OAUTH_TOKEN
         ? "Claude rejected the ANTHROPIC_API_KEY set here. Replace it, or unset it to use Claude Code's own login."
         : "Claude Code's login didn't work. Run claude and log in again.";
       throw new LoginError(process.env.GITHUB_ACTIONS === "true" ? claudeLoginMessage() : local, "Claude");
