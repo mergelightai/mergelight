@@ -232,7 +232,7 @@ runs:
               # Anyone who can see the pull request could enter a ChatGPT code shown there, and pick whose
               # account checks: only a private repository shows one, and one that can't be told doesn't.
               # Claude's link instead goes through mergelight.dev, where you sign in.
-              echo "::notice::Codex is set to check, but only a private repository shows a ChatGPT code, as anyone who can see the pull request could enter it. Save a ChatGPT login of its own as the ${SECRET_NAME:-CODEX_AUTH_JSON} secret yourself, never the one your own Codex uses: export CODEX_HOME=\$(mktemp -d); codex login; gh secret set ${SECRET_NAME:-CODEX_AUTH_JSON} --repo $GITHUB_REPOSITORY < \$CODEX_HOME/auth.json. This review is checked by $provider."
+              echo "::notice::Codex is set to check, but only a private repository shows a ChatGPT code, as anyone who can see the pull request could enter it. Save a ChatGPT login of its own as the ${SECRET_NAME:-CODEX_AUTH_JSON} secret yourself, never the one your own Codex uses: d=\$(mktemp -d); echo 'cli_auth_credentials_store = \"file\"' > \$d/config.toml; CODEX_HOME=\$d codex login && gh secret set ${SECRET_NAME:-CODEX_AUTH_JSON} --repo $GITHUB_REPOSITORY < \$d/auth.json; rm -rf \$d. This review is checked by $provider."
             elif [ "$checker" = codex ] && [ -z "$WANTED" ]; then
               # Claude reviews only because it has the one login: with a ChatGPT login saved too, the next
               # run would pick Codex to review. So the sign-in waits for the workflow to say who reviews.
