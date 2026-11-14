@@ -121,9 +121,19 @@ export function codexInstall(path = process.env.PATH ?? "", which: (manager: str
 }
 
 /** The version manager whose shim this is: Volta's links to volta-shim, asdf's are scripts in its shims folder, mise's link to mise. */
-export function shimManager(real: string): string | null {
+export function shimManager(real: string, env: NodeJS.ProcessEnv = process.env): string | null {
   if (/\/volta-shim$/.test(real)) return "volta";
   if (/\/\.?asdf[^/]*\/shims\/codex$/.test(real)) return "asdf";
+  // asdf can keep its shims anywhere ASDF_DATA_DIR says.
+  if (env.ASDF_DATA_DIR) {
+    let data = env.ASDF_DATA_DIR;
+    try {
+      data = realpathSync(data);
+    } catch {
+      // Compared as written.
+    }
+    if (real === join(data, "shims", "codex")) return "asdf";
+  }
   if (/\/mise$/.test(real) || /\/mise\/shims\/codex$/.test(real)) return "mise";
   return null;
 }

@@ -607,3 +607,23 @@ test("UTF-16 counts as text only with whole characters and no zero one, and is r
   assert.equal(textOf(be("Grüß 🎉")), "Grüß 🎉");
   assert.equal(textOf(Buffer.from("plain")), "plain");
 });
+
+test("a job may not delete a binary file, such as an image in its folder", async () => {
+  const { dir, git, jobGit } = repo();
+  writeFileSync(join(dir, "locales/flag.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x00, 0x01]));
+  git("add", "-A");
+  git("commit", "-q", "-m", "image");
+  const result = await runJobs({
+    git: jobGit,
+    head: git("rev-parse", "HEAD"),
+    jobs: [job("translations", "locales/*")],
+    ask: async (j, jobDir) => {
+      rmSync(join(jobDir, "locales/flag.png"));
+      return { summary: "Removed the flag." };
+    },
+  });
+  assert.equal(result.outcomes[0].status, "refused");
+  assert.match(result.outcomes[0].summary, /wrote or deleted binary files/);
+  assert.equal(shimManager("/opt/tools/shims/codex", { ASDF_DATA_DIR: "/opt/tools" }), "asdf", "asdf's shims where ASDF_DATA_DIR says");
+  assert.equal(shimManager("/opt/tools/shims/codex", {}), null);
+});

@@ -267,13 +267,13 @@ async function whyRefused(git: JobGit, job: Job, guarded: string[], headLinks: S
     bytes += Number.isFinite(size) ? size : Infinity;
   }
   if (bytes > MAX_CHANGE_BYTES) return `With it, the jobs would write ${Math.ceil(bytes / 1000).toLocaleString("en-US")} KB, over the limit of ${MAX_CHANGE_BYTES / 1000} KB.`;
+  // Nor delete one, such as an image in its docs folder: a job only ever handles text.
   const binary: string[] = [];
   for (const e of mine) {
-    if (e.status === "D") continue;
-    const head = await git.bytes(["cat-file", "blob", e.newSha]);
-    if (!head || isBinary(head)) binary.push(e.path);
+    const bytes = await git.bytes(["cat-file", "blob", e.status === "D" ? e.oldSha : e.newSha]);
+    if (!bytes || isBinary(bytes)) binary.push(e.path);
   }
-  if (binary.length) return `It wrote binary files, which a job may never write: ${some(binary)}.`;
+  if (binary.length) return `It wrote or deleted binary files, which a job may never do: ${some(binary)}.`;
   // A job's files get pushed: one that holds a secret the file didn't have before is never kept.
   for (const e of mine) {
     if (e.status === "D") continue;

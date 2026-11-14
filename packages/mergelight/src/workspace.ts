@@ -4,7 +4,7 @@ import { join, posix } from "node:path";
 import { run, runOk } from "./run.js";
 import { importSkills, SKILL_GIT_TIMEOUT_MS, SKILL_IMPORT_TIMEOUT_MS, writeSkills, type TeamSkill, type WrittenSkill } from "./skills.js";
 import type { Convention, TeamRule } from "./prompt.js";
-import { guardedFolders, JOB_FILE, MAX_JOB_FILES, readJobs, refusedPath, type Job, type JobProblem } from "./jobs.js";
+import { folded, guardedFolders, JOB_FILE, MAX_JOB_FILES, readJobs, refusedPath, type Job, type JobProblem } from "./jobs.js";
 import { parseRuleFile, repoRules, RULE_FILE } from "./repo-rules.js";
 import type { PullRequest } from "./types.js";
 
@@ -315,6 +315,23 @@ export async function jobFilesFor(mirror: string, base: string, guardFor?: Job[]
    * a link is followed before a ".." after it is applied. Where it ends is guarded. Null when it leaves
    * the repository; "deep" past the limit of links, or at the repository's root.
    */
+  /** Every file, link and folder of the tree by its name in any letter case, built once. */
+  let byCase: Map<string, string[]> | undefined;
+  const caseFits = (path: string): string[] => {
+    if (!byCase) {
+      const index = new Map<string, Set<string>>();
+      for (const p of tree.paths) {
+        const parts = p.split("/");
+        for (let i = 1; i <= parts.length; i++) {
+          const at = parts.slice(0, i).join("/");
+          const key = folded(at);
+          index.set(key, (index.get(key) ?? new Set()).add(at));
+        }
+      }
+      byCase = new Map([...index].map(([k, v]) => [k, [...v]]));
+    }
+    return byCase.get(folded(path)) ?? [];
+  };
   const resolve = async (path: string, guard = true): Promise<string | null | "unread" | "deep"> => {
     const done: string[] = [];
     let rest = path.split("/");
@@ -334,9 +351,19 @@ export async function jobFilesFor(mirror: string, base: string, guardFor?: Job[]
         done.pop();
         continue;
       }
-      const at = [...done, part].join("/");
+      let at = [...done, part].join("/");
+      // A disk that ignores letter case opens docs/alias.md for Docs/alias.md: the guard follows it there
+      // too. When two names fit, it can't tell which one is opened, so it gives up rather than guess.
+      if (tree.mode(at) === undefined) {
+        const fits = caseFits(at);
+        if (fits.length && !fits.includes(at)) {
+          if (fits.length > 1) return "deep";
+          at = fits[0]!;
+        }
+      }
+      const real = at.split("/").pop()!;
       if (tree.mode(at) !== "120000") {
-        done.push(part);
+        done.push(real);
         continue;
       }
       if (++hops > MAX_LINK_HOPS) return "deep";

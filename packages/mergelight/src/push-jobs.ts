@@ -265,6 +265,12 @@ export async function pushJobs(ref: PrRef, o: PushJobsOptions): Promise<number> 
     const { modes, files } = await headTree(mirror, pr.headSha, paths);
     const plan = checkPush(result, jobs, pr.headSha, modes, guarded, files);
     if ("why" in plan) return refuse(plan.why, 1);
+    // Nor may a job delete a binary file, such as an image: checked against the head, as the jobs step does.
+    for (const path of plan.deletions) {
+      const old = await git.bytes(["cat-file", "blob", `${pr.headSha}:${path}`]);
+      if (!old) throw new Error(`Couldn't read ${path} at ${pr.headSha.slice(0, 7)}.`);
+      if (isBinary(old)) return refuse(`${path} is a binary file, which a job may never delete.`, 1);
+    }
     // The jobs step drops a job that writes a secret the file didn't have. The file it hands over is checked again.
     for (const a of plan.additions) {
       // The mirror holds no file contents until they are asked for, so this fetches them, with the login a private repository needs.

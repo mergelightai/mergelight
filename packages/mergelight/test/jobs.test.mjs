@@ -554,3 +554,20 @@ test("a link that steps out of a folder keeps that folder guarded, and accents c
   // macOS takes é as one character and as e with an accent for the same name.
   assert.ok(!mayChange(job, "notes/re\u0301sume\u0301.md", ["notes/r\u00e9sum\u00e9.md"]));
 });
+
+test("the guard follows a link in any letter case, as a disk that ignores it opens it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-jobs-case-"));
+  const git = (...args) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t.test", "-c", "core.ignorecase=false", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
+  git("init", "-q", "-b", "main");
+  mkdirSync(join(dir, "docs"), { recursive: true });
+  writeFileSync(join(dir, "docs/guide.md"), "Guide\n");
+  symlinkSync("guide.md", join(dir, "docs/alias.md"));
+  symlinkSync("Docs/alias.md", join(dir, "AGENTS.md"));
+  mkdirSync(join(dir, ".mergelight/jobs"), { recursive: true });
+  writeFileSync(join(dir, ".mergelight/jobs/translations.md"), TRANSLATIONS);
+  git("add", "-A");
+  git("commit", "-q", "-m", "base");
+  const { guarded, incomplete } = await jobFilesFor(dir, "main");
+  assert.equal(incomplete, undefined);
+  assert.ok(guarded.includes("docs/guide.md"), JSON.stringify(guarded));
+});
