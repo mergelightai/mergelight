@@ -20,7 +20,7 @@ const customized = (use) => `# Our own note, keep this\nname: Mergelight\njobs:\
 let failures = 0;
 const expect = (ok, what) => { console.log(`  ${ok ? 'ok ' : 'FAIL'} ${what}`); if (!ok) failures++; };
 
-async function run(name, { login = false, apiKey = false, claude = false, refuse = null, onBase = null, prFile = null, prRefresh = null, baseRefresh = null, noRelease = false, reviewDone = false, scope = 'new', button = 'Add to api' } = {}, check = () => {}) {
+async function run(name, { login = false, apiKey = false, claude = false, orgSecrets = [], refuse = null, onBase = null, prFile = null, prRefresh = null, baseRefresh = null, noRelease = false, reviewDone = false, scope = 'new', button = 'Add to api' } = {}, check = () => {}) {
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 860, deviceScaleFactor: 2 });
   const errors = [];
@@ -56,11 +56,13 @@ async function run(name, { login = false, apiKey = false, claude = false, refuse
       if (u.pathname === '/user/installations/1/repositories') return json(req, { repositories: [{ full_name: 'acme/api', private: true, default_branch: 'main', archived: false }, { full_name: 'acme/zzz-other', private: true, default_branch: 'main', archived: false }] });
       if (p === '/branches') return json(req, [{ name: 'main' }, { name: 'staging' }, { name: 'feat/x' }]);
       if (p === '/pulls' && u.searchParams.get('state') === 'all') return json(req, [{ base: { ref: 'staging' }, head: { ref: 'feat/x' } }]);
-      if (p === '/pulls') return json(req, prFile ? [{ number: 5, html_url: 'https://github.com/acme/api/pull/5', head: { sha: 'oldsha', ref: 'mergelight-setup-old', repo: { full_name: 'acme/api' } } }] : []);
+      if (p === '/pulls') return json(req, prFile ? [{ number: 5, html_url: 'https://github.com/acme/api/pull/5', base: { ref: 'staging' }, head: { sha: 'oldsha', ref: 'mergelight-setup-old', repo: { full_name: 'acme/api' } } }] : []);
       if (p === '/pulls/5/files') return json(req, [{ filename: '.github/workflows/mergelight.yml' }]);
       if (p === '/pulls/5') return json(req, { merged: false, head: { sha: writes.some((w) => w.m === 'PUT') ? 'newsha' : 'oldsha' } });
       if (p === '/pulls/7') return json(req, { merged: false, head: { sha: 'headsha' } });
       if (p === '/issues/5/comments' || p === '/issues/7/comments') return json(req, []);
+      // A list is what the organization shares with the repo. A number is how GitHub answers instead: 422 on a repo a person owns.
+      if (p === '/actions/organization-secrets') return Array.isArray(orgSecrets) ? json(req, { secrets: orgSecrets.map((name) => ({ name })) }) : json(req, { message: 'no' }, orgSecrets);
       if (p === '/actions/secrets') return json(req, { secrets: [...(login ? [{ name: 'CODEX_AUTH_JSON' }] : []), ...(apiKey ? [{ name: 'OPENAI_API_KEY' }] : []), ...(claude ? [{ name: 'CLAUDE_CODE_OAUTH_TOKEN' }] : [])] });
       if (p.startsWith('/contents/')) {
         // A new branch starts with whatever the branch it came from has.
@@ -161,6 +163,16 @@ await run('claude-login', { claude: true }, ({ puts, file, after }) => {
   expect(puts.length === 1, 'a Claude login needs no refresh job');
   expect(/Your PR is open/.test(after), 'goes straight to the timeline');
 });
+await run('org-shares-chatgpt', { claude: true, orgSecrets: ['CODEX_AUTH_JSON'] }, ({ file }) => {
+  expect(file?.includes('          provider: codex\n'), "counts the organization's ChatGPT login, so it names the reviewer the Action would pick");
+});
+await run('org-secrets-unreadable', { claude: true, orgSecrets: 403 }, ({ file, after }) => {
+  expect(file && !/provider:/.test(file), "can't see what the organization shares, so it names no reviewer");
+  expect(/Your PR is open/.test(after), 'and still opens the PR');
+});
+await run('repo-a-person-owns', { claude: true, orgSecrets: 422 }, ({ file }) => {
+  expect(file?.includes('          provider: claude\n'), 'a repo with no organization has nothing more to see');
+});
 await run('review-done', { login: true, reviewDone: true }, ({ after }) => {
   expect(/First review done/.test(after), 'shows the review as done');
   expect(/The PR stays open until you merge it/.test(after), 'says what happens if the page is closed now');
@@ -173,6 +185,12 @@ await run('open-pr-on-old-version', { prFile: customized('v0'), login: true }, (
   expect(writes.every((w) => w.m === 'PUT') && puts.length === 2, 'only updates files on the open pull request');
   expect(put?.body.branch === 'mergelight-setup-old' && put?.body.sha === 'prblob', 'on its own branch, with the right blob');
   expect(/PR #5 opened/.test(after), 'keeps the same pull request');
+});
+const roleLines = '          provider: claude\n          verify-with: codex\n';
+await run('update-keeps-pending-roles', { onBase: customized(`${OLD_SHA} # v0.1.0`), prFile: customized(`${OLD_SHA} # v0.1.0`) + roleLines, login: true, button: 'Update to v0.2.0' }, ({ put }) => {
+  const content = put && Buffer.from(put.body.content, 'base64').toString();
+  expect(put?.body.branch === 'mergelight-setup-old', 'updates the open pull request');
+  expect(content === customized(`${RELEASE.sha} # ${RELEASE.tag}`) + roleLines, 'moves only the version lines, and keeps the change of AI waiting there');
 });
 await run('open-pr-already-current', { prFile: withLogin.file, prRefresh: withLogin.refresh, login: true }, ({ writes, after }) => {
   expect(writes.length === 0, 'writes nothing');

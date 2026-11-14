@@ -25,9 +25,10 @@ export interface SetRoles {
 const CLAUDE_SECRETS = ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'];
 const CODEX_SECRETS = ['CODEX_AUTH_JSON', 'OPENAI_API_KEY'];
 
-export const loginsFrom = (secretNames: string[]): Logins => ({
+/** `codexSecret` is the workflow's own name for a ChatGPT login, from its auth-secret-name. */
+export const loginsFrom = (secretNames: string[], codexSecret = 'CODEX_AUTH_JSON'): Logins => ({
   claude: secretNames.some((n) => CLAUDE_SECRETS.includes(n)),
-  codex: secretNames.some((n) => CODEX_SECRETS.includes(n)),
+  codex: secretNames.some((n) => CODEX_SECRETS.includes(n) || n === codexSecret),
 });
 
 export const otherAi = (ai: Ai): Ai => (ai === 'claude' ? 'codex' : 'claude');
@@ -46,6 +47,17 @@ export function rolesFor(set: SetRoles, logins: Logins): Roles {
   const reviewer = set.provider ?? defaultReviewer(logins);
   const checker = set.verifyWith ?? (logins.claude && logins.codex ? otherAi(reviewer) : reviewer);
   return { reviewer, checker };
+}
+
+/**
+ * Whether the login for `adding` has to wait until the pull request that sets `want` is merged. A login is a secret of
+ * the whole repo, so it reaches the workflow that runs now at once. When that workflow doesn't name the reviewer, the
+ * new login can move its reviews to the other AI, while the person chose to keep the reviewer they have.
+ */
+export function connectsAfterMerge(set: SetRoles, logins: Logins, want: Roles, adding: Ai | null): boolean {
+  if (!adding) return false;
+  const now = rolesFor(set, logins).reviewer;
+  return want.reviewer === now && rolesFor(set, { ...logins, [adding]: true }).reviewer !== now;
 }
 
 /* ---------- Reading and editing the Mergelight step ---------- */
@@ -157,13 +169,19 @@ function locate(content: string): Step | null {
   return { lines, text, usesLine, keyCol, withLine, childIndent: childIndent < 0 ? keyCol + 2 : childIndent, entries, blockEnd };
 }
 
-/** An AI as the Action reads it. Anything else, like an expression or nothing, is null. */
-function readAi(step: Step, key: string): Ai | null {
+/** An input's value, without quotes or a comment. Null when it isn't there, and empty when it's there with nothing. */
+function readValue(step: Step, key: string): string | null {
   const entry = step.entries.find((e) => e.key === key);
   if (!entry) return null;
   let value = step.text[entry.start]!.replace(/^[^:]*:/, '').replace(/[ \t]+#.*$/, '').trim();
   if (/^[|>]/.test(value)) value = step.text.slice(entry.start + 1, entry.end).join(' ').trim();
-  value = value.replace(/^(["'])(.*)\1$/, '$2').trim().toLowerCase();
+  value = value.replace(/^(["'])(.*)\1$/, '$2').trim();
+  return value === '~' || value === 'null' ? '' : value;
+}
+
+/** An AI as the Action reads it. Anything else, like an expression or nothing, is null. */
+function readAi(step: Step, key: string): Ai | null {
+  const value = readValue(step, key)?.toLowerCase();
   return value === 'claude' || value === 'codex' ? value : null;
 }
 
@@ -171,6 +189,29 @@ function readAi(step: Step, key: string): Ai | null {
 export function readRoles(content: string): SetRoles | null {
   const step = locate(content);
   return step && { provider: readAi(step, 'provider'), verifyWith: readAi(step, 'verify-with') };
+}
+
+/** The inputs that hand each AI's login to the Action. The first is the one a login connected from a pull request goes to. */
+export const LOGIN_INPUTS: Record<Ai, [string, string]> = {
+  codex: ['codex-auth-json', 'openai-api-key'],
+  claude: ['claude-code-oauth-token', 'anthropic-api-key'],
+};
+
+/**
+ * Whether the Mergelight step hands this AI a login. One still to be connected needs the input a connected login
+ * goes to: any other one would never see it. Without the step, nothing is handed on.
+ */
+export function passesLogin(content: string, ai: Ai, connecting: boolean): boolean {
+  const step = locate(content);
+  if (!step) return false;
+  return (connecting ? LOGIN_INPUTS[ai].slice(0, 1) : LOGIN_INPUTS[ai]).some((key) => Boolean(readValue(step, key)));
+}
+
+/** The secret that holds a ChatGPT login, as the Action reads it: auth-secret-name when it's set to a name, CODEX_AUTH_JSON otherwise. */
+export function authSecretName(content: string | null): string {
+  const step = content ? locate(content) : null;
+  const name = step ? readValue(step, 'auth-secret-name') : null;
+  return name && /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ? name : 'CODEX_AUTH_JSON';
 }
 
 /**

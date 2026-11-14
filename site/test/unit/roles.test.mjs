@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { loginsFrom, readRoles, rolesFor, withInputs, withRoles } from '../../src/setup/roles.ts';
+import { authSecretName, connectsAfterMerge, loginsFrom, passesLogin, readRoles, rolesFor, withInputs, withRoles } from '../../src/setup/roles.ts';
 
 const template = readFileSync(new URL('../../../examples/mergelight.yml', import.meta.url), 'utf8');
 const both = { claude: true, codex: true };
@@ -161,4 +161,36 @@ test('loginsFrom knows which secret belongs to which AI', () => {
   assert.deepEqual(loginsFrom(['CODEX_AUTH_JSON']), codexOnly);
   assert.deepEqual(loginsFrom(['OPENAI_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']), both);
   assert.deepEqual(loginsFrom([]), none);
+  assert.deepEqual(loginsFrom(['MY_CODEX'], 'MY_CODEX'), codexOnly, "the workflow's own name for a ChatGPT login counts");
+  assert.deepEqual(loginsFrom(['MY_CODEX']), none, 'and only when the workflow names it');
+});
+
+test('a login waits for the merge only when it would move reviews the person chose to keep', () => {
+  const unset = { provider: null, verifyWith: null };
+  const keepClaude = { reviewer: 'claude', checker: 'codex' };
+  assert.equal(connectsAfterMerge(unset, claudeOnly, keepClaude, 'codex'), true, 'Claude reviews only as the one login, so ChatGPT would take over');
+  assert.equal(connectsAfterMerge({ provider: 'claude', verifyWith: null }, claudeOnly, keepClaude, 'codex'), false, 'a file that names Claude keeps Claude');
+  assert.equal(connectsAfterMerge(unset, claudeOnly, { reviewer: 'codex', checker: 'claude' }, 'codex'), false, 'moving reviews to ChatGPT is the choice itself');
+  assert.equal(connectsAfterMerge(unset, codexOnly, { reviewer: 'codex', checker: 'claude' }, 'claude'), false, 'a Claude login never moves reviews away from ChatGPT');
+  assert.equal(connectsAfterMerge(unset, claudeOnly, keepClaude, null), false, 'nothing to connect');
+});
+
+test('passesLogin tells whether the Mergelight step hands an AI its login', () => {
+  assert.equal(passesLogin(template, 'codex', true), true);
+  assert.equal(passesLogin(template, 'claude', true), true);
+  const claudeStep = 'steps:\n  - uses: mergelightai/mergelight@v0\n    with:\n      claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n      openai-api-key: ${{ secrets.OPENAI_API_KEY }}\n      codex-auth-json: ""\n';
+  assert.equal(passesLogin(claudeStep, 'claude', true), true);
+  assert.equal(passesLogin(claudeStep, 'claude', false), true);
+  assert.equal(passesLogin(claudeStep, 'codex', false), true, 'a saved login can come through an API key');
+  assert.equal(passesLogin(claudeStep, 'codex', true), false, 'one still to connect needs codex-auth-json, and an empty one passes nothing');
+  assert.equal(passesLogin('steps:\n  - uses: mergelightai/mergelight@v0\n', 'claude', false), false, 'a step without with: passes nothing');
+  assert.equal(passesLogin('name: x\n', 'claude', false), false, 'without the step, nothing');
+});
+
+test("authSecretName reads the workflow's own name for a ChatGPT login", () => {
+  assert.equal(authSecretName(template), 'CODEX_AUTH_JSON');
+  assert.equal(authSecretName(null), 'CODEX_AUTH_JSON');
+  assert.equal(authSecretName(withInputs(template, [['auth-secret-name', 'TEAM_CODEX # ours']])), 'TEAM_CODEX');
+  assert.equal(authSecretName(withInputs(template, [['auth-secret-name', '"QUOTED_NAME"']])), 'QUOTED_NAME');
+  assert.equal(authSecretName(withInputs(template, [['auth-secret-name', '${{ vars.WHICH }}']])), 'CODEX_AUTH_JSON', "an expression can't be told, so the default stays");
 });

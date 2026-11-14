@@ -1,5 +1,5 @@
 /** What the setup page reads from GitHub, in the browser, with the person's own token. */
-import { aiName, defaultReviewer, loginsFrom, withInputs, type Logins, type Roles } from './roles';
+import { aiName, authSecretName, defaultReviewer, loginsFrom, withInputs, type Logins, type Roles } from './roles';
 import { readConnectCode, type ConnectCode } from './connect';
 
 const API = 'https://api.github.com';
@@ -61,6 +61,11 @@ export interface RepoDetails {
   hasLogin: boolean;
   /** Which AIs have a login. */
   logins: Logins;
+  /**
+   * Whether every secret a run gets was seen. One an organization shares with the repo only shows once that list can
+   * be read, and without it a login may be missing here that the Action still gets.
+   */
+  allSecretsSeen: boolean;
   /** An API key or a Claude login needs no refreshing, so such a repo doesn't need the refresh workflow. */
   hasApiKey: boolean;
   /** What's on the base branch already, if anything. */
@@ -176,8 +181,11 @@ export interface GitHubClient {
   /** The open pull request that adds the workflow, once someone has made it. */
   findSetupPr(repo: Repo): Promise<SetupPr | null>;
   hasWorkflow(repo: Repo, branch: string): Promise<boolean>;
-  /** Which AIs have a login saved, from the secrets' names. The values can't be read. */
-  logins(repo: Repo): Promise<Logins>;
+  /**
+   * Which AIs have a login saved, from the secrets' names, the repo's own and those its organization shares with it.
+   * The values can't be read. `codexSecret` is the workflow's own name for a ChatGPT login.
+   */
+  logins(repo: Repo, codexSecret?: string): Promise<Logins>;
   /** The Mergelight check on this commit, if a review has started. */
   checkStatus(repo: Repo, sha: string): Promise<CheckStatus | null>;
   /** The code for connecting ChatGPT and the link for Claude, while the pull request is waiting for someone to use them. */
@@ -384,11 +392,14 @@ export function realClient(token: string): GitHubClient {
     const { sha } = await get<{ sha: string }>(`/repos/${ACTION_REPO}/commits/${encodeURIComponent(tag)}`);
     return { tag, sha };
   };
-  const openSetupPull = async (repo: Repo) => {
-    const pulls = await get<{ number: number; html_url: string; head: { sha: string; ref: string; repo: { full_name: string } | null } }[]>(`/repos/${repo.fullName}/pulls?state=open&sort=created&direction=desc&per_page=5`);
+  /** With `base`, only one into that branch: a change made on one into another branch would never reach this one. */
+  const openSetupPull = async (repo: Repo, base?: string) => {
+    const into = base ? `&base=${encodeURIComponent(base)}` : '';
+    const pulls = await get<{ number: number; html_url: string; base: { ref: string }; head: { sha: string; ref: string; repo: { full_name: string } | null } }[]>(`/repos/${repo.fullName}/pulls?state=open&sort=created&direction=desc&per_page=5${into}`);
     for (const pull of pulls) {
       // A fork's pull request isn't ours to update.
       if (pull.head.repo?.full_name !== repo.fullName) continue;
+      if (base && pull.base?.ref !== base) continue;
       const files = await get<{ filename: string }[]>(`/repos/${repo.fullName}/pulls/${pull.number}/files?per_page=30`).catch(() => []);
       if (files.some((f) => f.filename === WORKFLOW_PATH)) return pull;
     }
@@ -408,11 +419,16 @@ export function realClient(token: string): GitHubClient {
     if (!res.ok) throw new Error(`Couldn't check for the review app (${res.status}).`);
     return ((await res.json()) as { installed: boolean }).installed;
   };
-  const secretNames = async (repo: Repo) => {
-    const { secrets } = await get<{ secrets: { name: string }[] }>(`/repos/${repo.fullName}/actions/secrets?per_page=100`).catch(() => ({ secrets: [] as { name: string }[] }));
-    return secrets.map((s) => s.name);
+  /**
+   * The names of the secrets a run gets: the repo's own, and those its organization shares with it. `complete` is
+   * false when a list couldn't be read. GitHub answers 422 for the organization's list on a repo a person owns.
+   */
+  const secretNames = async (repo: Repo): Promise<{ names: string[]; complete: boolean }> => {
+    const names = (path: string) => get<{ secrets: { name: string }[] }>(`/repos/${repo.fullName}/actions/${path}?per_page=100`).then(({ secrets }) => secrets.map((s) => s.name));
+    const [own, shared] = await Promise.all([names('secrets').catch(() => null), names('organization-secrets').catch((err) => (err instanceof GitHubError && err.status === 422 ? [] : null))]);
+    return { names: [...(own ?? []), ...(shared ?? [])], complete: own !== null && shared !== null };
   };
-  const logins = async (repo: Repo) => loginsFrom(await secretNames(repo));
+  const logins = async (repo: Repo, codexSecret?: string) => loginsFrom((await secretNames(repo)).names, codexSecret);
 
   return {
     repos: async () => {
@@ -428,7 +444,7 @@ export function realClient(token: string): GitHubClient {
       return lists.flat().sort((a, b) => a.fullName.localeCompare(b.fullName));
     },
     details: async (repo) => {
-      const [branches, pulls, secrets, release, reviewApp] = await Promise.all([
+      const [branches, pulls, seen, release, reviewApp] = await Promise.all([
         get<{ name: string }[]>(`/repos/${repo.fullName}/branches?per_page=100`),
         get<{ base: { ref: string }; head: { ref: string } }[]>(`/repos/${repo.fullName}/pulls?state=all&per_page=50`).catch(() => []),
         secretNames(repo),
@@ -438,14 +454,19 @@ export function realClient(token: string): GitHubClient {
       const names = branches.map((b) => b.name);
       const base = pickBase(pulls.map((p) => ({ base: p.base.ref, head: p.head.ref })), repo.defaultBranch);
       const [onBase, refresh] = await Promise.all([workflowOn(repo, base), workflowOn(repo, base, REFRESH_FILE)]);
+      const secrets = seen.names;
+      const installed = onBase && readInstalled(onBase.content);
+      // A ChatGPT login under the workflow's own name counts too.
+      const codexSecret = authSecretName(installed ? installed.content : null);
       return {
         branches: names.includes(base) ? names : [base, ...names],
         base,
         skip: pickSkip(names),
-        hasLogin: secrets.some((n) => LOGIN_SECRETS.includes(n)),
-        logins: loginsFrom(secrets),
+        hasLogin: secrets.some((n) => LOGIN_SECRETS.includes(n) || n === codexSecret),
+        logins: loginsFrom(secrets, codexSecret),
+        allSecretsSeen: seen.complete,
         hasApiKey: secrets.some((n) => NO_REFRESH_SECRETS.includes(n)),
-        installed: onBase && readInstalled(onBase.content),
+        installed,
         refresh: refresh?.content ?? null,
         release,
         reviewApp,
@@ -473,7 +494,7 @@ export function realClient(token: string): GitHubClient {
       };
 
       // One that's open already gets brought up to date, however old the version it was opened with.
-      const open = await openSetupPull(repo);
+      const open = await openSetupPull(repo, branch);
       if (open) {
         const commit = await write(open.head.ref, commitFor(change));
         return { number: open.number, url: open.html_url, headSha: commit ?? open.head.sha };
@@ -557,9 +578,9 @@ export function mockClient(): GitHubClient {
     details: (r) =>
       later<RepoDetails>({ reviewApp: r.fullName !== 'acme/docs', ...(
         r.fullName === 'acme/docs'
-          ? { branches: ['main'], base: 'main', skip: ['main'], hasLogin: false, logins: loginsOf(r.fullName), hasApiKey: false, installed: null, refresh: null, release }
+          ? { branches: ['main'], base: 'main', skip: ['main'], hasLogin: false, logins: loginsOf(r.fullName), allSecretsSeen: true, hasApiKey: false, installed: null, refresh: null, release }
           : r.fullName === 'acme/site'
-          ? { branches: ['main', 'feat/new-landing'], base: 'main', skip: ['main'], hasLogin: false, logins: loginsOf(r.fullName), hasApiKey: false, installed: null, refresh: null, release }
+          ? { branches: ['main', 'feat/new-landing'], base: 'main', skip: ['main'], hasLogin: false, logins: loginsOf(r.fullName), allSecretsSeen: true, hasApiKey: false, installed: null, refresh: null, release }
           : {
               branches: ['main', 'staging', 'development', 'feat/billing-export', 'fix/invoice-rounding'],
               base: 'staging',
@@ -567,6 +588,7 @@ export function mockClient(): GitHubClient {
               hasLogin: loginsOf(r.fullName).claude || loginsOf(r.fullName).codex,
               hasApiKey: loginsOf(r.fullName).claude,
               logins: loginsOf(r.fullName),
+              allSecretsSeen: true,
               installed: installedFor(r.fullName),
               refresh: null,
               release,
