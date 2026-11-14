@@ -299,8 +299,17 @@ export function withState(body: string, previous: string | undefined): string {
  */
 export function claudeInWorkflow(text: string | null, input = "claude-code-oauth-token"): "yes" | "no" | "unknown" {
   if (text === null) return "unknown";
-  if (text.includes(input)) return "yes";
-  return /^\s*(?:-\s*)?uses:\s*["']?[^\s"'#]*\.github\/workflows\//m.test(text) ? "unknown" : "no";
+  // Lines that are code, not comments: a line commented out passes nothing on.
+  const code = text
+    .split("\n")
+    .map((line) => line.replace(/(^|\s)#.*$/, ""))
+    .join("\n");
+  if (new RegExp(`(^|\\s)${input}\\s*:`, "m").test(code)) return "yes";
+  // A sure "no" only where the workflow uses Mergelight itself, in plain sight. A reusable workflow or a
+  // composite action of the team's own may pass the login on in a file this can't see.
+  const direct = /^\s*(?:-\s*)?uses:\s*["']?[^\s"']*mergelight[^\s"']*@/im.test(code);
+  const wrapped = /^\s*(?:-\s*)?uses:\s*["']?(?:\.\/|[^\s"']*\.github\/workflows\/)/m.test(code);
+  return direct && !wrapped ? "no" : "unknown";
 }
 
 async function workflowHasClaude(api: GitHub, env: NodeJS.ProcessEnv, input = "claude-code-oauth-token"): Promise<"yes" | "no" | "unknown"> {

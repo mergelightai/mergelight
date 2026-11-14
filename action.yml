@@ -225,12 +225,28 @@ runs:
     - name: Install Claude Code
       if: github.event_name != 'pull_request_review' && env.MERGELIGHT_USES_CLAUDE == '1'
       shell: bash
-      run: npm install -g "@anthropic-ai/claude-code@${{ inputs.claude-code-version }}" --no-audit --no-fund --loglevel=error
+      run: |
+        npm install -g "@anthropic-ai/claude-code@${{ inputs.claude-code-version }}" --no-audit --no-fund --loglevel=error && exit 0
+        # Claude only checking: the reviewer checks instead, and the review goes on.
+        if [ "$MERGELIGHT_PROVIDER" != claude ]; then
+          echo "::warning::Couldn't install Claude Code, so $MERGELIGHT_PROVIDER checks this review."
+          { echo "MERGELIGHT_USES_CLAUDE=0"; [ "${MERGELIGHT_CONNECT_CHECK:-}" != claude ] || echo "MERGELIGHT_CONNECT_CHECK="; } >> "$GITHUB_ENV"
+          exit 0
+        fi
+        exit 1
 
     - name: Install Codex
       if: github.event_name != 'pull_request_review' && env.MERGELIGHT_USES_CODEX == '1'
       shell: bash
-      run: npm install -g "@openai/codex@${{ inputs.codex-version }}" --no-audit --no-fund --loglevel=error
+      run: |
+        npm install -g "@openai/codex@${{ inputs.codex-version }}" --no-audit --no-fund --loglevel=error && exit 0
+        # Codex only checking: the reviewer checks instead, and the review goes on.
+        if [ "$MERGELIGHT_PROVIDER" != codex ]; then
+          echo "::warning::Couldn't install Codex, so $MERGELIGHT_PROVIDER checks this review."
+          { echo "MERGELIGHT_USES_CODEX=0"; [ "${MERGELIGHT_CONNECT_CHECK:-}" != codex ] || echo "MERGELIGHT_CONNECT_CHECK="; } >> "$GITHUB_ENV"
+          exit 0
+        fi
+        exit 1
 
     # Codex's Linux sandbox (bubblewrap) needs unprivileged user namespaces, which Ubuntu 24.04
     # runners block through AppArmor. Without them Codex can't read the code. Same fix as
@@ -458,9 +474,10 @@ runs:
         if [ "${MERGELIGHT_VERIFY_FOLLOWS:-0}" = 1 ]; then verify="$MERGELIGHT_PROVIDER"; fi
         missed=""
         if [ "$verify" != "$MERGELIGHT_PROVIDER" ]; then
+          # Only a login this Action set up counts: never one the runner itself happens to have.
           if [ "$verify" = claude ]; then
-            [ -n "$CLAUDE_CODE_OAUTH_TOKEN$ANTHROPIC_API_KEY" ] || missed=claude
-          elif [ "${MERGELIGHT_LOGIN_LOST:-0}" = 1 ] || ! codex login status > /dev/null 2>&1; then
+            { [ "${MERGELIGHT_USES_CLAUDE:-0}" = 1 ] && [ -n "$CLAUDE_CODE_OAUTH_TOKEN$ANTHROPIC_API_KEY" ]; } || missed=claude
+          elif [ "${MERGELIGHT_USES_CODEX:-0}" != 1 ] || [ "${MERGELIGHT_LOGIN_LOST:-0}" = 1 ] || ! codex login status > /dev/null 2>&1; then
             missed=codex
           fi
         fi

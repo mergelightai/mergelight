@@ -218,7 +218,7 @@ test("Codex that only checks, with no login, holds nothing up", () => {
 });
 
 /** Runs the review step with stand-ins for node, which prints what it was asked, and codex. */
-function reviewArgs({ provider, verify, follows = "0", claudeToken = "", codexLoggedIn = false, lost = "0" }) {
+function reviewArgs({ provider, verify, follows = "0", claudeToken = "", codexLoggedIn = false, lost = "0", usesCodex = "1", usesClaude = "1" }) {
   const dir = mkdtempSync(join(tmpdir(), "mergelight-review-step-"));
   const bin = join(dir, "bin");
   mkdirSync(bin);
@@ -228,7 +228,7 @@ function reviewArgs({ provider, verify, follows = "0", claudeToken = "", codexLo
   chmodSync(join(bin, "codex"), 0o755);
   const r = spawnSync("bash", ["-c", stepScript("Review")], {
     encoding: "utf8",
-    env: { PATH: `${bin}:${process.env.PATH}`, RUNNER_TEMP: dir, GITHUB_ACTION_PATH: dir, GITHUB_REPOSITORY: "acme/widgets", PR: "7", MODEL: "", EFFORT: "", YELLOW_BLOCKS: "false", AUTO_APPROVE: "true", CLAUDE_CODE_OAUTH_TOKEN: claudeToken, ANTHROPIC_API_KEY: "", MERGELIGHT_PROVIDER: provider, MERGELIGHT_VERIFY: verify, MERGELIGHT_VERIFY_FOLLOWS: follows, MERGELIGHT_LOGIN_LOST: lost },
+    env: { PATH: `${bin}:${process.env.PATH}`, RUNNER_TEMP: dir, GITHUB_ACTION_PATH: dir, GITHUB_REPOSITORY: "acme/widgets", PR: "7", MODEL: "", EFFORT: "", YELLOW_BLOCKS: "false", AUTO_APPROVE: "true", CLAUDE_CODE_OAUTH_TOKEN: claudeToken, ANTHROPIC_API_KEY: "", MERGELIGHT_PROVIDER: provider, MERGELIGHT_VERIFY: verify, MERGELIGHT_VERIFY_FOLLOWS: follows, MERGELIGHT_LOGIN_LOST: lost, MERGELIGHT_USES_CODEX: usesCodex, MERGELIGHT_USES_CLAUDE: usesClaude },
   });
   assert.equal(r.status, 0, r.stderr);
   return r.stdout;
@@ -246,6 +246,9 @@ test("the review checks with the other AI when it has a login, and with the revi
   assert.match(follows, /--verify-with claude --out/);
   assert.doesNotMatch(follows, /verify-missed/);
   assert.doesNotMatch(action, /VERIFY_WITH=claude/, "a Claude review is no longer always checked by Claude");
+  // A Codex login the runner itself has never counts: only one this Action set up.
+  assert.match(reviewArgs({ provider: "claude", verify: "codex", claudeToken: "t", codexLoggedIn: true, usesCodex: "0" }), /--verify-with claude .*--verify-missed codex/);
+  assert.match(reviewArgs({ provider: "codex", verify: "claude", claudeToken: "t", codexLoggedIn: true, usesClaude: "0" }), /--verify-with codex .*--verify-missed claude/);
 });
 
 test("action.yml is valid YAML, so GitHub can load the action at all", (t) => {
@@ -287,4 +290,22 @@ test("a checker is set up only when it can check, and connecting ChatGPT never m
   // A fork can't ask, so the checker isn't set up either.
   assert.equal(choose({ wanted: "claude", claude: "1", checker: "codex", headRepo: "stranger/widgets" }).env.MERGELIGHT_USES_CODEX, "0");
   assert.ok(action.indexOf("- name: Refresh the Codex login again after the sign-in") > action.indexOf("- name: Connect the checker"));
+});
+
+test("a checker that can't be installed lets the reviewer check, and a reviewer that can't be installed fails", () => {
+  for (const [step, provider, flag] of [["Install Codex", "claude", "MERGELIGHT_USES_CODEX"], ["Install Claude Code", "codex", "MERGELIGHT_USES_CLAUDE"]]) {
+    const dir = mkdtempSync(join(tmpdir(), "mergelight-install-"));
+    const bin = join(dir, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "npm"), "#!/usr/bin/env bash\nexit 1\n");
+    chmodSync(join(bin, "npm"), 0o755);
+    const envFile = join(dir, "env");
+    writeFileSync(envFile, "");
+    const script = stepScript(step).replace(/\$\{\{[^}]*\}\}/g, "1.0.0");
+    const checker = spawnSync("bash", ["-c", script], { encoding: "utf8", env: { PATH: `${bin}:${process.env.PATH}`, GITHUB_ENV: envFile, MERGELIGHT_PROVIDER: provider, MERGELIGHT_CONNECT_CHECK: provider === "claude" ? "codex" : "claude" } });
+    assert.equal(checker.status, 0, step);
+    assert.match(readFileSync(envFile, "utf8"), new RegExp(`${flag}=0\\nMERGELIGHT_CONNECT_CHECK=\\n`), step);
+    const reviewer = spawnSync("bash", ["-c", script], { encoding: "utf8", env: { PATH: `${bin}:${process.env.PATH}`, GITHUB_ENV: envFile, MERGELIGHT_PROVIDER: provider === "claude" ? "codex" : "claude" } });
+    assert.equal(reviewer.status, 1, `${step} for the reviewer`);
+  }
 });

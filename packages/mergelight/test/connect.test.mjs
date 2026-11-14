@@ -502,7 +502,9 @@ test("Claude is asked for only where the workflow can pass its login on to later
 });
 
 test("a checker's ChatGPT login is asked for only where the workflow passes it on, and the reason says what to add", async () => {
-  assert.equal(claudeInWorkflow("  with:\n    claude-code-oauth-token: x\n", "codex-auth-json"), "no");
+  assert.equal(claudeInWorkflow("    - uses: mergelightai/mergelight@v0\n      with:\n        claude-code-oauth-token: x\n", "codex-auth-json"), "no");
+  assert.equal(claudeInWorkflow("    - uses: mergelightai/mergelight@v0\n      with:\n        # codex-auth-json: x\n", "codex-auth-json"), "no", "a line commented out passes nothing on");
+  assert.equal(claudeInWorkflow("    - uses: ./.github/actions/review\n      with:\n        chatgpt: x\n", "codex-auth-json"), "unknown", "a composite action of the team's own may pass it on");
   assert.equal(claudeInWorkflow("  with:\n    codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}\n", "codex-auth-json"), "yes");
   const d = deps([], 1);
   d.chatgptUnavailable = () => chatgptInputMissing("MY_LOGIN");
