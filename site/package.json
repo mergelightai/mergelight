@@ -6,7 +6,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "test:browser": "node test/browser/full-flow.mjs && node test/browser/return-trip.mjs && node test/browser/connect-code.mjs && node test/browser/dashboard.mjs"
+    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test test/unit/*.test.mjs",
+    "test:browser": "npm test && node test/browser/full-flow.mjs && node test/browser/return-trip.mjs && node test/browser/connect-code.mjs && node test/browser/two-ais.mjs && node test/browser/dashboard.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",
