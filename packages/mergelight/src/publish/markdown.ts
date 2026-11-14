@@ -248,14 +248,23 @@ export function jobsLines(j: JobsReport): string[] {
   for (const o of j.outcomes) {
     const name = `**${clean(o.name)}**`;
     const said = clean(o.summary);
-    if (o.status === "changed") out.push(`- ✅ ${name}: ${said} (${files(o.files)}${j.commit ? ` in \`${j.commit.slice(0, 7)}\`` : ", not pushed"})`);
+    // What the job changed while it ran: a later job can undo some of it, so only the pushed commit is the result.
+    if (o.status === "changed") out.push(`- ✅ ${name}: ${said} (changed ${files(o.files)} while it ran${j.commit ? "" : ", not pushed"})`);
     else if (o.status === "nothing") out.push(`- ${name} changed nothing: ${said}`);
     else if (o.status === "refused") out.push(`- ⚠️ ${name} was dropped: ${said}`);
     else out.push(`- ⚠️ ${name} couldn't finish: ${said}`);
   }
   if (j.notPushed) out.push(`- ⚠️ Nothing was pushed: ${clean(j.notPushed)}`);
   for (const p of j.problems) out.push(`- ⚠️ \`${clean(p.source).replace(/`/g, "")}\` is left out: ${clean(p.problem)}.`);
-  if (j.commit) out.push("", `The jobs wrote \`${j.commit.slice(0, 7)}\` with AI, and this review read it like the rest. Pull before you push again.`);
+  if (j.moreProblems) out.push(`- ⚠️ ${j.moreProblems} more job file${j.moreProblems === 1 ? " is" : "s are"} left out. The jobs step's log lists ${j.moreProblems === 1 ? "it" : "them"}.`);
+  if (j.commit) {
+    out.push(
+      "",
+      j.reviewed === false
+        ? `The jobs wrote \`${j.commit.slice(0, 7)}\` with AI. This review read another commit, so that one isn't reviewed here. Pull before you push again.`
+        : `The jobs wrote \`${j.commit.slice(0, 7)}\` with AI, and this review read it like the rest. Pull before you push again.`,
+    );
+  }
   return out;
 }
 

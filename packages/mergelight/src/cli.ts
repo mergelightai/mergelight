@@ -267,7 +267,8 @@ async function main(): Promise<number> {
     }
   }
   const jobCommit = jobs?.commit ? { sha: jobs.commit, jobs: jobs.outcomes.filter((o) => o.status === "changed").map((o) => o.name) } : undefined;
-  values.at ??= jobCommit?.sha;
+  // The commit the push step names is the one to review, also when the jobs file can't be read.
+  values.at ??= jobCommit?.sha ?? (/^[0-9a-f]{40}$/.test(values["jobs-commit"] ?? "") ? values["jobs-commit"] : undefined);
   let checkRunId: number | null = null;
   let summaryComment: Awaited<ReturnType<typeof startSummary>> = null;
   /** The edit that names the models, so a result or a failure notice is always written after it. */
@@ -276,6 +277,8 @@ async function main(): Promise<number> {
   if (values.post) {
     headSha ??= (await fetchPullRequest(ref)).headSha;
     if (await reviewedJobCommit(api, ref.number, headSha).catch(() => false)) {
+      // Approvals turned off: none of Mergelight's stands, also on a commit it doesn't review again.
+      if (values["no-approve"]) await syncApproval(api, ref.number, "yellow", headSha, log, { why: APPROVALS_OFF }).catch((e) => log(`Couldn't take back the approval: ${(e as Error).message}`));
       log(`${headSha.slice(0, 7)} is a commit the team's jobs pushed, and its review is already posted. Nothing to do.`);
       return 0;
     }
@@ -328,7 +331,7 @@ async function main(): Promise<number> {
       onProgress: progress.onProgress,
     });
     progress.stop();
-    if (jobs) review.jobs = jobs;
+    if (jobs) review.jobs = { ...jobs, ...(jobs.commit ? { reviewed: review.pr.head_sha === jobs.commit } : {}) };
 
     const json = JSON.stringify(review, null, 2);
     if (values.out) writeFileSync(values.out, `${json}\n`);

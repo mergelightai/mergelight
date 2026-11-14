@@ -20,7 +20,7 @@ test("the summary's Jobs part says what each job did, and which commit the jobs 
   const report = jobsReport(result, { commit: COMMIT });
   assert.deepEqual(jobsLines(report), [
     "#### Jobs",
-    "- ✅ **translations**: Added 3 keys to da.json and de.json. (2 files in `8873502`)",
+    "- ✅ **translations**: Added 3 keys to da.json and de.json. (changed 2 files while it ran)",
     "- **docs** changed nothing: No new feature to document.",
     "- ⚠️ **guide** was dropped: It changed files it may not: README.md. All its changes were dropped.",
     "- ⚠️ `.mergelight/jobs/x.md` is left out: names no on paths, the files whose change starts the job.",
@@ -31,7 +31,7 @@ test("the summary's Jobs part says what each job did, and which commit the jobs 
 
 test("when the push step pushed nothing, the summary says why", () => {
   const lines = jobsLines(jobsReport(result, { why: "The branch moved while the jobs ran. The next push runs them again." }));
-  assert.ok(lines.includes("- ✅ **translations**: Added 3 keys to da.json and de.json. (2 files, not pushed)"));
+  assert.ok(lines.includes("- ✅ **translations**: Added 3 keys to da.json and de.json. (changed 2 files while it ran, not pushed)"));
   assert.ok(lines.includes("- ⚠️ Nothing was pushed: The branch moved while the jobs ran. The next push runs them again."));
   assert.ok(!lines.some((l) => /Pull before you push/.test(l)));
   assert.match(jobsLines(jobsReport(result, {})).join("\n"), /Nothing was pushed: The push step didn't say why\./);
@@ -56,4 +56,12 @@ test("the reviewers learn which commit the jobs wrote, so they read it like the 
   const prompt = buildHunterPrompt({ ...input, jobCommit: { sha: COMMIT, jobs: ["translations"] } }, "data");
   assert.match(prompt, new RegExp(`The newest commit, ${COMMIT}, was written by the team's jobs "translations" with AI, just before this review, not by the author\\. Review its lines like any other code in the diff\\.`));
   assert.doesNotMatch(buildHunterPrompt(input, "data"), /written by the team's jobs/);
+});
+
+test("the Jobs part says when more job files were left out than it lists, and when this review read another commit", () => {
+  const many = { ...result, problems: Array.from({ length: 13 }, (_, i) => ({ source: `.mergelight/jobs/j${i}.md`, problem: "only 5 jobs are read" })) };
+  const report = jobsReport(many, { commit: COMMIT });
+  assert.equal(report.problems.length, 10);
+  assert.ok(jobsLines(report).includes("- ⚠️ 3 more job files are left out. The jobs step's log lists them."));
+  assert.match(jobsLines({ ...report, reviewed: false }).join("\n"), /This review read another commit, so that one isn't reviewed here/);
 });

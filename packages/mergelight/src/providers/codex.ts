@@ -262,7 +262,9 @@ export function jobHidden(env: NodeJS.ProcessEnv = process.env, install: string 
   // Only the runner's install folder is let go when it is a system one: a credential file or folder a
   // tool is pointed at stays hidden wherever it is.
   const runnerPlace = install && !system(install) ? deepEnough(install) : undefined;
-  const places = [homedir(), dirname(homedir()), "/root", "/run/secrets", "/var/run/secrets", env.MERGELIGHT_CACHE, env.RUNNER_TEMP, env.GITHUB_WORKSPACE, deepEnough(work), deepEnough(workParent), runnerPlace, ...named, tmpdir(), "/tmp", ...runnerFiles].filter((p): p is string => typeof p === "string" && p !== "" && p !== "/");
+  // The work folders worked out from where the runner keeps checkouts are let go when they are system folders too.
+  const inferred = (p: string | undefined) => (p && !system(p) ? deepEnough(p) : undefined);
+  const places = [homedir(), dirname(homedir()), "/root", "/run/secrets", "/var/run/secrets", env.MERGELIGHT_CACHE, env.RUNNER_TEMP, env.GITHUB_WORKSPACE, inferred(work), inferred(workParent), runnerPlace, ...named, tmpdir(), "/tmp", ...runnerFiles].filter((p): p is string => typeof p === "string" && p !== "" && p !== "/");
   const real = places.map((p) => {
     try {
       return realpathSync(p);

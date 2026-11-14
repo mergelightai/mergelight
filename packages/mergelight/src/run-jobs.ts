@@ -584,10 +584,11 @@ export function jobsReport(result: unknown, push: { commit?: string; why?: strin
     .filter((o) => o && statuses.has(o.status))
     .slice(0, 10)
     .map((o) => ({ name: line(o.name, 40), status: o.status, files: Array.isArray(o.files) ? o.files.length : 0, summary: line(o.summary, 300) }));
-  const problems = (Array.isArray(r.problems) ? r.problems : []).slice(0, 10).map((p) => ({ source: line(p?.source, 200), problem: line(p?.problem, 300) }));
+  const allProblems = Array.isArray(r.problems) ? r.problems : [];
+  const problems = allProblems.slice(0, 10).map((p) => ({ source: line(p?.source, 200), problem: line(p?.problem, 300) }));
   const commit = /^[0-9a-f]{40}$/.test(push.commit ?? "") ? push.commit : undefined;
   const changed = Array.isArray(r.changes) && r.changes.length > 0;
   const notPushed = !commit && changed ? line(push.why, 300) || "The push step didn't say why." : undefined;
   if (!outcomes.length && !problems.length) return null;
-  return { ...(commit ? { commit } : {}), ...(notPushed ? { notPushed } : {}), outcomes, problems };
+  return { ...(commit ? { commit } : {}), ...(notPushed ? { notPushed } : {}), outcomes, problems, ...(allProblems.length > problems.length ? { moreProblems: allProblems.length - problems.length } : {}) };
 }

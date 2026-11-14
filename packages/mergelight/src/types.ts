@@ -162,4 +162,8 @@ export interface JobsReport {
   outcomes: { name: string; status: "changed" | "nothing" | "refused" | "failed"; files: number; summary: string }[];
   /** Job files that were left out, and why. */
   problems: { source: string; problem: string }[];
+  /** How many more job files were left out than the list holds. */
+  moreProblems?: number;
+  /** Whether this review read the commit the jobs pushed. */
+  reviewed?: boolean;
 }

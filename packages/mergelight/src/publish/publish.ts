@@ -65,15 +65,22 @@ export async function readPrReviewState(api: GitHub, number: number): Promise<Pr
 }
 
 /**
- * True when the commit is one the team's jobs pushed and a review of it is already posted. GitHub starts
- * a new run for a job's push once a person approves it, and that run has nothing new to review.
+ * True when this run only repeats a review already done in full. GitHub starts a new run for a job's push
+ * once a person approves it, and that run has nothing new to review. Only that run: started by the jobs'
+ * own push (github-actions), on a commit the jobs made, whose review was posted and whose check was
+ * finished, the last thing a review writes. Anything else, such as a person re-running it, a changed
+ * target branch, or a review that stopped halfway, is reviewed again.
  */
-export async function reviewedJobCommit(api: GitHub, number: number, sha: string): Promise<boolean> {
+export async function reviewedJobCommit(api: GitHub, number: number, sha: string, env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
+  if ((env.GITHUB_TRIGGERING_ACTOR || env.GITHUB_ACTOR) !== "github-actions[bot]" || env.GITHUB_EVENT_NAME !== "pull_request") return false;
   const commit = await api.get<{ commit: { message: string } }>(`commits/${sha}`).catch(() => null);
   // Only the last line marks a job commit, as for the jobs themselves.
   if (!((commit?.commit?.message ?? "").trim().split("\n").pop() ?? "").startsWith(`${JOBS_TRAILER}:`)) return false;
   const { state } = await readPrReviewState(api, number);
-  return Boolean(state?.rounds.some((r) => r.sha === sha));
+  if (!state?.rounds.some((r) => r.sha === sha)) return false;
+  const checks = await api.get<{ check_runs: { id: number; status: string; output?: { title?: string | null } }[] }>(`commits/${sha}/check-runs?check_name=${CHECK_NAME}`).catch(() => null);
+  const latest = (checks?.check_runs ?? []).sort((a, b) => b.id - a.id)[0];
+  return latest?.status === "completed" && !isFailedCheckTitle(latest.output?.title);
 }
 
 const MAX_PREVIOUS = 40;
