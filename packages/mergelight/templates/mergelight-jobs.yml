@@ -11,9 +11,10 @@ on:
 # Each job says what it may do. Only push-jobs may push, and it runs no AI.
 permissions: {}
 
-# A new push cancels the older run of the same pull request.
+# A new push cancels the older run of the same pull request. An edit that changes only the title or
+# description starts nothing, so it gets a group of its own and never cancels a run that is working.
 concurrency:
-  group: mergelight-pr-${{ github.event.pull_request.number }}
+  group: mergelight-pr-${{ github.event.pull_request.number }}${{ (github.event.action == 'edited' && !github.event.changes.base) && '-edit' || '' }}
   cancel-in-progress: true
 
 jobs:
@@ -48,7 +49,8 @@ jobs:
           claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: steps.jobs.outputs.jobs-result != ''
+        # Also when every job failed: the result says why, for the review's summary.
+        if: ${{ !cancelled() && steps.jobs.outputs.jobs-result != '' }}
         with:
           name: mergelight-jobs
           path: ${{ steps.jobs.outputs.jobs-result }}

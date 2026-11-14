@@ -25,7 +25,7 @@ test("the summary's Jobs part says what each job did, and which commit the jobs 
     "- ⚠️ **guide** was dropped: It changed files it may not: README.md. All its changes were dropped.",
     "- ⚠️ `.mergelight/jobs/x.md` is left out: names no on paths, the files whose change starts the job.",
     "",
-    "The jobs wrote `8873502` with AI, and this review read it like the rest. Pull before you push again.",
+    "The jobs wrote `8873502` with AI. Pull before you push again.",
   ]);
 });
 
@@ -81,4 +81,17 @@ test("the Jobs part stays when the review fails, says why no job ran when that n
   assert.equal(jobsReport({ head: "x", outcomes: [], problems: [], changes: [], skipped: "This pull request changes none of the files that start a job." }), null, "an everyday reason says nothing");
   const emoji = jobsReport({ ...result, outcomes: [{ ...result.outcomes[0], summary: `${"a".repeat(299)}🎉 more` }] });
   assert.equal(emoji.outcomes[0].summary, `${"a".repeat(299)}🎉`);
+});
+
+test("a failed review never says it read the jobs' commit, and an earlier summary gets the newest jobs without stacking them", async () => {
+  const { withFailedJobs } = await import("../dist/publish/markdown.js");
+  const report = jobsReport(result, { commit: COMMIT });
+  assert.ok(jobsLines(report).includes("The jobs wrote `8873502` with AI. Pull before you push again."), "not known to be reviewed");
+  assert.ok(jobsLines({ ...report, reviewed: true }).some((l) => /this review read it like the rest/.test(l)));
+  const earlier = "<!-- mergelight:summary -->\n### 🟢 Mergelight: Safe to merge\n\nAll good.\n<!-- mergelight:state:v1 abc -->";
+  const once = withFailedJobs(earlier, { heading: "⚠️ Mergelight: the ChatGPT login didn't work", body: "x" }, report);
+  assert.match(once, /All good\.[\s\S]*#### Jobs[\s\S]*\n<!-- mergelight:state:v1 abc -->$/);
+  const twice = withFailedJobs(once, undefined, report);
+  assert.equal(twice.split("#### Jobs").length - 1, 1, "replaced, not stacked");
+  assert.match(twice, /<!-- mergelight:state:v1 abc -->$/);
 });
