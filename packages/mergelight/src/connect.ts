@@ -331,7 +331,11 @@ export function claudeInWorkflow(text: string | null, input = "claude-code-oauth
       while (last < end && (!lines[last]!.trim() || indent(lines[last]!) > indent(lines[own]!.replace(/-\s*/, "  ")))) last++;
       condition = lines.slice(own, last).join(" ");
     }
-    if (/==\s*["']pull_request_review["']/.test(condition) && !/pull_request["']/.test(condition.replace(/pull_request_review["']/g, ""))) return;
+    // Likewise a step that runs only on other events, such as a schedule: every event its condition names
+    // with == is one a pull request never starts, so it never runs where a login is connected.
+    const named = [...condition.matchAll(/==\s*["']([\w-]+)["']/g)].map((m) => m[1]!);
+    const pullRequest = new Set(["pull_request", "pull_request_target"]);
+    if (named.length && named.every((e) => !pullRequest.has(e)) && /event_name/.test(condition)) return;
     steps.push(step);
   });
   // A reusable workflow or a composite action of the team's own may pass the login on in a file this

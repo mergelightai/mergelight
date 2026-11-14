@@ -450,6 +450,10 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
     // Opus checks better than Codex: in the eval it posted a third less and kept the same finds.
     if (!opts.verifyWith && verifyWith === "codex") progress("Claude Code isn't installed, so Codex checks the findings");
     progress(`Checking ${found.length} candidate${found.length === 1 ? "" : "s"}${verifyWith === "codex" ? "" : ` with ${verifyWith}`}`);
+    const servedModelSoFar = () => {
+      const first = hunts.find((h) => h.status === "fulfilled");
+      return first?.status === "fulfilled" ? first.value.model : null;
+    };
     const verifyWithAi = (ai: ProviderName, model: string | undefined) =>
       verifyCandidates(ws.dir, input, found, {
         provider: ai,
@@ -468,7 +472,10 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
       if (verifyWith === provider || !(err instanceof LoginError || err instanceof LimitError || err instanceof SandboxError)) throw err;
       checkerFailed = err instanceof LimitError ? "limit" : err instanceof SandboxError ? "sandbox" : "login-failed";
       progress(`${verifyWith === "codex" ? "Codex" : "Claude"} couldn't check (${err.message.slice(0, 120)}), so ${provider === "codex" ? "Codex" : "Claude"} checks the findings`);
-      verified = await verifyWithAi(provider, provider === "codex" ? opts.model : (opts.model ?? "opus"));
+      const fallbackModel = provider === "codex" ? opts.model : (opts.model ?? "opus");
+      // The live comment names the AI that checks now.
+      opts.onModels?.({ reviewer: { name: provider, model: servedModelSoFar() }, checker: { name: provider, model: fallbackModel ?? null } });
+      verified = await verifyWithAi(provider, fallbackModel);
     }
     const checkedBy: ProviderName = checkerFailed ? provider : verifyWith;
     // Every path the pull request touches counts here, the lockfiles and generated files the reviewers skip included.

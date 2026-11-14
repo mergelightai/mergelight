@@ -335,3 +335,11 @@ test("a check left running when the run ends is cancelled, so an older approval 
   assert.match(step, /conclusion=cancelled/);
   assert.match(step, /"\$status" != in_progress \] && \[ "\$status" != queued/, "only a check known to be running");
 });
+
+test("the notice for saving a checker's login names the secret this workflow reads", () => {
+  const r = spawnSync("bash", ["-c", stepScript("Choose who reviews and who checks")], {
+    encoding: "utf8",
+    env: { PATH: process.env.PATH, GITHUB_ENV: join(mkdtempSync(join(tmpdir(), "mergelight-secret-")), "env"), WANTED: "claude", WANTED_CHECKER: "codex", HAS_CLAUDE: "1", HAS_CODEX: "", GITHUB_EVENT_NAME: "pull_request", GITHUB_REPOSITORY: "acme/widgets", GITHUB_ACTOR: "someone", HEAD_REPO: "acme/widgets", VISIBILITY: "public", SECRET_NAME: "TEAM_CHATGPT" },
+  });
+  assert.match(r.stdout, /gh secret set TEAM_CHATGPT --repo acme\/widgets/);
+});

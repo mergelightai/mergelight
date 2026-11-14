@@ -598,3 +598,8 @@ test("an empty login input passes nothing on, and a value over several lines is 
   assert.equal(claudeInWorkflow(job(">-\n            ${{ secrets.CLAUDE_LOGIN }}"), "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "no", "the folded value names another secret");
   assert.equal(claudeInWorkflow(job(">-\n            ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}"), "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "yes");
 });
+
+test("a step that runs only on other events, such as a schedule, needs no login", () => {
+  const job = "jobs:\n  review:\n    steps:\n      - if: github.event_name == 'pull_request'\n        uses: mergelightai/mergelight@v0\n        with:\n          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n      - if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'\n        uses: mergelightai/mergelight@v0\n        with:\n          codex-auth-json: x\n";
+  assert.equal(claudeInWorkflow(job, "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "yes");
+});
