@@ -264,7 +264,7 @@ export function jobHidden(env: NodeJS.ProcessEnv = process.env, install: string 
   const runnerPlace = install && !system(install) ? deepEnough(install) : undefined;
   // The work folders worked out from where the runner keeps checkouts are let go when they are system folders too.
   const inferred = (p: string | undefined) => (p && !system(p) ? deepEnough(p) : undefined);
-  const places = [homedir(), dirname(homedir()), "/root", "/run/secrets", "/var/run/secrets", env.MERGELIGHT_CACHE, env.RUNNER_TEMP, env.GITHUB_WORKSPACE, inferred(work), inferred(workParent), runnerPlace, ...named, tmpdir(), "/tmp", ...runnerFiles].filter((p): p is string => typeof p === "string" && p !== "" && p !== "/");
+  const places = [inferred(homedir()), inferred(dirname(homedir())), "/root", "/run/secrets", "/var/run/secrets", env.MERGELIGHT_CACHE, env.RUNNER_TEMP, env.GITHUB_WORKSPACE, inferred(work), inferred(workParent), runnerPlace, ...named, tmpdir(), "/tmp", ...runnerFiles].filter((p): p is string => typeof p === "string" && p !== "" && p !== "/");
   const real = places.map((p) => {
     try {
       return realpathSync(p);

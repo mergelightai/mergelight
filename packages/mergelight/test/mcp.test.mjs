@@ -10,7 +10,7 @@ import { nextStep, reviewStatus } from "../dist/mcp/findings.js";
 import { GitHub } from "../dist/publish/api.js";
 import { decodeMark, encodeMark, findingState, readMarks } from "../dist/publish/handled.js";
 import { pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "../dist/publish/markdown.js";
-import { answerRemembered, APPROVAL_MARKER, APPROVALS_OFF, confirmReasons, previousFindings, publishReview, reviewedJobCommit, startSummary } from "../dist/publish/publish.js";
+import { answerRemembered, APPROVAL_MARKER, APPROVALS_OFF, confirmReasons, previousFindings, publishReview, startSummary } from "../dist/publish/publish.js";
 import { decodeState, encodeState, nextState } from "../dist/publish/state.js";
 import { buildVerifierPrompt } from "../dist/prompt.js";
 
@@ -962,24 +962,4 @@ test("a fixed finding's comment is folded away as resolved when GitHub won't let
   assert.ok(!hidden.writes().some((w) => w.graphql === "unfold"));
 });
 
-test("a commit the jobs pushed is reviewed once: the run GitHub starts for it after an approval does nothing", async () => {
-  const job = "d".repeat(40);
-  // The run GitHub starts for the jobs' own push, once a person approves it.
-  const bot = { GITHUB_ACTOR: "github-actions[bot]", GITHUB_EVENT_NAME: "pull_request" };
-  const finished = [{ id: 3, status: "completed", output: { title: "🟢 Safe to merge: nothing to fix" } }];
-  const message = "Run the job translations\n\n- translations: Added 3 keys.\n\nMergelight-Jobs: translations";
-  const reviewed = useScenario({ issueComments: [summaryComment(stateOf([], new Map(), null, job))], commitMessages: { [job]: message }, checkRuns: finished });
-  assert.equal(await withFakeGh(reviewed.env, () => reviewedJobCommit(new GitHub("o", "r"), 7, job, bot)), true);
-  // A person re-running it, or any other start, is reviewed again.
-  assert.equal(await withFakeGh(reviewed.env, () => reviewedJobCommit(new GitHub("o", "r"), 7, job, { ...bot, GITHUB_TRIGGERING_ACTOR: "maintainer" })), false);
-  assert.equal(await withFakeGh(reviewed.env, () => reviewedJobCommit(new GitHub("o", "r"), 7, job, {})), false);
-  // A review that stopped before it finished its check is done again.
-  const halfway = useScenario({ issueComments: [summaryComment(stateOf([], new Map(), null, job))], commitMessages: { [job]: message }, checkRuns: [{ id: 3, status: "in_progress", output: { title: "Reviewing" } }] });
-  assert.equal(await withFakeGh(halfway.env, () => reviewedJobCommit(new GitHub("o", "r"), 7, job, bot)), false);
-  // Not reviewed yet: the review right after the push.
-  const fresh = useScenario({ issueComments: [summaryComment(stateOf([]))], commitMessages: { [job]: "Run the job translations\n\nMergelight-Jobs: translations" }, checkRuns: finished });
-  assert.equal(await withFakeGh(fresh.env, () => reviewedJobCommit(new GitHub("o", "r"), 7, job, bot)), false);
-  // A person's commit is always reviewed, also when it was reviewed before: a re-run is someone asking.
-  const own = useScenario({ issueComments: [summaryComment(stateOf([], new Map(), null, job))], checkRuns: finished });
-  assert.equal(await withFakeGh(own.env, () => reviewedJobCommit(new GitHub("o", "r"), 7, job, bot)), false);
-});
+

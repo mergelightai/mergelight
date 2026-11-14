@@ -588,7 +588,9 @@ export function jobsReport(result: unknown, push: { commit?: string; why?: strin
   const problems = allProblems.slice(0, 10).map((p) => ({ source: line(p?.source, 200), problem: line(p?.problem, 300) }));
   const commit = /^[0-9a-f]{40}$/.test(push.commit ?? "") ? push.commit : undefined;
   const changed = Array.isArray(r.changes) && r.changes.length > 0;
-  const notPushed = !commit && changed ? line(push.why, 300) || "The push step didn't say why." : undefined;
+  // Jobs that changed files while they ran, but left nothing changed together, have nothing to push.
+  const undone = !changed && outcomes.some((o) => o.status === "changed");
+  const notPushed = !commit && changed ? line(push.why, 300) || "The push step didn't say why." : undone ? "The jobs' changes undid each other, so there was nothing to push." : undefined;
   if (!outcomes.length && !problems.length) return null;
   return { ...(commit ? { commit } : {}), ...(notPushed ? { notPushed } : {}), outcomes, problems, ...(allProblems.length > problems.length ? { moreProblems: allProblems.length - problems.length } : {}) };
 }

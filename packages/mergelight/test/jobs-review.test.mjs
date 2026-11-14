@@ -65,3 +65,8 @@ test("the Jobs part says when more job files were left out than it lists, and wh
   assert.ok(jobsLines(report).includes("- ⚠️ 3 more job files are left out. The jobs step's log lists them."));
   assert.match(jobsLines({ ...report, reviewed: false }).join("\n"), /This review read another commit, so that one isn't reviewed here/);
 });
+
+test("jobs whose changes undid each other say there was nothing to push", () => {
+  const undone = { ...result, changes: [] };
+  assert.ok(jobsLines(jobsReport(undone, {})).includes("- ⚠️ Nothing was pushed: The jobs' changes undid each other, so there was nothing to push."));
+});

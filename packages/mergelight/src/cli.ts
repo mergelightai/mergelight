@@ -7,7 +7,7 @@ import { declinesOf, fetchContext, MAX_REASON, reportReview } from "./cloud.js";
 import { GitHub } from "./publish/api.js";
 import { writeAccess } from "./publish/handled.js";
 import { publishTeamChecks } from "./publish/team-checks.js";
-import { reviewedJobCommit, answerRemembered, confirmReasons, approveCheck, checkLimitTitle, checkLoginTitle, failCheck, failSummary, previousFindings, publishReview, startCheck, startSummary, syncApproval, UNREVIEWED, APPROVALS_OFF, updatePendingSummary } from "./publish/publish.js";
+import { answerRemembered, confirmReasons, approveCheck, checkLimitTitle, checkLoginTitle, failCheck, failSummary, previousFindings, publishReview, startCheck, startSummary, syncApproval, UNREVIEWED, APPROVALS_OFF, updatePendingSummary } from "./publish/publish.js";
 import { configuredModel, LimitError, LoginError, loginFailureMessage } from "./providers/codex.js";
 import { limitNotice, loginNotice } from "./publish/markdown.js";
 import { renderRejected, renderTerminal } from "./render.js";
@@ -276,12 +276,6 @@ async function main(): Promise<number> {
   let headSha = values.at ?? null;
   if (values.post) {
     headSha ??= (await fetchPullRequest(ref)).headSha;
-    if (await reviewedJobCommit(api, ref.number, headSha).catch(() => false)) {
-      // Approvals turned off: none of Mergelight's stands, also on a commit it doesn't review again.
-      if (values["no-approve"]) await syncApproval(api, ref.number, "yellow", headSha, log, { why: APPROVALS_OFF }).catch((e) => log(`Couldn't take back the approval: ${(e as Error).message}`));
-      log(`${headSha.slice(0, 7)} is a commit the team's jobs pushed, and its review is already posted. Nothing to do.`);
-      return 0;
-    }
     checkRunId = await startCheck(api, headSha, provider ?? "codex");
     // Says which AI reviews from the start. The models' exact names follow once the first reviewer answers.
     // Without --provider the review runs on Codex, as reviewPullRequest decides.
