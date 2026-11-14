@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { chatgptInputMissing, checkWaitingTitle, CLAUDE_INPUT_MISSING, claudeInWorkflow, claudeSetupLink, connect, connectBody, connectCheckBody, connectedAccount, connectedBody, connectFailedBody, githubConnect, installAppBody, parseDeviceLogin, withState } from "../dist/connect.js";
+import { askForApp, chatgptInputMissing, checkWaitingTitle, CLAUDE_INPUT_MISSING, claudeInWorkflow, claudeSetupLink, connect, connectBody, connectCheckBody, connectedAccount, connectedBody, connectFailedBody, githubConnect, installAppBody, parseDeviceLogin, withState } from "../dist/connect.js";
 import { claudeCodeRef, parseClaudeLink, parseClaudeToken, readCodeRef, readPastedCode, scriptArgs, shareClaudeToken, startClaudeSignIn, waitForPastedCode } from "../dist/connect-claude.js";
 import { isPendingSummary, PENDING_MARKER, SUMMARY_MARKER } from "../dist/publish/markdown.js";
 import { ownSummary } from "../dist/publish/publish.js";
@@ -230,6 +230,26 @@ test("a sign-in that fails takes back Mergelight's approval of an earlier commit
   await githubConnect(api, 7, "abc", () => {}, { GH_TOKEN: "app" }).failed("The code ran out.");
   const dismissed = api.writes.filter((w) => w.path.endsWith("/dismissals")).map((w) => w.path);
   assert.deepEqual(dismissed, ["pulls/7/reviews/31/dismissals"]);
+});
+
+test("a sign-in that fails leaves approvals alone once a newer commit has its own run", async () => {
+  const api = fakeApi(() => false);
+  const logs = [];
+  api.get = async (path) => (path === "pulls/7" ? { head: { sha: "newer" } } : {});
+  const list = api.list;
+  api.list = async (path) => (path.endsWith("/reviews") ? [{ id: 33, state: "APPROVED", commit_id: "newer", body: "<!-- mergelight:approval -->", user: { login: "mergelight-ai[bot]" } }] : list(path));
+  await githubConnect(api, 7, "abc", (l) => logs.push(l), { GH_TOKEN: "app" }).failed("The code ran out.");
+  assert.ok(!api.writes.some((w) => w.path.endsWith("/dismissals")));
+  assert.ok(logs.some((l) => /newer commit \(newer\) has its own run/.test(l)));
+});
+
+test("asking for the app takes back Mergelight's approval of an earlier commit", async () => {
+  const api = fakeApi(() => false);
+  const list = api.list;
+  api.list = async (path) => (path.endsWith("/reviews") ? [{ id: 34, state: "APPROVED", commit_id: "old", body: "<!-- mergelight:approval -->", user: { login: "github-actions[bot]" } }] : list(path));
+  await askForApp(api, 7, "abc", "Claude");
+  assert.deepEqual(api.writes.filter((w) => w.path.endsWith("/dismissals")).map((w) => w.path), ["pulls/7/reviews/34/dismissals"]);
+  assert.ok(api.writes.some((w) => w.path === "check-runs" && w.body.conclusion === "neutral"));
 });
 
 test("a checker sign-in that fails takes no approval back: the review still runs", async () => {
@@ -610,6 +630,21 @@ test("a secret fallback naming the save secret passes the login on", () => {
 test("an approval-only condition written over several lines is read whole", () => {
   const job = `jobs:\n  review:\n    steps:\n      - uses: mergelightai/mergelight@v0\n        with:\n          claude-code-oauth-token: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n      - if: >-\n          github.event_name == 'pull_request_review'\n        uses: mergelightai/mergelight@v0\n`;
   assert.equal(claudeInWorkflow(job, "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "yes");
+});
+
+test("a step that runs only for a submitted review needs no login, also without naming the event", () => {
+  const job = (condition) => `jobs:\n  review:\n    steps:\n      - uses: mergelightai/mergelight@v0\n        with:\n          claude-code-oauth-token: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n      - if: ${condition}\n        uses: mergelightai/mergelight@v0\n`;
+  const read = (condition) => claudeInWorkflow(job(condition), "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN");
+  assert.equal(read("github.event.review.state == 'approved'"), "yes");
+  assert.equal(read(">-\n          github.event.review.state == 'approved' &&\n          github.actor != 'dependabot[bot]'"), "yes", "over several lines");
+  assert.equal(read("${{ github.event.review.state == 'approved' }}"), "yes");
+  // Each of these can run on a pull request, so the step must pass the login on.
+  assert.equal(read("github.event.review.state == 'approved' || github.event_name == 'pull_request'"), "no");
+  assert.equal(read("!(github.event.review.state == 'approved')"), "no");
+  assert.equal(read("!github.event.review.state == 'approved'"), "no");
+  assert.equal(read("github.event.review.state != 'approved'"), "no");
+  assert.equal(read("github.event.review.state == ''"), "no", "no review compares equal to an empty word");
+  assert.equal(read("github.event.review.state == '0'"), "no", "nor to a number");
 });
 
 test("a job with an anchor is found, and one that can't be found can't be told", () => {

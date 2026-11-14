@@ -277,6 +277,9 @@ export async function askForApp(api: GitHub, number: number, headSha: string, lo
     completed_at: new Date().toISOString(),
     output: { title: "Install the Mergelight AI app", summary: `Install it, then push a new commit: ${INSTALL_URL}` },
   });
+  // No review runs: an approval Mergelight gave an earlier commit must not count for this one, next to a
+  // check that a branch rule takes for passed.
+  await syncApproval(api, number, "yellow", headSha, undefined, { why: UNREVIEWED, otherCommitsOnly: true });
 }
 
 /** The summary holds what earlier rounds found, so a login prompt on a reviewed pull request has to keep that. */
@@ -343,11 +346,17 @@ export function claudeInWorkflow(text: string | null, input = "claude-code-oauth
     // with == is one a pull request never starts, so it never runs where a login is connected.
     // Only comparisons of the event's name count, never a branch's or anything else's. Each part on its
     // own side of || must name such an event: a part without one could run on a pull request.
+    // So is a step that runs only for a review someone submitted, as when its condition compares
+    // github.event.review.state with a word: a pull request's event has no review, so that is never true.
     const pullRequest = new Set(["pull_request", "pull_request_target"]);
-    const parts = condition.replace(/^\s*(?:-\s*)?if:\s*[>|]?[-+]?/, "").replace(/\$\{\{|\}\}|[()]/g, " ").split("||");
+    const parts = condition.replace(/^\s*(?:-\s*)?if:\s*[>|]?[-+]?/, "").replace(/\$\{\{|\}\}/g, " ").split("||");
     const otherEventOnly = (part: string) => {
+      // A group with ! before it turns what is inside around: it can't be told.
+      if (/!\s*\(/.test(part)) return false;
+      const terms = part.replace(/[()]/g, " ").split("&&");
       const named = [...part.matchAll(/event_name\s*==\s*["']([\w-]+)["']/g)].map((m) => m[1]!);
-      return named.length > 0 && named.every((e) => !pullRequest.has(e));
+      if (named.length > 0 && named.every((e) => !pullRequest.has(e))) return true;
+      return terms.some((t) => /^\s*github\.event\.review\.[\w.]+\s*==\s*["'][^"']*[A-Za-z][^"']*["']\s*$/.test(t));
     };
     if (condition && parts.every(otherEventOnly)) return;
     // A step that only runs the jobs never checks a review: for the checker's login it doesn't count.
@@ -615,8 +624,12 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
       // Finished here: nothing is left for the run's last step to finish. Not finished: it still is.
       if (finished && env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, "MERGELIGHT_CHECK_RUN=\n");
       // No review runs, as when one fails: an approval Mergelight gave an earlier commit must not count
-      // for this one, next to a check that a branch rule takes for passed.
-      await syncApproval(api, number, "yellow", headSha, log, { why: UNREVIEWED, otherCommitsOnly: true });
+      // for this one, next to a check that a branch rule takes for passed. Only while this commit is still
+      // the newest: a newer run may have reviewed and approved the newest one while this one waited. One
+      // that can't be read is taken for the newest, as a merge can't be taken back.
+      const newest = await (async () => (await api.get<{ head: { sha: string } }>(`pulls/${number}`)).head.sha)().catch(() => headSha);
+      if (newest === headSha) await syncApproval(api, number, "yellow", headSha, log, { why: UNREVIEWED, otherCommitsOnly: true });
+      else log(`A newer commit (${newest.slice(0, 7)}) has its own run, so Mergelight's approvals are left to it.`);
       log(reason);
     },
   };
