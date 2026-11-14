@@ -623,7 +623,18 @@ test("a job may not delete a binary file, such as an image in its folder", async
     },
   });
   assert.equal(result.outcomes[0].status, "refused");
-  assert.match(result.outcomes[0].summary, /wrote or deleted binary files/);
+  assert.match(result.outcomes[0].summary, /wrote, overwrote or deleted binary files/);
+  // Nor write text over it.
+  const over = await runJobs({
+    git: jobGit,
+    head: git("rev-parse", "HEAD"),
+    jobs: [job("translations", "locales/*")],
+    ask: async (j, jobDir) => {
+      writeFileSync(join(jobDir, "locales/flag.png"), "not an image\n");
+      return { summary: "Replaced the flag." };
+    },
+  });
+  assert.equal(over.outcomes[0].status, "refused");
   assert.equal(shimManager("/opt/tools/shims/codex", { ASDF_DATA_DIR: "/opt/tools" }), "asdf", "asdf's shims where ASDF_DATA_DIR says");
   assert.equal(shimManager("/opt/tools/shims/codex", {}), null);
 });

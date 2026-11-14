@@ -282,6 +282,8 @@ export async function pushJobs(ref: PrRef, o: PushJobsOptions): Promise<number> 
         if (size.code !== 0 || !(Number(size.stdout.trim()) > 60 * 1024 * 1024)) throw new Error(`Couldn't read ${a.path} at ${pr.headSha.slice(0, 7)}.`);
         old = Buffer.alloc(0);
       }
+      // A job never writes text over a binary file, such as an image, as the jobs step checks too.
+      if (old.length && isBinary(old)) return refuse(`${a.path} is a binary file, which a job may never overwrite.`, 1);
       // Read as the text it is, so a key in a UTF-16 file is seen too.
       const secret = newSecret(textOf(a.bytes), textOf(old));
       if (secret) return refuse(`${a.path} would hold what looks like ${secret === "a key or token" ? "a key or token" : `the runner's ${secret}`}.`, 1);
