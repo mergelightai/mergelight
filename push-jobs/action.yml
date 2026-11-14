@@ -21,7 +21,9 @@ inputs:
       token with "contents: write" and "pull-requests: read" is enough. A push made with it starts the
       repository's other pull_request workflows only after a person with write access approves them
       in the pull request ("Approve workflows to run"). GitHub's docs, "Triggering a workflow", say so,
-      and a test pull request showed it.
+      and a test pull request showed it. Workflows that run only on push don't start for its commit at
+      all, so a check they give, if your branch rules require it, never comes. To have them run, pass
+      a GitHub App's token, or a personal one, that can push to the branch.
     default: ${{ github.token }}
 
 outputs:
