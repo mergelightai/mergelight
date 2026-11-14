@@ -381,10 +381,11 @@ export function jobsToRun(jobs: Job[], changedPaths: string[]): Job[] {
 
 /**
  * A name in the form macOS and Windows compare names in: any letter case, and look-alike letters that
- * fold to plain ones, like ſ to s and ı to i. Upper case first, so those fold too.
+ * fold to plain ones, like ſ to s and ı to i. Upper case first, so those fold too. And one way of writing
+ * accented letters: macOS takes é as one character and as e with an accent for the same name.
  */
 export function folded(path: string): string {
-  return path.toUpperCase().toLowerCase();
+  return path.normalize("NFC").toUpperCase().toLowerCase().normalize("NFC");
 }
 
 /** A path no job may change, whatever its file says. In any letter case: on macOS and Windows, .GitAttributes is .gitattributes. */

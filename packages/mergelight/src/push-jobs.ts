@@ -178,7 +178,9 @@ async function landedCommit(api: GitHub, branch: string, parent: string, message
   }
   const paths = [...plan.additions.map((a) => a.path), ...plan.deletions];
   if (changed.size !== paths.length || !paths.every((p) => changed.has(p))) return null;
-  return plan.additions.every((a) => changed.get(a.path)?.sha === blobSha(a.bytes)) ? tip.sha : null;
+  // Each deletion as a deletion, and each file written with these contents.
+  if (!plan.deletions.every((p) => changed.get(p)?.status === "removed")) return null;
+  return plan.additions.every((a) => changed.get(a.path)?.status !== "removed" && changed.get(a.path)?.sha === blobSha(a.bytes)) ? tip.sha : null;
 }
 
 /** The id git gives a file's contents. */
@@ -266,8 +268,14 @@ export async function pushJobs(ref: PrRef, o: PushJobsOptions): Promise<number> 
     // The jobs step drops a job that writes a secret the file didn't have. The file it hands over is checked again.
     for (const a of plan.additions) {
       // The mirror holds no file contents until they are asked for, so this fetches them, with the login a private repository needs.
-      const old = modes.get(a.path) && modes.get(a.path) !== "040000" ? await git.bytes(["cat-file", "blob", `${pr.headSha}:${a.path}`]) : Buffer.alloc(0);
-      if (!old) throw new Error(`Couldn't read ${a.path} at ${pr.headSha.slice(0, 7)}.`);
+      let old = modes.get(a.path) && modes.get(a.path) !== "040000" ? await git.bytes(["cat-file", "blob", `${pr.headSha}:${a.path}`]) : Buffer.alloc(0);
+      if (!old) {
+        // Too large to hold, such as a huge file a job shrank: compared with nothing, so any key in the
+        // new file counts as new, and the push is refused rather than one with a key let through.
+        const size = await git.run(["cat-file", "-s", `${pr.headSha}:${a.path}`]);
+        if (size.code !== 0 || !(Number(size.stdout.trim()) > 60 * 1024 * 1024)) throw new Error(`Couldn't read ${a.path} at ${pr.headSha.slice(0, 7)}.`);
+        old = Buffer.alloc(0);
+      }
       // Read as the text it is, so a key in a UTF-16 file is seen too.
       const secret = newSecret(textOf(a.bytes), textOf(old));
       if (secret) return refuse(`${a.path} would hold what looks like ${secret === "a key or token" ? "a key or token" : `the runner's ${secret}`}.`, 1);

@@ -533,3 +533,24 @@ test("the pull request's own links into protected places are guarded too, and it
   assert.ok(!(await jobFilesFor(dir, "HEAD~1", [docs])).guarded.includes("docs/guide.md"), "the base branch alone doesn't guard it");
   assert.deepEqual((await jobFilesFor(dir, "HEAD")).jobs, [], "the head's own jobs never count");
 });
+
+test("a link that steps out of a folder keeps that folder guarded, and accents count either way", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-jobs-dotdot-"));
+  const git = (...args) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t.test", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
+  git("init", "-q", "-b", "main");
+  mkdirSync(join(dir, "docs/old"), { recursive: true });
+  writeFileSync(join(dir, "docs/old/keep.md"), "x\n");
+  writeFileSync(join(dir, "guide.md"), "Guide\n");
+  symlinkSync("docs/old/../../guide.md", join(dir, "AGENTS.md"));
+  mkdirSync(join(dir, ".mergelight/jobs"), { recursive: true });
+  writeFileSync(join(dir, ".mergelight/jobs/translations.md"), TRANSLATIONS);
+  git("add", "-A");
+  git("commit", "-q", "-m", "base");
+  const { guarded } = await jobFilesFor(dir, "main");
+  assert.ok(guarded.includes("docs/old"), JSON.stringify(guarded));
+  assert.ok(guarded.includes("guide.md"));
+  const { job } = parseJobFile(".mergelight/jobs/x.md", '---\non: src\nmay-change: "**"\n---\nTask.');
+  assert.ok(!mayChange(job, "docs/old/keep.md", guarded), "emptying the folder would make AGENTS.md lead nowhere");
+  // macOS takes é as one character and as e with an accent for the same name.
+  assert.ok(!mayChange(job, "notes/re\u0301sume\u0301.md", ["notes/r\u00e9sum\u00e9.md"]));
+});

@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, renameSync, rmSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, posix } from "node:path";
 import { run, runOk } from "./run.js";
@@ -319,11 +319,18 @@ export async function jobFilesFor(mirror: string, base: string, guardFor?: Job[]
     const done: string[] = [];
     let rest = path.split("/");
     let hops = 0;
+    /** Folders that hold a link on the way. No job may take a link away, so they stay folders. */
+    const held = new Set<string>();
     while (rest.length) {
       const part = rest.shift()!;
       if (part === "" || part === ".") continue;
       if (part === "..") {
         if (!done.length) return null;
+        // The folder it steps back out of must stay a folder for the path to lead anywhere: a job that
+        // emptied it would make a protected file disappear. So it is guarded too, along with all in it,
+        // unless a link sits in it, as when a link's own target starts with "..".
+        const leaving = done.join("/");
+        if (guard && !held.has(leaving)) targets.add(leaving);
         done.pop();
         continue;
       }
@@ -333,6 +340,7 @@ export async function jobFilesFor(mirror: string, base: string, guardFor?: Job[]
         continue;
       }
       if (++hops > MAX_LINK_HOPS) return "deep";
+      for (let i = 1; i <= done.length; i++) held.add(done.slice(0, i).join("/"));
       const content = await tree.linkContent(at);
       if (content === "unread") return "unread";
       // A link to an absolute path leads out of the repository. One to another link goes on from where it sits.
@@ -624,7 +632,19 @@ export async function fetchMirror(pr: PullRequest): Promise<{ mirror: string; te
   const mirror = join(cacheDir(), "repos", pr.owner, `${pr.repo}.git`);
   mkdirSync(join(cacheDir(), "repos", pr.owner), { recursive: true });
   if (!existsSync(mirror)) {
-    await git(["clone", "--bare", "--filter=blob:none", "--quiet", `https://github.com/${pr.owner}/${pr.repo}.git`, mirror]);
+    // Cloned beside it and moved into place in one step: the lock lives in the mirror, so two runs on a
+    // shared cache can't both be cloning into the same folder. The one that comes second keeps the first's.
+    const fresh = mkdtempSync(`${mirror}.new-`);
+    try {
+      await git(["clone", "--bare", "--filter=blob:none", "--quiet", `https://github.com/${pr.owner}/${pr.repo}.git`, fresh]);
+      try {
+        renameSync(fresh, mirror);
+      } catch {
+        // Another run put its clone there first.
+      }
+    } finally {
+      rmSync(fresh, { recursive: true, force: true });
+    }
   }
   return withLock(mirror, async () => {
     const fetch = (...refspecs: string[]) => git(["fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "origin", ...refspecs], mirror);
