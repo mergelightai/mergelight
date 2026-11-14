@@ -285,7 +285,9 @@ async function main(): Promise<number> {
     const branch = pr.headRef
       ? await api.get<{ object: { sha: string } }>(`git/ref/heads/${pr.headRef.split("/").map(encodeURIComponent).join("/")}`).catch(() => null)
       : null;
-    const newest = branch?.object.sha ?? values.at;
+    // Not told: no review, rather than one that may read older code than the newest.
+    if (!branch) throw new Error(`Couldn't read ${pr.headRef ?? "the branch"} to tell whether the jobs' commit is still the newest. Run the review again.`);
+    const newest = branch.object.sha;
     if (newest.toLowerCase() !== values.at.toLowerCase()) {
       log(`The jobs' commit ${values.at.slice(0, 7)} isn't the newest any more, so this review reads ${newest.slice(0, 7)}.`);
       values.at = newest;

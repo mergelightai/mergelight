@@ -391,9 +391,33 @@ runs:
 
     # The team's jobs instead of a review: the result goes to a file, for the push-jobs step to check
     # again and push from a workflow job of its own. Nothing here can push.
+    # The review after the jobs got the workflow's copy of the ChatGPT login when the run began. A token
+    # that runs out while the jobs work would be refreshed by Codex, which uses up the token that copy
+    # holds, and the review couldn't log in. So the jobs wait for a login that lasts through them and the
+    # review: the review refreshes it, and the jobs run on the next push.
+    - name: Check the login lasts through the jobs
+      id: lasts
+      if: inputs.run == 'jobs' && env.MERGELIGHT_CHATGPT == '1'
+      shell: bash
+      run: |
+        node --input-type=module -e '
+          import { readFileSync } from "node:fs";
+          import { join } from "node:path";
+          const { accessTokenExpiry } = await import(process.env.GITHUB_ACTION_PATH + "/packages/mergelight/scripts/refresh-login.mjs");
+          let expiry = null;
+          try { expiry = accessTokenExpiry(JSON.parse(readFileSync(join(process.env.CODEX_HOME, "auth.json"), "utf8"))); } catch {}
+          // The jobs (30 minutes at most), the push, and the review (45 at most), with room to wait in a queue.
+          if (expiry !== null && expiry - Date.now() < 2.5 * 3600_000) {
+            console.log("::notice::The ChatGPT login is due for a refresh, so no job runs this time: the review refreshes it, and the jobs run on the next push.");
+            console.log("skip=true");
+          }
+        ' | while IFS= read -r line; do
+          if [ "$line" = "skip=true" ]; then echo "skip=true" >> "$GITHUB_OUTPUT"; else echo "$line"; fi
+        done
+
     - name: Run the jobs
       id: jobs
-      if: (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && env.MERGELIGHT_NO_LOGIN != '1' && inputs.run == 'jobs'
+      if: (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && env.MERGELIGHT_NO_LOGIN != '1' && inputs.run == 'jobs' && steps.lasts.outputs.skip != 'true'
       shell: bash
       env:
         GH_TOKEN: ${{ steps.app.outputs.token || inputs.github-token }}

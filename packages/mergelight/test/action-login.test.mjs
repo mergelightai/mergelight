@@ -177,3 +177,20 @@ test("jobs mode never turns a check green on an approval, nor refreshes the logi
   assert.match(condition("Approve the check"), /inputs\.run != 'jobs'/);
   assert.match(condition("Refresh the Codex login if it's due"), /inputs\.run != 'jobs'/);
 });
+
+test("the jobs wait for a ChatGPT login that lasts through them and the review", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-lasts-"));
+  const script = stepScript("Check the login lasts through the jobs");
+  const run = (hours) => {
+    const payload = Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + hours * 3600 })).toString("base64url");
+    writeFileSync(join(dir, "auth.json"), JSON.stringify({ tokens: { access_token: `h.${payload}.s` } }));
+    const out = join(dir, `out-${hours}`);
+    writeFileSync(out, "");
+    const r = spawnSync("bash", ["-c", script], { encoding: "utf8", env: { PATH: process.env.PATH, CODEX_HOME: dir, GITHUB_ACTION_PATH: root, GITHUB_OUTPUT: out } });
+    assert.equal(r.status, 0, r.stderr);
+    return readFileSync(out, "utf8");
+  };
+  assert.equal(run(1), "skip=true\n", "runs out within the jobs and the review");
+  assert.equal(run(24), "");
+  assert.ok(action.includes("steps.lasts.outputs.skip != 'true'"));
+});
