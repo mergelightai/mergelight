@@ -328,7 +328,7 @@ async function main(): Promise<number> {
       onProgress: progress.onProgress,
     });
     progress.stop();
-    if (jobs) review.jobs = { ...jobs, ...(jobs.commit ? { reviewed: review.pr.head_sha === jobs.commit } : {}) };
+    if (jobs) review.jobs = { ...jobs, ...(jobs.commit ? { reviewed: review.pr.head_sha.toLowerCase() === jobs.commit.toLowerCase() } : {}) };
 
     const json = JSON.stringify(review, null, 2);
     if (values.out) writeFileSync(values.out, `${json}\n`);
@@ -379,7 +379,7 @@ async function main(): Promise<number> {
       const notice = limit ? limitNotice(limit.plan, limit.resets) : login ? loginNotice(login.plan, message) : undefined;
       await failCheck(api, checkRunId, headSha, message, log, title).catch((e) => log(`Couldn't update the check: ${(e as Error).message}`));
       await naming;
-      await failSummary(api, ref.number, notice).catch((e) => log(`Couldn't update the summary: ${(e as Error).message}`));
+      await failSummary(api, ref.number, notice, jobs).catch((e) => log(`Couldn't update the summary: ${(e as Error).message}`));
       // The newest commit wasn't reviewed. An approval Mergelight gave to an earlier commit must not count for this one.
       // With approvals turned off, none of Mergelight's approvals stands, this commit's included.
       await syncApproval(api, ref.number, "yellow", headSha, log, values["no-approve"] ? { why: APPROVALS_OFF } : { why: UNREVIEWED, otherCommitsOnly: true });

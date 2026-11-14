@@ -1,3 +1,4 @@
+import type { JobsReport } from "../types.js";
 import type { Finding, Light, Review } from "../types.js";
 import { RESOLVED_ONLY, type PriorFinding } from "../prompt.js";
 import { GitHub, TRANSIENT, type ApiOptions } from "./api.js";
@@ -284,9 +285,9 @@ export async function updatePendingSummary(api: GitHub, summary: PrComment | nul
 }
 
 /** A first review that couldn't run shouldn't say "Reviewing" forever, and an older failure shouldn't outlive a newer reason. Real results stay. */
-export async function failSummary(api: GitHub, number: number, notice?: FailureNotice): Promise<void> {
+export async function failSummary(api: GitHub, number: number, notice?: FailureNotice, jobs?: JobsReport | null): Promise<void> {
   const { summary } = await readPrReviewState(api, number);
-  if (summary && (isPendingSummary(summary.body) || isFailedSummary(summary.body))) await api.write("PATCH", `issues/comments/${summary.id}`, { body: failedSummaryBody(notice) });
+  if (summary && (isPendingSummary(summary.body) || isFailedSummary(summary.body))) await api.write("PATCH", `issues/comments/${summary.id}`, { body: failedSummaryBody(notice, jobs) });
 }
 
 /**

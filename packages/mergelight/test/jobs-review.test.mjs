@@ -70,3 +70,15 @@ test("jobs whose changes undid each other say there was nothing to push", () => 
   const undone = { ...result, changes: [] };
   assert.ok(jobsLines(jobsReport(undone, {})).includes("- ⚠️ Nothing was pushed: The jobs' changes undid each other, so there was nothing to push."));
 });
+
+test("the Jobs part stays when the review fails, says why no job ran when that needs fixing, and cuts by whole characters", async () => {
+  const { failedSummaryBody } = await import("../dist/publish/markdown.js");
+  const report = jobsReport(result, { commit: COMMIT });
+  assert.match(failedSummaryBody(undefined, report), /#### Jobs/);
+  assert.doesNotMatch(failedSummaryBody(undefined, null), /#### Jobs/);
+  const unread = jobsReport({ head: "x", outcomes: [], problems: [], changes: [], skipped: "CLAUDE.md couldn't be read this time, so no job runs. The next push tries again." });
+  assert.ok(jobsLines(unread).includes("- ⚠️ No job ran: CLAUDE.md couldn't be read this time, so no job runs. The next push tries again."));
+  assert.equal(jobsReport({ head: "x", outcomes: [], problems: [], changes: [], skipped: "This pull request changes none of the files that start a job." }), null, "an everyday reason says nothing");
+  const emoji = jobsReport({ ...result, outcomes: [{ ...result.outcomes[0], summary: `${"a".repeat(299)}🎉 more` }] });
+  assert.equal(emoji.outcomes[0].summary, `${"a".repeat(299)}🎉`);
+});

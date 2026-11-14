@@ -49,7 +49,7 @@ The workflow has 3 parts, each a job of its own in GitHub Actions:
 
 - One commit from Mergelight on your branch, named after the jobs, like "Run the job translations". **Pull before you push again.**
 - The Jobs part in the review's summary.
-- A banner in the pull request: **"Approve workflows to run"**. GitHub starts your other workflows, such as tests, for a commit that a workflow pushed only after a person with write access approves them. Mergelight's own review doesn't wait for that: it already ran in the same workflow. When the approved run reaches Mergelight, it finds a commit that jobs made and is reviewed already, and does nothing.
+- A banner in the pull request: **"Approve workflows to run"**. GitHub starts your other workflows, such as tests, for a commit that a workflow pushed only after a person with write access approves them. Mergelight's own review doesn't wait for that: it already ran in the same workflow. The approved run reviews that commit once more, on your plan, as any run does; if you don't need your other workflows on the jobs' commit, you don't have to approve it. Workflows that run only on `push` don't start for that commit at all, so a check they give never comes: to have them run, give the push step a GitHub App's token or a personal one (`github-token` on `push-jobs`).
 
 A job that has nothing to do changes nothing, and no commit appears. A commit that jobs made never starts the jobs again.
 

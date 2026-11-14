@@ -122,9 +122,11 @@ export function limitNotice(plan: string, resets: string | null): FailureNotice 
 export const FAILED_MARKER = "<!-- mergelight:failed -->";
 const GENERAL_FAILURE = ["### ⚠️ Mergelight couldn't review this pull request", "", "The Mergelight check has the reason. The next push tries again."].join("\n");
 
-export function failedSummaryBody(notice?: FailureNotice): string {
-  if (notice) return [SUMMARY_MARKER, FAILED_MARKER, `### ${notice.heading}`, "", notice.body].join("\n");
-  return [SUMMARY_MARKER, FAILED_MARKER, GENERAL_FAILURE].join("\n");
+export function failedSummaryBody(notice?: FailureNotice, jobs?: JobsReport | null): string {
+  // What the jobs did stays on the pull request when the review fails: the branch changed all the same.
+  const after = jobs ? ["", ...jobsLines(jobs)] : [];
+  if (notice) return [SUMMARY_MARKER, FAILED_MARKER, `### ${notice.heading}`, "", notice.body, ...after].join("\n");
+  return [SUMMARY_MARKER, FAILED_MARKER, GENERAL_FAILURE, ...after].join("\n");
 }
 
 /** Only at the very start, because a summary with results can quote text from the pull request. Earlier releases wrote no marker. */
@@ -254,6 +256,7 @@ export function jobsLines(j: JobsReport): string[] {
     else if (o.status === "refused") out.push(`- ⚠️ ${name} was dropped: ${said}`);
     else out.push(`- ⚠️ ${name} couldn't finish: ${said}`);
   }
+  if (j.skipped) out.push(`- ⚠️ No job ran: ${clean(j.skipped)}`);
   if (j.notPushed) out.push(`- ⚠️ Nothing was pushed: ${clean(j.notPushed)}`);
   for (const p of j.problems) out.push(`- ⚠️ \`${clean(p.source).replace(/`/g, "")}\` is left out: ${clean(p.problem)}.`);
   if (j.moreProblems) out.push(`- ⚠️ ${j.moreProblems} more job file${j.moreProblems === 1 ? " is" : "s are"} left out. The jobs step's log lists ${j.moreProblems === 1 ? "it" : "them"}.`);
