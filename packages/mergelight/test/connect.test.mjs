@@ -619,3 +619,9 @@ test("a step whose condition can also be true on a pull request still counts", (
   assert.equal(claudeInWorkflow(job, "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "no", "the second part runs on pull requests to main");
   assert.equal(claudeInWorkflow(job.replace(" || github.base_ref == 'main'", " || github.event_name == 'workflow_dispatch'"), "claude-code-oauth-token", "review", "CLAUDE_CODE_OAUTH_TOKEN"), "yes");
 });
+
+test("a step that only runs the jobs doesn't count for the checker's login", () => {
+  const job = "jobs:\n  review:\n    steps:\n      - uses: mergelightai/mergelight@v0\n        with:\n          run: jobs\n          claude-code-oauth-token: x\n      - uses: mergelightai/mergelight@v0\n        with:\n          codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}\n          claude-code-oauth-token: x\n";
+  assert.equal(claudeInWorkflow(job, "codex-auth-json", "review", "CODEX_AUTH_JSON", true), "yes");
+  assert.equal(claudeInWorkflow(job, "codex-auth-json", "review", "CODEX_AUTH_JSON"), "no", "for the reviewer's login it does count");
+});

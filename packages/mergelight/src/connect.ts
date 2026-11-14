@@ -297,7 +297,7 @@ export function withState(body: string, previous: string | undefined): string {
  * doesn't, so connecting Claude there would only ask again next time: "no". A workflow that calls a
  * reusable one may pass it on in a file this can't tell, and one that can't be read can't say: "unknown".
  */
-export function claudeInWorkflow(text: string | null, input = "claude-code-oauth-token", job?: string, secret?: string): "yes" | "no" | "unknown" {
+export function claudeInWorkflow(text: string | null, input = "claude-code-oauth-token", job?: string, secret?: string, forCheck = false): "yes" | "no" | "unknown" {
   if (text === null) return "unknown";
   // Lines that are code, not comments: a line commented out passes nothing on.
   let lines = text.split("\n").map((line) => line.replace(/(^|\s)#.*$/, ""));
@@ -350,6 +350,8 @@ export function claudeInWorkflow(text: string | null, input = "claude-code-oauth
       return named.length > 0 && named.every((e) => !pullRequest.has(e));
     };
     if (condition && parts.every(otherEventOnly)) return;
+    // A step that only runs the jobs never checks a review: for the checker's login it doesn't count.
+    if (forCheck && /^\s*["']?run["']?\s*:\s*["']?jobs["']?\s*$/m.test(step)) return;
     steps.push(step);
   });
   // A reusable workflow or a composite action of the team's own may pass the login on in a file this
@@ -387,11 +389,11 @@ export function claudeInWorkflow(text: string | null, input = "claude-code-oauth
   return steps.every(passes) ? "yes" : "no";
 }
 
-async function workflowHasClaude(api: GitHub, env: NodeJS.ProcessEnv, input = "claude-code-oauth-token", secret = "CLAUDE_CODE_OAUTH_TOKEN"): Promise<"yes" | "no" | "unknown"> {
+async function workflowHasClaude(api: GitHub, env: NodeJS.ProcessEnv, input = "claude-code-oauth-token", secret = "CLAUDE_CODE_OAUTH_TOKEN", forCheck = false): Promise<"yes" | "no" | "unknown"> {
   const [, path, ref] = (env.GITHUB_WORKFLOW_REF ?? "").match(/^[^/]+\/[^/]+\/(.+?)@(.+)$/) ?? [];
   if (!path || !ref) return "unknown";
   const text = await api.get<{ content: string }>(`contents/${path}?ref=${encodeURIComponent(env.GITHUB_SHA ?? ref)}`).then((f) => Buffer.from(f.content, "base64").toString("utf8"), () => null);
-  return claudeInWorkflow(text, input, env.GITHUB_JOB, secret);
+  return claudeInWorkflow(text, input, env.GITHUB_JOB, secret, forCheck);
 }
 
 /** The same for a ChatGPT login: a workflow that doesn't pass codex-auth-json would never see one saved now. */
@@ -457,7 +459,7 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
       if (checker === "codex") return null;
       // Claude is offered only where the workflow passes its login on. Beside ChatGPT, only when that is
       // sure. Asked for by name, also when a reusable workflow may pass it on where this can't see.
-      const passes = await workflowHasClaude(api, env);
+      const passes = await workflowHasClaude(api, env, "claude-code-oauth-token", "CLAUDE_CODE_OAUTH_TOKEN", Boolean(checker));
       if (passes === "no") {
         claudeMissing = CLAUDE_INPUT_MISSING;
         return null;
@@ -500,7 +502,7 @@ export function githubConnect(api: GitHub, number: number, headSha: string, log:
       // Connecting Claude alone starts no ChatGPT sign-in.
       if (onlyClaude) return 1;
       // A checker's ChatGPT login is asked for only where the workflow passes it on to later runs.
-      if (checker === "codex" && (await workflowHasClaude(api, env, "codex-auth-json", env.SECRET_NAME || "CODEX_AUTH_JSON")) === "no") {
+      if (checker === "codex" && (await workflowHasClaude(api, env, "codex-auth-json", env.SECRET_NAME || "CODEX_AUTH_JSON", true)) === "no") {
         chatgptMissing = chatgptInputMissing(env.SECRET_NAME || "CODEX_AUTH_JSON");
         return 1;
       }

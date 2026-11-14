@@ -351,7 +351,8 @@ test("the notice for saving a checker's login names the secret this workflow rea
     encoding: "utf8",
     env: { PATH: process.env.PATH, GITHUB_ENV: join(mkdtempSync(join(tmpdir(), "mergelight-secret-")), "env"), WANTED: "claude", WANTED_CHECKER: "codex", HAS_CLAUDE: "1", HAS_CODEX: "", GITHUB_EVENT_NAME: "pull_request", GITHUB_REPOSITORY: "acme/widgets", GITHUB_ACTOR: "someone", HEAD_REPO: "acme/widgets", VISIBILITY: "public", SECRET_NAME: "TEAM_CHATGPT" },
   });
-  assert.match(r.stdout, /gh secret set TEAM_CHATGPT --repo acme\/widgets/);
+  assert.match(r.stdout, /gh secret set TEAM_CHATGPT --repo acme\/widgets < \$CODEX_HOME\/auth\.json/);
+  assert.match(r.stdout, /export CODEX_HOME=\$\(mktemp -d\); codex login/, "a login of its own, never the one the person's Codex uses");
 });
 
 test("the jobs never get the Mergelight AI app's token, only the workflow's own, which can only read", () => {
