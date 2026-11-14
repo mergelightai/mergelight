@@ -105,6 +105,7 @@ if (args.includes("--paginate")) {
 const path = args[1].replace("repos/o/r/", "");
 if (path === "repos/o/r") out({ permissions: { push: s.push !== false } });
 else if (path === "pulls/7") out({ number: 7, title: "PR title", body: "", html_url: "https://github.com/o/r/pull/7", user: { login: "a" }, base: { ref: "main", sha: "b" }, head: { sha: s.head || "${REVIEWED}" }, additions: 1, deletions: 0, changed_files: 1 });
+else if (path.startsWith("commits/") && path.split("/").length === 2) out({ sha: path.slice(8), commit: { message: (s.commitMessages || {})[path.slice(8)] || "A commit" }, parents: [] });
 else if (path.startsWith("commits/")) out({ check_runs: s.checkRuns || [] });
 else if (path.startsWith("compare/")) { if (!s.compare) fail("HTTP 404"); out(s.compare); }
 else if (path === "user") { if (!s.viewer) fail("HTTP 403"); out({ login: s.viewer }); }
@@ -960,3 +961,5 @@ test("a fixed finding's comment is folded away as resolved when GitHub won't let
   await withFakeGh(hidden.env, () => publishReview(review([finding({ id: "aaaaaaaaaa", tier: "post" })])));
   assert.ok(!hidden.writes().some((w) => w.graphql === "unfold"));
 });
+
+

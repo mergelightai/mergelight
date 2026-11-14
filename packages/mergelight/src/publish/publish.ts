@@ -1,6 +1,7 @@
 import type { Finding, Light, Review } from "../types.js";
 import { RESOLVED_ONLY, type PriorFinding } from "../prompt.js";
 import { GitHub, TRANSIENT, type ApiOptions } from "./api.js";
+import { JOBS_TRAILER } from "../run-jobs.js";
 import { commentableLines, place } from "./diff-lines.js";
 import { answeredRemembered, closedBody, patchTouches, readClosed, REMEMBERED_MARKER, reopenedBody, resolvedByPeople, resolverReplies, threadAction, threadFinding, type Handled, type ReviewThread } from "./closed.js";
 import type { FailureNotice } from "./markdown.js";

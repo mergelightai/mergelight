@@ -31,6 +31,8 @@ import type { WrittenSkill } from "./skills.js";
 export interface ReviewOptions {
   /** Review this commit of the PR instead of its latest one. */
   at?: string;
+  /** The commit the team's jobs wrote just before this review, and which jobs, so the reviewers know. */
+  jobCommit?: { sha: string; jobs: string[] };
   /** Who hunts for problems: codex, the default, or claude. */
   provider?: ProviderName;
   model?: string;
@@ -328,6 +330,8 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
       // Matched against every path the pull request touches, exactly as git has it.
       skills: teamSkills,
       conventions: ws.conventions,
+      // Only when it is the commit under review: an older job commit is part of the diff like any other.
+      ...(opts.jobCommit && opts.jobCommit.sha === ws.headSha ? { jobCommit: opts.jobCommit } : {}),
       // The dashboard's rules, then the ones written in the repository.
       rules: [...(opts.rules ?? []), ...ws.rules].filter((r) => r.kind === "rule" && ruleApplies(r, ws.touchedPaths)).slice(0, MAX_RULES),
     };

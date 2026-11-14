@@ -6,7 +6,7 @@ import { mayChange, type Job, type JobProblem } from "./jobs.js";
 import type { Convention } from "./prompt.js";
 import { LimitError, LoginError, SandboxError } from "./providers/codex.js";
 import { run, type RunResult } from "./run.js";
-import type { PullRequest } from "./types.js";
+import type { JobsReport, PullRequest } from "./types.js";
 
 /**
  * Runs a team's jobs (jobs.ts) on a pull request. Each job works in a fresh copy of the code with no git
@@ -565,4 +565,32 @@ export function buildJobPrompt(input: JobPromptInput): string {
   }
   lines.push("", "## Your answer", "", "When you are done, answer with one sentence for the team: what you changed, or why you changed nothing.");
   return lines.join("\n");
+}
+
+/** One line of text from a file the review didn't write, cut to size. */
+function line(value: unknown, max: number): string {
+  return typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, max).trim() : "";
+}
+
+/**
+ * What the jobs did, for the review's summary: from the jobs step's file, and what the push step said.
+ * Null when there is nothing to tell: no job ran, and no job file was left out.
+ */
+export function jobsReport(result: unknown, push: { commit?: string; why?: string } = {}): JobsReport | null {
+  const r = result as Partial<JobsResult> | null;
+  if (!r || typeof r !== "object") return null;
+  const statuses = new Set(["changed", "nothing", "refused", "failed"]);
+  const outcomes = (Array.isArray(r.outcomes) ? r.outcomes : [])
+    .filter((o) => o && statuses.has(o.status))
+    .slice(0, 10)
+    .map((o) => ({ name: line(o.name, 40), status: o.status, files: Array.isArray(o.files) ? o.files.length : 0, summary: line(o.summary, 300) }));
+  const allProblems = Array.isArray(r.problems) ? r.problems : [];
+  const problems = allProblems.slice(0, 10).map((p) => ({ source: line(p?.source, 200), problem: line(p?.problem, 300) }));
+  const commit = /^[0-9a-f]{40}$/.test(push.commit ?? "") ? push.commit : undefined;
+  const changed = Array.isArray(r.changes) && r.changes.length > 0;
+  // Jobs that changed files while they ran, but left nothing changed together, have nothing to push.
+  const undone = !changed && outcomes.some((o) => o.status === "changed");
+  const notPushed = !commit && changed ? line(push.why, 300) || "The push step didn't say why." : undone ? "The jobs' changes undid each other, so there was nothing to push." : undefined;
+  if (!outcomes.length && !problems.length) return null;
+  return { ...(commit ? { commit } : {}), ...(notPushed ? { notPushed } : {}), outcomes, problems, ...(allProblems.length > problems.length ? { moreProblems: allProblems.length - problems.length } : {}) };
 }
