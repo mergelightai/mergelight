@@ -184,12 +184,15 @@ await run('pinned-behind', { onBase: customized(`${OLD_SHA} # v0.1.0`), login: t
   expect(/It moves the workflow to v0\.2\.0/.test(after), 'the timeline talks about the update');
   expect(/Review running/.test(after) && /reviewing this PR with v0\.2\.0/.test(after), 'says it is reviewing with the new version');
   expect(!/First review/.test(after) && !/see what a review looks like/.test(after), "doesn't call it the first review");
-  expect(/Changes that one line, and nothing else in your file/.test(before) && /Adds the small job/.test(before), 'one existing file, and says it adds the job');
-  expect(/Only that line changes/.test(pull?.body.body) && /also adds a small job/.test(pull?.body.body), 'the PR says the same');
+  expect(/Changes only the Mergelight version lines in your file/.test(before) && /Adds the small job/.test(before), 'one existing file, and says it adds the job');
+  expect(/Only the Mergelight version lines change/.test(pull?.body.body) && /also adds a small job/.test(pull?.body.body), 'the PR says the same');
 });
 const withJobs = (use) => `${customized(use)}  push:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: mergelightai/mergelight/push-jobs@${use}\n`;
 await run('pinned-jobs-workflow', { onBase: withJobs(`${OLD_SHA} # v0.1.0`), login: true, button: 'Update to v0.2.0' }, ({ file }) => {
   expect(file === withJobs(`${RELEASE.sha} # ${RELEASE.tag}`), 'moves the push-jobs step to the release too, and keeps its path');
+});
+await run('push-jobs-first', { onBase: `name: Mergelight\njobs:\n  push:\n    steps:\n      - uses: mergelightai/mergelight/push-jobs@v0\n  review:\n    steps:\n      - uses: mergelightai/mergelight@${OLD_SHA} # v0.1.0\n`, login: true, button: 'Update to v0.2.0' }, ({ before }) => {
+  expect(/It's pinned to v0\.1\.0, and v0\.2\.0 is out/.test(before), 'reads the version from the review step, even when the push step comes first');
 });
 await run('pinned-with-refresh-missing', { onBase: customized(`${OLD_SHA} # v0.1.0`), login: true, button: 'Update to v0.2.0' }, ({ puts, refresh }) => {
   expect(puts.length === 2, 'adds the refresh job');
@@ -197,9 +200,9 @@ await run('pinned-with-refresh-missing', { onBase: customized(`${OLD_SHA} # v0.1
   expect(!/Not pinned/.test(refresh ?? ''), "without the note saying it isn't");
 });
 await run('old-refresh-job-too', { onBase: customized(`${OLD_SHA} # v0.1.0`), baseRefresh: customized(`${OLD_SHA} # v0.1.0`), login: true, button: 'Update to v0.2.0' }, ({ before, puts, refresh, pull }) => {
-  expect(/Changes that one line in both files, and nothing else/.test(before), 'says both files');
+  expect(/Changes only the Mergelight version lines in both files/.test(before), 'says both files');
   expect(!/Adds the small job/.test(before), "doesn't claim to add the job");
-  expect(/Only that line changes/.test(pull?.body.body) && !/also adds/.test(pull?.body.body), 'the PR says the same');
+  expect(/Only the Mergelight version lines change/.test(pull?.body.body) && !/also adds/.test(pull?.body.body), 'the PR says the same');
   expect(puts.length === 2 && puts[1].body.sha === 'baserefreshblob', 'updates the refresh job that was there');
   expect(refresh === customized(`${RELEASE.sha} # ${RELEASE.tag}`), 'and keeps the rest of that file too');
 });

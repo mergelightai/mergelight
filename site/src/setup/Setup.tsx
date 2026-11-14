@@ -800,7 +800,7 @@ function AddStep(props: {
         <Heading title={`Update Mergelight on ${name}`} sub={`It's pinned to ${details.installed?.version ?? 'an older version'}, and ${update.tag} is out.`} />
         <ul className="mt-3 divide-y divide-white/[0.06]">
           <Fact icon={<Check className="size-4" />}>Moves the pin to the exact commit of {update.tag}</Fact>
-          <Fact icon={<Check className="size-4" />}>{details.refresh ? 'Changes that one line in both files, and nothing else' : 'Changes that one line, and nothing else in your file'}</Fact>
+          <Fact icon={<Check className="size-4" />}>{details.refresh ? 'Changes only the Mergelight version lines in both files' : 'Changes only the Mergelight version lines in your file'}</Fact>
           {!details.refresh && fileCount > 1 && <Fact icon={<Check className="size-4" />}>Adds the small job that keeps a ChatGPT login fresh</Fact>}
           <Fact center icon={<LockIcon className="size-4" />}>
             <span className="flex items-center justify-between gap-3">

@@ -83,8 +83,9 @@ const ACTION_USE = /^([ \t]*(?:-[ \t]+)?uses:[ \t]*)["']?mergelightai\/mergeligh
 /** The note in a new workflow saying why it isn't pinned, which stops being true once it is. */
 const NOT_PINNED_NOTE = /^[ \t]*# Not pinned, on purpose[^\n]*\n(?:[ \t]*#[^\n]*\n)*(?=[ \t]*(?:-[ \t]+)?uses:[ \t]*["']?mergelightai\/mergelight(?:\/push-jobs)?@)/gm;
 
+/** The installed version is the review step's. A push-jobs step may come first in the file, and may differ. */
 export function readInstalled(content: string): Installed | null {
-  const m = content.match(ACTION_USE);
+  const m = [...content.matchAll(new RegExp(ACTION_USE, 'gm'))].find((use) => !use[2]);
   return m ? { ref: m[3]!, version: m[4] ?? null, content } : null;
 }
 
@@ -209,7 +210,7 @@ const SETUP_BODY = [
 const SETUP_CHANGED = 'Update the Mergelight workflow';
 const updateTitle = (release: Release) => `Update Mergelight to ${release.tag}`;
 const updateBody = (release: Release, addsRefresh: boolean) =>
-  `Moves the workflow to [${release.tag}](https://github.com/mergelightai/mergelight/releases/tag/${release.tag}), pinned to its exact commit. Only that line changes.${addsRefresh ? ' It also adds a small job that keeps a ChatGPT login fresh.' : ''} This pull request reviews itself with the new version.`;
+  `Moves the workflow to [${release.tag}](https://github.com/mergelightai/mergelight/releases/tag/${release.tag}), pinned to its exact commit. Only the Mergelight version lines change.${addsRefresh ? ' It also adds a small job that keeps a ChatGPT login fresh.' : ''} This pull request reviews itself with the new version.`;
 
 const toBase64 = (text: string) => btoa(String.fromCharCode(...new TextEncoder().encode(text)));
 const fromBase64 = (text: string) => new TextDecoder().decode(Uint8Array.from(atob(text.replace(/\s/g, '')), (c) => c.charCodeAt(0)));
