@@ -33,6 +33,12 @@ const CODE = '2ZYY-TEST1';
 const askFor = () => withState(connectBody({ url: 'https://auth.openai.com/codex/device', code: CODE }, 'https://github.com/acme/api/actions/runs/1'), undefined);
 const WAITING = { status: 'in_progress', conclusion: null, output: { title: 'Waiting for you to connect ChatGPT' } };
 const PR = { number: 9, html_url: 'https://github.com/acme/api/pull/9' };
+const CLAUDE = `https://claude.com/cai/oauth/authorize?code=true&code_challenge=abc&state=${'t'.repeat(43)}`;
+/** A run asking to connect the AI that checks the review, written the way the Action's connectData writes it. */
+const askToCheck = (data) => ({ user: { login: BOT }, body: ['<!-- mergelight:summary -->', '<!-- mergelight:pending -->', `<!-- mergelight:connect:v1 ${JSON.stringify({ ...data, for: 'check' }).replace(/--/g, '\\u002d\\u002d')} -->`, '### 🔌 Connect to check this review'].join('\n') });
+const waitingToCheck = (who) => ({ status: 'in_progress', conclusion: null, output: { title: `Waiting for you to connect ${who} to check the review` } });
+/** Whether any tile on the page offers this AI. */
+const offers = (page, name) => page.evaluate((n) => [...document.querySelectorAll('[role=radiogroup] label')].some((l) => l.textContent.startsWith(n)), name);
 
 async function scenario(name, start, body) {
   console.log(`\n== ${name}`);
@@ -52,6 +58,7 @@ async function scenario(name, start, body) {
       if (u.pathname === '/review-app') return json(req, { installed: true });
       return req.respond({ status: 200, headers: cors, body: 'ok' });
     }
+    if (u.origin === 'https://github.com' && u.pathname === '/login/oauth/authorize') return req.respond({ status: 302, headers: { location: `${base}/setup/?code=c&state=${u.searchParams.get('state')}` } });
     if (u.origin === 'https://api.github.com') {
       if (m === 'OPTIONS') return req.respond({ status: 204, headers: cors });
       if (u.pathname === '/repos/mergelightai/mergelight/releases/latest') return json(req, { tag_name: 'v0.2.0' });
@@ -188,7 +195,7 @@ await scenario('claude-only-adds-chatgpt', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'
   await shot('roles-choice', true);
 
   await click('button', 'Open PR');
-  t = await until((x) => /Connect your AI/.test(x), 'the connect step');
+  t = await until((x) => /Connect ChatGPT to check reviews/.test(x), 'the connect step');
   const puts = world.writes.filter((w) => w.m === 'PUT');
   const file = puts[0] && unb64(puts[0].body.content);
   expect(puts.length === 2 && puts[0].p === '/contents/.github/workflows/mergelight.yml' && puts[1].p === '/contents/.github/workflows/mergelight-refresh.yml', 'changes the workflow, and adds the refresh job');
@@ -199,12 +206,14 @@ await scenario('claude-only-adds-chatgpt', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'
   expect(pull?.body.title === 'Set who reviews and who checks in Mergelight' && pull?.body.base === 'main', 'a pull request into the branch it runs from');
   expect(/Only the `provider` and `verify-with` lines/.test(pull?.body.body ?? ''), 'whose text says only those lines change');
   expect(/also adds a small job that keeps a ChatGPT login fresh/.test(pull?.body.body ?? ''), 'and that it adds the job');
-  expect((await picked('Which AI')) === 'ChatGPT', 'the connect step is on ChatGPT');
+  expect(/Connect ChatGPT to check reviews/.test(t) && /Claude's review then starts by itself, and ChatGPT checks its findings/.test(t), 'says the login is for checking the review');
+  expect(!(await offers(page, 'Claude')) && !(await offers(page, 'ChatGPT')), 'offers no choice of AI: only ChatGPT can connect on this run');
 
-  world.checks.rolesha = WAITING;
-  world.comments = [{ user: { login: BOT }, body: askFor() }];
+  world.checks.rolesha = waitingToCheck('ChatGPT');
+  world.comments = [askToCheck({ url: 'https://auth.openai.com/codex/device', code: CODE, claudeUrl: null })];
   t = await until((x) => x.includes(CODE), 'the code from the run');
   expect(/Enter this code at OpenAI/.test(t), 'shows the code from the run on that pull request');
+  expect(/Connect ChatGPT to check reviews/.test(t) && !/Open Claude|claude setup-token/.test(t), 'and still only ChatGPT');
   await shot('connect-chatgpt');
 
   world.secrets.push('CODEX_AUTH_JSON');
@@ -264,7 +273,7 @@ await scenario('open-pr-gets-the-change', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN']
   await reachLive();
   await choose('Add ChatGPT');
   await click('button', 'Open PR');
-  await until((x) => /Connect your AI/.test(x), 'the connect step');
+  await until((x) => /Connect ChatGPT to check reviews/.test(x), 'the connect step');
   const put = world.writes.find((w) => w.m === 'PUT');
   expect(world.writes.every((w) => w.m === 'PUT') && put?.body.branch === 'mergelight-setup-old' && put?.body.sha === 'prblob', 'adds to the pull request that changes the workflow already');
   expect(unb64(put.body.content).includes(`mergelight@${'a'.repeat(40)} # v0.2.0`) && unb64(put.body.content).includes('verify-with: codex'), 'keeps what that pull request changed, and makes this change on top');
@@ -274,7 +283,7 @@ await scenario('pinned-repo-gets-a-pinned-job', { secrets: ['CLAUDE_CODE_OAUTH_T
   await reachLive();
   await choose('Add ChatGPT');
   await click('button', 'Open PR');
-  await until((x) => /Connect your AI/.test(x), 'the connect step');
+  await until((x) => /Connect ChatGPT to check reviews/.test(x), 'the connect step');
   const job = world.writes.find((w) => w.m === 'PUT' && w.p.endsWith('/mergelight-refresh.yml'));
   const content = job && unb64(job.body.content);
   expect(content?.includes(`uses: mergelightai/mergelight@${SHA} # v0.2.0\n`), 'the job is pinned to the same release as the review');
@@ -286,9 +295,42 @@ await scenario('refresh-job-already-there', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN
   const t = await choose('Add ChatGPT');
   expect(!/Adds the small job/.test(t), "doesn't offer a job that's there");
   await click('button', 'Open PR');
-  await until((x) => /Connect your AI/.test(x), 'the connect step');
+  await until((x) => /Connect ChatGPT to check reviews/.test(x), 'the connect step');
   const puts = world.writes.filter((w) => w.m === 'PUT');
   expect(puts.length === 1 && puts[0].p.endsWith('/mergelight.yml'), 'changes only the workflow, and leaves their job alone');
+});
+
+await scenario('chatgpt-only-adds-claude', { secrets: ['CODEX_AUTH_JSON'] }, async ({ page, world, until, click, shot, reachLive, choose }) => {
+  const { live } = await reachLive();
+  expect(/Reviews with ChatGPT, checked by ChatGPT/.test(live) && /Add Claude/.test(live), 'offers to add Claude');
+  let t = await choose('Add Claude');
+  expect(/Claude isn't connected yet\. Next, you connect it to check reviews/.test(t), 'says Claude is connected to check reviews');
+  await click('button', 'Open PR');
+  t = await until((x) => /Connect Claude to check reviews/.test(x), 'the connect step for checking');
+  expect(/ChatGPT's review then starts by itself, and Claude checks its findings/.test(t), 'says what Claude does');
+  expect(!(await offers(page, 'ChatGPT')) && !(await offers(page, 'Claude')), 'offers no choice of AI');
+  expect(!/uses a lot of a Claude plan/.test(t), "says nothing about reviews on Opus, since Claude only checks");
+  world.checks.rolesha = waitingToCheck('Claude');
+  world.comments = [askToCheck({ url: '', code: '', claudeUrl: CLAUDE })];
+  t = await until((x) => /Open Claude/.test(x), "Claude's link");
+  expect(await page.evaluate(() => [...document.querySelectorAll('a')].find((a) => a.textContent.includes('Open Claude'))?.href) === CLAUDE, 'with the link from the run');
+  expect(!/Enter this code|OpenAI/.test(t), 'and nothing about a ChatGPT code');
+  await shot('connect-claude-check', true);
+});
+
+await scenario('claude-checker-from-the-link', { secrets: ['CODEX_AUTH_JSON'], comments: [askToCheck({ url: '', code: '', claudeUrl: CLAUDE })], checks: { rolesha: waitingToCheck('Claude') } }, async ({ page, world, until, text }) => {
+  await page.goto(`${base}/setup/?repo=acme/api&pr=9&connect=claude`, { waitUntil: 'networkidle2' });
+  let t = await until((x) => /Open Claude/.test(x), 'the Claude step');
+  expect(/Connect Claude to check reviews/.test(t) && /ChatGPT's review then starts by itself, and Claude checks its findings/.test(t), 'says the link is for checking the review');
+  expect(!(await offers(page, 'ChatGPT')), 'never offers ChatGPT, whose code never comes on this run');
+  world.comments = [{ user: { login: BOT }, body: withState(pendingSummaryBody(), undefined) }];
+  world.checks.rolesha = { status: 'completed', conclusion: 'neutral', output: { title: "Claude wasn't connected" } };
+  t = await until((x) => /This link has ended/.test(x), 'the ended link');
+  expect(/get a new link/.test(t), 'says how to get a new one');
+  world.checks.rolesha = { status: 'in_progress', conclusion: null, output: { title: 'Reviewing' } };
+  await wait(6000);
+  t = await text();
+  expect(/This link has ended/.test(t) && !/Mergelight is on/.test(t), "the review going on without Claude doesn't count as connected");
 });
 
 await scenario('step-cant-be-found', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], file: `${TEMPLATE}  again:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: mergelightai/mergelight@v0\n` }, async ({ world, reachLive }) => {

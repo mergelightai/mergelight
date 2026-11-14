@@ -9,7 +9,7 @@ import { OPENAI_PATH } from '../brandIcons';
 import Ambient from '../sections/Ambient';
 import { Check, GitHubIcon, SURFACE, WELL } from '../ui';
 import type { ConnectLink } from './github';
-import { cleanUrl, finishSignIn, GitHubError, INSTALL_URL, readConnectLink, readInstalled, rememberConnect, rememberRepo, reviewAppUrl, takeRememberedConnect, takeRememberedRepo, isPinned, mockClient, pinned, realClient, REFRESH_FILE, signInUrl, wakeTokenServer, withReviewer, WorkflowEditError, type CheckStatus, type ConnectCode, type GitHubClient, type Release, type Repo, type RepoDetails, type SetupPr, type WorkflowFile } from './github';
+import { cleanUrl, finishSignIn, GitHubError, INSTALL_URL, onlyAi, readConnectLink, readInstalled, rememberConnect, rememberRepo, reviewAppUrl, takeRememberedConnect, takeRememberedRepo, isPinned, mockClient, pinned, realClient, REFRESH_FILE, signInUrl, wakeTokenServer, withReviewer, WorkflowEditError, type CheckStatus, type ConnectCode, type GitHubClient, type Release, type Repo, type RepoDetails, type SetupPr, type WorkflowFile } from './github';
 import { aiName, otherAi, readRoles, rolesFor, withRoles, type Ai, type Logins, type Roles } from './roles';
 
 const CHATGPT_SECURITY = 'https://chatgpt.com/settings/security';
@@ -105,6 +105,8 @@ export default function Setup() {
   const [rolesFailed, setRolesFailed] = useState<RolesFailure | null>(null);
   /** Whether the branch it runs from has the job that keeps a ChatGPT login fresh. */
   const [refreshLive, setRefreshLive] = useState(false);
+  /** The commit whose run gave up on connecting a checker. Its review goes on, but nothing got connected. */
+  const [missedSha, setMissedSha] = useState<string | null>(null);
   const wide = useWide();
 
   const previous = useRef(view);
@@ -185,6 +187,7 @@ export default function Setup() {
     setLogins({ claude: false, codex: false });
     setLiveFile(null);
     setRefreshLive(false);
+    setMissedSha(null);
     setRolesChange(null);
     setRolesFailed(null);
     setMerged(false);
@@ -332,9 +335,12 @@ export default function Setup() {
         setLiveFile((known) => known ?? workflow);
         if (files.some((f) => f.name === REFRESH_FILE)) setRefreshLive(true);
       }
+      // A checker nobody connected lets the review go on, so that run going ahead doesn't mean it connected.
+      const missed = Boolean(pr) && (missedSha === pr?.headSha || (check?.status === 'completed' && /wasn't connected$/i.test(check.title ?? '')));
+      if (missed && pr && missedSha !== pr.headSha) setMissedSha(pr.headSha);
       // A run that's still asking comes first, even if the repo has some other login saved. Someone sent here by a
       // pull request is connecting that run, so only that run going ahead ends this step, not a login from before.
-      const movedOn = isReviewing(check) && !couldntFinish(check);
+      const movedOn = isReviewing(check) && !couldntFinish(check) && !missed;
       // A change of AI waits for that AI's login. Its run can be reviewing with the other AI before it asks.
       const need = rolesChange?.need;
       const connected = need ? Boolean(seen?.[need]) || /^connected/i.test(check?.title ?? '') : movedOn;
@@ -345,15 +351,20 @@ export default function Setup() {
       }
       return view === 'live' && (done || !pr);
     });
-  }, [view, client, repo, pr, startOnClaude, rolesChange, workflow, files]);
+  }, [view, client, repo, pr, startOnClaude, rolesChange, workflow, files, missedSha]);
 
   // A pull request's link can be any pull request. Only one on a repo without the workflow is the one that sets it up.
   // A change of AI is on a repo that's already on, so it never shows as a setup either.
   const shownPr = (startOnClaude && details?.installed) || rolesChange ? null : pr;
   const currentSet = liveFile ? readRoles(liveFile) : null;
   const currentRoles = currentSet && rolesFor(currentSet, logins);
-  /** A run for a change of AI that ended without connecting the AI it needed. A new commit gets a new one. */
-  const rolesRunEnded = Boolean(rolesChange?.need && status?.status === 'completed' && !/^connected/i.test(status.title ?? '') && !logins[rolesChange.need]);
+  /**
+   * A run for a change of AI that went past asking without connecting the AI it needed: it finished, or it's reviewing
+   * already. A new commit gets a new one.
+   */
+  const rolesRunEnded = Boolean(rolesChange?.need && status && !logins[rolesChange.need] && !/^connected/i.test(status.title ?? '') && (status.status === 'completed' || /^review/i.test(status.title ?? '')));
+  /** What a change of AI asks the run for: one AI, for the review or for checking another AI's review. */
+  const rolesAsk = rolesChange?.need ? { ai: rolesChange.need, forCheck: rolesChange.need === rolesChange.roles.checker && rolesChange.need !== rolesChange.roles.reviewer } : null;
 
   const openRoles = () => {
     setRolesFrom(view);
@@ -444,7 +455,7 @@ export default function Setup() {
                 <AddStep repo={repo} details={details} ai={yourAi} fileCount={files.length} branch={branch} setBranch={setBranch} scope={scope} setScope={setScope} fileOpen={fileOpen} onToggleFile={() => setFileOpen((v) => !v)} adding={adding} failed={addFailed} detailsFailed={detailsFailed} onRetry={() => choose(repo)} update={update} onAdd={() => void addToRepo()} fileUrl={fileUrl} onBack={adding ? () => undefined : back.add!} onByHand={() => { setFileOpen(false); setView('finish'); }} onContinue={afterAdding} />
               )}
               {view === 'finish' && repo && <FinishStep repo={repo} branch={branch} fileUrl={fileUrl} pr={pr} onBack={back.finish!} />}
-              {view === 'connect' && repo && <ConnectStep repo={repo} pr={pr} status={status} code={connectCode} ended={rolesRunEnded} onBack={back.connect!} onSkip={() => setView('live')} startOnClaude={startOnClaude || rolesChange?.need === 'claude'} onClaudeCode={(url, c) => client!.sendClaudeCode(repo, url, c)} />}
+              {view === 'connect' && repo && <ConnectStep repo={repo} pr={pr} status={status} code={connectCode} ask={rolesAsk} ended={rolesRunEnded || Boolean(pr && missedSha === pr.headSha)} onBack={back.connect!} onSkip={() => setView('live')} startOnClaude={startOnClaude || rolesChange?.need === 'claude'} onClaudeCode={(url, c) => client!.sendClaudeCode(repo, url, c)} />}
               {view === 'live' && repo && <LiveStep repo={repo} pr={shownPr} backTo={startOnClaude ? pr : null} status={status} hasLogin={hasLogin} merged={merged} updatedTo={startOnClaude ? null : (update?.tag ?? null)} ai={yourAi} onAnother={anotherRepo} />}
               {view === 'roles' && repo && liveFile && currentRoles && <RolesStep current={currentRoles} logins={logins} refreshMissing={!refreshLive} file={liveFile} branch={branch} changing={changingRoles} failed={rolesFailed} accessUrl={repo.accessUrl} onBack={back.roles!} onConfirm={(r) => void changeRoles(r)} />}
             </Stage>
@@ -1284,14 +1295,31 @@ function FinishStep({ repo, branch, fileUrl, pr, onBack }: { repo: Repo; branch:
   );
 }
 
-/** `ended` is a run that finished without the login this step is for, which its check title alone can't tell. */
-function ConnectStep({ repo, pr, status, code: found, ended = false, onBack, onSkip, startOnClaude, onClaudeCode }: { repo: Repo; pr: SetupPr | null; status: CheckStatus | null; code: ConnectCode | null; ended?: boolean; onBack: () => void; onSkip: () => void; startOnClaude: boolean; onClaudeCode: (url: string, code: string) => Promise<void> }) {
+/**
+ * `ended` is a run that finished without the login this step is for, which its check title alone can't tell. `ask` is
+ * what the page knows the run asks for before it says so: one AI, for the review or for checking another AI's review.
+ */
+function ConnectStep({ repo, pr, status, code: found, ask = null, ended = false, onBack, onSkip, startOnClaude, onClaudeCode }: { repo: Repo; pr: SetupPr | null; status: CheckStatus | null; code: ConnectCode | null; ask?: { ai: Ai; forCheck: boolean } | null; ended?: boolean; onBack: () => void; onSkip: () => void; startOnClaude: boolean; onClaudeCode: (url: string, code: string) => Promise<void> }) {
   const code = found?.code ? found : null;
   const claudeUrl = found?.claudeUrl ?? null;
   const [pasted, setPasted] = useState('');
   const [sending, setSending] = useState<'idle' | 'sending' | 'sent' | 'failed' | 'incomplete'>('idle');
   const [billing, setBilling] = useState<'plan' | 'key'>('plan');
-  const [provider, setProvider] = useState<'openai' | 'anthropic'>(startOnClaude ? 'anthropic' : 'openai');
+  const [provider, setProvider] = useState<'openai' | 'anthropic'>(startOnClaude || ask?.ai === 'claude' ? 'anthropic' : 'openai');
+  // A run that offers one AI only gets that AI here: the other one's code or link never comes on that run.
+  const [only, setOnly] = useState<Ai | null>(ask?.ai ?? null);
+  const [forCheck, setForCheck] = useState(ask?.forCheck ?? false);
+  useEffect(() => {
+    if (!found) return;
+    const one = onlyAi(found);
+    // What the run says wins, and it holds once it has said it, also after its line is gone.
+    if (one) {
+      setOnly(one);
+      setProvider(one === 'claude' ? 'anthropic' : 'openai');
+    }
+    if (found.purpose === 'check') setForCheck(true);
+  }, [found]);
+  const checking = forCheck && only;
   const mode = billing === 'plan' ? (provider === 'openai' ? 'chatgpt' : 'claude') : provider === 'openai' ? 'apikey' : 'anthropic';
   const [copied, setCopied] = useState<string | null>(null);
   const prUrl = pr?.url ?? `https://github.com/${repo.fullName}/pulls`;
@@ -1345,11 +1373,14 @@ function ConnectStep({ repo, pr, status, code: found, ended = false, onBack, onS
   return (
     <div>
       <BackButton onClick={onBack} />
-      <Heading title="Connect your AI" sub={billing === 'plan' ? 'Reviews use the subscription you already have.' : 'You pay your AI provider for each review.'} />
+      <Heading
+        title={checking ? `Connect ${aiName(checking)} to check reviews` : only ? `Connect ${aiName(only)}` : 'Connect your AI'}
+        sub={checking ? `${aiName(otherAi(checking))}'s review then starts by itself, and ${aiName(checking)} checks its findings.` : billing === 'plan' ? 'Reviews use the subscription you already have.' : 'You pay your AI provider for each review.'}
+      />
 
       <Segment label="How to pay" options={[{ id: 'plan' as const, title: 'Your plan' }, { id: 'key' as const, title: 'API key' }]} value={billing} onChange={setBilling} />
-      <Choices label="Which AI" options={providers} value={provider} onChange={setProvider} top="mt-3" />
-      {mode === 'claude' && <p className="mt-3 text-[13px] leading-snug text-muted [text-wrap:pretty]">Reviews run on Opus, which uses a lot of a Claude plan. On a small plan, a few reviews can use up the week.</p>}
+      {!only && <Choices label="Which AI" options={providers} value={provider} onChange={setProvider} top="mt-3" />}
+      {mode === 'claude' && !checking && <p className="mt-3 text-[13px] leading-snug text-muted [text-wrap:pretty]">Reviews run on Opus, which uses a lot of a Claude plan. On a small plan, a few reviews can use up the week.</p>}
 
       {mode === 'chatgpt' ? (
         <ol className="mt-6 space-y-4">
@@ -1656,7 +1687,7 @@ function RolesStep(props: { current: Roles; logins: Logins; refreshMissing: bool
         <Fact icon={<Check className="size-4" />}>Two AIs from different companies catch more than one.</Fact>
         {need.map((ai) => (
           <Fact key={ai} icon={<span className="size-1.5 rounded-full bg-lilac" />}>
-            {aiName(ai)} isn't connected yet. You connect it next.
+            {aiName(ai)} isn't connected yet. {ai === checker && ai !== reviewer ? 'Next, you connect it to check reviews.' : 'You connect it next.'}
           </Fact>
         ))}
         {refreshMissing && need.includes('codex') && <Fact icon={<Check className="size-4" />}>Adds the small job that keeps a ChatGPT login fresh</Fact>}

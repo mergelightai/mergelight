@@ -1,5 +1,6 @@
 /** What the setup page reads from GitHub, in the browser, with the person's own token. */
 import { aiName, defaultReviewer, loginsFrom, withInputs, type Logins, type Roles } from './roles';
+import { readConnectCode, type ConnectCode } from './connect';
 
 const API = 'https://api.github.com';
 /** Mergelight Setup. It has no private key anywhere, so it only ever acts for the person signed in here. */
@@ -149,51 +150,7 @@ export interface CheckStatus {
   title: string | null;
 }
 
-/** The link and code for connecting ChatGPT, as the Action posted them on the pull request. */
-export interface ConnectCode {
-  /** Empty when only Claude is on offer. */
-  url: string;
-  code: string;
-  claudeUrl: string | null;
-}
-
-/**
- * Who can post for Mergelight. Anyone can comment on a public pull request, and entering someone else's
- * code would sign them in on your plan, so nobody else's comment counts.
- */
-const OWN_COMMENTERS = ['mergelight-ai[bot]', 'github-actions[bot]'];
-
-/** The hidden line a run writes. Each value still has to be the exact shape it should be, whatever the comment says. */
-function readConnectData(body: string): ConnectCode | null {
-  const raw = body.match(/^<!-- mergelight:connect:v1 (\{.*\}) -->$/m)?.[1];
-  if (!raw) return null;
-  try {
-    const { url, code, claudeUrl } = JSON.parse(raw) as { url?: unknown; code?: unknown; claudeUrl?: unknown };
-    const device = typeof url === 'string' && typeof code === 'string' && /^https:\/\/auth\.openai\.com\/\S+$/.test(url) && /^[A-Z0-9]{4}-[A-Z0-9]{4,}$/.test(code);
-    const claude = typeof claudeUrl === 'string' && /^https:\/\/claude\.(?:com|ai)\/\S+$/.test(claudeUrl) ? claudeUrl : null;
-    if (!device && !claude) return null;
-    return { url: device ? (url as string) : '', code: device ? (code as string) : '', claudeUrl: claude };
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Finds the code in Mergelight's comment, if that comment is still asking for one. It has to be in the
- * exact shape the Action writes, because a finished review's comment can quote text from the pull request.
- */
-export function readConnectCode(comments: { user: { login: string } | null; body?: string | null }[]): ConnectCode | null {
-  const body = comments.filter((c) => OWN_COMMENTERS.includes(c.user?.login ?? '') && c.body?.includes('<!-- mergelight:summary -->')).at(-1)?.body;
-  if (!body?.includes('<!-- mergelight:pending -->')) return null;
-  const data = readConnectData(body);
-  if (data) return data;
-  // Releases before v0.1.10 only have these lines.
-  const url = body.match(/^1\. Open (https:\/\/auth\.openai\.com\/\S+)$/m)?.[1];
-  const code = body.match(/^2\. Enter this code: `([A-Z0-9]{4}-[A-Z0-9]{4,})`$/m)?.[1];
-  const claudeUrl = body.match(/^Claude: Open (https:\/\/claude\.(?:com|ai)\/\S+)$/m)?.[1] ?? null;
-  if (!(url && code) && !claudeUrl) return null;
-  return { url: url && code ? url : '', code: url && code ? code : '', claudeUrl };
-}
+export { onlyAi, readConnectCode, type ConnectCode } from './connect';
 
 export class GitHubError extends Error {
   status: number;
@@ -625,7 +582,7 @@ export function mockClient(): GitHubClient {
     },
     sendClaudeCode: () => later(undefined),
     clearClaudeCode: () => later(undefined),
-    connectCode: () => later(checks < 4 ? { url: 'https://auth.openai.com/codex/device', code: '2ZYY-TEST1', claudeUrl: 'https://claude.com/cai/oauth/authorize?code_challenge=x' } : null),
+    connectCode: () => later(checks < 4 ? { url: 'https://auth.openai.com/codex/device', code: '2ZYY-TEST1', claudeUrl: 'https://claude.com/cai/oauth/authorize?code_challenge=x', purpose: 'review' } : null),
     prState: () => later({ merged: checks >= 11, headSha: 'abc' }),
   };
 }
