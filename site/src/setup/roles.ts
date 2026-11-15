@@ -279,6 +279,10 @@ export function readRoles(content: string): SetRoles | null {
 export function isStandard(content: string): boolean {
   const step = locate(content);
   if (!step || stepInScalar(content)) return false;
+  // A commit, a moving tag like v0, or a release. A branch can change under the job that keeps a login fresh, which
+  // this page would add, so a workflow on one is theirs to set up.
+  const ref = step.text[step.usesLine]!.match(/mergelightai\/mergelight@([^\s#"']+)/)?.[1] ?? '';
+  if (!/^(?:[0-9a-f]{40}|v\d+|v\d+\.\d+\.\d+)$/i.test(ref)) return false;
   // The review job's environment has secrets of its own, which this page can't see. Another job's doesn't matter.
   const keys = jobKeys(step);
   if (!keys || keys.some((k) => /^(["']?)environment\1[ \t]*:/.test(k))) return false;
@@ -299,8 +303,10 @@ export function isStandard(content: string): boolean {
 export function reviewerFixedBy(content: string): 'model' | 'effort' | null {
   const step = locate(content);
   if (!step) return null;
-  if (step.entries.some((e) => e.key === 'model')) return 'model';
-  if (!step.entries.some((e) => e.key === 'effort')) return null;
+  // An empty value is left out by the Action, the same as none. One over more lines can't be told, so it counts.
+  const set = (key: string) => step.entries.some((e) => e.key === key) && readValue(step, key) !== '';
+  if (set('model')) return 'model';
+  if (!set('effort')) return null;
   return /^(low|medium|high)$/.test(readValue(step, 'effort') ?? '') ? null : 'effort';
 }
 

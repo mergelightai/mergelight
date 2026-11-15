@@ -13,7 +13,7 @@ const line = source.match(/const command = `(.*)`;/)?.[1];
 test('the login line quotes every use of its folder', () => {
   assert.ok(line, 'the page builds the line here');
   const command = line.replace('${LOGIN_SECRET[LOGIN_INPUTS.codex[0]]}', 'CODEX_AUTH_JSON').replace('${repo.fullName}', 'acme/api');
-  assert.equal(command, `d="$(mktemp -d)"; echo 'cli_auth_credentials_store = "file"' > "$d/config.toml"; CODEX_HOME="$d" codex login && gh secret set CODEX_AUTH_JSON --repo acme/api < "$d/auth.json"; rm -rf "$d"`);
+  assert.equal(command, `d="$(mktemp -d)" && echo 'cli_auth_credentials_store = "file"' > "$d/config.toml" && CODEX_HOME="$d" codex login && gh secret set CODEX_AUTH_JSON --repo acme/api < "$d/auth.json"; [ -n "$d" ] && rm -rf "$d"`);
 });
 
 test('run with a temp folder whose path has a space, it removes only its own folder', () => {
@@ -38,6 +38,35 @@ test('run with a temp folder whose path has a space, it removes only its own fol
     assert.equal(readFileSync(saved, 'utf8'), '{"tokens":"t"}', 'gh got the new login');
     assert.ok(existsSync(join(victim, 'keep.txt')), 'the folder beside it is untouched');
     assert.equal(execFileSync('ls', ['-A', spaced]).toString(), '', 'and its own folder is gone');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('when mktemp fails, it writes nothing, signs in to nothing, and removes nothing', () => {
+  const command = line.replace('${LOGIN_SECRET[LOGIN_INPUTS.codex[0]]}', 'CODEX_AUTH_JSON').replace('${repo.fullName}', 'acme/api');
+  const root = mkdtempSync(join(tmpdir(), 'ml-login-'));
+  try {
+    const keep = join(root, 'keep');
+    mkdirSync(keep);
+    writeFileSync(join(keep, 'keep.txt'), 'keep');
+    const bin = join(root, 'bin');
+    mkdirSync(bin);
+    const ran = join(root, 'ran');
+    writeFileSync(join(bin, 'mktemp'), '#!/bin/bash\necho "mktemp: failed" >&2\nexit 1\n');
+    // Any of these running would leave a mark.
+    for (const tool of ['codex', 'gh', 'rm']) writeFileSync(join(bin, tool), `#!/bin/bash\necho ${tool} >> "${ran}"\n`);
+    for (const tool of ['mktemp', 'codex', 'gh', 'rm']) chmodSync(join(bin, tool), 0o755);
+    let failed = false;
+    try {
+      execFileSync('bash', ['-c', command], { cwd: keep, env: { ...process.env, PATH: `${bin}:/usr/bin:/bin` }, stdio: 'pipe' });
+    } catch {
+      failed = true;
+    }
+    assert.equal(failed, true, 'the line fails');
+    assert.equal(existsSync(ran), false, 'codex, gh and rm never ran');
+    assert.ok(existsSync(join(keep, 'keep.txt')), 'and nothing was removed');
+    assert.equal(execFileSync('ls', ['-A', keep]).toString().trim(), 'keep.txt', 'nor written');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

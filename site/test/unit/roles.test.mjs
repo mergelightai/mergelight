@@ -283,3 +283,15 @@ test('a step in a run script is an example: never edited, and its workflow is cu
   assert.equal(withRoles(only, { reviewer: 'claude', checker: 'codex' }), null, 'and is never edited');
   assert.equal(stepInScalar(template), false);
 });
+
+test('an empty model or effort is left out, so the reviewer can change', () => {
+  assert.equal(reviewerFixedBy(step(['model: ""'])), null);
+  assert.equal(reviewerFixedBy(step(['model:'])), null);
+  assert.equal(reviewerFixedBy(step(["effort: ''"])), null);
+  assert.equal(reviewerFixedBy(step(['model: opus'])), 'model');
+});
+
+test('a review on a branch of the Action is set up its own way', () => {
+  for (const ref of ['v0', 'v1', 'v0.1.19', 'a'.repeat(40)]) assert.equal(isStandard(template.replace('mergelight@v0', `mergelight@${ref}`)), true, ref);
+  for (const ref of ['main', 'feature/x', 'v0.1']) assert.equal(isStandard(template.replace('mergelight@v0', `mergelight@${ref}`)), false, ref);
+});
