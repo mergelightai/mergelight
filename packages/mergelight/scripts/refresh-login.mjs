@@ -36,9 +36,10 @@ export function ownLoginCommand(secret = "CODEX_AUTH_JSON", repo = "OWNER/REPO")
 }
 
 /**
- * The GitHub environment this job runs in, from GitHub's signed pass for the run: "" for none, and null
- * when it can't be told, as without "id-token: write". An environment's secret wins over the repository's
- * of the same name, so the login may be the environment's.
+ * The GitHub environment this job runs in, from GitHub's signed pass for the run: "" for none, null when
+ * the job can't get a pass (no "id-token: write"), and undefined when GitHub didn't give one this time.
+ * An environment's secret wins over the repository's of the same name, so the login may be the
+ * environment's.
  */
 export async function jobEnvironment({ env = process.env, fetchImpl = fetch } = {}) {
   if (!env.ACTIONS_ID_TOKEN_REQUEST_URL || !env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) return null;
@@ -46,12 +47,12 @@ export async function jobEnvironment({ env = process.env, fetchImpl = fetch } = 
     const url = new URL(env.ACTIONS_ID_TOKEN_REQUEST_URL);
     url.searchParams.set("audience", "mergelight-login-check");
     const res = await fetchImpl(url, { headers: { authorization: `Bearer ${env.ACTIONS_ID_TOKEN_REQUEST_TOKEN}` } });
-    if (res.status !== 200) return null;
+    if (res.status !== 200) return undefined;
     const { value } = await res.json();
     const claims = JSON.parse(Buffer.from(String(value).split(".")[1], "base64url").toString("utf8"));
     return typeof claims.environment === "string" ? claims.environment : "";
   } catch {
-    return null;
+    return undefined;
   }
 }
 
@@ -211,7 +212,7 @@ export async function refreshLogin({
   // An environment's secret of the same name wins over the repository's, and can't be read with the
   // token that saves the login: a job in an environment, or one that can't be told, isn't refreshed.
   const where = await environment();
-  const owned = where === null ? "blind" : where ? "environment" : await held(token);
+  const owned = where === null ? "blind" : where === undefined ? "unknown" : where ? "environment" : await held(token);
   if (owned !== "yes") {
     const message = {
       no: `This repository reads its ChatGPT login from a ${secret} secret it doesn't hold itself, such as an organization's. Mergelight doesn't refresh a login other repositories share, as that would sign them out. Save a login of its own as this repository's secret, then push: ${ownLoginCommand(secret, env.GITHUB_REPOSITORY)}`,
@@ -230,9 +231,8 @@ export async function refreshLogin({
       return 1;
     }
     log(`::error::${message}`);
-    // The review says the same. A login it may share is called that when it only checks.
-    const shared = owned === "no" || owned === "environment" ? "MERGELIGHT_LOGIN_SHARED=1\n" : "";
-    if (env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, `${shared}MERGELIGHT_LOGIN_SHORT=1\nMERGELIGHT_LOGIN_LOST=1\nMERGELIGHT_LOGIN_NOTE=${message}\n`);
+    // The review says the same, also when Codex only checks.
+    if (env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, `MERGELIGHT_LOGIN_SHORT=1\nMERGELIGHT_LOGIN_LOST=1\nMERGELIGHT_LOGIN_NOTE=${message}\n`);
     return 0;
   }
 

@@ -17,7 +17,7 @@ const MAX_BODY = 65_000;
  * markers or ping people.
  */
 /** Says when the AI the team asked to check had no login yet, so the reviewer's own AI checked instead. */
-export function checkerMissedLine(r: Pick<Review, "checker_missed" | "checker_missed_why" | "provider">): string | null {
+export function checkerMissedLine(r: Pick<Review, "checker_missed" | "checker_missed_why" | "checker_missed_note" | "provider">): string | null {
   if (!r.checker_missed || r.checker_missed === r.provider.name) return null;
   const name = (ai: "codex" | "claude") => (ai === "codex" ? "Codex" : "Claude");
   const login = r.checker_missed === "codex" ? "ChatGPT" : "Claude";
@@ -29,10 +29,10 @@ export function checkerMissedLine(r: Pick<Review, "checker_missed" | "checker_mi
     // A plan's usage or an API key's credit: it can be either.
     limit: "it hit its usage limit",
     sandbox: `${name(r.checker_missed)}'s sandbox couldn't start on this runner`,
-    // Read from a secret other repositories share, which Mergelight doesn't refresh: it would sign them out.
-    shared: "its ChatGPT login comes from a secret this repository doesn't hold itself, such as an organization's or an environment's, and Mergelight doesn't refresh a shared login",
+    // Held back on purpose, as one other repositories share: the note says why, and what to do.
+    held: "Mergelight held its ChatGPT login back",
   }[r.checker_missed_why ?? "no-login"];
-  const then = r.checker_missed_why === "shared" ? " The workflow log says how to save a login of its own." : "";
+  const then = r.checker_missed_why === "held" && r.checker_missed_note ? ` ${clean(r.checker_missed_note)}` : "";
   return `⚠️ ${name(r.checker_missed)} was set to check this review, but ${why}, so ${name(r.provider.name)} checked it.${then}`;
 }
 

@@ -105,7 +105,9 @@ export interface Review {
   /** The AI the team asked to check the findings, which had no login yet, so the reviewer's own AI checked. */
   checker_missed?: "codex" | "claude";
   /** Why it couldn't check: no login yet (the default), it couldn't be installed, its login didn't work, or its plan was used up. */
-  checker_missed_why?: "no-login" | "not-installed" | "login-failed" | "limit" | "sandbox" | "shared";
+  checker_missed_why?: "no-login" | "not-installed" | "login-failed" | "limit" | "sandbox" | "held";
+  /** For "held": why the login step held the checker's login back, and what to do. */
+  checker_missed_note?: string;
   verifier?: { name: "codex" | "claude"; model: string | null; effort: string; cost_usd?: number | null };
   light: Light;
   summary: string;

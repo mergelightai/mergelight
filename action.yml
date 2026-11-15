@@ -272,7 +272,6 @@ runs:
           echo "MERGELIGHT_NO_LOGIN=$no_login"
           echo "MERGELIGHT_LOGIN_LOST=0"
           echo "MERGELIGHT_LOGIN_SHORT=0"
-          echo "MERGELIGHT_LOGIN_SHARED=0"
           echo "MERGELIGHT_LOGIN_NOTE="
         } >> "$GITHUB_ENV"
 
@@ -338,7 +337,6 @@ runs:
           echo "MERGELIGHT_CONNECT=0"
           echo "MERGELIGHT_LOGIN_LOST=0"
           echo "MERGELIGHT_LOGIN_SHORT=0"
-          echo "MERGELIGHT_LOGIN_SHARED=0"
           echo "MERGELIGHT_LOGIN_NOTE="
           echo "MERGELIGHT_LOGIN_READ_AT="
         } >> "$GITHUB_ENV"
@@ -579,10 +577,11 @@ runs:
         [ -n "$missed" ] && args+=(--verify-missed "$missed")
         [ -n "$missed" ] && [ "${MERGELIGHT_CHECKER_NOT_INSTALLED:-0}" = 1 ] && args+=(--verify-missed-why not-installed)
         # A saved ChatGPT login that couldn't be refreshed or read is one that stopped working, not one never
-        # connected. One that other repositories share isn't refreshed, and the summary says that instead.
+        # connected. One the login step held back on purpose, as one other repositories share, has its own
+        # reason, which the summary gives.
         if [ "$missed" = codex ] && [ "${MERGELIGHT_CHECKER_NOT_INSTALLED:-0}" != 1 ]; then
-          if [ "${MERGELIGHT_LOGIN_SHARED:-0}" = 1 ]; then
-            args+=(--verify-missed-why shared)
+          if [ -n "${MERGELIGHT_LOGIN_NOTE:-}" ]; then
+            args+=(--verify-missed-why held)
           elif [ "${MERGELIGHT_LOGIN_LOST:-0}" = 1 ] || [ "${MERGELIGHT_CHATGPT:-0}" = 1 ] || [ "${MERGELIGHT_CHECKER_LOGIN_FAILED:-0}" = 1 ]; then
             args+=(--verify-missed-why login-failed)
           fi
