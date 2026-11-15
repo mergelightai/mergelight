@@ -422,7 +422,8 @@ await scenario('link-to-a-repo-they-cannot-see', { comments: [CLAUDE_COMMENT()],
   world.onlyOther = false;
   await wait(800); // The screen slides in, and a click during that misses.
   await click('a', 'Choose on GitHub');
-  const after = await until((x) => /Paste the code Claude shows you/.test(x), 'the Claude step after giving access');
+  // The link comes with the run's comment, which the page reads a moment after the step shows.
+  const after = await until((x) => /Paste the code Claude shows you/.test(x) && /Open Claude/.test(x), 'the Claude step after giving access');
   expect(/Open Claude/.test(after), 'comes straight back to the pull request that sent them');
 });
 
