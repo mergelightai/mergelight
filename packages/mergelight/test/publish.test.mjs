@@ -9,8 +9,8 @@ import { fileURLToPath } from "node:url";
 import { parsePatch, place } from "../dist/publish/diff-lines.js";
 import { mergeLight, tierOf } from "../dist/review.js";
 import { closedBody, patchTouches, readClosed, reopenedBody, resolvedByPeople, threadAction } from "../dist/publish/closed.js";
-import { checkerMissedLine, clean, failedSummaryBody, isFailedSummary, limitNotice, notReadLine, loginNotice, FINDING_MARKER_RE, inlineBody, isPendingSummary, pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "../dist/publish/markdown.js";
-import { APPROVAL_MARKER, approvalHold, approvalLight, checkLimitTitle as limitTitle, failSummary, startCheck, startSummary, UNREVIEWED, checkConclusion, isYellowCheck, syncApproval, trustedComment, CHECK_FAILED_TITLE, checkLimitTitle, checkLoginTitle, isFailedCheckTitle } from "../dist/publish/publish.js";
+import { checkerMissedLine, clean, failedSummaryBody, heldLoginNotice, isFailedSummary, limitNotice, notReadLine, loginNotice, FINDING_MARKER_RE, inlineBody, isPendingSummary, pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "../dist/publish/markdown.js";
+import { APPROVAL_MARKER, approvalHold, approvalLight, checkHeldTitle, checkLimitTitle as limitTitle, failSummary, startCheck, startSummary, UNREVIEWED, checkConclusion, isYellowCheck, syncApproval, trustedComment, CHECK_FAILED_TITLE, checkLimitTitle, checkLoginTitle, isFailedCheckTitle } from "../dist/publish/publish.js";
 import { decodeState, encodeState, nextState } from "../dist/publish/state.js";
 import { buildVerifierPrompt } from "../dist/prompt.js";
 import { assignIds } from "../dist/review.js";
@@ -746,4 +746,13 @@ test("a dead prompt to connect the checking AI gives way to the review when it s
   assert.equal(writes.length, 1);
   assert.match(writes[0].body.body, /Mergelight: Reviewing/);
   assert.doesNotMatch(writes[0].body.body, /AAAA-BBBB/);
+});
+
+test("a login held back on purpose isn't called one that didn't work", () => {
+  const notice = heldLoginNotice("GitHub couldn't say whose it is. Nothing is wrong with the login: run the Mergelight job again.");
+  assert.equal(notice.heading, "⚠️ Mergelight: the ChatGPT login was held back");
+  assert.doesNotMatch(notice.heading, /didn't work/);
+  assert.match(notice.body, /Nothing is wrong with the login/);
+  assert.equal(checkHeldTitle, "Couldn't review this pull request: the ChatGPT login was held back");
+  assert.ok(isFailedCheckTitle(checkHeldTitle), "a later run still knows this check as one that couldn't review");
 });

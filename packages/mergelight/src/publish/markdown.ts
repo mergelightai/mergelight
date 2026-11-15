@@ -129,6 +129,8 @@ export interface FailureNotice {
 }
 
 export const loginNotice = (plan: string, reason: string): FailureNotice => ({ heading: `⚠️ Mergelight: the ${plan} login didn't work`, body: reason });
+/** For a login held back on purpose: the reason says why and what to do, and nothing is wrong with the login. */
+export const heldLoginNotice = (reason: string): FailureNotice => ({ heading: "⚠️ Mergelight: the ChatGPT login was held back", body: reason });
 
 export function limitNotice(plan: string, resets: string | null): FailureNotice {
   // An API key's credit, not a plan: the fix is adding credit.

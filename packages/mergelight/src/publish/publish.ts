@@ -206,6 +206,7 @@ export async function answerRemembered(api: GitHub, number: number, ids: string[
 
 export const CHECK_FAILED_TITLE = "Couldn't review this pull request";
 export const checkLoginTitle = (plan: string) => `The ${plan} login didn't work`;
+export const checkHeldTitle = `${CHECK_FAILED_TITLE}: the ChatGPT login was held back`;
 export const checkLimitTitle = (plan: string) => (plan === "OpenAI" || plan === "Anthropic" ? `${CHECK_FAILED_TITLE}: the ${plan} API key has no usage left` : `${CHECK_FAILED_TITLE}: your ${plan} plan hit its limit`);
 export const isFailedCheckTitle = (title: string | null | undefined) => Boolean(title && (title.startsWith(CHECK_FAILED_TITLE) || /^The \w+ login didn't work$/.test(title)));
 

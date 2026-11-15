@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { test } from "node:test";
 import { claudeEnv, runClaude } from "../dist/providers/claude.js";
-import { codexEnv, LimitError, limitFrom, LoginError, loginFailureMessage, runCodex, SandboxError, sandboxArgs, scrubSecrets } from "../dist/providers/codex.js";
+import { codexEnv, HeldLoginError, LimitError, limitFrom, LoginError, loginFailureMessage, runCodex, SandboxError, sandboxArgs, scrubSecrets } from "../dist/providers/codex.js";
 
 /** Puts a stand-in codex first on the PATH that fails with this message, on a run with this login. */
 async function failingCodex(stderr, { stdout = "", chatgpt = "1" } = {}) {
@@ -80,6 +80,8 @@ test("other failures keep their own message", async () => {
 
 test("the message names the secret this repository uses", () => {
   assert.match(loginFailureMessage("MY_LOGIN"), /delete the MY_LOGIN secret/);
+  // A login held back on purpose is still a login problem for the review, but has its own headings.
+  assert.ok(new HeldLoginError("why") instanceof LoginError);
 });
 
 test("the sandbox can read everything except the login folder", () => {
