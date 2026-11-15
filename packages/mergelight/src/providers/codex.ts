@@ -20,6 +20,9 @@ export class LoginError extends Error {
   }
 }
 
+/** A login held back on purpose before the review, as one other repositories share: nothing is wrong with it. */
+export class HeldLoginError extends LoginError {}
+
 /** Whose login: a ChatGPT plan, a Claude plan, or an OpenAI API key. */
 export type Plan = "ChatGPT" | "Claude" | "OpenAI" | "Anthropic" | "Codex";
 

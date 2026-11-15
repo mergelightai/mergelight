@@ -232,7 +232,7 @@ runs:
               # Anyone who can see the pull request could enter a ChatGPT code shown there, and pick whose
               # account checks: only a private repository shows one, and one that can't be told doesn't.
               # Claude's link instead goes through mergelight.dev, where you sign in.
-              echo "::notice::Codex is set to check, but only a private repository shows a ChatGPT code, as anyone who can see the pull request could enter it. Save a ChatGPT login of its own as the ${SECRET_NAME:-CODEX_AUTH_JSON} secret yourself, never the one your own Codex uses: d=\$(mktemp -d); echo 'cli_auth_credentials_store = \"file\"' > \$d/config.toml; CODEX_HOME=\$d codex login && gh secret set ${SECRET_NAME:-CODEX_AUTH_JSON} --repo $GITHUB_REPOSITORY < \$d/auth.json; rm -rf \$d. This review is checked by $provider."
+              echo "::notice::Codex is set to check, but only a private repository shows a ChatGPT code, as anyone who can see the pull request could enter it. Save a ChatGPT login of its own as the ${SECRET_NAME:-CODEX_AUTH_JSON} secret yourself, never the one your own Codex uses: d=\"\$(mktemp -d)\" && echo 'cli_auth_credentials_store = \"file\"' > \"\$d/config.toml\" && CODEX_HOME=\"\$d\" codex login && gh secret set ${SECRET_NAME:-CODEX_AUTH_JSON} --repo $GITHUB_REPOSITORY < \"\$d/auth.json\"; rm -rf \"\$d\". This review is checked by $provider."
             elif [ "$checker" = codex ] && [ -z "$WANTED" ]; then
               # Claude reviews only because it has the one login: with a ChatGPT login saved too, the next
               # run would pick Codex to review. So the sign-in waits for the workflow to say who reviews.
@@ -272,6 +272,7 @@ runs:
           echo "MERGELIGHT_NO_LOGIN=$no_login"
           echo "MERGELIGHT_LOGIN_LOST=0"
           echo "MERGELIGHT_LOGIN_SHORT=0"
+          echo "MERGELIGHT_LOGIN_NOTE="
         } >> "$GITHUB_ENV"
 
     - name: Install Claude Code
@@ -336,12 +337,19 @@ runs:
           echo "MERGELIGHT_CONNECT=0"
           echo "MERGELIGHT_LOGIN_LOST=0"
           echo "MERGELIGHT_LOGIN_SHORT=0"
+          echo "MERGELIGHT_LOGIN_NOTE="
+          echo "MERGELIGHT_LOGIN_READ_AT="
+          echo "MERGELIGHT_LOGIN_SAVED_AT="
         } >> "$GITHUB_ENV"
         if [ -n "$AUTH_JSON" ]; then
           printf 'cli_auth_credentials_store = "file"\n' > "$CODEX_HOME/config.toml"
           printf '%s' "$AUTH_JSON" > "$CODEX_HOME/auth.json"
           chmod 600 "$CODEX_HOME/auth.json"
           sha256sum "$CODEX_HOME/auth.json" | cut -d' ' -f1 > "$RUNNER_TEMP/codex-auth.sha256"
+          # When the job got the secret, at the latest, less ten minutes for its start. A secret saved again
+          # after this isn't the login this run has, so this run doesn't refresh it. The refresh also takes
+          # the pull request event's time when that is earlier.
+          echo "MERGELIGHT_LOGIN_READ_AT=$(( $(date -u +%s) - 600 ))" >> "$GITHUB_ENV"
           echo "MERGELIGHT_CHATGPT=1" >> "$GITHUB_ENV"
         elif [ -n "$API_KEY" ]; then
           if ! printf '%s' "$API_KEY" | codex login --with-api-key; then
@@ -569,8 +577,16 @@ runs:
         args=(review "$GITHUB_REPOSITORY#$PR" --post --provider "$MERGELIGHT_PROVIDER" --verify-with "$verify" --out "$RUNNER_TEMP/mergelight-review.json")
         [ -n "$missed" ] && args+=(--verify-missed "$missed")
         [ -n "$missed" ] && [ "${MERGELIGHT_CHECKER_NOT_INSTALLED:-0}" = 1 ] && args+=(--verify-missed-why not-installed)
-        # A saved ChatGPT login that couldn't be refreshed or read is one that stopped working, not one never connected.
-        [ "$missed" = codex ] && [ "${MERGELIGHT_CHECKER_NOT_INSTALLED:-0}" != 1 ] && { [ "${MERGELIGHT_LOGIN_LOST:-0}" = 1 ] || [ "${MERGELIGHT_CHATGPT:-0}" = 1 ] || [ "${MERGELIGHT_CHECKER_LOGIN_FAILED:-0}" = 1 ]; } && args+=(--verify-missed-why login-failed)
+        # A saved ChatGPT login that couldn't be refreshed or read is one that stopped working, not one never
+        # connected. One the login step held back on purpose, as one other repositories share, has its own
+        # reason, which the summary gives.
+        if [ "$missed" = codex ] && [ "${MERGELIGHT_CHECKER_NOT_INSTALLED:-0}" != 1 ]; then
+          if [ -n "${MERGELIGHT_LOGIN_NOTE:-}" ]; then
+            args+=(--verify-missed-why held)
+          elif [ "${MERGELIGHT_LOGIN_LOST:-0}" = 1 ] || [ "${MERGELIGHT_CHATGPT:-0}" = 1 ] || [ "${MERGELIGHT_CHECKER_LOGIN_FAILED:-0}" = 1 ]; then
+            args+=(--verify-missed-why login-failed)
+          fi
+        fi
         [ -n "$MODEL" ] && args+=(--model "$MODEL")
         [ -n "$EFFORT" ] && args+=(--effort "$EFFORT")
         [ -n "$COMMIT" ] && args+=(--at "$COMMIT")
