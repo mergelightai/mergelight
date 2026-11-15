@@ -403,13 +403,13 @@ await scenario('pr-opened-meanwhile', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'] }, 
   expect(world.writes.length === 0, 'and nothing was written');
 });
 
-await scenario('tagged-repo-gets-a-tagged-job', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], file: TEMPLATE.replace('mergelightai/mergelight@v0', 'mergelightai/mergelight@v0.1.5') }, async ({ world, until, click, reachLive, choose }) => {
+await scenario('tagged-repo-gets-a-tagged-job', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], file: TEMPLATE.replace('mergelightai/mergelight@v0', 'mergelightai/mergelight@v0.2.0') }, async ({ world, until, click, reachLive, choose }) => {
   await reachLive();
   await choose('Add ChatGPT');
   await click('button', 'Open PR');
   await until((x) => /Merge your PR first/.test(x), 'the next step');
   const job = world.writes.find((w) => w.m === 'PUT' && w.p.endsWith('/mergelight-refresh.yml'));
-  expect(job && unb64(job.body.content).includes('uses: mergelightai/mergelight@v0.1.5\n'), 'the job runs the same tag as the review');
+  expect(job && unb64(job.body.content).includes('uses: mergelightai/mergelight@v0.2.0\n'), 'the job runs the same tag as the review');
 });
 
 
@@ -912,7 +912,8 @@ await scenario('back-after-a-late-secrets-read', { secrets: ['CLAUDE_CODE_OAUTH_
   await until((x) => /Choose your AI/.test(x), 'the choice');
   await wait(3500);
   const t = await text();
-  expect(/We can't read all of this repo's secrets/.test(t), 'says why there is no choice now');
+  // That read was for the live step, which they left, so its late answer is dropped and the choice stays.
+  expect(/Choose your AI/.test(t) && /Open PR/.test(t) && !/We can't read all of this repo's secrets/.test(t), 'the late answer changes nothing on the choice');
   expect(await page.evaluate(() => [...document.querySelectorAll('button')].some((b) => b.textContent.includes('Back'))), 'and Back is still there');
 });
 
