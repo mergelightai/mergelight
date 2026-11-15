@@ -395,6 +395,9 @@ export default function Setup() {
   const linkContent = typeof linkFile === 'object' && linkFile ? linkFile.content : null;
   const connectFile = startOnClaude ? (linkContent ?? liveFile) : (rolesChange?.content ?? liveFile);
   const connectLogins = useMemo(() => loginsIn(connectFile, secretNames, sharedSecrets), [connectFile, secretNames, sharedSecrets]);
+  // Each read of the secrets makes a new list, so the polling reads this without restarting on it.
+  const connectLoginsNow = useRef(connectLogins);
+  connectLoginsNow.current = connectLogins;
 
   // Following the first review and the merge once the pull request exists. A failed read just waits for the next one.
   useEffect(() => {
@@ -450,7 +453,7 @@ export default function Setup() {
       const asked = code?.purpose === 'check' ? onlyAi(code) : null;
       if (asked && asked !== askedCheck) setAskedCheck(asked);
       // A change of AI waits for the login of the AI it connects now. Its run can be reviewing with the other AI before it asks.
-      const need = rolesChange?.needs.find((ai) => !connectLogins[ai]) ?? asked ?? askedCheck;
+      const need = rolesChange?.needs.find((ai) => !connectLoginsNow.current[ai]) ?? asked ?? askedCheck;
       const connected = need ? Boolean(seen?.[need]) || /^connected/i.test(check?.title ?? '') : movedOn;
       if (view === 'connect' && (need ? connected : (login && !code && !startOnClaude) || movedOn)) {
         // Only once this run has moved on: it has read the code then, and the next screen can send them back to GitHub at
@@ -464,7 +467,7 @@ export default function Setup() {
     });
     // readLinkFile only sets state, so it isn't one.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, client, repo, pr, startOnClaude, rolesChange, workflow, files, missedSha, askedCheck, connectFile, connectLogins, branch]);
+  }, [view, client, repo, pr, startOnClaude, rolesChange, workflow, files, missedSha, askedCheck, connectFile, branch]);
 
   // A pull request's link can be any pull request. Only one on a repo without the workflow is the one that sets it up.
   // A change of AI is on a repo that's already on, so it never shows as a setup either.
