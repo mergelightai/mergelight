@@ -217,3 +217,18 @@ test('reviewerFixedBy: a model, or an effort only one AI takes, ties the review 
   assert.equal(reviewerFixedBy(step(['effort: xhigh'])), 'effort');
   assert.equal(reviewerFixedBy(step(['effort: ${{ vars.EFFORT }}'])), 'effort', "an effort that can't be read counts too");
 });
+
+test("an organization's ChatGPT plan login isn't the repo's own, but its API key counts", () => {
+  assert.deepEqual(loginsFrom(['CLAUDE_CODE_OAUTH_TOKEN', 'CODEX_AUTH_JSON'], ['CODEX_AUTH_JSON']), claudeOnly);
+  assert.deepEqual(loginsFrom(['CLAUDE_CODE_OAUTH_TOKEN', 'OPENAI_API_KEY'], ['OPENAI_API_KEY']), both);
+  assert.deepEqual(loginsIn(template, ['CODEX_AUTH_JSON'], ['CODEX_AUTH_JSON']), none);
+  assert.deepEqual(loginsIn(template, ['CODEX_AUTH_JSON']), codexOnly, 'without saying which are shared, every secret counts');
+});
+
+test('a job with an environment, or a step that runs the jobs, is set up its own way', () => {
+  const withEnvironment = template.replace('    runs-on: ubuntu-latest\n', '    runs-on: ubuntu-latest\n    environment: ai\n');
+  assert.notEqual(withEnvironment, template);
+  assert.equal(isStandard(withEnvironment), false, 'its secrets are out of sight');
+  assert.equal(isStandard(step(['run: jobs'])), false);
+  assert.equal(isStandard(step(['run: review'])), true);
+});

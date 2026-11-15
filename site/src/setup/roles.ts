@@ -35,10 +35,17 @@ export const LOGIN_SECRET: Record<string, string> = {
   'anthropic-api-key': 'ANTHROPIC_API_KEY',
 };
 
+/**
+ * Whether a login input's secret is one this page counts. A ChatGPT plan's login the repo only gets from its organization
+ * doesn't count: a review can't refresh it without signing out the other repos that share it, so the repo needs its own.
+ * An API key has nothing to refresh, so the organization's counts. `shared` is the organization's secrets.
+ */
+const counts = (input: string, secretNames: string[], shared: string[]) => secretNames.includes(LOGIN_SECRET[input]!) && !(input === LOGIN_INPUTS.codex[0] && shared.includes(LOGIN_SECRET[input]!));
+
 /** Which AIs have a login, from the secrets' names, for a workflow that hands every login input its own secret. */
-export const loginsFrom = (secretNames: string[]): Logins => ({
-  claude: LOGIN_INPUTS.claude.some((input) => secretNames.includes(LOGIN_SECRET[input]!)),
-  codex: LOGIN_INPUTS.codex.some((input) => secretNames.includes(LOGIN_SECRET[input]!)),
+export const loginsFrom = (secretNames: string[], shared: string[] = []): Logins => ({
+  claude: LOGIN_INPUTS.claude.some((input) => counts(input, secretNames, shared)),
+  codex: LOGIN_INPUTS.codex.some((input) => counts(input, secretNames, shared)),
 });
 
 export const otherAi = (ai: Ai): Ai => (ai === 'claude' ? 'codex' : 'claude');
@@ -208,8 +215,12 @@ export function readRoles(content: string): SetRoles | null {
 export function isStandard(content: string): boolean {
   const step = locate(content);
   if (!step) return false;
+  // A job's environment has secrets of its own, which this page can't see.
+  if (step.text.some((t) => /^[ \t]+environment[ \t]*:/.test(t))) return false;
   return step.entries.every(({ key }) => {
     if (key === 'auth-secret-name') return false;
+    // A step that runs the jobs has its own AI, and only the review's is this page's to change.
+    if (key === 'run') return readValue(step, key) === 'review';
     if (key === 'provider' || key === 'verify-with') return readAi(step, key) !== null;
     const secret = LOGIN_SECRET[key];
     return !secret || new RegExp(`^\\$\\{\\{\\s*secrets\\.${secret}\\s*\\}\\}$`, 'i').test(readValue(step, key) ?? '');
@@ -238,10 +249,10 @@ export function loginInputs(content: string): string[] {
  * Which AIs have a login the Action gets: a secret that's there, read by an input the step has. Without a standard
  * step to read, the secrets alone tell.
  */
-export function loginsIn(content: string | null, secretNames: string[]): Logins {
-  if (!content || !isStandard(content)) return loginsFrom(secretNames);
+export function loginsIn(content: string | null, secretNames: string[], shared: string[] = []): Logins {
+  if (!content || !isStandard(content)) return loginsFrom(secretNames, shared);
   const inputs = loginInputs(content);
-  const has = (ai: Ai) => LOGIN_INPUTS[ai].some((input) => inputs.includes(input) && secretNames.includes(LOGIN_SECRET[input]!));
+  const has = (ai: Ai) => LOGIN_INPUTS[ai].some((input) => inputs.includes(input) && counts(input, secretNames, shared));
   return { claude: has('claude'), codex: has('codex') };
 }
 

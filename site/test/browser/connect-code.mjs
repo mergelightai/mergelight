@@ -82,7 +82,7 @@ async function scenario(name, start, body) {
       if (p === '/pulls') return json(req, []);
       if (p === '/pulls/7') return json(req, { merged: false, head: { sha: world.head } });
       if (p === '/issues/7/comments') return world.commentsStatus === 200 ? json(req, world.comments) : json(req, { message: 'no' }, world.commentsStatus);
-      if (p === '/actions/secrets') return json(req, { secrets: world.login ? [{ name: 'CODEX_AUTH_JSON' }] : [] });
+      if (p === '/actions/secrets') return json(req, { secrets: [...(world.login ? [{ name: 'CODEX_AUTH_JSON' }] : []), ...(world.claudeSaved ? [{ name: 'CLAUDE_CODE_OAUTH_TOKEN' }] : [])] });
       if (p.startsWith('/contents/')) return world.installed && p.endsWith('mergelight.yml') || (world.installed && p.includes('mergelight.yml?')) ? json(req, { sha: 'filesha', content: Buffer.from(`    steps:\n      - uses: mergelightai/mergelight@${'b'.repeat(40)} # v0.1.0\n`).toString('base64') }) : json(req, {}, 404);
       if (p.startsWith('/git/ref/heads/')) return json(req, { object: { sha: 'basesha' } });
       const run = p.match(/^\/commits\/([^/]+)\/check-runs/);
@@ -336,6 +336,20 @@ await scenario('claude-button-and-paste', { comments: [CLAUDE_COMMENT()], checks
   const end = Date.now() + 14000;
   while (Date.now() < end && !world.removed?.length) await new Promise((r) => setTimeout(r, 200));
   expect(world.removed?.[0] === `refs/${claudeCodeRef(CLAUDE)}` && world.removed.length === 1, 'removes its own code as soon as the run has connected, before anyone can leave the page');
+});
+
+await scenario('another-runs-login-keeps-this-code', { comments: [CLAUDE_COMMENT()], checks: { headsha: WAITING } }, async ({ page, world, click, until }) => {
+  await page.goto(claudeSetupLink('acme/api', 7), { waitUntil: 'networkidle2' });
+  await until((x) => /Paste the code Claude shows you/.test(x), 'the Claude step');
+  await wait(900);
+  await page.type('input[aria-label="Code from Claude"]', WHOLE);
+  await click('button', 'Connect');
+  await until((x) => /Connecting to Claude/.test(x), 'the connecting line');
+  // Another pull request's run saves a Claude login, while this run still waits to read its code.
+  world.claudeSaved = true;
+  await until((x) => /Your PR is open|Mergelight is on/.test(x), 'the next screen, as a login is there now');
+  await wait(4000);
+  expect(!world.removed?.length, "keeps this run's code until this run has read it");
 });
 
 await scenario('link-from-the-pull-request', { comments: [CLAUDE_COMMENT()], checks: { headsha: WAITING }, login: true }, async ({ page, world, until, click, shot }) => {
