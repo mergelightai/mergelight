@@ -42,10 +42,19 @@ export const LOGIN_SECRET: Record<string, string> = {
  */
 const counts = (input: string, secretNames: string[], shared: string[]) => secretNames.includes(LOGIN_SECRET[input]!) && !(input === LOGIN_INPUTS.codex[0] && shared.includes(LOGIN_SECRET[input]!));
 
+/**
+ * The Action uses a ChatGPT plan's login before an OpenAI key, so when the one it would get is the organization's, an
+ * API key never gets used, and ChatGPT still needs a login of the repo's own. `inputs` is what the workflow passes on.
+ */
+const sharedPlanWins = (inputs: string[], secretNames: string[], shared: string[]) => {
+  const plan = LOGIN_INPUTS.codex[0];
+  return inputs.includes(plan) && secretNames.includes(LOGIN_SECRET[plan]!) && shared.includes(LOGIN_SECRET[plan]!);
+};
+
 /** Which AIs have a login, from the secrets' names, for a workflow that hands every login input its own secret. */
 export const loginsFrom = (secretNames: string[], shared: string[] = []): Logins => ({
   claude: LOGIN_INPUTS.claude.some((input) => counts(input, secretNames, shared)),
-  codex: LOGIN_INPUTS.codex.some((input) => counts(input, secretNames, shared)),
+  codex: !sharedPlanWins(Object.keys(LOGIN_SECRET), secretNames, shared) && LOGIN_INPUTS.codex.some((input) => counts(input, secretNames, shared)),
 });
 
 export const otherAi = (ai: Ai): Ai => (ai === 'claude' ? 'codex' : 'claude');
@@ -95,6 +104,8 @@ interface Step {
   /** Each line with its own line ending, so the parts nobody touches come out byte for byte. */
   lines: string[];
   text: string[];
+  /** The step's first line, with its dash. */
+  start: number;
   usesLine: number;
   /** Where the step's own keys start, like `uses` and `with`. */
   keyCol: number;
@@ -157,7 +168,7 @@ function locate(content: string): Step | null {
   for (let i = start; i < end; i++) if (/^with[ \t]*:/.test(keyOn(i) ?? '')) withs.push(i);
   if (withs.length > 1) return null;
   const withLine = withs[0] ?? null;
-  if (withLine === null) return { lines, text, usesLine, keyCol, withLine, childIndent: keyCol + 2, entries: [], blockEnd: usesLine + 1 };
+  if (withLine === null) return { lines, text, start, usesLine, keyCol, withLine, childIndent: keyCol + 2, entries: [], blockEnd: usesLine + 1 };
   // Values written on the same line, like `with: { provider: codex }`, aren't edited.
   if (!/^with[ \t]*:[ \t]*(?:#.*)?$/.test(keyOn(withLine)!)) return null;
 
@@ -183,7 +194,34 @@ function locate(content: string): Step | null {
   }
   const keys = entries.map((e) => e.key);
   if (new Set(keys).size !== keys.length) return null;
-  return { lines, text, usesLine, keyCol, withLine, childIndent: childIndent < 0 ? keyCol + 2 : childIndent, entries, blockEnd };
+  return { lines, text, start, usesLine, keyCol, withLine, childIndent: childIndent < 0 ? keyCol + 2 : childIndent, entries, blockEnd };
+}
+
+/**
+ * The keys of the job that holds the step, like `runs-on` and `environment`. Null when the step isn't under a
+ * `steps:` the usual way, which isn't guessed at.
+ */
+function jobKeys(step: Step): string[] | null {
+  const { text } = step;
+  const dash = indentOf(text[step.start]!);
+  // Up past the steps before this one, to its `steps:`.
+  let i = step.start - 1;
+  while (i >= 0 && (NOTE.test(text[i]!) || indentOf(text[i]!) > dash || (indentOf(text[i]!) === dash && /^ *- /.test(text[i]!)))) i--;
+  if (i < 0 || !/^ *steps[ \t]*:[ \t]*(?:#.*)?$/.test(text[i]!)) return null;
+  const keyIndent = indentOf(text[i]!);
+  // Up past the job's other keys, to its name.
+  let head = i - 1;
+  while (head >= 0 && (NOTE.test(text[head]!) || indentOf(text[head]!) >= keyIndent)) head--;
+  // `steps:` with no job above it has no job keys either.
+  if (head < 0) return [];
+  const keys: string[] = [];
+  for (let j = head + 1; j < text.length; j++) {
+    const t = text[j]!;
+    if (NOTE.test(t)) continue;
+    if (indentOf(t) <= indentOf(text[head]!)) break;
+    if (indentOf(t) === keyIndent) keys.push(t.trim());
+  }
+  return keys;
 }
 
 /** An input's value on its one line, without quotes or a comment. Null when it isn't there or goes on over more lines. */
@@ -215,8 +253,9 @@ export function readRoles(content: string): SetRoles | null {
 export function isStandard(content: string): boolean {
   const step = locate(content);
   if (!step) return false;
-  // A job's environment has secrets of its own, which this page can't see.
-  if (step.text.some((t) => /^[ \t]+environment[ \t]*:/.test(t))) return false;
+  // The review job's environment has secrets of its own, which this page can't see. Another job's doesn't matter.
+  const keys = jobKeys(step);
+  if (!keys || keys.some((k) => /^environment[ \t]*:/.test(k))) return false;
   return step.entries.every(({ key }) => {
     if (key === 'auth-secret-name') return false;
     // A step that runs the jobs has its own AI, and only the review's is this page's to change.
@@ -253,7 +292,7 @@ export function loginsIn(content: string | null, secretNames: string[], shared: 
   if (!content || !isStandard(content)) return loginsFrom(secretNames, shared);
   const inputs = loginInputs(content);
   const has = (ai: Ai) => LOGIN_INPUTS[ai].some((input) => inputs.includes(input) && counts(input, secretNames, shared));
-  return { claude: has('claude'), codex: has('codex') };
+  return { claude: has('claude'), codex: !sharedPlanWins(inputs, secretNames, shared) && has('codex') };
 }
 
 /** Whether the Mergelight step hands this AI a login at all: without one of its inputs, it can never review or check. */
@@ -318,6 +357,15 @@ export function withInputs(content: string, values: [key: string, value: string]
     }
   }
   return out.join('');
+}
+
+/** Takes these inputs out of the Mergelight step's `with:`, line and all. Every other byte stays. Null when the step can't be found. */
+export function withoutInputs(content: string, keys: string[]): string | null {
+  const step = locate(content);
+  if (!step) return null;
+  const drop = new Set<number>();
+  for (const e of step.entries) if (keys.includes(e.key)) for (let i = e.start; i < e.end; i++) drop.add(i);
+  return step.lines.filter((_, i) => !drop.has(i)).join('');
 }
 
 /** Sets who reviews and who checks, with nothing left to a default. */

@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { connectsAfterMerge, isStandard, loginsFrom, loginsIn, passesLogin, readRoles, reviewerFixedBy, rolesFor, withInputs, withRoles } from '../../src/setup/roles.ts';
+import { connectsAfterMerge, isStandard, loginsFrom, loginsIn, passesLogin, readRoles, reviewerFixedBy, rolesFor, withInputs, withoutInputs, withRoles } from '../../src/setup/roles.ts';
 
 const template = readFileSync(new URL('../../../examples/mergelight.yml', import.meta.url), 'utf8');
 const both = { claude: true, codex: true };
@@ -231,4 +231,34 @@ test('a job with an environment, or a step that runs the jobs, is set up its own
   assert.equal(isStandard(withEnvironment), false, 'its secrets are out of sight');
   assert.equal(isStandard(step(['run: jobs'])), false);
   assert.equal(isStandard(step(['run: review'])), true);
+});
+
+test("an OpenAI key doesn't stand in for the organization's ChatGPT login, which the Action uses first", () => {
+  assert.deepEqual(loginsFrom(['CODEX_AUTH_JSON', 'OPENAI_API_KEY'], ['CODEX_AUTH_JSON']), none);
+  assert.deepEqual(loginsIn(template, ['CODEX_AUTH_JSON', 'OPENAI_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN'], ['CODEX_AUTH_JSON']), claudeOnly);
+  const keyOnly = template.replace('          codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}\n', '');
+  assert.deepEqual(loginsIn(keyOnly, ['CODEX_AUTH_JSON', 'OPENAI_API_KEY'], ['CODEX_AUTH_JSON']), codexOnly, "a workflow that never reads it uses the key");
+});
+
+test('only the review job environment makes a workflow customized', () => {
+  const deploy = `${template}  deploy:\n    runs-on: ubuntu-latest\n    environment: production\n    steps:\n      - run: echo hi\n`;
+  assert.equal(isStandard(deploy), true, "another job's environment doesn't touch the review's secrets");
+  const review = template.replace('    runs-on: ubuntu-latest\n', '    runs-on: ubuntu-latest\n    environment:\n      name: ai\n');
+  assert.equal(isStandard(review), false);
+});
+
+test('withoutInputs takes a line out, and leaves every other byte', () => {
+  const set = withRoles(template, { reviewer: 'claude', checker: 'codex' });
+  assert.equal(withoutInputs(set, ['verify-with']), withInputs(template, [['provider', 'claude']]));
+  assert.equal(withoutInputs(template, ['verify-with']), template, 'nothing to take out');
+  assert.equal(withoutInputs('name: x\n', ['verify-with']), null);
+});
+
+test("the development mock's workflow passes both logins, so its repos can try every flow", () => {
+  const source = readFileSync(new URL('../../src/setup/github.ts', import.meta.url), 'utf8');
+  const body = source.match(/const workflowWith = \(use: string, inputs = ''\) => `(.*)`;/)?.[1];
+  assert.ok(body, 'the mock builds its workflow here');
+  const yaml = body.replace('${use}', 'v0').replace('${inputs}', '').replaceAll('\\${{', '${{').replaceAll('\\n', '\n');
+  assert.equal(isStandard(yaml), true);
+  assert.equal(passesLogin(yaml, 'codex') && passesLogin(yaml, 'claude'), true);
 });

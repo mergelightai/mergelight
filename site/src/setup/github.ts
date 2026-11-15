@@ -593,7 +593,8 @@ export function mockClient(): GitHubClient {
   let checks = 0;
   const later = <T,>(value: T) => new Promise<T>((r) => setTimeout(() => r(value), 300));
   const release: Release = { tag: 'v0.2.0', sha: 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0' };
-  const workflowWith = (use: string, inputs = '') => `name: Mergelight\n\njobs:\n  review:\n    steps:\n      - uses: mergelightai/mergelight@${use}\n        with:\n          claude-code-oauth-token: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n${inputs}`;
+  // Both logins' inputs, as setup writes them, so a repo with both secrets can try every change of AI.
+  const workflowWith = (use: string, inputs = '') => `name: Mergelight\n\njobs:\n  review:\n    steps:\n      - uses: mergelightai/mergelight@${use}\n        with:\n          codex-auth-json: \${{ secrets.CODEX_AUTH_JSON }}\n          claude-code-oauth-token: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n${inputs}`;
   const installedFor = (name: string): Installed | null =>
     name === 'acme/app'
       ? readInstalled(workflowWith(`${release.sha} # ${release.tag}`))
