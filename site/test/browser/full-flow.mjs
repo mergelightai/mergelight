@@ -203,6 +203,13 @@ await run('update-checks-every-file-first', { onBase: customized(`${OLD_SHA} # v
   expect(writes.length === 0, 'writes nothing, not even the file it could update');
   expect(/That didn't work/.test(after), 'and says it failed');
 });
+const ourRefresh = (use) => `# Ours: every day\n${customized(use)}`;
+await run('update-keeps-the-prs-refresh-job', { onBase: customized(`${OLD_SHA} # v0.1.0`), prFile: customized(`${OLD_SHA} # v0.1.0`), prRefresh: ourRefresh(`${OLD_SHA} # v0.1.0`), login: true, button: 'Update to v0.2.0' }, ({ puts }) => {
+  const job = puts.find((w) => w.p.endsWith('/mergelight-refresh.yml'));
+  const content = job && Buffer.from(job.body.content, 'base64').toString();
+  expect(job?.body.branch === 'mergelight-setup-old' && job?.body.sha === 'prrefreshblob', "updates the refresh job that PR has, though main has none");
+  expect(content === ourRefresh(`${RELEASE.sha} # ${RELEASE.tag}`), 'moves only its version lines, and keeps the rest of it');
+});
 await run('open-pr-already-current', { prFile: withLogin.file, prRefresh: withLogin.refresh, login: true }, ({ writes, after }) => {
   expect(writes.length === 0, 'writes nothing');
   expect(/PR #5 opened/.test(after), 'reuses it');

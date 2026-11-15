@@ -93,6 +93,8 @@ export interface WorkflowFile {
   edit?: (current: string) => string | null;
   /** Only added where it's missing. One that's there already stays exactly as it is. */
   keep?: boolean;
+  /** With `edit`: a branch without the file gets `content`, rather than the change failing. */
+  orAdd?: boolean;
 }
 
 /** What a pull request from this page is for. */
@@ -123,6 +125,7 @@ export class OpenPrError extends Error {
 function wanted(file: WorkflowFile, current: string | null): string {
   if (file.keep && current !== null) return current;
   if (!file.edit) return file.content;
+  if (current === null && file.orAdd) return file.content;
   if (current === null) throw new WorkflowEditError('no-file');
   const next = file.edit(current);
   if (next === null) throw new WorkflowEditError('no-step');
@@ -425,6 +428,14 @@ export function realClient(token: string): GitHubClient {
     return { tag, sha };
   };
   /** With `base`, only one into that branch: a change made on one into another branch would never reach this one. */
+  /** Whether a pull request changes a Mergelight workflow, looking through all its files a page at a time. */
+  const changesWorkflow = async (repo: Repo, number: number) => {
+    for (let page = 1; ; page++) {
+      const files = await get<{ filename: string }[]>(`/repos/${repo.fullName}/pulls/${number}/files?per_page=100&page=${page}`).catch(() => []);
+      if (files.some((f) => f.filename === WORKFLOW_PATH || f.filename === REFRESH_PATH)) return true;
+      if (files.length < 100) return false;
+    }
+  };
   /** Every open pull request, a page at a time, so one far down the list is still found. */
   const openSetupPull = async (repo: Repo, base?: string) => {
     const into = base ? `&base=${encodeURIComponent(base)}` : '';
@@ -434,8 +445,7 @@ export function realClient(token: string): GitHubClient {
         // A fork's pull request isn't ours to update.
         if (pull.head.repo?.full_name !== repo.fullName) continue;
         if (base && pull.base?.ref !== base) continue;
-        const files = await get<{ filename: string }[]>(`/repos/${repo.fullName}/pulls/${pull.number}/files?per_page=100`).catch(() => []);
-        if (files.some((f) => f.filename === WORKFLOW_PATH || f.filename === REFRESH_PATH)) return pull;
+        if (await changesWorkflow(repo, pull.number)) return pull;
       }
       if (pulls.length < 100) return null;
     }

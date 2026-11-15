@@ -97,7 +97,9 @@ function reconciled(change: RolesChange, merged: string, logins: Logins): RolesC
   };
   const needs = change.needs.filter(uses);
   const all = { ...logins, ...Object.fromEntries(needs.map((ai) => [ai, true])) } as Logins;
-  return { ...change, content: merged, needs, roles: set ? rolesFor(set, all) : change.roles, connectFirst: false, hold: false };
+  // A merged workflow that still leaves the checker to the default has no run that asks for it, so its login still
+  // comes from the command, whatever else was edited.
+  return { ...change, content: merged, needs, roles: set ? rolesFor(set, all) : change.roles, connectFirst: false, hold: change.hold && Boolean(set && !set.verifyWith && needs.length) };
 }
 
 /** A pull request that changes who reviews and who checks, and the AIs it still needs a login for. */
@@ -243,6 +245,9 @@ export default function Setup() {
   /** Each read of a linked PR's workflow, and each lookup of an open workflow PR, so only the newest answer counts. */
   const linkRead = useRef(0);
   const openPrLookup = useRef(0);
+  const rolesRead = useRef(0);
+  /** The repo picked, counted, so an answer for one picked before is never applied to this one. */
+  const picked = useRef(0);
   /**
    * A pull_request run reads the workflow at the PR's merge commit, which may take other logins than the branch's or
    * the PR's own head. `again` is a retry after a read that failed, which keeps showing that until one works.
@@ -258,8 +263,11 @@ export default function Setup() {
 
   /** `waitingPr` is the pull request whose comment sent them here, which skips straight to connecting it. */
   const choose = (r: Repo, waitingPr?: number) => {
+    picked.current++;
     openPrLookup.current++;
     linkRead.current++;
+    rolesRead.current++;
+    setChangingRoles(false);
     setRepo(r);
     setStartOnClaude(false);
     setDetailsFailed(false);
@@ -369,7 +377,8 @@ export default function Setup() {
     const version = (content: string) => (pinTo ? pinned(content, pinTo) : content);
     if (details.refresh) list.push({ name: REFRESH_FILE, content: version(details.refresh), ...moves });
     // Only for a workflow that reads the ChatGPT plan's login: another tool's login of that name isn't the review's to refresh.
-    else if (!details.hasApiKey && readsChatgpt(details.installed?.content)) list.push({ name: REFRESH_FILE, content: refreshJob(pinTo) });
+    // An update moves one an open PR already has, kept as it is, and adds one only where that branch has none.
+    else if (!details.hasApiKey && readsChatgpt(details.installed?.content)) list.push({ name: REFRESH_FILE, content: refreshJob(pinTo), ...(update && { ...moves, orAdd: true }) });
     return list;
   }, [workflow, details, repo, pinTo, update]);
   const fileUrl = repo ? newFileUrl(repo.fullName, branch, workflow) : '#';
@@ -444,6 +453,14 @@ export default function Setup() {
         // What the old run asked for, and the logins its workflow took, may not be the new one's.
         setAskedCheck(null);
         if (startOnClaude) readLinkFile(client, repo, pr.number);
+        // A role PR's new commit can change the logins its workflow takes: its run reads the PR's merge commit.
+        else if (rolesChange) {
+          const read = ++rolesRead.current;
+          void client.workflowAt(repo, `refs/pull/${pr.number}/merge`).then(
+            (content) => read === rolesRead.current && content && setRolesChange((rc) => rc && { ...rc, content }),
+            () => undefined,
+          );
+        }
         setPr({ ...pr, headSha: current.headSha });
         return true;
       }
@@ -557,6 +574,8 @@ export default function Setup() {
   /** Opens a pull request that sets who reviews and who checks, the same way a setup or an update does. */
   const changeRoles = async (want: Roles) => {
     if (!client || !repo || !liveFile || changingRoles || adding) return;
+    // Another repo picked while this waits on GitHub makes its answer one for a repo no longer on screen.
+    const forRepo = picked.current;
     const full = withRoles(liveFile, want);
     if (full === null) {
       setRolesFailed('no-step');
@@ -604,26 +623,33 @@ export default function Setup() {
       if (current !== liveFile) throw new WorkflowEditError('changed');
       return content;
     };
-    const list: WorkflowFile[] = full !== liveFile ? [{ name: 'mergelight.yml', content, edit }] : [];
+    // The review workflow is always checked, also when only the refresh job is added and it stays as it is.
+    const list: WorkflowFile[] = [{ name: 'mergelight.yml', content, edit }];
     // On the same version as the review, a tag as much as a commit.
     if (addsRefresh) list.push({ name: REFRESH_FILE, content: refreshLike(content), keep: true });
     setChangingRoles(true);
     setRolesFailed(null);
     try {
       const opened = await client.proposeWorkflows(repo, branch, list, full !== liveFile ? { kind: 'roles', roles: want } : { kind: 'refresh' });
-      // Null means the branch already says exactly this.
+      if (forRepo !== picked.current) return;
+      // Null means the branch already has all of it, like a refresh job someone else added since. A login still missing
+      // is still to connect.
       if (opened) begin(opened, addsRefresh);
-      else {
+      else if (needs.length) {
+        if (addsRefresh) setRefreshLive(true);
+        begin(null, false);
+      } else {
         setRolesChange(null);
         setView('live');
       }
     } catch (err) {
+      if (forRepo !== picked.current) return;
       if (err instanceof OpenPrError) setOpenPr(err.pr);
       else setRolesFailed(err instanceof WorkflowEditError ? err.reason : err instanceof GitHubError && (err.status === 403 || err.status === 404) ? 'refused' : 'other');
       // A PR that opens by itself, after a login, shows why it didn't on the choice.
       setView('roles');
     } finally {
-      setChangingRoles(false);
+      if (forRepo === picked.current) setChangingRoles(false);
     }
   };
 
@@ -643,6 +669,8 @@ export default function Setup() {
   const accepts = startOnClaude && !linkContent ? null : connectFile && isStandard(connectFile) ? loginInputs(connectFile) : null;
 
   const anotherRepo = () => {
+    picked.current++;
+    setChangingRoles(false);
     setRepo(null);
     setDetails(null);
     setPr(null);
