@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { connectsAfterMerge, isStandard, loginsFrom, loginsIn, passesLogin, readRoles, reviewerFixedBy, rolesFor, withInputs, withoutInputs, withRoles } from '../../src/setup/roles.ts';
+import { connectsAfterMerge, isStandard, stepInScalar, loginsFrom, loginsIn, passesLogin, readRoles, reviewerFixedBy, rolesFor, withInputs, withoutInputs, withRoles } from '../../src/setup/roles.ts';
 
 const template = readFileSync(new URL('../../../examples/mergelight.yml', import.meta.url), 'utf8');
 const both = { claude: true, codex: true };
@@ -269,4 +269,17 @@ test('a quoted with or environment key is read as set up its own way, never as a
   assert.equal(isStandard(quotedWith), false);
   const quotedEnvironment = template.replace('    runs-on: ubuntu-latest\n', '    runs-on: ubuntu-latest\n    "environment": ai\n');
   assert.equal(isStandard(quotedEnvironment), false);
+});
+
+test('a step in a run script is an example: never edited, and its workflow is customized', () => {
+  const example = `      - run: |\n          cat > fixture.yml <<'EOF'\n          steps:\n            - uses: mergelightai/mergelight@v0\n              with:\n                provider: codex\n          EOF\n`;
+  const both = template.replace('      - uses: mergelightai/mergelight@v0\n', `${example}      - uses: mergelightai/mergelight@v0\n`);
+  assert.notEqual(both, template);
+  assert.equal(stepInScalar(both), true);
+  assert.deepEqual(readRoles(both), { provider: null, verifyWith: null }, 'the real step is the one read');
+  assert.equal(isStandard(both), false, 'and the page leaves the file to them');
+  const only = 'jobs:\n  test:\n    steps:\n' + example;
+  assert.equal(readRoles(only), null, 'an example alone is no step');
+  assert.equal(withRoles(only, { reviewer: 'claude', checker: 'codex' }), null, 'and is never edited');
+  assert.equal(stepInScalar(template), false);
 });

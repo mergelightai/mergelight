@@ -120,13 +120,35 @@ interface Step {
 const indentOf = (line: string) => line.match(/^ */)![0].length;
 
 /**
+ * Whether this line is text inside a block scalar, like a `run: |` script or a heredoc in one: a line above it that's
+ * set in less than it opens `|` or `>`. Such a line only looks like a step.
+ */
+function insideScalar(text: string[], at: number): boolean {
+  let least = indentOf(text[at]!);
+  for (let i = at - 1; i >= 0 && least > 0; i--) {
+    const t = text[i]!;
+    if (NOTE.test(t) || indentOf(t) >= least) continue;
+    if (/:[ \t]*[|>][-+0-9]*[ \t]*(?:#.*)?$/.test(t)) return true;
+    least = indentOf(t);
+  }
+  return false;
+}
+
+/** Whether a line that looks like the Mergelight step is text inside a block scalar, which makes the file one set up its own way. */
+export const stepInScalar = (content: string) => {
+  const text = content.split(/\r?\n/);
+  return text.some((t, i) => USES.test(t) && insideScalar(text, i));
+};
+
+/**
  * Finds the one step that runs the Action, and the values in its `with:`. Null when there isn't exactly one such
  * step, or its shape is one this doesn't edit, like `with: { ... }`. Better to say so than to guess.
  */
 function locate(content: string): Step | null {
   const lines = content.split(/(?<=\n)/);
   const text = lines.map((l) => l.replace(/\r?\n$/, ''));
-  const uses = text.flatMap((t, i) => (USES.test(t) ? [i] : []));
+  // Only a real step: one inside a script's text is an example.
+  const uses = text.flatMap((t, i) => (USES.test(t) && !insideScalar(text, i) ? [i] : []));
   if (uses.length !== 1) return null;
   const usesLine = uses[0]!;
   const m = text[usesLine]!.match(USES)!;
@@ -256,7 +278,7 @@ export function readRoles(content: string): SetRoles | null {
  */
 export function isStandard(content: string): boolean {
   const step = locate(content);
-  if (!step) return false;
+  if (!step || stepInScalar(content)) return false;
   // The review job's environment has secrets of its own, which this page can't see. Another job's doesn't matter.
   const keys = jobKeys(step);
   if (!keys || keys.some((k) => /^(["']?)environment\1[ \t]*:/.test(k))) return false;
