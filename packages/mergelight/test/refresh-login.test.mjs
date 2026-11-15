@@ -82,7 +82,7 @@ test("a due login is refreshed and saved before the review starts", async () => 
   assert.equal(s.calls.refresh, 1);
   assert.deepEqual(s.calls.saved, ["tok"]);
   // A refresh that worked clears a failed one from earlier in the run, and the saved login is this run's own.
-  assert.equal(readFileSync(s.envFile, "utf8"), `MERGELIGHT_LOGIN_LOST=0\nMERGELIGHT_LOGIN_SHORT=0\nMERGELIGHT_LOGIN_READ_AT=${Math.floor(NOW / 1000)}\n`);
+  assert.equal(readFileSync(s.envFile, "utf8"), `MERGELIGHT_LOGIN_LOST=0\nMERGELIGHT_LOGIN_SHORT=0\nMERGELIGHT_LOGIN_SAVED_AT=${Math.floor(NOW / 1000)}\n`);
 });
 
 test("the job refreshes a login with plenty of time left", async () => {
@@ -328,7 +328,7 @@ test("a job in a GitHub environment, or one that can't be told, never refreshes 
 test("a login not known to be the repository's own, as last saved, isn't refreshed", async () => {
   // A review doesn't use it either, even with time left: Codex would refresh it by itself in its last
   // minutes, which a long job can reach. It says to run again, and what happened.
-  for (const [held, says] of [["unknown", /GitHub couldn't say.*Nothing is wrong with the login: run the Mergelight job again\./], ["newer", /saved again after this run read it.*Run the Mergelight job again/]]) {
+  for (const [held, says] of [["unknown", /GitHub couldn't say.*Nothing is wrong with the login: run the Mergelight job again\./], ["newer", /saved again after this run got it.*Push a new commit/]]) {
     for (const msLeft of [2 * HOUR, 30 * 60_000]) {
       const s = setup({ event: "pull_request", msLeft, held });
       assert.equal(await s.run(), 0);
@@ -352,7 +352,7 @@ test("a login not known to be the repository's own, as last saved, isn't refresh
 test("a login this run saved is its own again", async () => {
   const s = setup({ event: "pull_request", msLeft: 30 * 60_000 });
   assert.equal(await s.run(), 0);
-  assert.match(readFileSync(s.envFile, "utf8"), new RegExp(`MERGELIGHT_LOGIN_READ_AT=${Math.floor(NOW / 1000)}\\n$`));
+  assert.match(readFileSync(s.envFile, "utf8"), new RegExp(`MERGELIGHT_LOGIN_SAVED_AT=${Math.floor(NOW / 1000)}\\n$`));
 });
 
 test("whether the repository holds the secret is asked of GitHub, and only a plain answer counts", async () => {
@@ -367,6 +367,17 @@ test("whether the repository holds the secret is asked of GitHub, and only a pla
   assert.equal(await secretHeld({ env: read, token: "t", fetchImpl: saved("2026-11-15T09:59:00Z") }), "yes");
   assert.equal(await secretHeld({ env: read, token: "t", fetchImpl: saved("2026-11-15T10:01:00Z") }), "newer");
   assert.equal(await secretHeld({ env: read, token: "t", fetchImpl: saved(undefined) }), "unknown");
+  // A pull request's event comes before the run and its secrets: a secret saved after the event, even
+  // before the login step's time, may be newer than what this run got.
+  const dir = mkdtempSync(join(tmpdir(), "mergelight-event-"));
+  const eventFile = join(dir, "event.json");
+  writeFileSync(eventFile, JSON.stringify({ pull_request: { updated_at: "2026-11-15T09:30:00Z" } }));
+  const queued = { ...read, GITHUB_EVENT_PATH: eventFile };
+  assert.equal(await secretHeld({ env: queued, token: "t", fetchImpl: saved("2026-11-15T09:45:00Z") }), "newer");
+  assert.equal(await secretHeld({ env: queued, token: "t", fetchImpl: saved("2026-11-15T09:00:00Z") }), "yes");
+  // A login this run saved itself counts from then.
+  const own = { ...queued, MERGELIGHT_LOGIN_SAVED_AT: String(Date.parse("2026-11-15T10:05:00Z") / 1000) };
+  assert.equal(await secretHeld({ env: own, token: "t", fetchImpl: saved("2026-11-15T10:04:00Z") }), "yes");
   assert.equal(await secretHeld({ env, token: "t", fetchImpl: answer(404) }), "no");
   assert.equal(await secretHeld({ env, token: "t", fetchImpl: answer(403) }), "unknown");
   assert.equal(await secretHeld({ env, token: "t", fetchImpl: async () => { throw new Error("offline"); } }), "unknown");

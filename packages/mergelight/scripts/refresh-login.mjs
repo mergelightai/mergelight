@@ -35,6 +35,17 @@ export function ownLoginCommand(secret = "CODEX_AUTH_JSON", repo = "OWNER/REPO")
   return `d="$(mktemp -d)" && echo 'cli_auth_credentials_store = "file"' > "$d/config.toml" && CODEX_HOME="$d" codex login && gh secret set ${secret} --repo ${repo} < "$d/auth.json"; rm -rf "$d"`;
 }
 
+/** When the pull request event that started this run happened, in seconds, or null when it isn't one. */
+export function eventTime(env = process.env) {
+  try {
+    const event = JSON.parse(readFileSync(env.GITHUB_EVENT_PATH, "utf8"));
+    const time = Date.parse(event?.pull_request?.updated_at ?? "");
+    return Number.isFinite(time) ? Math.floor(time / 1000) : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The GitHub environment this job runs in, from GitHub's signed pass for the run: "" for none, null when
  * the job can't get a pass (no "id-token: write"), and undefined when GitHub didn't give one this time.
@@ -62,8 +73,11 @@ export async function jobEnvironment({ env = process.env, fetchImpl = fetch } = 
  * - "no": the repository has no secret of that name, so the login comes from elsewhere, such as an
  *   organization's secret. A refresh saved here would leave that secret holding a spent refresh token,
  *   and sign out every repository that shares it.
- * - "newer": the secret was saved again after this run read it (MERGELIGHT_LOGIN_READ_AT, in seconds),
- *   by another run or a person, so what this run has may not be what the repository holds.
+ * - "newer": the secret was saved again after this run got it, by another run or a person, so what this
+ *   run has may not be what the repository holds. When it got it is taken early: the login step's time
+ *   less ten minutes (MERGELIGHT_LOGIN_READ_AT), or the pull request event's time when that is earlier,
+ *   as the run and its secrets come after the event. A login this run saved itself counts from then
+ *   (MERGELIGHT_LOGIN_SAVED_AT).
  * - "unknown": GitHub didn't answer plainly.
  */
 export async function secretHeld({ env = process.env, token, fetchImpl = fetch } = {}) {
@@ -74,7 +88,9 @@ export async function secretHeld({ env = process.env, token, fetchImpl = fetch }
     const res = await fetchImpl(`${api}/repos/${env.GITHUB_REPOSITORY}/actions/secrets/${name}`, { headers });
     if (res.status === 404) return "no";
     if (res.status !== 200) return "unknown";
-    const since = Number(env.MERGELIGHT_LOGIN_READ_AT);
+    const read = Number(env.MERGELIGHT_LOGIN_READ_AT);
+    const event = eventTime(env);
+    const since = Number(env.MERGELIGHT_LOGIN_SAVED_AT) || (read && event !== null ? Math.min(read, event) : read);
     if (!since) return "yes";
     const updated = Date.parse((await res.json())?.updated_at ?? "");
     if (!Number.isFinite(updated)) return "unknown";
@@ -218,7 +234,7 @@ export async function refreshLogin({
       no: `This repository reads its ChatGPT login from a ${secret} secret it doesn't hold itself, such as an organization's. Mergelight doesn't refresh a login other repositories share, as that would sign them out. Save a login of its own as this repository's secret, then push: ${ownLoginCommand(secret, env.GITHUB_REPOSITORY)}`,
       environment: `This job runs in the GitHub environment "${where}", whose own ${secret} secret would win over the repository's, so Mergelight can't tell whose ChatGPT login this is and doesn't refresh it, as that could sign out the environment's other jobs. Remove environment: from the Mergelight job, and keep the login as the repository's own secret.`,
       blind: `Mergelight can't tell whether this job runs in a GitHub environment, whose secret would win over the repository's, so it doesn't refresh the ChatGPT login. Add "id-token: write" to the job's permissions, then push.`,
-      newer: `The ${secret} secret was saved again after this run read it, so this run doesn't refresh or use the ChatGPT login it has. Run the Mergelight job again: it reads the secret as it is now.`,
+      newer: `The ${secret} secret was saved again after this run got it, so this run doesn't refresh or use the ChatGPT login it has. Push a new commit: its run gets the secret as it is then.`,
       unknown: `GitHub couldn't say whether this repository holds the ${secret} secret itself, so this run doesn't refresh or use the ChatGPT login. Nothing is wrong with the login: run the Mergelight job again.`,
     }[owned];
     if (event === "schedule" || event === "workflow_dispatch") {
@@ -245,7 +261,7 @@ export async function refreshLogin({
     if (env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, "MERGELIGHT_LOGIN_LOST=0\nMERGELIGHT_LOGIN_SHORT=0\n");
     if (save(token) !== 0) log("::warning::Couldn't save the refreshed Codex login yet. This run tries again when it ends.");
     // Saved by this run: the secret is this run's own again, as of now.
-    else if (env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, `MERGELIGHT_LOGIN_READ_AT=${Math.floor(now() / 1000)}\n`);
+    else if (env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, `MERGELIGHT_LOGIN_SAVED_AT=${Math.floor(now() / 1000)}\n`);
     return 0;
   }
 

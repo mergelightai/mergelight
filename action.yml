@@ -339,15 +339,16 @@ runs:
           echo "MERGELIGHT_LOGIN_SHORT=0"
           echo "MERGELIGHT_LOGIN_NOTE="
           echo "MERGELIGHT_LOGIN_READ_AT="
+          echo "MERGELIGHT_LOGIN_SAVED_AT="
         } >> "$GITHUB_ENV"
         if [ -n "$AUTH_JSON" ]; then
           printf 'cli_auth_credentials_store = "file"\n' > "$CODEX_HOME/config.toml"
           printf '%s' "$AUTH_JSON" > "$CODEX_HOME/auth.json"
           chmod 600 "$CODEX_HOME/auth.json"
           sha256sum "$CODEX_HOME/auth.json" | cut -d' ' -f1 > "$RUNNER_TEMP/codex-auth.sha256"
-          # When the job got the secret, at the latest: it got it when it started. A secret saved again after
-          # this isn't the login this run has, so this run doesn't refresh it. Ten minutes earlier, so a save
-          # while the job started up counts too.
+          # When the job got the secret, at the latest, less ten minutes for its start. A secret saved again
+          # after this isn't the login this run has, so this run doesn't refresh it. The refresh also takes
+          # the pull request event's time when that is earlier.
           echo "MERGELIGHT_LOGIN_READ_AT=$(( $(date -u +%s) - 600 ))" >> "$GITHUB_ENV"
           echo "MERGELIGHT_CHATGPT=1" >> "$GITHUB_ENV"
         elif [ -n "$API_KEY" ]; then
