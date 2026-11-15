@@ -83,7 +83,7 @@ async function scenario(name, start, body) {
       if (p === '/pulls/7') return json(req, { merged: false, head: { sha: world.head } });
       if (p === '/issues/7/comments') return world.commentsStatus === 200 ? json(req, world.comments) : json(req, { message: 'no' }, world.commentsStatus);
       if (p === '/actions/secrets') return json(req, { secrets: [...(world.login ? [{ name: 'CODEX_AUTH_JSON' }] : []), ...(world.claudeSaved ? [{ name: 'CLAUDE_CODE_OAUTH_TOKEN' }] : [])] });
-      if (p.startsWith('/contents/')) return world.installed && p.endsWith('mergelight.yml') || (world.installed && p.includes('mergelight.yml?')) ? json(req, { sha: 'filesha', content: Buffer.from(`    steps:\n      - uses: mergelightai/mergelight@${'b'.repeat(40)} # v0.1.0\n`).toString('base64') }) : json(req, {}, 404);
+      if (p.startsWith('/contents/')) return world.installed && p.endsWith('mergelight.yml') || (world.installed && p.includes('mergelight.yml?')) ? json(req, { sha: 'filesha', content: Buffer.from(`    steps:\n      - uses: mergelightai/mergelight@${'b'.repeat(40)} # v0.1.0\n        with:\n          codex-auth-json: \${{ secrets.CODEX_AUTH_JSON }}\n          claude-code-oauth-token: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n`).toString('base64') }) : json(req, {}, 404);
       if (p.startsWith('/git/ref/heads/')) return json(req, { object: { sha: 'basesha' } });
       const run = p.match(/^\/commits\/([^/]+)\/check-runs/);
       if (run) return json(req, { check_runs: world.checks[run[1]] ? [world.checks[run[1]]] : [] });

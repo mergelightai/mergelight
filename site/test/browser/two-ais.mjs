@@ -103,7 +103,7 @@ async function scenario(name, start, body) {
         const delay = world.openDelays?.shift() ?? 0;
         return delay ? void setTimeout(() => json(req, list), delay) : json(req, list);
       }
-      if (/^\/pulls\/1\d\d\/files$/.test(p)) return json(req, [{ filename: 'src/app.ts' }]);
+      if (/^\/pulls\/[12]\d\d\/files$/.test(p)) return json(req, [{ filename: 'src/app.ts' }]);
       // Most new work goes to main, which is the default branch unless a test says otherwise.
       if (p === '/pulls') return json(req, [{ base: { ref: 'main' }, head: { ref: 'feat/x' } }]);
       if (p === `/pulls/${PR.number}/files` && world.filesFail) return json(req, {}, 500);
