@@ -164,12 +164,14 @@ await run('claude-login', { claude: true }, ({ puts, file, after }) => {
   expect(puts.length === 1, 'a Claude login needs no refresh job');
   expect(/Your PR is open/.test(after), 'goes straight to the timeline');
 });
-await run('org-shares-chatgpt', { claude: true, orgSecrets: ['CODEX_AUTH_JSON'] }, ({ file }) => {
+await run('org-shares-chatgpt', { claude: true, orgSecrets: ['CODEX_AUTH_JSON'] }, ({ file, after }) => {
   expect(file?.includes('          provider: codex\n'), "counts the organization's ChatGPT login, so it names the reviewer the Action would pick");
+  // That reviewer's login is the organization's, so the repo needs its own, though it has Claude's.
+  expect(/Connect ChatGPT/.test(after) && /Your organization's ChatGPT login is shared, so this repo gets its own\./.test(after) && /codex login/.test(after), "goes on to the reviewer's own login, from the command");
 });
 await run('org-shares-only-chatgpt', { orgSecrets: ['CODEX_AUTH_JSON'] }, ({ puts, after }) => {
   // A review can't refresh the organization's login without signing out the other repos, so this repo saves its own.
-  expect(/Connect your AI/.test(after), "the organization's ChatGPT login isn't this repo's own, so it goes on to connect one");
+  expect(/Connect ChatGPT/.test(after), "the organization's ChatGPT login isn't this repo's own, so it goes on to connect ChatGPT, the reviewer it names");
   expect(/Your organization's ChatGPT login is shared, so this repo gets its own\./.test(after) && /codex login && gh secret set CODEX_AUTH_JSON --repo acme\/api/.test(after), 'with the command, as no run asks while the shared one is there');
   expect(puts.length === 2, "and the refresh job, for the repo's own login");
 });

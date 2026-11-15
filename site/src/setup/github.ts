@@ -463,7 +463,8 @@ export function realClient(token: string): GitHubClient {
   /** Whether a pull request changes a Mergelight workflow, looking through all its files a page at a time. */
   const changesWorkflow = async (repo: Repo, number: number) => {
     for (let page = 1; ; page++) {
-      const files = await get<{ filename: string }[]>(`/repos/${repo.fullName}/pulls/${number}/files?per_page=100&page=${page}`).catch(() => []);
+      // A list that can't be read stops whoever asked: an unread PR may change the workflow already.
+      const files = await get<{ filename: string }[]>(`/repos/${repo.fullName}/pulls/${number}/files?per_page=100&page=${page}`);
       if (files.some((f) => f.filename === WORKFLOW_PATH || f.filename === REFRESH_PATH)) return true;
       if (files.length < 100) return false;
     }

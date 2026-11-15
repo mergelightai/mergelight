@@ -106,6 +106,7 @@ async function scenario(name, start, body) {
       if (/^\/pulls\/1\d\d\/files$/.test(p)) return json(req, [{ filename: 'src/app.ts' }]);
       // Most new work goes to main, which is the default branch unless a test says otherwise.
       if (p === '/pulls') return json(req, [{ base: { ref: 'main' }, head: { ref: 'feat/x' } }]);
+      if (p === `/pulls/${PR.number}/files` && world.filesFail) return json(req, {}, 500);
       if (p === `/pulls/${PR.number}/files`) {
         // A big PR lists its files a page at a time, with the workflow on the second page.
         if (!world.manyFiles) return json(req, [{ filename: '.github/workflows/mergelight.yml' }]);
@@ -1290,6 +1291,86 @@ await scenario('new-run-offers-both-in-a-link', { secrets: ['CODEX_AUTH_JSON'], 
     await wait(200);
   }
   expect(ok, 'ChatGPT is offered again on the new run');
+});
+
+await scenario('named-reviewer-needs-its-own-login', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], orgSecrets: ['CODEX_AUTH_JSON'], file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: codex\n`) }, async ({ page, world, until, click }) => {
+  await page.goto(`${base}/setup/`, { waitUntil: 'networkidle2' });
+  await page.evaluate(() => sessionStorage.setItem('mergelight.setup.state', 's'));
+  await page.goto(`${base}/setup/?code=c&state=s`, { waitUntil: 'networkidle2' });
+  await until((x) => x.includes('Which repo'), 'the list');
+  await click('[role=option]', 'api');
+  await until((x) => /It's already on main/.test(x), 'the add step');
+  await wait(800);
+  await click('button', 'Continue');
+  // ChatGPT reviews, on the organization's login. Claude's own login doesn't make reviews work.
+  const t = await until((x) => /Connect ChatGPT/.test(x), "the reviewer's own login");
+  expect(/codex login/.test(t) && !(await offers(page, 'Claude')), "from the command, and only ChatGPT's");
+  world.secrets.push('CODEX_AUTH_JSON');
+  await until((x) => /Mergelight is on/.test(x), "done once ChatGPT has the repo's own login");
+});
+
+await scenario('merge-first-holds-through-edits', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], refresh: REFRESH }, async ({ world, until, click, reachLive, choose, text }) => {
+  await reachLive();
+  await choose('Add ChatGPT');
+  await click('button', 'Open PR');
+  await until((x) => /Merge your PR first/.test(x), 'the step that waits for the merge');
+  // Someone names ChatGPT as checker on the PR before it's merged, so its run asks for a code.
+  world.headFile = TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n          verify-with: codex\n`);
+  world.checks.newsha = waitingToCheck('ChatGPT');
+  world.comments = [askToCheck({ url: 'https://auth.openai.com/codex/device', code: CODE, claudeUrl: null })];
+  world.head = 'newsha';
+  await wait(9000);
+  const t = await text();
+  expect(/Merge your PR first/.test(t) && !t.includes(CODE), "main still doesn't name Claude, so connecting still waits for the merge");
+});
+
+await scenario('role-pr-read-retried', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], refresh: REFRESH, file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`) }, async ({ world, until, click, reachLive, choose }) => {
+  await reachLive();
+  await choose('Add ChatGPT');
+  await click('button', 'Open PR');
+  await until((x) => /Enable device code sign-in/.test(x), 'the plan login');
+  // A new commit on the PR, whose workflow can't be read for a while.
+  world.headFile = 500;
+  world.checks.newsha = waitingToCheck('ChatGPT');
+  world.head = 'newsha';
+  await until((x) => /We couldn't read the workflow on this PR/.test(x), 'the unknown workflow');
+  // It can be read again: the commit took the plan login out.
+  world.headFile = world.branchFile.replace('          codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}\n', '');
+  const t = await until((x) => /Add a secret named OPENAI_API_KEY/.test(x), "the API key, which the PR's workflow takes now");
+  expect(!/couldn't read the workflow/.test(t), 'once it could be read');
+});
+
+await scenario('pr-files-unreadable-stops', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`), open: { ...PR, ref: 'mergelight-setup-old', title: 'Some change' }, filesFail: true }, async ({ world, until, click, reachLive, choose }) => {
+  await reachLive();
+  await choose('Add ChatGPT');
+  await click('button', 'Open PR');
+  await until((x) => /That didn't work\. Please try again\./.test(x), 'the message');
+  expect(world.writes.length === 0, "an open PR whose files can't be read stops it, as it may change the workflow");
+});
+
+await scenario('refresh-job-deleted-before-the-pr', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], refresh: REFRESH, file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`) }, async ({ world, until, click, reachLive, choose }) => {
+  await reachLive();
+  const t = await choose('Add ChatGPT');
+  expect(!/Adds the small job/.test(t), 'the job is there when the page reads main');
+  // Someone deletes it while the choice is on screen.
+  world.refresh = null;
+  await click('button', 'Open PR');
+  await until((x) => /Connect ChatGPT to check reviews/.test(x), 'the connect step');
+  expect(world.writes.some((w) => w.m === 'PUT' && w.p.endsWith('/mergelight-refresh.yml')), 'the PR brings it back');
+});
+
+await scenario('workflow-takes-no-login', { secrets: [], file: TEMPLATE.replace('          codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}\n          openai-api-key: ${{ secrets.OPENAI_API_KEY }}\n          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}\n', '') }, async ({ page, until, click }) => {
+  await page.goto(`${base}/setup/`, { waitUntil: 'networkidle2' });
+  await page.evaluate(() => sessionStorage.setItem('mergelight.setup.state', 's'));
+  await page.goto(`${base}/setup/?code=c&state=s`, { waitUntil: 'networkidle2' });
+  await until((x) => x.includes('Which repo'), 'the list');
+  await click('[role=option]', 'api');
+  await until((x) => /It's already on main/.test(x), 'the add step');
+  await wait(800);
+  await click('button', 'Continue');
+  const t = await until((x) => /Connect your AI/.test(x), 'the connect step');
+  expect(/Your workflow doesn't pass an AI login to Mergelight\. Add codex-auth-json: \$\{\{ secrets\.CODEX_AUTH_JSON \}\} or claude-code-oauth-token: \$\{\{ secrets\.CLAUDE_CODE_OAUTH_TOKEN \}\} under with: in it first\./.test(t), 'says which line to add');
+  expect(!/Enable device code sign-in|claude setup-token|Add a secret named/.test(t), 'and offers no sign-in that could never reach the review');
 });
 
 await scenario('step-cant-be-found', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], file: `${TEMPLATE}  again:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: mergelightai/mergelight@v0\n` }, async ({ world, reachLive }) => {
