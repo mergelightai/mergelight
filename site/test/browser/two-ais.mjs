@@ -467,7 +467,8 @@ await scenario('public-repo-adds-chatgpt-checker', { isPrivate: false, secrets: 
   expect(!/codex login/.test(t), 'no command before the merge');
   world.merged = true;
   t = await until((x) => /Connect ChatGPT to check reviews/.test(x), 'the connect step');
-  const command = `d=$(mktemp -d); echo 'cli_auth_credentials_store = "file"' > $d/config.toml; CODEX_HOME=$d codex login && gh secret set CODEX_AUTH_JSON --repo acme/api < $d/auth.json; rm -rf $d`;
+  // Every use of the folder is quoted, so a temp path with a space can't make rm -rf remove something else.
+  const command = `d="$(mktemp -d)"; echo 'cli_auth_credentials_store = "file"' > "$d/config.toml"; CODEX_HOME="$d" codex login && gh secret set CODEX_AUTH_JSON --repo acme/api < "$d/auth.json"; rm -rf "$d"`;
   expect(t.includes(command), 'shows the command, with this repo filled in');
   expect(/This repo is public, so anyone who can see your PR could enter a ChatGPT code/.test(t), 'and says why');
   expect(!/close that PR/.test(t) && /your own Codex stays signed in/.test(t), 'a login of its own, and no extra PR to close');

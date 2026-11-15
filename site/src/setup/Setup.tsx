@@ -1558,8 +1558,9 @@ function ConnectStep({ repo, pr, status, code: found, ask = null, commandWhy = n
   // No code comes for this ChatGPT login, so it's saved from their own computer.
   const byCommand = Boolean(commandWhy) && billing === 'plan' && provider === 'openai';
   // The same line the Action prints: a login of its own in a fresh folder, never the one their own Codex uses,
-  // kept in a file so it can be saved, and the folder removed after.
-  const command = `d=$(mktemp -d); echo 'cli_auth_credentials_store = "file"' > $d/config.toml; CODEX_HOME=$d codex login && gh secret set ${LOGIN_SECRET[LOGIN_INPUTS.codex[0]]} --repo ${repo.fullName} < $d/auth.json; rm -rf $d`;
+  // kept in a file so it can be saved, and the folder removed after. Every use of the folder is quoted: a temp
+  // folder with a space in its path would otherwise split, and rm -rf would remove something else.
+  const command = `d="$(mktemp -d)"; echo 'cli_auth_credentials_store = "file"' > "$d/config.toml"; CODEX_HOME="$d" codex login && gh secret set ${LOGIN_SECRET[LOGIN_INPUTS.codex[0]]} --repo ${repo.fullName} < "$d/auth.json"; rm -rf "$d"`;
   const mode = modeOf(billing, provider);
   const [copied, setCopied] = useState<string | null>(null);
   const prUrl = pr?.url ?? `https://github.com/${repo.fullName}/pulls`;
