@@ -403,6 +403,17 @@ test("the notice for saving a checker's login names the secret this workflow rea
   assert.notEqual(home, "/home/me/.codex", "never the person's own Codex login");
   assert.ok(!existsSync(home), "the login's folder is deleted once it is saved");
   assert.match(ran.stdout, /after=\/home\/me\/\.codex/);
+  // When no temporary folder can be made, nothing signs in, saves or removes anything.
+  rmSync(homes, { force: true });
+  rmSync(saved, { force: true });
+  writeFileSync(join(bin, "mktemp"), "#!/usr/bin/env bash\nexit 1\n");
+  writeFileSync(join(bin, "rm"), `#!/usr/bin/env bash\necho "$*" > "${dir}/removed"\n`);
+  chmodSync(join(bin, "mktemp"), 0o755);
+  chmodSync(join(bin, "rm"), 0o755);
+  spawnSync("bash", ["-c", command], { encoding: "utf8", env: { PATH: `${bin}:${process.env.PATH}` } });
+  assert.ok(!existsSync(homes), "codex didn't run");
+  assert.ok(!existsSync(saved), "nothing was saved");
+  assert.ok(!existsSync(join(dir, "removed")), "rm didn't run");
 });
 
 test("the jobs never get the Mergelight AI app's token, only the workflow's own, which can only read", () => {
