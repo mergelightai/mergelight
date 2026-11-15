@@ -262,3 +262,11 @@ test("the development mock's workflow passes both logins, so its repos can try e
   assert.equal(isStandard(yaml), true);
   assert.equal(passesLogin(yaml, 'codex') && passesLogin(yaml, 'claude'), true);
 });
+
+test('a quoted with or environment key is read as set up its own way, never as a step without inputs', () => {
+  const quotedWith = 'steps:\n  - uses: mergelightai/mergelight@v0\n    "with":\n      provider: claude\n';
+  assert.equal(readRoles(quotedWith), null);
+  assert.equal(isStandard(quotedWith), false);
+  const quotedEnvironment = template.replace('    runs-on: ubuntu-latest\n', '    runs-on: ubuntu-latest\n    "environment": ai\n');
+  assert.equal(isStandard(quotedEnvironment), false);
+});

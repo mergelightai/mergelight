@@ -96,7 +96,7 @@ export interface WorkflowFile {
 }
 
 /** What a pull request from this page is for. */
-export type Change = { kind: 'setup' } | { kind: 'update'; release: Release } | { kind: 'roles'; roles: Roles };
+export type Change = { kind: 'setup' } | { kind: 'update'; release: Release } | { kind: 'roles'; roles: Roles } | { kind: 'refresh' };
 
 /**
  * The workflow wasn't there to change, its Mergelight step couldn't be found in it, or it changed since the page read
@@ -222,6 +222,7 @@ export interface GitHubClient {
 const WORKFLOWS = '.github/workflows';
 const WORKFLOW_PATH = `${WORKFLOWS}/mergelight.yml`;
 export const REFRESH_FILE = 'mergelight-refresh.yml';
+const REFRESH_PATH = `${WORKFLOWS}/${REFRESH_FILE}`;
 /** The secrets that can run a review. Only a ChatGPT login has to be refreshed. */
 const NO_REFRESH_SECRETS = ['OPENAI_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'];
 const LOGIN_SECRETS = ['CODEX_AUTH_JSON', ...NO_REFRESH_SECRETS];
@@ -248,7 +249,15 @@ const rolesBody = (refresh: string) =>
   ].join('\n');
 /** The commit says which AI, since each change is its own commit. */
 const rolesCommit = (roles: Roles) => (roles.reviewer === roles.checker ? `Review and check with ${aiName(roles.reviewer)}` : `Review with ${aiName(roles.reviewer)}, check with ${aiName(roles.checker)}`);
-const commitFor = (change: Change) => (change.kind === 'update' ? updateTitle(change.release) : change.kind === 'roles' ? rolesCommit(change.roles) : SETUP_CHANGED);
+/** For roles that are set already, whose ChatGPT login has no job to keep it fresh yet. */
+const REFRESH_TITLE = 'Keep the ChatGPT login fresh for Mergelight';
+const refreshBody = (repo: Repo, branch: string) =>
+  [
+    `Adds a small job that keeps the ChatGPT login [Mergelight](https://mergelight.dev) uses fresh, so reviews don't have to. The review workflow doesn't change.${branch === repo.defaultBranch ? '' : ` That job only runs on a schedule from ${repo.defaultBranch}, so merge it there too.`}`,
+    '',
+    'Merge it to keep it.',
+  ].join('\n');
+const commitFor = (change: Change) => (change.kind === 'update' ? updateTitle(change.release) : change.kind === 'roles' ? rolesCommit(change.roles) : change.kind === 'refresh' ? REFRESH_TITLE : SETUP_CHANGED);
 
 const toBase64 = (text: string) => btoa(String.fromCharCode(...new TextEncoder().encode(text)));
 const fromBase64 = (text: string) => new TextDecoder().decode(Uint8Array.from(atob(text.replace(/\s/g, '')), (c) => c.charCodeAt(0)));
@@ -416,17 +425,20 @@ export function realClient(token: string): GitHubClient {
     return { tag, sha };
   };
   /** With `base`, only one into that branch: a change made on one into another branch would never reach this one. */
+  /** Every open pull request, a page at a time, so one far down the list is still found. */
   const openSetupPull = async (repo: Repo, base?: string) => {
     const into = base ? `&base=${encodeURIComponent(base)}` : '';
-    const pulls = await get<{ number: number; html_url: string; title: string; base: { ref: string }; head: { sha: string; ref: string; repo: { full_name: string } | null } }[]>(`/repos/${repo.fullName}/pulls?state=open&sort=created&direction=desc&per_page=5${into}`);
-    for (const pull of pulls) {
-      // A fork's pull request isn't ours to update.
-      if (pull.head.repo?.full_name !== repo.fullName) continue;
-      if (base && pull.base?.ref !== base) continue;
-      const files = await get<{ filename: string }[]>(`/repos/${repo.fullName}/pulls/${pull.number}/files?per_page=30`).catch(() => []);
-      if (files.some((f) => f.filename === WORKFLOW_PATH)) return pull;
+    for (let page = 1; ; page++) {
+      const pulls = await get<{ number: number; html_url: string; title: string; base: { ref: string }; head: { sha: string; ref: string; repo: { full_name: string } | null } }[]>(`/repos/${repo.fullName}/pulls?state=open&sort=created&direction=desc&per_page=100&page=${page}${into}`);
+      for (const pull of pulls) {
+        // A fork's pull request isn't ours to update.
+        if (pull.head.repo?.full_name !== repo.fullName) continue;
+        if (base && pull.base?.ref !== base) continue;
+        const files = await get<{ filename: string }[]>(`/repos/${repo.fullName}/pulls/${pull.number}/files?per_page=100`).catch(() => []);
+        if (files.some((f) => f.filename === WORKFLOW_PATH || f.filename === REFRESH_PATH)) return pull;
+      }
+      if (pulls.length < 100) return null;
     }
-    return null;
   };
   const findSetupPr = async (repo: Repo, base?: string): Promise<SetupPr | null> => {
     const pull = await openSetupPull(repo, base);
@@ -527,7 +539,7 @@ export function realClient(token: string): GitHubClient {
       const open = await openSetupPull(repo, branch);
       if (open) {
         // A change of AI is a pull request of its own, and an update never goes into one: each says only what it changes.
-        if (change.kind === 'roles' || (change.kind === 'update' && open.title === ROLES_TITLE)) throw new OpenPrError({ number: open.number, url: open.html_url, headSha: open.head.sha });
+        if (change.kind === 'roles' || change.kind === 'refresh' || (change.kind === 'update' && open.title === ROLES_TITLE)) throw new OpenPrError({ number: open.number, url: open.html_url, headSha: open.head.sha });
         const planned = await plan(open.head.ref);
         const commit = await write(open.head.ref, commitFor(change), planned);
         return { number: open.number, url: open.html_url, headSha: commit ?? open.head.sha };
@@ -536,15 +548,15 @@ export function realClient(token: string): GitHubClient {
       // A change that can't be made stops here, before there's a branch to clean up. A new branch starts with what this one holds.
       const planned = await plan(branch);
       if (planned.every(({ current, content }) => current?.content === content)) return null;
-      const title = update ? updateTitle(update) : change.kind === 'roles' ? ROLES_TITLE : SETUP_TITLE;
+      const title = update ? updateTitle(update) : change.kind === 'roles' ? ROLES_TITLE : change.kind === 'refresh' ? REFRESH_TITLE : SETUP_TITLE;
       const base = await get<{ object: { sha: string } }>(`${r}/git/ref/heads/${branch.split('/').map(encodeURIComponent).join('/')}`);
       const head = `mergelight-setup-${Date.now().toString(36)}`;
       await call('POST', `${r}/git/refs`, { ref: `refs/heads/${head}`, sha: base.object.sha });
       try {
-        await write(head, change.kind === 'roles' ? commitFor(change) : title, planned);
+        await write(head, change.kind === 'roles' || change.kind === 'refresh' ? commitFor(change) : title, planned);
         // A file the branch doesn't have yet is one this pull request adds.
         const refresh = planned.some(({ current }) => !current) ? refreshNote(repo, branch) : '';
-        const body = update ? updateBody(update, refresh) : change.kind === 'roles' ? rolesBody(refresh) : SETUP_BODY;
+        const body = update ? updateBody(update, refresh) : change.kind === 'roles' ? rolesBody(refresh) : change.kind === 'refresh' ? refreshBody(repo, branch) : SETUP_BODY;
         const pull = await call<{ number: number; html_url: string; head: { sha: string } }>('POST', `${r}/pulls`, { title, head, base: branch, body });
         return { number: pull.number, url: pull.html_url, headSha: pull.head.sha };
       } catch (err) {

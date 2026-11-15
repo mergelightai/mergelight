@@ -165,7 +165,11 @@ function locate(content: string): Step | null {
     return ok && t.length > keyCol && t[keyCol] !== ' ' ? t.slice(keyCol) : null;
   };
   const withs: number[] = [];
-  for (let i = start; i < end; i++) if (/^with[ \t]*:/.test(keyOn(i) ?? '')) withs.push(i);
+  for (let i = start; i < end; i++) {
+    // A quoted "with" is valid YAML this doesn't read, so the step isn't read at all rather than as one without inputs.
+    if (/^(["'])with\1[ \t]*:/.test(keyOn(i) ?? '')) return null;
+    if (/^with[ \t]*:/.test(keyOn(i) ?? '')) withs.push(i);
+  }
   if (withs.length > 1) return null;
   const withLine = withs[0] ?? null;
   if (withLine === null) return { lines, text, start, usesLine, keyCol, withLine, childIndent: keyCol + 2, entries: [], blockEnd: usesLine + 1 };
@@ -255,7 +259,7 @@ export function isStandard(content: string): boolean {
   if (!step) return false;
   // The review job's environment has secrets of its own, which this page can't see. Another job's doesn't matter.
   const keys = jobKeys(step);
-  if (!keys || keys.some((k) => /^environment[ \t]*:/.test(k))) return false;
+  if (!keys || keys.some((k) => /^(["']?)environment\1[ \t]*:/.test(k))) return false;
   return step.entries.every(({ key }) => {
     if (key === 'auth-secret-name') return false;
     // A step that runs the jobs has its own AI, and only the review's is this page's to change.
