@@ -7,9 +7,9 @@ import { declinesOf, fetchContext, MAX_REASON, reportReview } from "./cloud.js";
 import { GitHub } from "./publish/api.js";
 import { writeAccess } from "./publish/handled.js";
 import { publishTeamChecks } from "./publish/team-checks.js";
-import { answerRemembered, confirmReasons, approveCheck, checkLimitTitle, checkLoginTitle, failCheck, failSummary, previousFindings, publishReview, startCheck, startSummary, syncApproval, UNREVIEWED, APPROVALS_OFF, updatePendingSummary } from "./publish/publish.js";
-import { configuredModel, LimitError, LoginError, loginFailureMessage } from "./providers/codex.js";
-import { limitNotice, loginNotice } from "./publish/markdown.js";
+import { answerRemembered, confirmReasons, approveCheck, checkHeldTitle, checkLimitTitle, checkLoginTitle, failCheck, failSummary, previousFindings, publishReview, startCheck, startSummary, syncApproval, UNREVIEWED, APPROVALS_OFF, updatePendingSummary } from "./publish/publish.js";
+import { configuredModel, HeldLoginError, LimitError, LoginError, loginFailureMessage } from "./providers/codex.js";
+import { heldLoginNotice, limitNotice, loginNotice } from "./publish/markdown.js";
 import { renderRejected, renderTerminal } from "./render.js";
 import { reviewPullRequest } from "./review.js";
 import { jobsCommand } from "./jobs-command.js";
@@ -370,7 +370,12 @@ async function main(): Promise<number> {
     // The login step already found this login can't be refreshed, so don't send every reviewer to find out.
     // Only when Codex is in this review: a Claude review whose Codex checker lost its login is checked by Claude.
     const usesCodex = (provider ?? "codex") === "codex" || verifyWith === "codex";
-    if (usesCodex && process.env.MERGELIGHT_LOGIN_LOST === "1") throw new LoginError(loginFailureMessage(process.env.SECRET_NAME || undefined));
+    if (usesCodex && process.env.MERGELIGHT_LOGIN_LOST === "1") {
+      const secret = process.env.SECRET_NAME || undefined;
+      // The login step says why when it held the login back on purpose, as for one other repositories share.
+      const note = process.env.MERGELIGHT_LOGIN_NOTE;
+      throw note ? new HeldLoginError(note) : new LoginError(loginFailureMessage(secret));
+    }
     // Before the threads are read: a reply written after this counts as newer than this review.
     const startedAt = new Date();
     let previous = values.post ? await previousFindings(api, ref.number, headSha ?? undefined) : undefined;
@@ -405,6 +410,11 @@ async function main(): Promise<number> {
       review.checker_missed = verifyMissed;
       const why = values["verify-missed-why"];
       if (why === "not-installed" || why === "login-failed") review.checker_missed_why = why;
+      // Held back on purpose, as a login other repositories share: the login step's own words say why.
+      if (why === "held" && process.env.MERGELIGHT_LOGIN_NOTE) {
+        review.checker_missed_why = why;
+        review.checker_missed_note = process.env.MERGELIGHT_LOGIN_NOTE;
+      }
     }
     if (jobs) review.jobs = { ...jobs, ...(jobs.commit ? { reviewed: review.pr.head_sha.toLowerCase() === jobs.commit.toLowerCase() } : {}) };
 
@@ -453,8 +463,10 @@ async function main(): Promise<number> {
     if (values.post && headSha) {
       const login = err instanceof LoginError ? err : null;
       const limit = err instanceof LimitError ? err : null;
-      const title = limit ? checkLimitTitle(limit.plan) : login ? checkLoginTitle(login.plan) : undefined;
-      const notice = limit ? limitNotice(limit.plan, limit.resets) : login ? loginNotice(login.plan, message) : undefined;
+      // Held back on purpose is no login that failed: its own words say why.
+      const held = err instanceof HeldLoginError;
+      const title = limit ? checkLimitTitle(limit.plan) : held ? checkHeldTitle : login ? checkLoginTitle(login.plan) : undefined;
+      const notice = limit ? limitNotice(limit.plan, limit.resets) : held ? heldLoginNotice(message) : login ? loginNotice(login.plan, message) : undefined;
       await failCheck(api, checkRunId, headSha, message, log, title, jobs).catch((e) => log(`Couldn't update the check: ${(e as Error).message}`));
       await naming;
       await failSummary(api, ref.number, notice, jobs).catch((e) => log(`Couldn't update the summary: ${(e as Error).message}`));

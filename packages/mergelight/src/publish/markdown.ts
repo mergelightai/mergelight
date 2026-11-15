@@ -17,7 +17,7 @@ const MAX_BODY = 65_000;
  * markers or ping people.
  */
 /** Says when the AI the team asked to check had no login yet, so the reviewer's own AI checked instead. */
-export function checkerMissedLine(r: Pick<Review, "checker_missed" | "checker_missed_why" | "provider">): string | null {
+export function checkerMissedLine(r: Pick<Review, "checker_missed" | "checker_missed_why" | "checker_missed_note" | "provider">): string | null {
   if (!r.checker_missed || r.checker_missed === r.provider.name) return null;
   const name = (ai: "codex" | "claude") => (ai === "codex" ? "Codex" : "Claude");
   const login = r.checker_missed === "codex" ? "ChatGPT" : "Claude";
@@ -29,8 +29,11 @@ export function checkerMissedLine(r: Pick<Review, "checker_missed" | "checker_mi
     // A plan's usage or an API key's credit: it can be either.
     limit: "it hit its usage limit",
     sandbox: `${name(r.checker_missed)}'s sandbox couldn't start on this runner`,
+    // Held back on purpose, as one other repositories share: the note says why, and what to do.
+    held: "Mergelight held its ChatGPT login back",
   }[r.checker_missed_why ?? "no-login"];
-  return `⚠️ ${name(r.checker_missed)} was set to check this review, but ${why}, so ${name(r.provider.name)} checked it.`;
+  const then = r.checker_missed_why === "held" && r.checker_missed_note ? ` ${clean(r.checker_missed_note)}` : "";
+  return `⚠️ ${name(r.checker_missed)} was set to check this review, but ${why}, so ${name(r.provider.name)} checked it.${then}`;
 }
 
 export function clean(text: string): string {
@@ -126,6 +129,8 @@ export interface FailureNotice {
 }
 
 export const loginNotice = (plan: string, reason: string): FailureNotice => ({ heading: `⚠️ Mergelight: the ${plan} login didn't work`, body: reason });
+/** For a login held back on purpose: the reason says why and what to do, and nothing is wrong with the login. */
+export const heldLoginNotice = (reason: string): FailureNotice => ({ heading: "⚠️ Mergelight: the ChatGPT login was held back", body: reason });
 
 export function limitNotice(plan: string, resets: string | null): FailureNotice {
   // An API key's credit, not a plan: the fix is adding credit.
