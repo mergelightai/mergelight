@@ -311,6 +311,23 @@ await scenario('only-claude-on-this-run', { comments: [comment(BOT, withState(co
   expect(/Connect your AI/.test(keys), 'and the step is for either AI');
 });
 
+await scenario('new-run-offers-both-again', { comments: [comment(BOT, withState(connectBody(null, 'https://github.com/acme/api/actions/runs/1', CLAUDE, claudeSetupLink('acme/api', 7)), undefined))], checks: { headsha: { status: 'in_progress', conclusion: null, output: { title: 'Waiting for you to connect Claude' } } } }, async ({ page, world, until, reach }) => {
+  await reach();
+  await until((x) => /Open Claude/.test(x), "Claude's link, as this run's ChatGPT sign-in failed");
+  // A new commit's run makes a ChatGPT code again.
+  world.comments = [CLAUDE_COMMENT()];
+  world.checks.newsha = WAITING;
+  world.head = 'newsha';
+  await until(() => true, 'a moment');
+  const end = Date.now() + 14000;
+  let tiles = [];
+  while (Date.now() < end && !tiles.includes('ChatGPT')) {
+    tiles = await page.evaluate(() => [...document.querySelectorAll('[role=radiogroup][aria-label="Which AI"] label')].map((l) => l.textContent));
+    await wait(200);
+  }
+  expect(tiles.includes('ChatGPT') && tiles.includes('Claude'), `ChatGPT is offered again (${tiles.join(', ')})`);
+});
+
 await scenario('claude-button-and-paste', { comments: [CLAUDE_COMMENT()], checks: { headsha: WAITING } }, async ({ page, world, click, reach, until }) => {
   await reach();
   await until((x) => x.includes(CODE), 'the code');

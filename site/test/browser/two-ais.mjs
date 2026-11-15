@@ -105,7 +105,8 @@ async function scenario(name, start, body) {
       if (p === '/contents/.github/workflows/mergelight.yml') {
         const ref = u.searchParams.get('ref');
         if (world.fileGone) return json(req, {}, 404);
-        if (ref === 'main') return json(req, { sha: 'baseblob', content: b64(world.file) });
+        // Once the PR is merged, main has what its branch held.
+        if (ref === 'main') return json(req, { sha: 'baseblob', content: b64(world.merged && world.branchFile ? world.branchFile : world.file) });
         // The pull request's own commit, as a link from its run reads it. A number is how GitHub answers instead.
         if (world.headFile !== null && ref === world.head) return typeof world.headFile === 'number' ? json(req, {}, world.headFile) : json(req, { sha: 'headblob', content: b64(world.headFile) });
         if (ref === world.open?.ref && world.branchFile) return json(req, { sha: 'prblob', content: b64(world.branchFile) });
@@ -145,6 +146,8 @@ async function scenario(name, start, body) {
     const at = await page.evaluate((s, l) => {
       const el = [...document.querySelectorAll(s)].find((e) => e.textContent.includes(l));
       if (!el) return null;
+      // A long step can put it below the window, where a click misses.
+      el.scrollIntoView({ block: 'center', behavior: 'instant' });
       const b = el.getBoundingClientRect();
       return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
     }, selector, label);
@@ -649,8 +652,9 @@ await scenario('roles-set-but-chatgpt-not-connected', { secrets: ['CLAUDE_CODE_O
   const t = await choose('Add ChatGPT');
   expect(/Connect ChatGPT/.test(t) && !/Already set like this|Opens a PR/.test(t), 'the file says this already, so connecting is all that is left');
   await click('button', 'Connect ChatGPT');
-  await until((x) => /Connect ChatGPT to check reviews/.test(x), 'the connect step');
+  const c = await until((x) => /Connect ChatGPT to check reviews/.test(x), 'the connect step');
   expect(world.writes.length === 0, 'with nothing written');
+  expect(/Open a new PR, then enter the code its Mergelight comment shows/.test(c), 'with no PR open, a new one is where the code comes from');
   world.secrets.push('CODEX_AUTH_JSON');
   await until((x) => /Mergelight is on/.test(x) && /Reviews with Claude, checked by ChatGPT/.test(x) && !/Resume/.test(x), 'live once ChatGPT is connected');
 });
@@ -674,15 +678,25 @@ await scenario('org-shared-chatgpt-login', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'
   expect(/Reviews with Claude, checked by ChatGPT/.test(live), "today's reviews use the organization's login, so it shows who checks now");
   expect(/Add ChatGPT/.test(live), "but it isn't this repo's own, so ChatGPT is still to add");
   let t = await choose('Add ChatGPT');
-  expect(/ChatGPT isn't connected yet\. Your organization's ChatGPT login is shared, so this repo gets its own\. Next, you save it from your own computer\./.test(t), 'says why the repo gets its own');
-  await click('button', 'Open PR');
+  expect(/ChatGPT isn't connected yet\. Your organization's ChatGPT login is shared, so this repo gets its own\. Next, you save it from your own computer, and then we open the PR\./.test(t), 'says why the repo gets its own, and that it comes first');
+  await click('button', 'Connect ChatGPT');
   t = await until((x) => /Connect ChatGPT to check reviews/.test(x), 'the connect step');
-  expect(/Your organization's ChatGPT login is shared, so this repo gets its own\./.test(t) && /codex login && gh secret set CODEX_AUTH_JSON --repo acme\/api/.test(t), "the command saves one of the repo's own, as no run asks while the shared one is there");
+  expect(world.writes.length === 0, 'no PR yet, so nothing can use the shared login before the repo has its own');
+  expect(/Your organization's ChatGPT login is shared, so this repo gets its own\./.test(t) && /codex login && gh secret set CODEX_AUTH_JSON --repo acme\/api/.test(t), "the command saves one of the repo's own");
+  expect(/We'll open your PR once it's saved/.test(t), 'and says the PR comes after');
   expect(!/API key|OPENAI_API_KEY/.test(t) && !(await offers(page, 'Claude')), 'and offers no OpenAI key, which the shared login would win over');
-  expect(world.writes.filter((w) => w.m === 'PUT').length === 2, "the repo's own login gets the refresh job");
   world.secrets.push('CODEX_AUTH_JSON');
-  t = await until((x) => /Mergelight is on/.test(x), "live once the repo has its own");
+  t = await until((x) => /Merge PR #9 to review with Claude and check with ChatGPT/.test(x), 'the PR, once the repo has its own login');
+  expect(world.writes.filter((w) => w.m === 'PUT').length === 2, "with the refresh job, for the repo's own login");
   expect(!/Resume/.test(t), 'nothing left to connect');
+});
+
+await scenario('org-shared-login-beats-api-key', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN', 'OPENAI_API_KEY'], orgSecrets: ['CODEX_AUTH_JSON'], file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`) }, async ({ reachLive, choose }) => {
+  const { live } = await reachLive();
+  // The Action uses the ChatGPT login before the key, and that login is the organization's.
+  expect(/Add ChatGPT/.test(live), "the repo's OpenAI key doesn't make ChatGPT connected");
+  const t = await choose('Add ChatGPT');
+  expect(/Your organization's ChatGPT login is shared, so this repo gets its own/.test(t), 'and it still gets its own login');
 });
 
 await scenario('model-keeps-the-reviewer', { secrets: ['CODEX_AUTH_JSON', 'CLAUDE_CODE_OAUTH_TOKEN'], file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n          model: opus\n`) }, async ({ page, picked, until, click, reachLive, choose }) => {
@@ -869,6 +883,71 @@ await scenario('back-after-a-late-secrets-read', { secrets: ['CLAUDE_CODE_OAUTH_
   const t = await text();
   expect(/We can't read all of this repo's secrets/.test(t), 'says why there is no choice now');
   expect(await page.evaluate(() => [...document.querySelectorAll('button')].some((b) => b.textContent.includes('Back'))), 'and Back is still there');
+});
+
+await scenario('merge-first-clears-the-checker', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          verify-with: codex\n`) }, async ({ world, until, click, reachLive, choose }) => {
+  await reachLive();
+  await choose('Add ChatGPT');
+  await click('button', 'Open PR');
+  await until((x) => /Merge your PR first/.test(x), 'the step that waits for the merge');
+  const put = world.writes.find((w) => w.m === 'PUT' && w.p.endsWith('/mergelight.yml'));
+  // A checker the PR kept would make its run ask for a ChatGPT code before the merge.
+  expect(unb64(put.body.content) === TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`), 'names the reviewer and takes the checker out');
+});
+
+await scenario('both-missing-one-at-a-time', { secrets: [], orgSecrets: ['CODEX_AUTH_JSON'], file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: codex\n`) }, async ({ page, world, until, click }) => {
+  await page.goto(`${base}/setup/`, { waitUntil: 'networkidle2' });
+  await page.evaluate(() => sessionStorage.setItem('mergelight.setup.state', 's'));
+  await page.goto(`${base}/setup/?code=c&state=s`, { waitUntil: 'networkidle2' });
+  await until((x) => x.includes('Which repo'), 'the list');
+  await click('[role=option]', 'api');
+  await until((x) => /It's already on main/.test(x), 'the add step');
+  // ChatGPT reviews on the organization's login. Neither AI has a login of the repo's own.
+  await wait(800);
+  await click('section[aria-label="Your AI"] button', 'Change');
+  let t = await until((x) => /Choose your AI/.test(x), 'the choice');
+  await wait(800);
+  await click('button', 'Connect ChatGPT');
+  t = await until((x) => /Connect ChatGPT/.test(x) && /codex login/.test(x), 'ChatGPT first, from the command');
+  world.secrets.push('CODEX_AUTH_JSON');
+  t = await until((x) => /Connect Claude to check reviews/.test(x), 'then Claude, on the PR that opens');
+  expect(world.writes.some((w) => w.m === 'POST' && w.p === '/pulls'), 'the PR opened once ChatGPT had its own login');
+  await wait(600);
+  await click('button', 'Back');
+  t = await until((x) => /Resume/.test(x), 'Your AI, after Back');
+  expect(/Claude isn't connected yet\./.test(t), 'Resume stays for Claude, the AI still to connect');
+  world.secrets.push('CLAUDE_CODE_OAUTH_TOKEN');
+  await until((x) => !/Resume/.test(x), 'Resume goes once both are connected');
+});
+
+await scenario('roles-set-public-chatgpt', { isPrivate: false, secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n          verify-with: codex\n`) }, async ({ world, until, click, reachLive, choose }) => {
+  await reachLive();
+  await choose('Add ChatGPT');
+  await click('button', 'Connect ChatGPT');
+  const t = await until((x) => /Connect ChatGPT to check reviews/.test(x), 'the connect step');
+  expect(/codex login && gh secret set CODEX_AUTH_JSON --repo acme\/api/.test(t), 'a public repo gets the command, which needs no PR');
+  expect(world.writes.length === 0, 'and nothing is written');
+});
+
+await scenario('role-pr-edited-before-merge', { secrets: ['CODEX_AUTH_JSON', 'CLAUDE_CODE_OAUTH_TOKEN'], refresh: REFRESH, file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n          verify-with: codex\n`) }, async ({ world, until, click, reachLive, choose }) => {
+  await reachLive();
+  await choose('Change');
+  await click('[role=radiogroup][aria-label="Reviews your PRs"] label', 'ChatGPT');
+  await wait(200);
+  await click('button', 'Open PR');
+  await until((x) => /Merge PR #9 to review with ChatGPT and check with Claude/.test(x), 'the pending change');
+  // On GitHub, they make ChatGPT check too before merging.
+  world.branchFile = TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: codex\n          verify-with: codex\n`);
+  world.open = null;
+  world.merged = true;
+  const t = await until((x) => !/Merge PR #9/.test(x), 'the merged change');
+  expect(/Reviews with ChatGPT, checked by ChatGPT/.test(t), 'shows what merged, not what the page proposed');
+});
+
+await scenario('old-link-after-merge', { secrets: ['CODEX_AUTH_JSON'], merged: true, comments: [{ user: { login: BOT }, body: withState(pendingSummaryBody(), undefined) }], checks: { rolesha: { status: 'in_progress', conclusion: null, output: { title: 'Reviewing' } } } }, async ({ page, until }) => {
+  await page.goto(`${base}/setup/?repo=acme/api&pr=9&connect=claude`, { waitUntil: 'networkidle2' });
+  const t = await until((x) => /This link has ended/.test(x), 'the ended link');
+  expect(/Open a new PR to get a new link/.test(t) && !/Push a new commit/.test(t), 'that PR is merged, so it says to open a new one');
 });
 
 await scenario('step-cant-be-found', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], file: `${TEMPLATE}  again:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: mergelightai/mergelight@v0\n` }, async ({ world, reachLive }) => {
