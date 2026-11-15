@@ -30,6 +30,29 @@ export const REVIEW_WITHIN = 2.5 * HOUR;
  */
 const CARRY_ON_ABOVE = 20 * 60_000;
 
+/** The command that saves a ChatGPT login of its own as this repository's secret, as setup's codexLogin() makes one. */
+export function ownLoginCommand(secret = "CODEX_AUTH_JSON", repo = "OWNER/REPO") {
+  return `d=$(mktemp -d); echo 'cli_auth_credentials_store = "file"' > $d/config.toml; CODEX_HOME=$d codex login && gh secret set ${secret} --repo ${repo} < $d/auth.json; rm -rf $d`;
+}
+
+/**
+ * Whether this repository holds the login's secret itself: "no" when GitHub says it has no repository
+ * secret of that name, so the login comes from elsewhere, such as an organization's secret. A refresh
+ * saved here would leave that secret holding a spent refresh token, and sign out every repository that
+ * shares it. Anything GitHub doesn't answer plainly is "unknown".
+ */
+export async function secretHeld({ env = process.env, token, fetchImpl = fetch } = {}) {
+  const api = env.GITHUB_API_URL || "https://api.github.com";
+  try {
+    const res = await fetchImpl(`${api}/repos/${env.GITHUB_REPOSITORY}/actions/secrets/${encodeURIComponent(env.SECRET_NAME || "CODEX_AUTH_JSON")}`, {
+      headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json" },
+    });
+    return res.status === 200 ? "yes" : res.status === 404 ? "no" : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
 /** When the login's access token expires, in milliseconds, or null if that can't be told. */
 export function accessTokenExpiry(auth) {
   try {
@@ -107,6 +130,7 @@ export async function refreshLogin({
   log = console.log,
   refresh = () => forceRefresh({ env }),
   appToken = () => getAppToken({ env: { ...env, TOKEN_SCOPE: "login" }, log }),
+  held = (token) => secretHeld({ env, token }),
   save = (token) => spawnSync("bash", [join(env.GITHUB_ACTION_PATH, "packages/mergelight/scripts/save-login.sh")], { stdio: "inherit", env: { ...env, SECRETS_TOKEN: token } }).status,
 } = {}) {
   const file = join(env.CODEX_HOME, "auth.json");
@@ -143,6 +167,27 @@ export async function refreshLogin({
       return 1;
     }
     log(`::warning::${message}`);
+    return 0;
+  }
+
+  // A login other repositories share is never refreshed here: the new one could only be saved to this
+  // repository, and the shared secret would keep a spent refresh token.
+  if ((await held(token)) === "no") {
+    const secret = env.SECRET_NAME || "CODEX_AUTH_JSON";
+    const message = `This repository reads its ChatGPT login from a ${secret} secret it doesn't hold itself, such as an organization's. Mergelight doesn't refresh a login other repositories share, as that would sign them out. Save a login of its own as this repository's secret: ${ownLoginCommand(secret, env.GITHUB_REPOSITORY)}`;
+    if (event === "schedule" || event === "workflow_dispatch") {
+      log(`::error::${message}`);
+      return 1;
+    }
+    if (env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, "MERGELIGHT_LOGIN_SHARED=1\n");
+    // What's left of the access token still works: the review uses it, and nothing else may wait on it.
+    if (expiry !== null && expiry - now() > CARRY_ON_ABOVE) {
+      log(`::warning::${message} This review carries on, since the login is good for another ${left(expiry - now())}.`);
+      if (env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, "MERGELIGHT_LOGIN_SHORT=1\n");
+      return 0;
+    }
+    log(`::error::${message}`);
+    if (env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, "MERGELIGHT_LOGIN_LOST=1\n");
     return 0;
   }
 

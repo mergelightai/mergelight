@@ -13,7 +13,7 @@ const HOUR = 3_600_000;
 const jwt = (exp) => `h.${Buffer.from(JSON.stringify({ exp: exp / 1000 })).toString("base64url")}.s`;
 const login = (msLeft, refreshToken = "old") => JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: jwt(NOW + msLeft), refresh_token: refreshToken } });
 
-function setup({ event, msLeft, rotates = true, secretsToken = "tok", appToken = null, saveCode = 0, reason = null }) {
+function setup({ event, msLeft, rotates = true, secretsToken = "tok", appToken = null, saveCode = 0, reason = null, held = "yes" }) {
   const home = mkdtempSync(join(tmpdir(), "mergelight-refresh-"));
   const file = join(home, "auth.json");
   const envFile = join(home, "env");
@@ -26,10 +26,14 @@ function setup({ event, msLeft, rotates = true, secretsToken = "tok", appToken =
     envFile,
     run: () =>
       refreshLogin({
-        env: { CODEX_HOME: home, GITHUB_EVENT_NAME: event, SECRETS_TOKEN: secretsToken, SECRET_NAME: "CODEX_AUTH_JSON", GITHUB_ENV: envFile },
+        env: { CODEX_HOME: home, GITHUB_EVENT_NAME: event, SECRETS_TOKEN: secretsToken, SECRET_NAME: "CODEX_AUTH_JSON", GITHUB_ENV: envFile, GITHUB_REPOSITORY: "acme/api" },
         now: () => NOW,
         log: (l) => calls.logs.push(l),
         appToken: async () => appToken,
+        held: async (token) => {
+          calls.heldToken = token;
+          return held;
+        },
         refresh: async () => {
           calls.refresh++;
           if (rotates) writeFileSync(file, login(240 * HOUR, "new"));
@@ -187,6 +191,7 @@ test("what comes back decides whether it worked, not just that a token changed",
       env: { CODEX_HOME: dirname(s.file), GITHUB_EVENT_NAME: "workflow_dispatch", SECRETS_TOKEN: "tok", SECRET_NAME: "CODEX_AUTH_JSON", GITHUB_ENV: s.envFile },
       now: () => NOW,
       log: (l) => s.calls.logs.push(l),
+      held: async () => "yes",
       refresh: async () => {
         writeFileSync(s.file, content);
         return null;
@@ -274,3 +279,40 @@ test("a refreshed login's new tokens are hidden before anything else is logged",
   assert.ok(hidden >= 0 && hidden < refreshed, s.calls.logs.join("\n"));
 });
 
+
+test("a login this repository doesn't hold itself, such as an organization's, is never refreshed", async () => {
+  // A review with time left uses what's left, and nothing else may wait on it.
+  const later = setup({ event: "pull_request", msLeft: HOUR, held: "no" });
+  assert.equal(await later.run(), 0);
+  assert.equal(later.calls.refresh, 0);
+  assert.deepEqual(later.calls.saved, []);
+  assert.equal(later.calls.heldToken, "tok", "asked with the token that would save it");
+  assert.ok(said(later.calls, /::warning::.*doesn't hold itself.*gh secret set CODEX_AUTH_JSON --repo acme\/api.*carries on/));
+  assert.equal(readFileSync(later.envFile, "utf8"), "MERGELIGHT_LOGIN_SHARED=1\nMERGELIGHT_LOGIN_SHORT=1\n");
+  // With no time left, Codex isn't started, and the review says why.
+  const now = setup({ event: "pull_request", msLeft: 10 * 60_000, held: "no" });
+  assert.equal(await now.run(), 0);
+  assert.equal(now.calls.refresh, 0);
+  assert.equal(readFileSync(now.envFile, "utf8"), "MERGELIGHT_LOGIN_SHARED=1\nMERGELIGHT_LOGIN_LOST=1\n");
+  // The job fails where it can be seen.
+  const job = setup({ event: "schedule", msLeft: 9 * 24 * HOUR, held: "no" });
+  assert.equal(await job.run(), 1);
+  assert.equal(job.calls.refresh, 0);
+  assert.ok(said(job.calls, /::error::.*doesn't hold itself/));
+  // An answer GitHub doesn't give plainly changes nothing.
+  const unknown = setup({ event: "pull_request", msLeft: HOUR, held: "unknown" });
+  assert.equal(await unknown.run(), 0);
+  assert.equal(unknown.calls.refresh, 1);
+});
+
+test("whether the repository holds the secret is asked of GitHub, and only a plain answer counts", async () => {
+  const { secretHeld } = await import("../scripts/refresh-login.mjs");
+  const asked = [];
+  const answer = (status) => async (url, init) => (asked.push([url, init.headers.authorization]), { status });
+  const env = { GITHUB_REPOSITORY: "acme/api", SECRET_NAME: "TEAM_CHATGPT" };
+  assert.equal(await secretHeld({ env, token: "t", fetchImpl: answer(200) }), "yes");
+  assert.equal(await secretHeld({ env, token: "t", fetchImpl: answer(404) }), "no");
+  assert.equal(await secretHeld({ env, token: "t", fetchImpl: answer(403) }), "unknown");
+  assert.equal(await secretHeld({ env, token: "t", fetchImpl: async () => { throw new Error("offline"); } }), "unknown");
+  assert.deepEqual(asked[0], ["https://api.github.com/repos/acme/api/actions/secrets/TEAM_CHATGPT", "Bearer t"]);
+});

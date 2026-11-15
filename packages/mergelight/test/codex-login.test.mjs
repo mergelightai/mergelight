@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { test } from "node:test";
 import { claudeEnv, runClaude } from "../dist/providers/claude.js";
-import { codexEnv, LimitError, limitFrom, LoginError, loginFailureMessage, runCodex, SandboxError, sandboxArgs, scrubSecrets } from "../dist/providers/codex.js";
+import { codexEnv, LimitError, limitFrom, LoginError, loginFailureMessage, runCodex, SandboxError, sandboxArgs, scrubSecrets, sharedLoginMessage } from "../dist/providers/codex.js";
 
 /** Puts a stand-in codex first on the PATH that fails with this message, on a run with this login. */
 async function failingCodex(stderr, { stdout = "", chatgpt = "1" } = {}) {
@@ -80,6 +80,11 @@ test("other failures keep their own message", async () => {
 
 test("the message names the secret this repository uses", () => {
   assert.match(loginFailureMessage("MY_LOGIN"), /delete the MY_LOGIN secret/);
+  // A shared login says why it isn't refreshed, and how to save one of its own, never to delete a secret others use.
+  const shared = sharedLoginMessage("MY_LOGIN", "acme/api");
+  assert.match(shared, /doesn't hold itself, such as an organization's/);
+  assert.match(shared, /CODEX_HOME=\$d codex login && gh secret set MY_LOGIN --repo acme\/api < \$d\/auth\.json; rm -rf \$d/);
+  assert.doesNotMatch(shared, /delete/);
 });
 
 test("the sandbox can read everything except the login folder", () => {

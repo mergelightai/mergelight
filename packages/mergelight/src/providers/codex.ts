@@ -66,6 +66,11 @@ export function loginFailureMessage(secretName = "CODEX_AUTH_JSON"): string {
   return `The ChatGPT login didn't work, most likely because another run already refreshed it. Re-run the Mergelight job from the Actions tab, or push again, to pick up the new one. If it fails again, the login has stopped working: delete the ${secretName} secret, then push, and this pull request shows a code to connect ChatGPT again.`;
 }
 
+/** For a ChatGPT login from a secret other repositories share, which Mergelight doesn't refresh. */
+export function sharedLoginMessage(secretName = "CODEX_AUTH_JSON", repo = "OWNER/REPO"): string {
+  return `This repository reads its ChatGPT login from a ${secretName} secret it doesn't hold itself, such as an organization's, and that login is about to run out. Mergelight doesn't refresh a login other repositories share, as that would sign them out. Save a login of its own as this repository's secret, then push: \`d=$(mktemp -d); echo 'cli_auth_credentials_store = "file"' > $d/config.toml; CODEX_HOME=$d codex login && gh secret set ${secretName} --repo ${repo} < $d/auth.json; rm -rf $d\``;
+}
+
 const SANDBOX_FAILURE = /bwrap:|user namespace|new namespace|RTM_NEWADDR|uid map|sandbox.*(denied|not permitted)/i;
 
 function codexHome(): string {

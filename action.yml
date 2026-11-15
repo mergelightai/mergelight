@@ -272,6 +272,7 @@ runs:
           echo "MERGELIGHT_NO_LOGIN=$no_login"
           echo "MERGELIGHT_LOGIN_LOST=0"
           echo "MERGELIGHT_LOGIN_SHORT=0"
+          echo "MERGELIGHT_LOGIN_SHARED=0"
         } >> "$GITHUB_ENV"
 
     - name: Install Claude Code
@@ -336,6 +337,7 @@ runs:
           echo "MERGELIGHT_CONNECT=0"
           echo "MERGELIGHT_LOGIN_LOST=0"
           echo "MERGELIGHT_LOGIN_SHORT=0"
+          echo "MERGELIGHT_LOGIN_SHARED=0"
         } >> "$GITHUB_ENV"
         if [ -n "$AUTH_JSON" ]; then
           printf 'cli_auth_credentials_store = "file"\n' > "$CODEX_HOME/config.toml"
