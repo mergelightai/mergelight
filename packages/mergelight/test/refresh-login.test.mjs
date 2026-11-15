@@ -13,7 +13,7 @@ const HOUR = 3_600_000;
 const jwt = (exp) => `h.${Buffer.from(JSON.stringify({ exp: exp / 1000 })).toString("base64url")}.s`;
 const login = (msLeft, refreshToken = "old") => JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: jwt(NOW + msLeft), refresh_token: refreshToken } });
 
-function setup({ event, msLeft, rotates = true, secretsToken = "tok", appToken = null, saveCode = 0, reason = null, held = "yes" }) {
+function setup({ event, msLeft, rotates = true, secretsToken = "tok", appToken = null, saveCode = 0, reason = null, held = "yes", environment = "" }) {
   const home = mkdtempSync(join(tmpdir(), "mergelight-refresh-"));
   const file = join(home, "auth.json");
   const envFile = join(home, "env");
@@ -34,6 +34,7 @@ function setup({ event, msLeft, rotates = true, secretsToken = "tok", appToken =
           calls.heldToken = token;
           return held;
         },
+        environment: async () => environment,
         refresh: async () => {
           calls.refresh++;
           if (rotates) writeFileSync(file, login(240 * HOUR, "new"));
@@ -192,6 +193,7 @@ test("what comes back decides whether it worked, not just that a token changed",
       now: () => NOW,
       log: (l) => s.calls.logs.push(l),
       held: async () => "yes",
+      environment: async () => "",
       refresh: async () => {
         writeFileSync(s.file, content);
         return null;
@@ -290,7 +292,7 @@ test("a login this repository doesn't hold itself, such as an organization's, is
     assert.deepEqual(s.calls.saved, []);
     assert.equal(s.calls.heldToken, "tok", "asked with the token that would save it");
     assert.ok(said(s.calls, /::error::.*doesn't hold itself.*gh secret set CODEX_AUTH_JSON --repo acme\/api/));
-    assert.equal(readFileSync(s.envFile, "utf8"), "MERGELIGHT_LOGIN_SHARED=1\nMERGELIGHT_LOGIN_SHORT=1\nMERGELIGHT_LOGIN_LOST=1\n");
+    assert.match(readFileSync(s.envFile, "utf8"), /^MERGELIGHT_LOGIN_SHARED=1\nMERGELIGHT_LOGIN_SHORT=1\nMERGELIGHT_LOGIN_LOST=1\nMERGELIGHT_LOGIN_NOTE=This repository reads its ChatGPT login from a CODEX_AUTH_JSON secret it doesn't hold itself.*rm -rf "\$d"\n$/);
   }
   // Not yet due, it isn't even asked about: nothing refreshes it in a review then.
   const fresh = setup({ event: "pull_request", msLeft: 9 * 24 * HOUR, held: "no" });
@@ -303,24 +305,42 @@ test("a login this repository doesn't hold itself, such as an organization's, is
   assert.ok(said(job.calls, /::error::.*doesn't hold itself/));
 });
 
+test("a job in a GitHub environment, or one that can't be told, never refreshes the login", async () => {
+  // The environment's secret of the same name would win, and the token that saves can't read it.
+  const env = setup({ event: "pull_request", msLeft: 2 * HOUR, environment: "prod" });
+  assert.equal(await env.run(), 0);
+  assert.equal(env.calls.refresh, 0);
+  assert.equal(env.calls.heldToken, undefined, "the repository's secret doesn't settle it");
+  assert.match(readFileSync(env.envFile, "utf8"), /^MERGELIGHT_LOGIN_SHARED=1\nMERGELIGHT_LOGIN_SHORT=1\nMERGELIGHT_LOGIN_LOST=1\nMERGELIGHT_LOGIN_NOTE=This job runs in the GitHub environment "prod".*Remove environment: from the Mergelight job/);
+  // Without GitHub's pass for the run, it can't be told.
+  const blind = setup({ event: "pull_request", msLeft: 2 * HOUR, environment: null });
+  assert.equal(await blind.run(), 0);
+  assert.equal(blind.calls.refresh, 0);
+  assert.match(readFileSync(blind.envFile, "utf8"), /MERGELIGHT_LOGIN_LOST=1\nMERGELIGHT_LOGIN_NOTE=.*Add "id-token: write" to the job's permissions/);
+  assert.doesNotMatch(readFileSync(blind.envFile, "utf8"), /SHARED/);
+  const job = setup({ event: "schedule", msLeft: 9 * 24 * HOUR, environment: null });
+  assert.equal(await job.run(), 1);
+});
+
 test("a login not known to be the repository's own, as last saved, isn't refreshed", async () => {
   // A review doesn't use it either, even with time left: Codex would refresh it by itself in its last
-  // minutes, which a long job can reach. It says to run again.
-  for (const [held, flags] of [["unknown", "MERGELIGHT_LOGIN_SHORT=1\nMERGELIGHT_LOGIN_LOST=1\nMERGELIGHT_LOGIN_UNSURE=1\n"], ["newer", "MERGELIGHT_LOGIN_SHORT=1\nMERGELIGHT_LOGIN_LOST=1\n"]]) {
+  // minutes, which a long job can reach. It says to run again, and what happened.
+  for (const [held, says] of [["unknown", /GitHub couldn't say.*Nothing is wrong with the login: run the Mergelight job again\./], ["newer", /saved again after this run read it.*Run the Mergelight job again/]]) {
     for (const msLeft of [2 * HOUR, 30 * 60_000]) {
       const s = setup({ event: "pull_request", msLeft, held });
       assert.equal(await s.run(), 0);
       assert.equal(s.calls.refresh, 0, held);
       assert.deepEqual(s.calls.saved, []);
-      assert.ok(said(s.calls, /::error::.*doesn't refresh.*Run it again/), held);
-      assert.equal(readFileSync(s.envFile, "utf8"), flags, held);
+      const flags = readFileSync(s.envFile, "utf8");
+      assert.match(flags, /^MERGELIGHT_LOGIN_SHORT=1\nMERGELIGHT_LOGIN_LOST=1\nMERGELIGHT_LOGIN_NOTE=/, held);
+      assert.match(flags, says, held);
     }
   }
   // The job: a lookup GitHub didn't answer fails, to be run again; a newer login saved meanwhile leaves it nothing to do.
   const unsure = setup({ event: "schedule", msLeft: 9 * 24 * HOUR, held: "unknown" });
   assert.equal(await unsure.run(), 1);
   assert.equal(unsure.calls.refresh, 0);
-  assert.ok(said(unsure.calls, /::error::GitHub couldn't say.*Run it again/));
+  assert.ok(said(unsure.calls, /::error::GitHub couldn't say/));
   const newer = setup({ event: "schedule", msLeft: 9 * 24 * HOUR, held: "newer" });
   assert.equal(await newer.run(), 0);
   assert.equal(newer.calls.refresh, 0);
@@ -344,21 +364,20 @@ test("whether the repository holds the secret is asked of GitHub, and only a pla
   assert.equal(await secretHeld({ env: read, token: "t", fetchImpl: saved("2026-11-15T09:59:00Z") }), "yes");
   assert.equal(await secretHeld({ env: read, token: "t", fetchImpl: saved("2026-11-15T10:01:00Z") }), "newer");
   assert.equal(await secretHeld({ env: read, token: "t", fetchImpl: saved(undefined) }), "unknown");
-  // A job in an environment: that environment's secret of the same name wins over the repository's.
-  const pass = (claims) => `x.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.y`;
-  const inEnv = { ...env, ACTIONS_ID_TOKEN_REQUEST_URL: "https://oidc.example/token?x=1", ACTIONS_ID_TOKEN_REQUEST_TOKEN: "r" };
-  const github = (envSecret, repoSecret, claims = { environment: "prod" }) => async (url) => {
-    const u = String(url);
-    if (u.startsWith("https://oidc.example/")) return { status: 200, json: async () => ({ value: pass(claims) }) };
-    if (u.includes("/environments/prod/secrets/")) return { status: envSecret };
-    return { status: repoSecret, json: async () => ({}) };
-  };
-  assert.equal(await secretHeld({ env: inEnv, token: "t", fetchImpl: github(200, 200) }), "no", "the environment's own wins");
-  assert.equal(await secretHeld({ env: inEnv, token: "t", fetchImpl: github(404, 200) }), "yes");
-  assert.equal(await secretHeld({ env: inEnv, token: "t", fetchImpl: github(403, 200) }), "unknown", "can't read the environment's");
-  assert.equal(await secretHeld({ env: inEnv, token: "t", fetchImpl: github(200, 200, {}) }), "yes", "a job in no environment");
   assert.equal(await secretHeld({ env, token: "t", fetchImpl: answer(404) }), "no");
   assert.equal(await secretHeld({ env, token: "t", fetchImpl: answer(403) }), "unknown");
   assert.equal(await secretHeld({ env, token: "t", fetchImpl: async () => { throw new Error("offline"); } }), "unknown");
   assert.deepEqual(asked[0], ["https://api.github.com/repos/acme/api/actions/secrets/TEAM_CHATGPT", "Bearer t"]);
+});
+
+test("the job's GitHub environment is read from GitHub's signed pass for the run", async () => {
+  const { jobEnvironment } = await import("../scripts/refresh-login.mjs");
+  const pass = (claims) => `x.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.y`;
+  const env = { ACTIONS_ID_TOKEN_REQUEST_URL: "https://oidc.example/token?x=1", ACTIONS_ID_TOKEN_REQUEST_TOKEN: "r" };
+  const gives = (claims, status = 200) => async () => ({ status, json: async () => ({ value: pass(claims) }) });
+  assert.equal(await jobEnvironment({ env, fetchImpl: gives({ environment: "prod" }) }), "prod");
+  assert.equal(await jobEnvironment({ env, fetchImpl: gives({ repository: "acme/api" }) }), "", "a job in no environment");
+  assert.equal(await jobEnvironment({ env: {}, fetchImpl: gives({}) }), null, "no id-token: write");
+  assert.equal(await jobEnvironment({ env, fetchImpl: gives({}, 500) }), null);
+  assert.equal(await jobEnvironment({ env, fetchImpl: async () => { throw new Error("offline"); } }), null);
 });

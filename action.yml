@@ -273,7 +273,7 @@ runs:
           echo "MERGELIGHT_LOGIN_LOST=0"
           echo "MERGELIGHT_LOGIN_SHORT=0"
           echo "MERGELIGHT_LOGIN_SHARED=0"
-          echo "MERGELIGHT_LOGIN_UNSURE=0"
+          echo "MERGELIGHT_LOGIN_NOTE="
         } >> "$GITHUB_ENV"
 
     - name: Install Claude Code
@@ -339,7 +339,7 @@ runs:
           echo "MERGELIGHT_LOGIN_LOST=0"
           echo "MERGELIGHT_LOGIN_SHORT=0"
           echo "MERGELIGHT_LOGIN_SHARED=0"
-          echo "MERGELIGHT_LOGIN_UNSURE=0"
+          echo "MERGELIGHT_LOGIN_NOTE="
           echo "MERGELIGHT_LOGIN_READ_AT="
         } >> "$GITHUB_ENV"
         if [ -n "$AUTH_JSON" ]; then
