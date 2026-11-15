@@ -407,7 +407,7 @@ async function main(): Promise<number> {
     if (verifyMissed && verifyMissed !== review.verifier?.name && !review.checker_missed) {
       review.checker_missed = verifyMissed;
       const why = values["verify-missed-why"];
-      if (why === "not-installed" || why === "login-failed") review.checker_missed_why = why;
+      if (why === "not-installed" || why === "login-failed" || why === "shared") review.checker_missed_why = why;
     }
     if (jobs) review.jobs = { ...jobs, ...(jobs.commit ? { reviewed: review.pr.head_sha.toLowerCase() === jobs.commit.toLowerCase() } : {}) };
 

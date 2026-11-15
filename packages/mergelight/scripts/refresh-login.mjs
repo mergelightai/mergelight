@@ -179,15 +179,10 @@ export async function refreshLogin({
       log(`::error::${message}`);
       return 1;
     }
-    if (env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, "MERGELIGHT_LOGIN_SHARED=1\n");
-    // What's left of the access token still works: the review uses it, and nothing else may wait on it.
-    if (expiry !== null && expiry - now() > CARRY_ON_ABOVE) {
-      log(`::warning::${message} This review carries on, since the login is good for another ${left(expiry - now())}.`);
-      if (env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, "MERGELIGHT_LOGIN_SHORT=1\n");
-      return 0;
-    }
+    // Not even with time left: Codex refreshes a login by itself in its last minutes, which a long review
+    // can reach, and the new one would again only be saved here. No sign-in waits on it either.
     log(`::error::${message}`);
-    if (env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, "MERGELIGHT_LOGIN_LOST=1\n");
+    if (env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, "MERGELIGHT_LOGIN_SHARED=1\nMERGELIGHT_LOGIN_SHORT=1\nMERGELIGHT_LOGIN_LOST=1\n");
     return 0;
   }
 

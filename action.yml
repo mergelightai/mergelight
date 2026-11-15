@@ -571,8 +571,15 @@ runs:
         args=(review "$GITHUB_REPOSITORY#$PR" --post --provider "$MERGELIGHT_PROVIDER" --verify-with "$verify" --out "$RUNNER_TEMP/mergelight-review.json")
         [ -n "$missed" ] && args+=(--verify-missed "$missed")
         [ -n "$missed" ] && [ "${MERGELIGHT_CHECKER_NOT_INSTALLED:-0}" = 1 ] && args+=(--verify-missed-why not-installed)
-        # A saved ChatGPT login that couldn't be refreshed or read is one that stopped working, not one never connected.
-        [ "$missed" = codex ] && [ "${MERGELIGHT_CHECKER_NOT_INSTALLED:-0}" != 1 ] && { [ "${MERGELIGHT_LOGIN_LOST:-0}" = 1 ] || [ "${MERGELIGHT_CHATGPT:-0}" = 1 ] || [ "${MERGELIGHT_CHECKER_LOGIN_FAILED:-0}" = 1 ]; } && args+=(--verify-missed-why login-failed)
+        # A saved ChatGPT login that couldn't be refreshed or read is one that stopped working, not one never
+        # connected. One that other repositories share isn't refreshed, and the summary says that instead.
+        if [ "$missed" = codex ] && [ "${MERGELIGHT_CHECKER_NOT_INSTALLED:-0}" != 1 ]; then
+          if [ "${MERGELIGHT_LOGIN_SHARED:-0}" = 1 ]; then
+            args+=(--verify-missed-why shared)
+          elif [ "${MERGELIGHT_LOGIN_LOST:-0}" = 1 ] || [ "${MERGELIGHT_CHATGPT:-0}" = 1 ] || [ "${MERGELIGHT_CHECKER_LOGIN_FAILED:-0}" = 1 ]; then
+            args+=(--verify-missed-why login-failed)
+          fi
+        fi
         [ -n "$MODEL" ] && args+=(--model "$MODEL")
         [ -n "$EFFORT" ] && args+=(--effort "$EFFORT")
         [ -n "$COMMIT" ] && args+=(--at "$COMMIT")

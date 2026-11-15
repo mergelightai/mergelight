@@ -281,19 +281,21 @@ test("a refreshed login's new tokens are hidden before anything else is logged",
 
 
 test("a login this repository doesn't hold itself, such as an organization's, is never refreshed", async () => {
-  // A review with time left uses what's left, and nothing else may wait on it.
-  const later = setup({ event: "pull_request", msLeft: HOUR, held: "no" });
-  assert.equal(await later.run(), 0);
-  assert.equal(later.calls.refresh, 0);
-  assert.deepEqual(later.calls.saved, []);
-  assert.equal(later.calls.heldToken, "tok", "asked with the token that would save it");
-  assert.ok(said(later.calls, /::warning::.*doesn't hold itself.*gh secret set CODEX_AUTH_JSON --repo acme\/api.*carries on/));
-  assert.equal(readFileSync(later.envFile, "utf8"), "MERGELIGHT_LOGIN_SHARED=1\nMERGELIGHT_LOGIN_SHORT=1\n");
-  // With no time left, Codex isn't started, and the review says why.
-  const now = setup({ event: "pull_request", msLeft: 10 * 60_000, held: "no" });
-  assert.equal(await now.run(), 0);
-  assert.equal(now.calls.refresh, 0);
-  assert.equal(readFileSync(now.envFile, "utf8"), "MERGELIGHT_LOGIN_SHARED=1\nMERGELIGHT_LOGIN_LOST=1\n");
+  // Once it is due, no review uses it, even with time left: Codex would refresh it by itself in its last
+  // minutes, which a long review can reach. Nor does a sign-in wait on it. The review says why.
+  for (const msLeft of [2 * HOUR, 10 * 60_000]) {
+    const s = setup({ event: "pull_request", msLeft, held: "no" });
+    assert.equal(await s.run(), 0);
+    assert.equal(s.calls.refresh, 0);
+    assert.deepEqual(s.calls.saved, []);
+    assert.equal(s.calls.heldToken, "tok", "asked with the token that would save it");
+    assert.ok(said(s.calls, /::error::.*doesn't hold itself.*gh secret set CODEX_AUTH_JSON --repo acme\/api/));
+    assert.equal(readFileSync(s.envFile, "utf8"), "MERGELIGHT_LOGIN_SHARED=1\nMERGELIGHT_LOGIN_SHORT=1\nMERGELIGHT_LOGIN_LOST=1\n");
+  }
+  // Not yet due, it isn't even asked about: nothing refreshes it in a review then.
+  const fresh = setup({ event: "pull_request", msLeft: 9 * 24 * HOUR, held: "no" });
+  assert.equal(await fresh.run(), 0);
+  assert.equal(fresh.calls.heldToken, undefined);
   // The job fails where it can be seen.
   const job = setup({ event: "schedule", msLeft: 9 * 24 * HOUR, held: "no" });
   assert.equal(await job.run(), 1);

@@ -230,7 +230,7 @@ test("Codex that only checks, with no login, holds nothing up", () => {
 });
 
 /** Runs the review step with stand-ins for node, which prints what it was asked, and codex. */
-function reviewArgs({ provider, verify, follows = "0", claudeToken = "", codexLoggedIn = false, lost = "0", usesCodex = "1", usesClaude = "1", notInstalled = "0" }) {
+function reviewArgs({ provider, verify, follows = "0", claudeToken = "", codexLoggedIn = false, lost = "0", usesCodex = "1", usesClaude = "1", notInstalled = "0", shared = "0" }) {
   const dir = mkdtempSync(join(tmpdir(), "mergelight-review-step-"));
   const bin = join(dir, "bin");
   mkdirSync(bin);
@@ -240,7 +240,7 @@ function reviewArgs({ provider, verify, follows = "0", claudeToken = "", codexLo
   chmodSync(join(bin, "codex"), 0o755);
   const r = spawnSync("bash", ["-c", stepScript("Review")], {
     encoding: "utf8",
-    env: { PATH: `${bin}:${process.env.PATH}`, RUNNER_TEMP: dir, GITHUB_ACTION_PATH: dir, GITHUB_REPOSITORY: "acme/widgets", PR: "7", MODEL: "", EFFORT: "", YELLOW_BLOCKS: "false", AUTO_APPROVE: "true", CLAUDE_CODE_OAUTH_TOKEN: claudeToken, ANTHROPIC_API_KEY: "", MERGELIGHT_PROVIDER: provider, MERGELIGHT_VERIFY: verify, MERGELIGHT_VERIFY_FOLLOWS: follows, MERGELIGHT_LOGIN_LOST: lost, MERGELIGHT_USES_CODEX: usesCodex, MERGELIGHT_USES_CLAUDE: usesClaude, MERGELIGHT_CHECKER_NOT_INSTALLED: notInstalled, COMMIT: "", JOBS_RESULT: "", JOBS_COMMIT: "", JOBS_WHY: "" },
+    env: { PATH: `${bin}:${process.env.PATH}`, RUNNER_TEMP: dir, GITHUB_ACTION_PATH: dir, GITHUB_REPOSITORY: "acme/widgets", PR: "7", MODEL: "", EFFORT: "", YELLOW_BLOCKS: "false", AUTO_APPROVE: "true", CLAUDE_CODE_OAUTH_TOKEN: claudeToken, ANTHROPIC_API_KEY: "", MERGELIGHT_PROVIDER: provider, MERGELIGHT_VERIFY: verify, MERGELIGHT_VERIFY_FOLLOWS: follows, MERGELIGHT_LOGIN_LOST: lost, MERGELIGHT_USES_CODEX: usesCodex, MERGELIGHT_USES_CLAUDE: usesClaude, MERGELIGHT_CHECKER_NOT_INSTALLED: notInstalled, MERGELIGHT_LOGIN_SHARED: shared, COMMIT: "", JOBS_RESULT: "", JOBS_COMMIT: "", JOBS_WHY: "" },
   });
   assert.equal(r.status, 0, r.stderr);
   return r.stdout;
@@ -263,6 +263,10 @@ test("the review checks with the other AI when it has a login, and with the revi
   assert.match(reviewArgs({ provider: "codex", verify: "claude", claudeToken: "t", codexLoggedIn: true, usesClaude: "0" }), /--verify-with codex .*--verify-missed claude/);
   assert.match(reviewArgs({ provider: "claude", verify: "codex", claudeToken: "t", usesCodex: "0", notInstalled: "1" }), /--verify-missed codex --verify-missed-why not-installed/);
   assert.match(reviewArgs({ provider: "claude", verify: "codex", claudeToken: "t", codexLoggedIn: true, lost: "1" }), /--verify-missed codex --verify-missed-why login-failed/);
+  // A login other repositories share wasn't refreshed: the summary says that, not that it stopped working.
+  const shared = reviewArgs({ provider: "claude", verify: "codex", claudeToken: "t", codexLoggedIn: true, lost: "1", shared: "1" });
+  assert.match(shared, /--verify-missed codex --verify-missed-why shared/);
+  assert.doesNotMatch(shared, /login-failed/);
 });
 
 test("action.yml is valid YAML, so GitHub can load the action at all", (t) => {

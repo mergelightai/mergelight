@@ -660,6 +660,7 @@ test("the summary says when the AI set to check had no login yet, so the reviewe
   assert.match(checkerMissedLine({ checker_missed: "codex", checker_missed_why: "login-failed", provider: claudeReviews }), /but its login didn't work, so Claude checked it/);
   assert.match(checkerMissedLine({ checker_missed: "codex", checker_missed_why: "limit", provider: claudeReviews }), /but it hit its usage limit, so Claude checked it/);
   assert.match(checkerMissedLine({ checker_missed: "codex", checker_missed_why: "sandbox", provider: claudeReviews }), /but Codex's sandbox couldn't start on this runner/);
+  assert.match(checkerMissedLine({ checker_missed: "codex", checker_missed_why: "shared", provider: claudeReviews }), /but its ChatGPT login comes from a secret this repository doesn't hold itself, such as an organization's, and Mergelight doesn't refresh a shared login, so Claude checked it\. The workflow log says how to save a login of its own\.$/);
 });
 
 test("a summary too long for GitHub still says the AI set to check didn't", () => {
