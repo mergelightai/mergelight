@@ -32,7 +32,7 @@ const CARRY_ON_ABOVE = 20 * 60_000;
 
 /** The command that saves a ChatGPT login of its own as this repository's secret, as setup's codexLogin() makes one. */
 export function ownLoginCommand(secret = "CODEX_AUTH_JSON", repo = "OWNER/REPO") {
-  return `d="$(mktemp -d)" && echo 'cli_auth_credentials_store = "file"' > "$d/config.toml" && CODEX_HOME="$d" codex login && gh secret set ${secret} --repo ${repo} < "$d/auth.json"; rm -rf "$d"`;
+  return `d="$(mktemp -d)" && echo 'cli_auth_credentials_store = "file"' > "$d/config.toml" && CODEX_HOME="$d" codex login && gh secret set ${secret} --repo ${repo} < "$d/auth.json"; [ -n "$d" ] && rm -rf "$d"`;
 }
 
 /**
