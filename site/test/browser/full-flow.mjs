@@ -67,7 +67,8 @@ async function run(name, { login = false, apiKey = false, claude = false, orgSec
       if (p.startsWith('/contents/')) {
         // A new branch starts with whatever the branch it came from has.
         const raw = u.searchParams.get('ref');
-        const ref = raw.startsWith('mergelight-setup-') && raw !== 'mergelight-setup-old' ? 'staging' : raw;
+        // The base branch's commit is staging's, which a new branch starts from.
+        const ref = (raw.startsWith('mergelight-setup-') && raw !== 'mergelight-setup-old') || raw === 'basesha' ? 'staging' : raw;
         const isRefresh = p.endsWith('mergelight-refresh.yml');
         if (ref === 'mergelight-setup-old') {
           const body = isRefresh ? prRefresh : prFile;
@@ -195,7 +196,7 @@ await run('open-pr-on-old-version', { prFile: customized('v0'), login: true }, (
 const roleLines = '          provider: claude\n          verify-with: codex\n';
 await run('update-waits-for-a-roles-pr', { onBase: customized(`${OLD_SHA} # v0.1.0`), prFile: customized(`${OLD_SHA} # v0.1.0`) + roleLines, prTitle: 'Set who reviews and who checks in Mergelight', login: true, button: 'Update to v0.2.0' }, ({ writes, after, page }) => {
   expect(writes.length === 0, 'an update never goes into the PR that changes who reviews');
-  expect(/PR #5 changes who reviews and who checks\. Merge or close it first, then update\./.test(after), 'says to merge or close it first');
+  expect(/PR #5 changes your Mergelight workflow already\. Merge or close it first, then update\./.test(after), 'says to merge or close it first');
   return page.evaluate(() => [...document.querySelectorAll('a')].find((a) => a.textContent.includes('Open PR #5'))?.href).then((href) => expect(href === 'https://github.com/acme/api/pull/5', 'and links it'));
 });
 await run('update-checks-every-file-first', { onBase: customized(`${OLD_SHA} # v0.1.0`), baseRefresh: customized(`${OLD_SHA} # v0.1.0`), prFile: customized(`${OLD_SHA} # v0.1.0`), login: true, button: 'Update to v0.2.0' }, ({ writes, after }) => {
@@ -204,6 +205,10 @@ await run('update-checks-every-file-first', { onBase: customized(`${OLD_SHA} # v
   expect(/That didn't work/.test(after), 'and says it failed');
 });
 const ourRefresh = (use) => `# Ours: every day\n${customized(use)}`;
+await run('update-waits-for-a-refresh-pr', { onBase: customized(`${OLD_SHA} # v0.1.0`), prFile: customized(`${OLD_SHA} # v0.1.0`), prTitle: 'Keep the ChatGPT login fresh for Mergelight', login: true, button: 'Update to v0.2.0' }, ({ writes, after }) => {
+  expect(writes.length === 0, 'an update never goes into the PR that adds the refresh job');
+  expect(/PR #5 changes your Mergelight workflow already\. Merge or close it first, then update\./.test(after), 'says to merge or close it first');
+});
 await run('update-keeps-the-prs-refresh-job', { onBase: customized(`${OLD_SHA} # v0.1.0`), prFile: customized(`${OLD_SHA} # v0.1.0`), prRefresh: ourRefresh(`${OLD_SHA} # v0.1.0`), login: true, button: 'Update to v0.2.0' }, ({ puts }) => {
   const job = puts.find((w) => w.p.endsWith('/mergelight-refresh.yml'));
   const content = job && Buffer.from(job.body.content, 'base64').toString();

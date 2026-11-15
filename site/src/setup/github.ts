@@ -152,6 +152,14 @@ export function readInstalled(content: string): Installed | null {
   return m ? { ref: m[3]!, version: m[4] ?? null, content } : null;
 }
 
+/** Orders releases like v0.1.9 and v0.1.19 by their numbers, not as text. */
+export function compareVersions(a: string, b: string): number {
+  const parts = (v: string) => v.replace(/^v/, '').split('.').map(Number);
+  const [x, y] = [parts(a), parts(b)];
+  for (let i = 0; i < Math.max(x.length, y.length); i++) if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) - (y[i] ?? 0);
+  return 0;
+}
+
 /** A moving tag like v0 gets each release by itself. Only a pinned commit has anything to update. */
 export const isPinned = (installed: Installed) => /^[0-9a-f]{40}$/i.test(installed.ref);
 
@@ -203,8 +211,13 @@ export interface GitHubClient {
   /** The open pull request that changes the workflow, once someone has made it. With `base`, only one into that branch. */
   findSetupPr(repo: Repo, base?: string): Promise<SetupPr | null>;
   hasWorkflow(repo: Repo, branch: string): Promise<boolean>;
-  /** The review workflow at a branch or commit. Null when it isn't there, and throws when it can't be read. */
-  workflowAt(repo: Repo, ref: string): Promise<string | null>;
+  /** A workflow at a branch or commit, the review's unless named. Null when it isn't there, and throws when it can't be read. */
+  workflowAt(repo: Repo, ref: string, name?: string): Promise<string | null>;
+  /**
+   * The release of the Action a workflow runs, like v0.1.19: the one its pinned commit or moving tag points at now, or
+   * the one it names. Null when that can't be told, like a branch or a commit that's in no release.
+   */
+  actionVersion(ref: string, comment: string | null): Promise<string | null>;
   /**
    * The names of the secrets a run gets, the repo's own and those its organization shares with it. The values can't
    * be read. `complete` is false when a list couldn't be read.
@@ -219,7 +232,7 @@ export interface GitHubClient {
   /** Removes the sign-in code this page left in the repository, once the run has connected. */
   clearClaudeCode(repo: Repo): Promise<void>;
   /** Whether it's merged, and the commit it's on now. */
-  prState(repo: Repo, number: number): Promise<{ merged: boolean; headSha: string }>;
+  prState(repo: Repo, number: number): Promise<{ merged: boolean; closed: boolean; headSha: string }>;
 }
 
 const WORKFLOWS = '.github/workflows';
@@ -422,6 +435,25 @@ export function realClient(token: string): GitHubClient {
     }
   };
   const hasWorkflow = (repo: Repo, branch: string) => workflowOn(repo, branch).then(Boolean, () => false);
+  /** The Action's tags, read once: they say which release a commit or a moving tag is. */
+  let tags: Promise<{ name: string; commit: { sha: string } }[]> | null = null;
+  const actionTags = () => (tags ??= get<{ name: string; commit: { sha: string } }[]>(`/repos/${ACTION_REPO}/tags?per_page=100`).catch(() => ((tags = null), [])));
+  const RELEASE_TAG = /^v\d+\.\d+\.\d+$/;
+  /** The newest release among these tags. */
+  const newest = (names: string[]) => names.filter((n) => RELEASE_TAG.test(n)).sort(compareVersions).at(-1) ?? null;
+  const actionVersion = async (ref: string, comment: string | null): Promise<string | null> => {
+    if (RELEASE_TAG.test(ref)) return ref;
+    if (/^[0-9a-f]{40}$/i.test(ref)) {
+      if (comment && RELEASE_TAG.test(comment)) return comment;
+      return newest((await actionTags()).filter((t) => t.commit.sha === ref).map((t) => t.name));
+    }
+    // A moving tag is the release it points at now.
+    if (/^v\d+$/.test(ref)) {
+      const sha = await get<{ sha: string }>(`/repos/${ACTION_REPO}/commits/${encodeURIComponent(ref)}`).then((c) => c.sha, () => null);
+      return sha ? newest((await actionTags()).filter((t) => t.commit.sha === sha).map((t) => t.name)) : null;
+    }
+    return null;
+  };
   const latestRelease = async (): Promise<Release> => {
     const { tag_name: tag } = await get<{ tag_name: string }>(`/repos/${ACTION_REPO}/releases/latest`);
     const { sha } = await get<{ sha: string }>(`/repos/${ACTION_REPO}/commits/${encodeURIComponent(tag)}`);
@@ -549,17 +581,18 @@ export function realClient(token: string): GitHubClient {
       const open = await openSetupPull(repo, branch);
       if (open) {
         // A change of AI is a pull request of its own, and an update never goes into one: each says only what it changes.
-        if (change.kind === 'roles' || change.kind === 'refresh' || (change.kind === 'update' && open.title === ROLES_TITLE)) throw new OpenPrError({ number: open.number, url: open.html_url, headSha: open.head.sha });
+        if (change.kind === 'roles' || change.kind === 'refresh' || (change.kind === 'update' && (open.title === ROLES_TITLE || open.title === REFRESH_TITLE))) throw new OpenPrError({ number: open.number, url: open.html_url, headSha: open.head.sha });
         const planned = await plan(open.head.ref);
         const commit = await write(open.head.ref, commitFor(change), planned);
         return { number: open.number, url: open.html_url, headSha: commit ?? open.head.sha };
       }
 
       // A change that can't be made stops here, before there's a branch to clean up. A new branch starts with what this one holds.
-      const planned = await plan(branch);
+      // The commit the new branch starts from is the one checked, so a change pushed in between can't slip past.
+      const base = await get<{ object: { sha: string } }>(`${r}/git/ref/heads/${branch.split('/').map(encodeURIComponent).join('/')}`);
+      const planned = await plan(base.object.sha);
       if (planned.every(({ current, content }) => current?.content === content)) return null;
       const title = update ? updateTitle(update) : change.kind === 'roles' ? ROLES_TITLE : change.kind === 'refresh' ? REFRESH_TITLE : SETUP_TITLE;
-      const base = await get<{ object: { sha: string } }>(`${r}/git/ref/heads/${branch.split('/').map(encodeURIComponent).join('/')}`);
       const head = `mergelight-setup-${Date.now().toString(36)}`;
       await call('POST', `${r}/git/refs`, { ref: `refs/heads/${head}`, sha: base.object.sha });
       try {
@@ -577,7 +610,8 @@ export function realClient(token: string): GitHubClient {
     },
     findSetupPr,
     hasWorkflow,
-    workflowAt: async (repo, ref) => (await workflowOn(repo, ref))?.content ?? null,
+    workflowAt: async (repo, ref, name) => (await workflowOn(repo, ref, name))?.content ?? null,
+    actionVersion,
     secrets: secretNames,
     checkStatus: async (repo, sha) => {
       const { check_runs } = await get<{ check_runs: { status: string; conclusion: string | null; output: { title: string | null } }[] }>(`/repos/${repo.fullName}/commits/${sha}/check-runs?check_name=Mergelight`);
@@ -600,8 +634,8 @@ export function realClient(token: string): GitHubClient {
     clearClaudeCode,
     connectCode: async (repo, number) => readConnectCode(await get<{ user: { login: string } | null; body?: string | null }[]>(`/repos/${repo.fullName}/issues/${number}/comments?per_page=100`)),
     prState: async (repo, number) => {
-      const pull = await get<{ merged: boolean; head: { sha: string } }>(`/repos/${repo.fullName}/pulls/${number}`);
-      return { merged: pull.merged, headSha: pull.head.sha };
+      const pull = await get<{ merged: boolean; state?: string; head: { sha: string } }>(`/repos/${repo.fullName}/pulls/${number}`);
+      return { merged: pull.merged, closed: pull.state === 'closed' && !pull.merged, headSha: pull.head.sha };
     },
   };
 }
@@ -656,7 +690,8 @@ export function mockClient(): GitHubClient {
     proposeWorkflows: (r) => (r.fullName === 'acme/site' ? Promise.reject(new GitHubError(403)) : new Promise((done) => setTimeout(() => done({ number: 128, url: 'https://github.com/acme/api/pull/128', headSha: 'abc' }), 900))),
     findSetupPr: (_, base) => later(!base && ++finds > 1 ? { number: 128, url: 'https://github.com/acme/api/pull/128', headSha: 'abc' } : null),
     hasWorkflow: () => later(false),
-    workflowAt: (r) => later(installedFor(r.fullName)?.content ?? null),
+    workflowAt: (r, _, name) => later(name ? null : (installedFor(r.fullName)?.content ?? null)),
+    actionVersion: (ref, comment) => later(comment ?? (ref === 'v0' ? release.tag : null)),
     // ChatGPT shows up on acme/claude once its code has been used, like a run saving the login.
     secrets: (r) => later({ names: namesOf(r.fullName, r.fullName === 'acme/claude' && checks >= 4 ? ['CODEX_AUTH_JSON'] : []), shared: [], complete: true }),
     checkStatus: () => {
@@ -669,6 +704,6 @@ export function mockClient(): GitHubClient {
     sendClaudeCode: () => later(undefined),
     clearClaudeCode: () => later(undefined),
     connectCode: () => later(checks < 4 ? { url: 'https://auth.openai.com/codex/device', code: '2ZYY-TEST1', claudeUrl: 'https://claude.com/cai/oauth/authorize?code_challenge=x', purpose: 'review' } : null),
-    prState: () => later({ merged: checks >= 11, headSha: 'abc' }),
+    prState: () => later({ merged: checks >= 11, closed: false, headSha: 'abc' }),
   };
 }
