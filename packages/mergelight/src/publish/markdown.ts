@@ -30,7 +30,7 @@ export function checkerMissedLine(r: Pick<Review, "checker_missed" | "checker_mi
     limit: "it hit its usage limit",
     sandbox: `${name(r.checker_missed)}'s sandbox couldn't start on this runner`,
     // Read from a secret other repositories share, which Mergelight doesn't refresh: it would sign them out.
-    shared: "its ChatGPT login comes from a secret this repository doesn't hold itself, such as an organization's, and Mergelight doesn't refresh a shared login",
+    shared: "its ChatGPT login comes from a secret this repository doesn't hold itself, such as an organization's or an environment's, and Mergelight doesn't refresh a shared login",
   }[r.checker_missed_why ?? "no-login"];
   const then = r.checker_missed_why === "shared" ? " The workflow log says how to save a login of its own." : "";
   return `⚠️ ${name(r.checker_missed)} was set to check this review, but ${why}, so ${name(r.provider.name)} checked it.${then}`;

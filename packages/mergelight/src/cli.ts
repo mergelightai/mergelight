@@ -8,7 +8,7 @@ import { GitHub } from "./publish/api.js";
 import { writeAccess } from "./publish/handled.js";
 import { publishTeamChecks } from "./publish/team-checks.js";
 import { answerRemembered, confirmReasons, approveCheck, checkLimitTitle, checkLoginTitle, failCheck, failSummary, previousFindings, publishReview, startCheck, startSummary, syncApproval, UNREVIEWED, APPROVALS_OFF, updatePendingSummary } from "./publish/publish.js";
-import { configuredModel, LimitError, LoginError, loginFailureMessage, sharedLoginMessage } from "./providers/codex.js";
+import { configuredModel, LimitError, LoginError, loginFailureMessage, sharedLoginMessage, unsureLoginMessage } from "./providers/codex.js";
 import { limitNotice, loginNotice } from "./publish/markdown.js";
 import { renderRejected, renderTerminal } from "./render.js";
 import { reviewPullRequest } from "./review.js";
@@ -372,7 +372,13 @@ async function main(): Promise<number> {
     const usesCodex = (provider ?? "codex") === "codex" || verifyWith === "codex";
     if (usesCodex && process.env.MERGELIGHT_LOGIN_LOST === "1") {
       const secret = process.env.SECRET_NAME || undefined;
-      throw new LoginError(process.env.MERGELIGHT_LOGIN_SHARED === "1" ? sharedLoginMessage(secret, process.env.GITHUB_REPOSITORY || undefined) : loginFailureMessage(secret));
+      throw new LoginError(
+        process.env.MERGELIGHT_LOGIN_SHARED === "1"
+          ? sharedLoginMessage(secret, process.env.GITHUB_REPOSITORY || undefined)
+          : process.env.MERGELIGHT_LOGIN_UNSURE === "1"
+            ? unsureLoginMessage(secret)
+            : loginFailureMessage(secret),
+      );
     }
     // Before the threads are read: a reply written after this counts as newer than this review.
     const startedAt = new Date();

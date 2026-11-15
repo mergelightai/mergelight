@@ -304,18 +304,17 @@ test("a login this repository doesn't hold itself, such as an organization's, is
 });
 
 test("a login not known to be the repository's own, as last saved, isn't refreshed", async () => {
-  for (const held of ["unknown", "newer"]) {
-    // A review uses it only with more than an hour left, so Codex never refreshes it by itself meanwhile.
-    const later = setup({ event: "pull_request", msLeft: 2 * HOUR, held });
-    assert.equal(await later.run(), 0);
-    assert.equal(later.calls.refresh, 0, held);
-    assert.deepEqual(later.calls.saved, []);
-    assert.ok(said(later.calls, /::warning::.*doesn't refresh.*carries on/), held);
-    assert.equal(readFileSync(later.envFile, "utf8"), "MERGELIGHT_LOGIN_SHORT=1\n");
-    const soon = setup({ event: "pull_request", msLeft: 50 * 60_000, held });
-    assert.equal(await soon.run(), 0);
-    assert.equal(soon.calls.refresh, 0, held);
-    assert.equal(readFileSync(soon.envFile, "utf8"), "MERGELIGHT_LOGIN_SHORT=1\nMERGELIGHT_LOGIN_LOST=1\n");
+  // A review doesn't use it either, even with time left: Codex would refresh it by itself in its last
+  // minutes, which a long job can reach. It says to run again.
+  for (const [held, flags] of [["unknown", "MERGELIGHT_LOGIN_SHORT=1\nMERGELIGHT_LOGIN_LOST=1\nMERGELIGHT_LOGIN_UNSURE=1\n"], ["newer", "MERGELIGHT_LOGIN_SHORT=1\nMERGELIGHT_LOGIN_LOST=1\n"]]) {
+    for (const msLeft of [2 * HOUR, 30 * 60_000]) {
+      const s = setup({ event: "pull_request", msLeft, held });
+      assert.equal(await s.run(), 0);
+      assert.equal(s.calls.refresh, 0, held);
+      assert.deepEqual(s.calls.saved, []);
+      assert.ok(said(s.calls, /::error::.*doesn't refresh.*Run it again/), held);
+      assert.equal(readFileSync(s.envFile, "utf8"), flags, held);
+    }
   }
   // The job: a lookup GitHub didn't answer fails, to be run again; a newer login saved meanwhile leaves it nothing to do.
   const unsure = setup({ event: "schedule", msLeft: 9 * 24 * HOUR, held: "unknown" });
@@ -345,6 +344,19 @@ test("whether the repository holds the secret is asked of GitHub, and only a pla
   assert.equal(await secretHeld({ env: read, token: "t", fetchImpl: saved("2026-11-15T09:59:00Z") }), "yes");
   assert.equal(await secretHeld({ env: read, token: "t", fetchImpl: saved("2026-11-15T10:01:00Z") }), "newer");
   assert.equal(await secretHeld({ env: read, token: "t", fetchImpl: saved(undefined) }), "unknown");
+  // A job in an environment: that environment's secret of the same name wins over the repository's.
+  const pass = (claims) => `x.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.y`;
+  const inEnv = { ...env, ACTIONS_ID_TOKEN_REQUEST_URL: "https://oidc.example/token?x=1", ACTIONS_ID_TOKEN_REQUEST_TOKEN: "r" };
+  const github = (envSecret, repoSecret, claims = { environment: "prod" }) => async (url) => {
+    const u = String(url);
+    if (u.startsWith("https://oidc.example/")) return { status: 200, json: async () => ({ value: pass(claims) }) };
+    if (u.includes("/environments/prod/secrets/")) return { status: envSecret };
+    return { status: repoSecret, json: async () => ({}) };
+  };
+  assert.equal(await secretHeld({ env: inEnv, token: "t", fetchImpl: github(200, 200) }), "no", "the environment's own wins");
+  assert.equal(await secretHeld({ env: inEnv, token: "t", fetchImpl: github(404, 200) }), "yes");
+  assert.equal(await secretHeld({ env: inEnv, token: "t", fetchImpl: github(403, 200) }), "unknown", "can't read the environment's");
+  assert.equal(await secretHeld({ env: inEnv, token: "t", fetchImpl: github(200, 200, {}) }), "yes", "a job in no environment");
   assert.equal(await secretHeld({ env, token: "t", fetchImpl: answer(404) }), "no");
   assert.equal(await secretHeld({ env, token: "t", fetchImpl: answer(403) }), "unknown");
   assert.equal(await secretHeld({ env, token: "t", fetchImpl: async () => { throw new Error("offline"); } }), "unknown");
