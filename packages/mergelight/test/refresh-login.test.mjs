@@ -80,8 +80,8 @@ test("a due login is refreshed and saved before the review starts", async () => 
   assert.equal(await s.run(), 0);
   assert.equal(s.calls.refresh, 1);
   assert.deepEqual(s.calls.saved, ["tok"]);
-  // A refresh that worked clears a failed one from earlier in the run.
-  assert.equal(readFileSync(s.envFile, "utf8"), "MERGELIGHT_LOGIN_LOST=0\nMERGELIGHT_LOGIN_SHORT=0\n");
+  // A refresh that worked clears a failed one from earlier in the run, and the saved login is this run's own.
+  assert.equal(readFileSync(s.envFile, "utf8"), `MERGELIGHT_LOGIN_LOST=0\nMERGELIGHT_LOGIN_SHORT=0\nMERGELIGHT_LOGIN_READ_AT=${Math.floor(NOW / 1000)}\n`);
 });
 
 test("the job refreshes a login with plenty of time left", async () => {
@@ -301,10 +301,36 @@ test("a login this repository doesn't hold itself, such as an organization's, is
   assert.equal(await job.run(), 1);
   assert.equal(job.calls.refresh, 0);
   assert.ok(said(job.calls, /::error::.*doesn't hold itself/));
-  // An answer GitHub doesn't give plainly changes nothing.
-  const unknown = setup({ event: "pull_request", msLeft: HOUR, held: "unknown" });
-  assert.equal(await unknown.run(), 0);
-  assert.equal(unknown.calls.refresh, 1);
+});
+
+test("a login not known to be the repository's own, as last saved, isn't refreshed", async () => {
+  for (const held of ["unknown", "newer"]) {
+    // A review uses it only with more than an hour left, so Codex never refreshes it by itself meanwhile.
+    const later = setup({ event: "pull_request", msLeft: 2 * HOUR, held });
+    assert.equal(await later.run(), 0);
+    assert.equal(later.calls.refresh, 0, held);
+    assert.deepEqual(later.calls.saved, []);
+    assert.ok(said(later.calls, /::warning::.*doesn't refresh.*carries on/), held);
+    assert.equal(readFileSync(later.envFile, "utf8"), "MERGELIGHT_LOGIN_SHORT=1\n");
+    const soon = setup({ event: "pull_request", msLeft: 50 * 60_000, held });
+    assert.equal(await soon.run(), 0);
+    assert.equal(soon.calls.refresh, 0, held);
+    assert.equal(readFileSync(soon.envFile, "utf8"), "MERGELIGHT_LOGIN_SHORT=1\nMERGELIGHT_LOGIN_LOST=1\n");
+  }
+  // The job: a lookup GitHub didn't answer fails, to be run again; a newer login saved meanwhile leaves it nothing to do.
+  const unsure = setup({ event: "schedule", msLeft: 9 * 24 * HOUR, held: "unknown" });
+  assert.equal(await unsure.run(), 1);
+  assert.equal(unsure.calls.refresh, 0);
+  assert.ok(said(unsure.calls, /::error::GitHub couldn't say.*Run it again/));
+  const newer = setup({ event: "schedule", msLeft: 9 * 24 * HOUR, held: "newer" });
+  assert.equal(await newer.run(), 0);
+  assert.equal(newer.calls.refresh, 0);
+});
+
+test("a login this run saved is its own again", async () => {
+  const s = setup({ event: "pull_request", msLeft: 30 * 60_000 });
+  assert.equal(await s.run(), 0);
+  assert.match(readFileSync(s.envFile, "utf8"), new RegExp(`MERGELIGHT_LOGIN_READ_AT=${Math.floor(NOW / 1000)}\\n$`));
 });
 
 test("whether the repository holds the secret is asked of GitHub, and only a plain answer counts", async () => {
@@ -313,6 +339,12 @@ test("whether the repository holds the secret is asked of GitHub, and only a pla
   const answer = (status) => async (url, init) => (asked.push([url, init.headers.authorization]), { status });
   const env = { GITHUB_REPOSITORY: "acme/api", SECRET_NAME: "TEAM_CHATGPT" };
   assert.equal(await secretHeld({ env, token: "t", fetchImpl: answer(200) }), "yes");
+  // Saved again after this run read it: what this run has may not be what the repository holds.
+  const saved = (updated_at) => async () => ({ status: 200, json: async () => ({ updated_at }) });
+  const read = { ...env, MERGELIGHT_LOGIN_READ_AT: String(Date.parse("2026-11-15T10:00:00Z") / 1000) };
+  assert.equal(await secretHeld({ env: read, token: "t", fetchImpl: saved("2026-11-15T09:59:00Z") }), "yes");
+  assert.equal(await secretHeld({ env: read, token: "t", fetchImpl: saved("2026-11-15T10:01:00Z") }), "newer");
+  assert.equal(await secretHeld({ env: read, token: "t", fetchImpl: saved(undefined) }), "unknown");
   assert.equal(await secretHeld({ env, token: "t", fetchImpl: answer(404) }), "no");
   assert.equal(await secretHeld({ env, token: "t", fetchImpl: answer(403) }), "unknown");
   assert.equal(await secretHeld({ env, token: "t", fetchImpl: async () => { throw new Error("offline"); } }), "unknown");

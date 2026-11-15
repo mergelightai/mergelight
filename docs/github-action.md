@@ -134,7 +134,7 @@ Mergelight also checks each `.github/instructions/*.instructions.md` file as a r
 | `codex-auth-json` | | ChatGPT login. Unset, the pull request shows a link to connect |
 | `openai-api-key` | | OpenAI API key |
 | `secrets-token` | | Only without the app: a token that can update secrets, to save refreshed logins |
-| `auth-secret-name` | `CODEX_AUTH_JSON` | The secret the refreshed login is saved to. It must be the repository's own: a login read from an organization's secret is never refreshed, as the new one could only be saved to this repository and would sign out every other repository that shares it. When it is due for a refresh, Codex doesn't run on it, and the review says how to save one of its own |
+| `auth-secret-name` | `CODEX_AUTH_JSON` | The secret the refreshed login is saved to. It must be the repository's own, not an organization's or an environment's: a login read from an organization's secret is never refreshed, as the new one could only be saved to this repository and would sign out every other repository that shares it. When it is due for a refresh, Codex doesn't run on it, and the review says how to save one of its own. Nor is a login refreshed when the secret was saved again after the run read it, or when GitHub can't say whose it is |
 | `model` | Codex default | Model to review with |
 | `effort` | `high` | Reasoning effort: `low`, `medium` or `high` |
 | `provider` | | Who reviews: `claude` or `codex`. Empty: Claude with only a Claude login, Codex otherwise |

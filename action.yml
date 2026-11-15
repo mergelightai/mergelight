@@ -338,12 +338,17 @@ runs:
           echo "MERGELIGHT_LOGIN_LOST=0"
           echo "MERGELIGHT_LOGIN_SHORT=0"
           echo "MERGELIGHT_LOGIN_SHARED=0"
+          echo "MERGELIGHT_LOGIN_READ_AT="
         } >> "$GITHUB_ENV"
         if [ -n "$AUTH_JSON" ]; then
           printf 'cli_auth_credentials_store = "file"\n' > "$CODEX_HOME/config.toml"
           printf '%s' "$AUTH_JSON" > "$CODEX_HOME/auth.json"
           chmod 600 "$CODEX_HOME/auth.json"
           sha256sum "$CODEX_HOME/auth.json" | cut -d' ' -f1 > "$RUNNER_TEMP/codex-auth.sha256"
+          # When the job got the secret, at the latest: it got it when it started. A secret saved again after
+          # this isn't the login this run has, so this run doesn't refresh it. Ten minutes earlier, so a save
+          # while the job started up counts too.
+          echo "MERGELIGHT_LOGIN_READ_AT=$(( $(date -u +%s) - 600 ))" >> "$GITHUB_ENV"
           echo "MERGELIGHT_CHATGPT=1" >> "$GITHUB_ENV"
         elif [ -n "$API_KEY" ]; then
           if ! printf '%s' "$API_KEY" | codex login --with-api-key; then

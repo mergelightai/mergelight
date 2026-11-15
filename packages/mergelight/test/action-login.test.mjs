@@ -122,6 +122,8 @@ test("the refresh and its save come before the review", () => {
   assert.ok(action.indexOf("- name: Refresh the Codex login if it's due") < action.indexOf("- name: Review\n"));
   assert.match(stepScript("Log in to Codex"), /MERGELIGHT_LOGIN_LOST=0/, "nothing carries over from an earlier run in the job");
   assert.match(stepScript("Log in to Codex"), /MERGELIGHT_LOGIN_SHARED=0/);
+  // When the run got the login, ten minutes early: a secret saved after that isn't the one this run has.
+  assert.match(stepScript("Log in to Codex"), /MERGELIGHT_LOGIN_READ_AT=\$\(\( \$\(date -u \+%s\) - 600 \)\)/);
   assert.match(stepScript("Choose who reviews and who checks"), /MERGELIGHT_LOGIN_SHARED=0/);
   assert.doesNotMatch(action, /Reply with the single word OK/, "the job no longer spends plan quota on a model call");
 });
