@@ -1701,7 +1701,8 @@ function ConnectStep({ repo, pr, status, code: found, ask = null, commandWhy = n
   // kept in a file so it can be saved, and the folder removed after. Every use of the folder is quoted: a temp
   // folder with a space in its path would otherwise split, and rm -rf would remove something else. Each step waits
   // for the one before, so a folder that couldn't be made writes nothing, and nothing is removed without one.
-  const command = `d="$(mktemp -d)" && echo 'cli_auth_credentials_store = "file"' > "$d/config.toml" && CODEX_HOME="$d" codex login && gh secret set ${LOGIN_SECRET[LOGIN_INPUTS.codex[0]]} --repo ${repo.fullName} < "$d/auth.json"; [ -n "$d" ] && rm -rf "$d"`;
+  // It says it saved the login only once it has, so a failed upload never looks like it worked.
+  const command = `d="$(mktemp -d)" && echo 'cli_auth_credentials_store = "file"' > "$d/config.toml" && CODEX_HOME="$d" codex login && gh secret set ${LOGIN_SECRET[LOGIN_INPUTS.codex[0]]} --repo ${repo.fullName} < "$d/auth.json" && echo "Saved the ChatGPT login in ${repo.fullName}."; [ -n "$d" ] && rm -rf "$d"`;
   const mode = modeOf(billing, provider);
   const [copied, setCopied] = useState<string | null>(null);
   const prUrl = pr?.url ?? `https://github.com/${repo.fullName}/pulls`;

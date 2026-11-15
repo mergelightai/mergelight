@@ -295,3 +295,11 @@ test('a review on a branch of the Action is set up its own way', () => {
   for (const ref of ['v0', 'v1', 'v0.1.19', 'a'.repeat(40)]) assert.equal(isStandard(template.replace('mergelight@v0', `mergelight@${ref}`)), true, ref);
   for (const ref of ['main', 'feature/x', 'v0.1']) assert.equal(isStandard(template.replace('mergelight@v0', `mergelight@${ref}`)), false, ref);
 });
+
+test('input names are read without regard to case, as GitHub reads them', () => {
+  assert.deepEqual(readRoles(step(['PROVIDER: codex', 'Verify-With: claude'])), { provider: 'codex', verifyWith: 'claude' });
+  assert.equal(reviewerFixedBy(step(['MODEL: opus'])), 'model');
+  assert.equal(isStandard(step(['CODEX-AUTH-JSON: ${{ secrets.CODEX_AUTH_JSON }}'])), true);
+  assert.equal(passesLogin(step(['Codex-Auth-Json: ${{ secrets.CODEX_AUTH_JSON }}']), 'codex'), true);
+  assert.equal(readRoles(step(['provider: codex', 'PROVIDER: claude'])), null, 'the same input twice is not read');
+});

@@ -211,7 +211,9 @@ function locate(content: string): Step | null {
     if (indent === childIndent) {
       const key = t.slice(indent).match(/^([\w-]+)[ \t]*:(?:[ \t]|$)/);
       if (!key) return null;
-      entries.push({ key: key[1]!, start: i, end: i + 1 });
+      // GitHub reads input names without regard to case, so PROVIDER is provider. Two that differ only in case are
+      // one input given twice, which isn't read below.
+      entries.push({ key: key[1]!.toLowerCase(), start: i, end: i + 1 });
     } else {
       // More of the value above, like the lines of a `|` block.
       entries.at(-1)!.end = i + 1;
