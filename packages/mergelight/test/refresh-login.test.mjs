@@ -328,7 +328,7 @@ test("a job in a GitHub environment, or one that can't be told, never refreshes 
 test("a login not known to be the repository's own, as last saved, isn't refreshed", async () => {
   // A review doesn't use it either, even with time left: Codex would refresh it by itself in its last
   // minutes, which a long job can reach. It says to run again, and what happened.
-  for (const [held, says] of [["unknown", /GitHub couldn't say.*Nothing is wrong with the login: run the Mergelight job again\./], ["newer", /saved again after this run got it.*Push a new commit/]]) {
+  for (const [held, says] of [["unknown", /GitHub couldn't say.*Nothing is wrong with the login: run the Mergelight job again\./], ["newer", /saved again after this run got it.*Run the Mergelight job again, or push a new commit/]]) {
     for (const msLeft of [2 * HOUR, 30 * 60_000]) {
       const s = setup({ event: "pull_request", msLeft, held });
       assert.equal(await s.run(), 0);
@@ -375,6 +375,9 @@ test("whether the repository holds the secret is asked of GitHub, and only a pla
   const queued = { ...read, GITHUB_EVENT_PATH: eventFile };
   assert.equal(await secretHeld({ env: queued, token: "t", fetchImpl: saved("2026-11-15T09:45:00Z") }), "newer");
   assert.equal(await secretHeld({ env: queued, token: "t", fetchImpl: saved("2026-11-15T09:00:00Z") }), "yes");
+  // A run started again keeps the first attempt's event, but gets the secret as it is when it starts again.
+  assert.equal(await secretHeld({ env: { ...queued, GITHUB_RUN_ATTEMPT: "2" }, token: "t", fetchImpl: saved("2026-11-15T09:45:00Z") }), "yes");
+  assert.equal(await secretHeld({ env: { ...queued, GITHUB_RUN_ATTEMPT: "2" }, token: "t", fetchImpl: saved("2026-11-15T10:01:00Z") }), "newer");
   // A login this run saved itself counts from then.
   const own = { ...queued, MERGELIGHT_LOGIN_SAVED_AT: String(Date.parse("2026-11-15T10:05:00Z") / 1000) };
   assert.equal(await secretHeld({ env: own, token: "t", fetchImpl: saved("2026-11-15T10:04:00Z") }), "yes");
