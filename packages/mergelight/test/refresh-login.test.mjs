@@ -292,7 +292,7 @@ test("a login this repository doesn't hold itself, such as an organization's, is
     assert.deepEqual(s.calls.saved, []);
     assert.equal(s.calls.heldToken, "tok", "asked with the token that would save it");
     assert.ok(said(s.calls, /::error::.*doesn't hold itself.*gh secret set CODEX_AUTH_JSON --repo acme\/api/));
-    assert.match(readFileSync(s.envFile, "utf8"), /^MERGELIGHT_LOGIN_SHORT=1\nMERGELIGHT_LOGIN_LOST=1\nMERGELIGHT_LOGIN_NOTE=This repository reads its ChatGPT login from a CODEX_AUTH_JSON secret it doesn't hold itself.*rm -rf "\$d"\n$/);
+    assert.match(readFileSync(s.envFile, "utf8"), /^MERGELIGHT_LOGIN_SHORT=1\nMERGELIGHT_LOGIN_LOST=1\nMERGELIGHT_LOGIN_NOTE=This repository reads its ChatGPT login from a CODEX_AUTH_JSON secret it doesn't hold itself.*then push: `d=.*rm -rf "\$d"`\n$/);
   }
   // Not yet due, it isn't even asked about: nothing refreshes it in a review then.
   const fresh = setup({ event: "pull_request", msLeft: 9 * 24 * HOUR, held: "no" });

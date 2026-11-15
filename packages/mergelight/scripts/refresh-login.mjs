@@ -231,7 +231,7 @@ export async function refreshLogin({
   const owned = where === null ? "blind" : where === undefined ? "unknown" : where ? "environment" : await held(token);
   if (owned !== "yes") {
     const message = {
-      no: `This repository reads its ChatGPT login from a ${secret} secret it doesn't hold itself, such as an organization's. Mergelight doesn't refresh a login other repositories share, as that would sign them out. Save a login of its own as this repository's secret, then push: ${ownLoginCommand(secret, env.GITHUB_REPOSITORY)}`,
+      no: `This repository reads its ChatGPT login from a ${secret} secret it doesn't hold itself, such as an organization's. Mergelight doesn't refresh a login other repositories share, as that would sign them out. Save a login of its own as this repository's secret, then push: \`${ownLoginCommand(secret, env.GITHUB_REPOSITORY)}\``,
       environment: `This job runs in the GitHub environment "${where}", whose own ${secret} secret would win over the repository's, so Mergelight can't tell whose ChatGPT login this is and doesn't refresh it, as that could sign out the environment's other jobs. Remove environment: from the Mergelight job, and keep the login as the repository's own secret.`,
       blind: `Mergelight can't tell whether this job runs in a GitHub environment, whose secret would win over the repository's, so it doesn't refresh the ChatGPT login. Add "id-token: write" to the job's permissions, then push.`,
       newer: `The ${secret} secret was saved again after this run got it, so this run doesn't refresh or use the ChatGPT login it has. Push a new commit: its run gets the secret as it is then.`,
