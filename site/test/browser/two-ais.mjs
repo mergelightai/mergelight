@@ -479,7 +479,11 @@ await scenario('public-repo-adds-chatgpt-checker', { isPrivate: false, secrets: 
   await shot('connect-public-checker', true);
   await click('button', 'Continue');
   t = await until((x) => /Mergelight is on/.test(x), 'back to live');
-  expect(/Reviews with Claude, checked by ChatGPT/.test(t) && !/Merge PR #9/.test(t), 'with the merged change');
+  // The PR named only the reviewer, so ChatGPT checks once its login is saved, and until then it's still to connect.
+  expect(/Reviews with Claude, checked by Claude/.test(t) && !/Merge PR #9/.test(t), 'with the merged change, and Claude checking until ChatGPT has a login');
+  expect(/ChatGPT isn't connected yet\./.test(t) && /Resume/.test(t), 'and ChatGPT still to connect');
+  world.secrets.push('CODEX_AUTH_JSON');
+  await until((x) => /Reviews with Claude, checked by ChatGPT/.test(x) && !/Resume/.test(x), 'ChatGPT checking, once its login is saved');
 });
 
 const DOCS = 'https://github.com/mergelightai/mergelight/blob/main/docs/github-action.md#two-ais-one-reviews-the-other-checks';
