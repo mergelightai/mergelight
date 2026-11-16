@@ -1194,6 +1194,18 @@ await scenario('refresh-job-added-meanwhile', { secrets: ['CLAUDE_CODE_OAUTH_TOK
   expect(world.writes.length === 0 && /Open a new PR, then enter the code its Mergelight comment shows/.test(t), 'with nothing written, and the way to finish it');
 });
 
+await scenario('refresh-job-added-meanwhile-with-both-connected', { secrets: ['CODEX_AUTH_JSON', 'CLAUDE_CODE_OAUTH_TOKEN'], file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n          verify-with: codex\n`) }, async ({ world, until, click, reachLive, choose }) => {
+  await reachLive();
+  let t = await choose('Change');
+  expect(/Opens a PR that adds only that job/.test(t), 'offers only the refresh job');
+  // Someone else adds it while the choice is on screen, so the PR would change nothing.
+  world.refresh = REFRESH;
+  await click('button', 'Open PR');
+  await until((x) => /Mergelight is on/.test(x), 'back to live');
+  t = await choose('Change');
+  expect(!/Adds the small job/.test(t) && world.writes.length === 0, "doesn't offer the job again, and wrote nothing");
+});
+
 await scenario('old-pinned-offers-the-update', { secrets: ['CODEX_AUTH_JSON', 'CLAUDE_CODE_OAUTH_TOKEN'], refresh: REFRESH, file: TEMPLATE.replace('mergelightai/mergelight@v0', `mergelightai/mergelight@${'c'.repeat(40)} # v0.1.18`) }, async ({ page, until, click }) => {
   await page.goto(`${base}/setup/`, { waitUntil: 'networkidle2' });
   await page.evaluate(() => sessionStorage.setItem('mergelight.setup.state', 's'));

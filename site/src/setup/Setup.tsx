@@ -857,12 +857,14 @@ export default function Setup() {
       // Null means the branch already has all of it, like a refresh job someone else added since. A login still missing
       // is still to connect.
       if (opened) begin(opened, addsRefresh);
-      else if (needs.length) {
-        if (addsRefresh) setRefreshLive(true);
-        begin(null, false);
-      } else {
-        setRolesChange(null);
-        setView('live');
+      else {
+        // The refresh job was in the list, so the branch has it now, and it isn't offered again.
+        if (usesPlan) setRefreshLive(true);
+        if (needs.length) begin(null, false);
+        else {
+          setRolesChange(null);
+          setView('live');
+        }
       }
     } catch (err) {
       if (forRepo !== picked.current) return;
