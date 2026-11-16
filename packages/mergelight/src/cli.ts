@@ -5,7 +5,8 @@ import { currentRepo, fetchPullRequest, parsePrRef } from "./github.js";
 import { serve } from "./mcp/server.js";
 import { declinesOf, fetchContext, MAX_REASON, reportReview } from "./cloud.js";
 import { GitHub } from "./publish/api.js";
-import { writeAccess } from "./publish/handled.js";
+import { askWriteAccess, writeAccess } from "./publish/handled.js";
+import { answerReplyBody, decisionsFromAnswer, teamAnswerFromEnv, withDecisions } from "./answer.js";
 import { publishTeamChecks } from "./publish/team-checks.js";
 import { answerRemembered, confirmReasons, approveCheck, checkHeldTitle, checkLimitTitle, checkLoginTitle, failCheck, failSummary, previousReview, publishReview, startCheck, startSummary, syncApproval, UNREVIEWED, APPROVALS_OFF, updatePendingSummary } from "./publish/publish.js";
 import { configuredModel, HeldLoginError, LimitError, LoginError, loginFailureMessage } from "./providers/codex.js";
@@ -358,6 +359,22 @@ async function main(): Promise<number> {
       values.at = newest;
     }
   }
+  // A comment that mentioned Mergelight started this run: the team's answer to the findings, for this review.
+  const answer = values.post ? teamAnswerFromEnv() : null;
+  if (answer) {
+    const pr = await fetchPullRequest(ref);
+    // A fork's pull request gets no review on a push, and a comment on one starts none either.
+    if (pr.headRepo && pr.headRepo.toLowerCase() !== `${ref.owner}/${ref.repo}`.toLowerCase()) {
+      log(`This pull request comes from the fork ${pr.headRepo}, so a comment on it starts no review.`);
+      return 0;
+    }
+    // Only someone who can push answers for the team. Not when GitHub can't say either.
+    if ((await askWriteAccess(api)(answer.by)) !== true) {
+      log(`${answer.by} can't push to this repository, or GitHub couldn't say, so their comment isn't the team's answer and starts no review.`);
+      return 0;
+    }
+    log(`Reading the answer ${answer.by} wrote${answer.url ? ` (${answer.url})` : ""}.`);
+  }
   let headSha = values.at ?? null;
   if (values.post) {
     headSha ??= (await fetchPullRequest(ref)).headSha;
@@ -406,6 +423,7 @@ async function main(): Promise<number> {
       previous,
       // The round this review becomes: from LATE_ROUND on, the loop breaker lets fewer findings hold the merge.
       ...(earlier ? { round: earlier.round + 1 } : {}),
+      ...(answer ? { teamAnswer: { by: answer.by, text: answer.text } } : {}),
       memories: cloud.memories,
       rules: cloud.rules,
       rulesUnread: cloud.failed === true,
@@ -451,6 +469,15 @@ async function main(): Promise<number> {
 
     if (values.post) {
       previous = confirmReasons(previous, review.trace.rejected);
+      if (answer) {
+        // Mergelight answers the comment, and keeps each decision it took from it as a mark with the team's
+        // reason: the summary below counts them as handled, and later rounds and the agent tools read them.
+        const decided = decisionsFromAnswer(previous, review.trace.rejected);
+        await api.write("POST", `issues/${ref.number}/comments`, { body: answerReplyBody(answer, decided, review, review.pr.head_sha) }).catch((e) => log(`Couldn't answer the comment: ${(e as Error).message}`));
+        // Kept as the person's own decisions, so the server can remember their reasons for later pull requests.
+        previous = withDecisions(previous, decided, answer, review.pr.head_sha);
+        log(`Took ${decided.length} decision${decided.length === 1 ? "" : "s"} from the answer.`);
+      }
       // Reasons given in threads that this review sends to keep: the state holds them until the server confirms.
       // Also when the server couldn't be asked this time, so a waiting reason isn't dropped from the state.
       const remember = cloud.connected || cloud.failed ? (previous ?? []).filter((p) => p.handled?.from === "reply" && p.handled.remember && p.handled.at).map((p) => ({ id: p.id, at: p.handled!.at!, tries: (p.handled!.tries ?? 0) + (cloud.connected ? 1 : 0) })) : [];

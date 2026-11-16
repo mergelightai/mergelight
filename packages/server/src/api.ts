@@ -30,8 +30,11 @@ export function audienceOf(publicUrl: string): string {
   return url.origin + url.pathname.replace(/\/+$/, "");
 }
 
-/** Only runs that review a pull request talk to this server. */
-const EVENTS = new Set(["pull_request", "pull_request_target"]);
+/**
+ * Only runs that review a pull request talk to this server. issue_comment: a comment that mentions
+ * Mergelight reviews the pull request again. Like pull_request_target, it is signed for the base branch.
+ */
+const EVENTS = new Set(["pull_request", "pull_request_target", "issue_comment"]);
 
 /** Room for a review's numbers and up to 40 decisions with their reasons. */
 export const MAX_BODY = 65_536;

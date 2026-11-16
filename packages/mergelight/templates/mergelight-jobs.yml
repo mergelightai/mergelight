@@ -7,23 +7,29 @@ name: Mergelight
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, edited]
+  # A comment that mentions @mergelight-ai on a pull request reviews it again, reading the comment as your
+  # team's answer to the findings: what's fixed, and what to leave and why. Only people who can push count.
+  issue_comment:
+    types: [created]
 
 # Each job says what it may do. Only push-jobs may push, and it runs no AI.
 permissions: {}
 
 # A new push cancels the older run of the same pull request. An edit that changes only the title or
 # description starts nothing, so it gets a group of its own and never cancels a run that is working.
-# A run started again by hand waits for the one going instead of cancelling it.
+# So does every comment: one that doesn't mention Mergelight starts nothing either. A run started again
+# by hand waits for the one going instead of cancelling it.
 concurrency:
-  group: mergelight-pr-${{ github.event.pull_request.number }}${{ (github.event.action == 'edited' && !github.event.changes.base) && '-edit' || '' }}
+  group: mergelight-pr-${{ github.event.pull_request.number || github.event.issue.number }}${{ github.event_name == 'issue_comment' && format('-comment-{0}', github.event.comment.id) || ((github.event.action == 'edited' && !github.event.changes.base) && '-edit' || '') }}
   cancel-in-progress: ${{ github.run_attempt == 1 }}
 
 jobs:
   # The AI does the jobs, with a token that can only read, and writes what they changed to a file.
   run-jobs:
     # Forks and Dependabot get no secrets, and drafts aren't ready. An edit only counts when the target
-    # branch changed, so a new title starts nothing.
+    # branch changed, so a new title starts nothing. A comment runs no jobs.
     if: >
+      github.event_name == 'pull_request' &&
       (github.event.action != 'edited' || github.event.changes.base) &&
       !github.event.pull_request.draft &&
       github.actor != 'dependabot[bot]' &&
@@ -89,13 +95,19 @@ jobs:
   # The review, as in mergelight.yml, of the commit the jobs pushed when they pushed one.
   review:
     needs: [run-jobs, push-jobs]
-    # Also after jobs that failed or had nothing to push, but not in a run a newer push cancelled.
+    # Also after jobs that failed or had nothing to push, but not in a run a newer push cancelled. A comment
+    # counts when it mentions Mergelight on a pull request, and isn't a bot's.
     if: >
       !cancelled() &&
+      ((github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      contains(github.event.comment.body, '@mergelight-ai') &&
+      github.event.comment.user.type != 'Bot') ||
+      (github.event_name == 'pull_request' &&
       (github.event.action != 'edited' || github.event.changes.base) &&
       !github.event.pull_request.draft &&
       github.actor != 'dependabot[bot]' &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      github.event.pull_request.head.repo.full_name == github.repository))
     runs-on: ubuntu-latest
     # Room for the first login, which can wait up to 16 minutes, and then a long review.
     timeout-minutes: 45

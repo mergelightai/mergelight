@@ -123,6 +123,14 @@ test("a scheduled run gets a login token but no review token", async () => {
   assert.equal((await handle(post(makeToken({ event_name: "schedule" })), env(), fetchImpl, NOW)).status, 403);
 });
 
+test("a comment that mentions Mergelight gets a review token, and a login token to save a refreshed login", async () => {
+  for (const scope of ["review", "login"]) {
+    const { fetchImpl } = fakeGitHub();
+    const res = await handle(post(makeToken({ event_name: "issue_comment" }), `/token?scope=${scope}`), env(), fetchImpl, NOW);
+    assert.equal(res.status, 200, scope);
+  }
+});
+
 test("an approval can't ask for a login token", async () => {
   const { fetchImpl } = fakeGitHub();
   const res = await handle(post(makeToken({ event_name: "pull_request_review" }), "/token?scope=login"), env(), fetchImpl, NOW);

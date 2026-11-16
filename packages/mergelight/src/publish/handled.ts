@@ -71,7 +71,7 @@ export interface Mark {
   url: string;
 }
 
-const MARK_RE = /<!-- mergelight:handled:v1 ([A-Za-z0-9+/=]+) -->/;
+const MARK_RE = /<!-- mergelight:handled:v1 ([A-Za-z0-9+/=]+) -->/g;
 export const MAX_NOTE = 1000;
 
 export function encodeMark(ids: string[], as: HandledAs, note: string | null, sha: string): string {
@@ -79,10 +79,20 @@ export function encodeMark(ids: string[], as: HandledAs, note: string | null, sh
 }
 
 export function decodeMark(body: string | undefined): Pick<Mark, "as" | "note" | "sha"> & { ids: string[] } | null {
-  const m = body?.match(MARK_RE);
-  if (!m) return null;
+  return decodeMarks(body)[0] ?? null;
+}
+
+/**
+ * Every mark in a comment, in order. One comment can hold several, each with its own reason, as
+ * Mergelight's answer to a comment that answered several findings does.
+ */
+export function decodeMarks(body: string | undefined): (Pick<Mark, "as" | "note" | "sha"> & { ids: string[] })[] {
+  return [...(body ?? "").matchAll(MARK_RE)].map((m) => decodeOne(m[1]!)).filter((m) => m !== null);
+}
+
+function decodeOne(encoded: string): Pick<Mark, "as" | "note" | "sha"> & { ids: string[] } | null {
   try {
-    const { ids, as, note, sha } = JSON.parse(Buffer.from(m[1]!, "base64").toString("utf8"));
+    const { ids, as, note, sha } = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
     if (!Array.isArray(ids) || (as !== "fixed" && as !== "wont_fix")) return null;
     return {
       ids: ids.filter((id): id is string => typeof id === "string" && /^[a-f0-9]+$/.test(id)),
@@ -103,8 +113,7 @@ export function decodeMark(body: string | undefined): Pick<Mark, "as" | "note" |
  */
 export async function readMarks(comments: PrComment[], canWrite: (login: string) => Promise<boolean | null>): Promise<Map<string, Mark>> {
   const marked = comments
-    .map((comment) => ({ comment, mark: decodeMark(comment.body) }))
-    .filter((c) => c.mark)
+    .flatMap((comment) => decodeMarks(comment.body).map((mark) => ({ comment, mark })))
     .sort((a, b) => Date.parse(a.comment.created_at ?? "") - Date.parse(b.comment.created_at ?? ""));
   const marks = new Map<string, Mark>();
   for (const { comment, mark } of marked) {
@@ -115,8 +124,8 @@ export async function readMarks(comments: PrComment[], canWrite: (login: string)
       // away the team's decisions; only GitHub's answer that the person can't push does.
       if (can === false || (can === null && !trustedComment(comment))) continue;
     }
-    for (const id of mark!.ids) {
-      marks.set(id, { id, as: mark!.as, note: mark!.note, sha: mark!.sha, by, at: comment.created_at ?? "", url: comment.html_url });
+    for (const id of mark.ids) {
+      marks.set(id, { id, as: mark.as, note: mark.note, sha: mark.sha, by, at: comment.created_at ?? "", url: comment.html_url });
     }
   }
   return marks;

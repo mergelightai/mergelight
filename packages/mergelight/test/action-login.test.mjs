@@ -128,13 +128,19 @@ test("the refresh and its save come before the review", () => {
   assert.doesNotMatch(action, /Reply with the single word OK/, "the job no longer spends plan quota on a model call");
 });
 
-function choose({ wanted = "", checker = "", claude = "", codex = "", event = "pull_request", headRepo = "acme/widgets", actor = "someone", visibility = "private" }) {
+function choose({ wanted = "", checker = "", claude = "", codex = "", event = "pull_request", headRepo = "acme/widgets", actor = "someone", visibility = "private", permission = null }) {
   const dir = mkdtempSync(join(tmpdir(), "mergelight-choose-"));
   const envFile = join(dir, "env");
   writeFileSync(envFile, "");
+  // GitHub's answer about the person who commented, when a test gives one.
+  const bin = join(dir, "bin");
+  mkdirSync(bin);
+  if (permission !== null) writeFileSync(join(bin, "gh"), `#!/usr/bin/env bash\necho "$*" > "${dir}/asked"\necho ${permission}\n`);
+  else writeFileSync(join(bin, "gh"), "#!/usr/bin/env bash\nexit 1\n");
+  chmodSync(join(bin, "gh"), 0o755);
   const r = spawnSync("bash", ["-c", stepScript("Choose who reviews and who checks")], {
     encoding: "utf8",
-    env: { PATH: process.env.PATH, GITHUB_ENV: envFile, WANTED: wanted, WANTED_CHECKER: checker, HAS_CLAUDE: claude, HAS_CODEX: codex, GITHUB_EVENT_NAME: event, GITHUB_REPOSITORY: "acme/widgets", GITHUB_ACTOR: actor, HEAD_REPO: headRepo, VISIBILITY: visibility },
+    env: { PATH: `${bin}:${process.env.PATH}`, GITHUB_ENV: envFile, WANTED: wanted, WANTED_CHECKER: checker, HAS_CLAUDE: claude, HAS_CODEX: codex, GITHUB_EVENT_NAME: event, GITHUB_REPOSITORY: "acme/widgets", GITHUB_ACTOR: actor, HEAD_REPO: headRepo, VISIBILITY: visibility, COMMENT_BY: event === "issue_comment" ? "reader" : "" },
   });
   const env = Object.fromEntries(readFileSync(envFile, "utf8").trim().split("\n").filter(Boolean).map((l) => l.split("=")));
   return { code: r.status, out: r.stdout, env };
@@ -469,4 +475,44 @@ test("in jobs mode no second AI is set up, and a Claude reviewer with no login s
   assert.equal(none.env.MERGELIGHT_CONNECT_CLAUDE, "0");
   assert.equal(none.env.MERGELIGHT_NO_LOGIN, "1");
   assert.match(none.out, /Skipping the jobs: there's no Claude login yet/);
+});
+
+test("a comment that mentions Mergelight reviews again, in a group of its own, and never for a bot", () => {
+  for (const name of ["mergelight.yml", "mergelight-jobs.yml"]) {
+    const workflow = readFileSync(join(root, "examples", name), "utf8");
+    assert.equal(readFileSync(join(root, "packages", "mergelight", "templates", name), "utf8"), workflow, `setup writes the same ${name}`);
+    assert.match(workflow, /\n  issue_comment:\n    types: \[created\]\n/, name);
+    assert.match(workflow, /github\.event\.issue\.pull_request &&\n\s+contains\(github\.event\.comment\.body, '@mergelight-ai'\) &&\n\s+github\.event\.comment\.user\.type != 'Bot'/, name);
+    // Every comment gets a concurrency group of its own: one that doesn't mention Mergelight cancels nothing.
+    assert.match(workflow, /github\.event_name == 'issue_comment' && format\('-comment-\{0\}', github\.event\.comment\.id\)/, name);
+  }
+  // The jobs never run for a comment.
+  assert.match(readFileSync(join(root, "examples", "mergelight-jobs.yml"), "utf8"), /run-jobs:[\s\S]*?if: >\n\s+github\.event_name == 'pull_request' &&/);
+  // The Action passes the comment on only for a comment, and a comment never connects a login.
+  const review = action.slice(action.indexOf("    - name: Review\n"), action.indexOf("      run: |", action.indexOf("    - name: Review\n")));
+  assert.match(review, /github\.event_name == 'issue_comment'\) && env\.MERGELIGHT_NO_LOGIN != '1'/);
+  assert.match(review, /MERGELIGHT_COMMENT_BODY: \$\{\{ github\.event_name == 'issue_comment' && github\.event\.comment\.body \|\| '' \}\}/);
+  assert.match(stepScript("Log in to Codex"), /elif \[ "\$GITHUB_EVENT_NAME" = issue_comment \]; then[\s\S]*?MERGELIGHT_NO_LOGIN=1/);
+  assert.doesNotMatch(action, /github\.event\.pull_request\.number \}\}/, "the pull request's number also comes from a comment's issue");
+});
+
+test("a comment from someone who can't push starts nothing: no install, no login refresh, no review", () => {
+  for (const permission of ["read", "none", ""]) {
+    const r = choose({ codex: "1", claude: "1", event: "issue_comment", permission });
+    assert.equal(r.code, 0);
+    assert.equal(r.env.MERGELIGHT_NO_LOGIN, "1", permission);
+    assert.equal(r.env.MERGELIGHT_USES_CODEX, "0");
+    assert.equal(r.env.MERGELIGHT_USES_CLAUDE, "0");
+    assert.match(r.out, /reader can't push to this repository/);
+  }
+  // GitHub not answering counts as no.
+  assert.equal(choose({ codex: "1", event: "issue_comment" }).env.MERGELIGHT_NO_LOGIN, "1");
+  // Someone who can push: the review goes on as for a push.
+  for (const permission of ["write", "admin"]) {
+    const ok = choose({ codex: "1", event: "issue_comment", permission });
+    assert.equal(ok.env.MERGELIGHT_NO_LOGIN, "0", permission);
+    assert.equal(ok.env.MERGELIGHT_USES_CODEX, "1");
+  }
+  // A push never asks.
+  assert.equal(choose({ codex: "1" }).env.MERGELIGHT_NO_LOGIN, "0");
 });
