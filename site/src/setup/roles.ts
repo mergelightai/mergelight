@@ -323,14 +323,27 @@ export function loginInputs(content: string): string[] {
 }
 
 /**
- * Which AIs have a login the Action gets: a secret that's there, read by an input the step has. Without a standard
- * step to read, the secrets alone tell.
+ * Which AIs have a login the Action gets: a secret that's there, read by an input the step has, whatever else the
+ * workflow does its own way. A secret no input reads, like an app's own API key, never counts. Without a workflow yet,
+ * the one setup writes reads them all. A step that can't be found reads none.
  */
 export function loginsIn(content: string | null, secretNames: string[], shared: string[] = []): Logins {
-  if (!content || !isStandard(content)) return loginsFrom(secretNames, shared);
-  const inputs = loginInputs(content);
-  const has = (ai: Ai) => LOGIN_INPUTS[ai].some((input) => inputs.includes(input) && counts(input, secretNames, shared));
-  return { claude: has('claude'), codex: !sharedPlanWins(inputs, secretNames, shared) && has('codex') };
+  if (!content) return loginsFrom(secretNames, shared);
+  const step = locate(content);
+  if (!step) return { claude: false, codex: false };
+  // The secret each input reads, where it reads exactly one: anything else, like a fallback or an expression, can't be
+  // told, so it counts for nothing. Secret names are read without regard to case, as GitHub reads them.
+  const secretOf = (input: string) => readValue(step, input)?.match(/^\$\{\{\s*secrets\.([A-Za-z0-9_]+)\s*\}\}$/i)?.[1]?.toUpperCase() ?? null;
+  const there = (name: string | null): name is string => Boolean(name && secretNames.includes(name));
+  const plan = LOGIN_INPUTS.codex[0];
+  const planSecret = secretOf(plan);
+  // The Action uses the plan's login before a key, so an organization's one there means ChatGPT needs the repo's own.
+  const planShared = there(planSecret) && shared.includes(planSecret);
+  const has = (input: string) => {
+    const secret = secretOf(input);
+    return there(secret) && !(input === plan && shared.includes(secret));
+  };
+  return { claude: LOGIN_INPUTS.claude.some(has), codex: !planShared && LOGIN_INPUTS.codex.some(has) };
 }
 
 /** Whether the Mergelight step hands this AI a login at all: without one of its inputs, it can never review or check. */

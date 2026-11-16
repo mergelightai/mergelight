@@ -324,3 +324,13 @@ test('a step in an anchored run script is an example too', () => {
   assert.equal(isStandard(both), false);
   assert.deepEqual(readRoles(both), { provider: null, verifyWith: null }, 'and the real step is still the one read');
 });
+
+test('a login counts only through the input that reads it, also in a workflow set up its own way', () => {
+  // auth-secret-name makes it customized. Its ChatGPT input reads CODEX_AUTH_JSON, which isn't there, and no input reads
+  // the app's own OpenAI key.
+  const custom = step(['codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}', 'auth-secret-name: CODEX_AUTH_JSON', 'claude-code-oauth-token: ${{ secrets.TEAM_CLAUDE }}']);
+  assert.equal(isStandard(custom), false);
+  assert.deepEqual(loginsIn(custom, ['OPENAI_API_KEY', 'TEAM_CLAUDE']), claudeOnly, "an input's own secret counts, an unread key doesn't");
+  assert.deepEqual(loginsIn(step(['codex-auth-json: ${{ secrets.A || secrets.B }}']), ['A', 'B']), none, "a fallback can't be told");
+  assert.deepEqual(loginsIn('name: x\n', ['CODEX_AUTH_JSON']), none, 'no step reads nothing');
+});
