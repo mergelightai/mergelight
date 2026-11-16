@@ -27,8 +27,11 @@ export function teamAnswerFromEnv(env: NodeJS.ProcessEnv = process.env): TeamAns
   return { by, at: env.MERGELIGHT_COMMENT_AT ?? new Date().toISOString(), url: env.MERGELIGHT_COMMENT_URL ?? "", text: text.slice(0, MAX_ANSWER) };
 }
 
-/** How the verifier names a finding the team decided to leave: "the team decided not to fix this: <their reason>". */
-const DECIDED = /^\s*the team decided not to fix this\s*(?::\s*(.*))?$/is;
+/**
+ * How the verifier names a finding the answer decided to leave: "the team decided not to fix this: <their
+ * reason>". The bare form is for a decision made before, so it is no new one.
+ */
+const DECIDED = /^\s*the team decided not to fix this\s*:\s*(\S.*)$/is;
 
 export interface AnsweredDecision {
   id: string;
@@ -46,9 +49,9 @@ export function decisionsFromAnswer(previous: PriorFinding[] | undefined, reject
   for (const r of rejected) {
     const p = earlier.get(r.candidate);
     const m = DECIDED.exec(r.reason);
-    if (!p || !m || decided.has(p.id)) continue;
-    const note = (m[1] ?? "").replace(/\s+/g, " ").trim();
-    decided.set(p.id, { id: p.id, title: p.title, note: note || "The team decided not to fix this." });
+    // A finding someone decided on before keeps their decision, with its reason and their name.
+    if (!p || !m || decided.has(p.id) || p.handled?.as === "wont_fix") continue;
+    decided.set(p.id, { id: p.id, title: p.title, note: m[1]!.replace(/\s+/g, " ").trim() });
   }
   return [...decided.values()];
 }
@@ -90,7 +93,8 @@ export function answerReplyBody(answer: TeamAnswer, decided: AnsweredDecision[],
     out.push("", `**Still holds the merge (${holding.length}):**`);
     for (const f of holding) out.push(`- ${line(f.title)}: ${line(f.verdict)}`);
   } else {
-    out.push("", "Nothing holds the merge now.");
+    // A team check, or a guarded file, can still hold it: the summary and the checks say.
+    out.push("", "No finding holds the merge now. The summary and the checks show anything else that does.");
   }
   out.push("", "The summary is up to date.");
   for (const d of decided) out.push(encodeMark([d.id], "wont_fix", `${answer.by}: ${d.note}`.slice(0, MAX_NOTE), sha));

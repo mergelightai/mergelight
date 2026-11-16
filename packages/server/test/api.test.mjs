@@ -185,6 +185,8 @@ test("a run can't report numbers for another pull request than the one GitHub si
   assert.equal((await post(makeToken({ ref: "refs/pull/42/merge" }))).status, 201);
   // A pull_request_target run is signed for the base branch, which names no pull request.
   assert.equal((await post(makeToken({ ref: "refs/heads/main", event_name: "pull_request_target", run_id: "9005" }))).status, 201);
+  // So is a comment that mentions Mergelight, which reviews the pull request again.
+  assert.equal((await post(makeToken({ ref: "refs/heads/main", event_name: "issue_comment", run_id: "9006" }))).status, 201);
 });
 
 test("a model name with a context suffix is kept", async () => {

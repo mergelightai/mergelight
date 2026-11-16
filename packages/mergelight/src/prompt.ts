@@ -578,7 +578,7 @@ It answers each problem it names, by its title or clearly by what it describes. 
 
 - Named as fixed: a claim, not proof. Check the code the same way as a mark.
 - Named with a reason to leave it as it is, such as "not worth it" with why: a decision not to fix, as for "Decided not to fix by the team" above. When you don't keep it, list its id in rejected with the reason "the team decided not to fix this: " followed by their reason, in one short line of your own words.
-- Named as fixed later, in another pull request: as for that case above.
+- Named as fixed later, in another pull request: the same as a reason to leave it here. When you don't keep it, list its id in rejected with the reason "the team decided not to fix this: they will fix it in another pull request".
 
 `;
 }
