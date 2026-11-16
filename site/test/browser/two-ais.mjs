@@ -465,6 +465,17 @@ await scenario('tagged-review-commit-unreadable', { secrets: ['CLAUDE_CODE_OAUTH
   expect(world.writes.length === 0, 'adds no job, and changes nothing');
 });
 
+await scenario('merged-role-pr-that-never-ran', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`) }, async ({ world, until, click, reachLive, choose }) => {
+  await reachLive();
+  await choose('Add ChatGPT');
+  await click('button', 'Open PR');
+  await until((x) => /Connect ChatGPT to check reviews/.test(x), 'the connect step');
+  // The workflow only reviews PRs that change src, so this one started no run. It's merged.
+  world.merged = true;
+  const t = await until((x) => /codex login && gh secret set CODEX_AUTH_JSON/.test(x), 'the command');
+  expect(/Your PR is merged, so no run on it asks for a code\./.test(t) && !/It shows up here in a moment/.test(t), "says why, and doesn't wait for a code");
+});
+
 await scenario('claude-named-adds-chatgpt', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`) }, async ({ page, world, until, click, shot, reachLive, choose }) => {
   await reachLive();
   let t = await choose('Add ChatGPT');
