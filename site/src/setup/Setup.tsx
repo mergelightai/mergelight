@@ -301,22 +301,23 @@ export default function Setup() {
   };
   /** The repo picked, counted, so an answer for one picked before is never applied to this one. */
   const picked = useRef(0);
+  /** The branch the linked PR goes into, which can be another one than the branch picked here. */
+  const linkBase = useRef('');
   /**
    * A pull_request run reads the workflow at the PR's merge commit, which may take other logins than the branch's or
-   * the PR's own head. `again` is a retry after a read that failed, which keeps showing that until one works.
+   * the PR's own head. A pull_request_target run reads the one on the PR's own base branch. `again` is a retry after a
+   * read that failed, which keeps showing that until one works.
    */
-  const readLinkFile = (c: GitHubClient, r: Repo, number: number, base: string | null, again = false) => {
+  const readLinkFile = (c: GitHubClient, r: Repo, number: number, again = false) => {
     const read = ++linkRead.current;
-    // A pull_request_target run reads the base branch's workflow, which the page has already.
-    if (base && runsOnBase(base)) {
-      setLinkFile({ content: base });
-      return Promise.resolve();
-    }
     if (!again) setLinkFile('reading');
-    return c.workflowAt(r, `refs/pull/${number}/merge`).then(
-      (content) => read === linkRead.current && setLinkFile(content === null ? 'unknown' : { content }),
-      () => read === linkRead.current && setLinkFile('unknown'),
-    );
+    return c
+      .workflowAt(r, linkBase.current)
+      .then((onBase) => (runsOnBase(onBase) ? onBase : c.workflowAt(r, `refs/pull/${number}/merge`)))
+      .then(
+        (content) => read === linkRead.current && setLinkFile(content === null ? 'unknown' : { content }),
+        () => read === linkRead.current && setLinkFile('unknown'),
+      );
   };
 
   /** `waitingPr` is the pull request whose comment sent them here, which skips straight to connecting it. */
@@ -373,12 +374,13 @@ export default function Setup() {
         setView(next);
         return;
       }
-      client.prState(r, waitingPr).then(({ headSha }) => {
+      client.prState(r, waitingPr).then(({ headSha, base }) => {
         setPr({ number: waitingPr, url: `https://github.com/${r.fullName}/pull/${waitingPr}`, headSha });
         setStartOnClaude(true);
         // The link is for Claude, so only Claude's login ends this step, even once the run's comment is gone.
         setAskedCheck('claude');
-        readLinkFile(client, r, waitingPr, d.installed?.content ?? null);
+        linkBase.current = base;
+        readLinkFile(client, r, waitingPr);
         setView('connect');
       }, () => setView(next));
     }, () => {
@@ -581,7 +583,10 @@ export default function Setup() {
         // What the old run asked for, and the logins its workflow took, may not be the new one's.
         setAskedCheck(null);
         loginsBefore.current = null;
-        if (startOnClaude) readLinkFile(client, repo, pr.number, liveFile);
+        if (startOnClaude) {
+          linkBase.current = current.base;
+          readLinkFile(client, repo, pr.number);
+        }
         // A role PR's new commit can change the logins its workflow takes: its run reads the PR's merge commit.
         else if (rolesChange) void readRolesFile(client, repo, pr.number);
         setPr({ ...pr, headSha: current.headSha });
@@ -597,7 +602,7 @@ export default function Setup() {
       // A linked PR's workflow that couldn't be read is tried again, one try at a time, so a slow one can finish.
       if (startOnClaude && pr && linkFileNow.current === 'unknown' && !linkRetrying.current) {
         linkRetrying.current = true;
-        void readLinkFile(client, repo, pr.number, liveFile, true).finally(() => {
+        void readLinkFile(client, repo, pr.number, true).finally(() => {
           linkRetrying.current = false;
         });
       }

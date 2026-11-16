@@ -44,8 +44,11 @@ const offers = (page, name) => page.evaluate((n) => [...document.querySelectorAl
 const [shard, shards] = (process.env.SHARD ?? '1/1').split('/').map(Number);
 let scenarioIndex = 0;
 
+// ONLY=name,name runs just those scenarios, to try one while changing it.
+const only = process.env.ONLY?.split(',');
+
 async function scenario(name, start, body) {
-  if (scenarioIndex++ % shards !== shard - 1) return;
+  if (scenarioIndex++ % shards !== shard - 1 || (only && !only.includes(name))) return;
   console.log(`\n== ${name}`);
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 900, deviceScaleFactor: 2 });
@@ -94,7 +97,7 @@ async function scenario(name, start, body) {
         return json(req, {}, 404);
       }
       if (u.pathname === '/user/installations') return json(req, { installations: [{ id: 1, html_url: 'https://github.com/settings/installations/1', account: { id: 1, login: 'acme', avatar_url: `${base}/logo.png` } }] });
-      if (p === `/pulls/${PR.number}` && world.closed) return json(req, { merged: false, state: 'closed', head: { sha: world.head } });
+      if (p === `/pulls/${PR.number}` && world.closed) return json(req, { merged: false, state: 'closed', head: { sha: world.head }, base: { ref: world.prBase ?? 'main' } });
       if (u.pathname === '/user/installations/1/repositories') return json(req, { repositories: [{ id: 2, full_name: 'acme/api', private: world.isPrivate, visibility: world.visibility ?? (world.isPrivate ? 'private' : 'public'), default_branch: world.defaultBranch, archived: false }, { id: 3, full_name: 'acme/zzz-other', private: true, default_branch: 'main', archived: false }] });
       if (p === '/branches') return json(req, (world.branches ?? ['main']).map((name) => ({ name })));
       if (p === '/pulls' && u.searchParams.get('state') === 'open') {
@@ -118,7 +121,7 @@ async function scenario(name, start, body) {
         const page = Number(u.searchParams.get('page') ?? 1);
         return json(req, page === 1 ? Array.from({ length: 100 }, (_, i) => ({ filename: `src/f${i}.ts` })) : [{ filename: '.github/workflows/mergelight.yml' }]);
       }
-      if (p === `/pulls/${PR.number}`) return json(req, { merged: world.merged, head: { sha: world.head } });
+      if (p === `/pulls/${PR.number}`) return json(req, { merged: world.merged, head: { sha: world.head }, base: { ref: world.prBase ?? 'main' } });
       if (p === `/issues/${PR.number}/comments`) return json(req, world.comments);
       // A number is how GitHub answers instead of a list.
       if (p === '/actions/secrets') return Array.isArray(world.secrets) ? json(req, { secrets: world.secrets.map((name) => ({ name })) }) : json(req, {}, world.secrets);
@@ -1455,6 +1458,13 @@ await scenario('link-on-pull-request-target-reads-the-base', { secrets: ['CODEX_
   // The run reads main's workflow, which takes Claude's plan login, though the PR's own takes only a key.
   const t = await until((x) => /Open Claude|ANTHROPIC_API_KEY/.test(x), "Claude's step");
   expect(/Open Claude/.test(t) && !/ANTHROPIC_API_KEY/.test(t), "goes by the base branch's workflow");
+});
+
+await scenario('link-on-pull-request-target-reads-its-own-base', { secrets: ['CODEX_AUTH_JSON'], prBase: 'staging', stagingFile: TEMPLATE.replace('on:\n  pull_request:\n', 'on:\n  pull_request_target:\n'), file: CLAUDE_KEY_ONLY.replace('on:\n  pull_request:\n', 'on:\n  pull_request_target:\n'), headFile: CLAUDE_KEY_ONLY, comments: [askToCheck({ url: '', code: '', claudeUrl: CLAUDE })], checks: { rolesha: waitingToCheck('Claude') } }, async ({ page, until }) => {
+  await page.goto(`${base}/setup/?repo=acme/api&pr=9&connect=claude`, { waitUntil: 'networkidle2' });
+  // The PR goes into staging, whose workflow takes Claude's plan login. main's, which the page picked, takes only a key.
+  const t = await until((x) => /Open Claude|ANTHROPIC_API_KEY/.test(x), "Claude's step");
+  expect(/Open Claude/.test(t) && !/ANTHROPIC_API_KEY/.test(t), "goes by the workflow on the PR's own base branch");
 });
 
 await scenario('closed-role-pr-is-no-update', { secrets: ['CODEX_AUTH_JSON', 'CLAUDE_CODE_OAUTH_TOKEN'], refresh: REFRESH, file: BEHIND }, async ({ page, world, until, click, text }) => {

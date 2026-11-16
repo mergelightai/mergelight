@@ -248,7 +248,8 @@ export interface GitHubClient {
   /** Removes the sign-in code this page left in the repository, once the run has connected. */
   clearClaudeCode(repo: Repo): Promise<void>;
   /** Whether it's merged, and the commit it's on now. */
-  prState(repo: Repo, number: number): Promise<{ merged: boolean; closed: boolean; headSha: string }>;
+  /** Where a PR is: merged or closed, its newest commit, and the branch it goes into. */
+  prState(repo: Repo, number: number): Promise<{ merged: boolean; closed: boolean; headSha: string; base: string }>;
 }
 
 const WORKFLOWS = '.github/workflows';
@@ -670,8 +671,8 @@ export function realClient(token: string): GitHubClient {
     clearClaudeCode,
     connectCode: async (repo, number) => readConnectCode(await get<{ user: { login: string } | null; body?: string | null }[]>(`/repos/${repo.fullName}/issues/${number}/comments?per_page=100`)),
     prState: async (repo, number) => {
-      const pull = await get<{ merged: boolean; state?: string; head: { sha: string } }>(`/repos/${repo.fullName}/pulls/${number}`);
-      return { merged: pull.merged, closed: pull.state === 'closed' && !pull.merged, headSha: pull.head.sha };
+      const pull = await get<{ merged: boolean; state?: string; head: { sha: string }; base: { ref: string } }>(`/repos/${repo.fullName}/pulls/${number}`);
+      return { merged: pull.merged, closed: pull.state === 'closed' && !pull.merged, headSha: pull.head.sha, base: pull.base.ref };
     },
   };
 }
@@ -741,6 +742,6 @@ export function mockClient(): GitHubClient {
     sendClaudeCode: () => later(undefined),
     clearClaudeCode: () => later(undefined),
     connectCode: () => later(checks < 4 ? { url: 'https://auth.openai.com/codex/device', code: '2ZYY-TEST1', claudeUrl: 'https://claude.com/cai/oauth/authorize?code_challenge=x', purpose: 'review' } : null),
-    prState: () => later({ merged: checks >= 11, closed: false, headSha: 'abc' }),
+    prState: () => later({ merged: checks >= 11, closed: false, headSha: 'abc', base: 'main' }),
   };
 }

@@ -59,8 +59,8 @@ async function run(name, { login = false, apiKey = false, claude = false, orgSec
       if (p === '/pulls' && u.searchParams.get('state') === 'all') return json(req, [{ base: { ref: 'staging' }, head: { ref: 'feat/x' } }]);
       if (p === '/pulls') return json(req, prFile ? [{ number: 5, html_url: 'https://github.com/acme/api/pull/5', title: prTitle, base: { ref: 'staging' }, head: { sha: 'oldsha', ref: 'mergelight-setup-old', repo: { full_name: 'acme/api' } } }] : []);
       if (p === '/pulls/5/files') return json(req, prFiles.map((filename) => ({ filename })));
-      if (p === '/pulls/5') return json(req, { merged: false, head: { sha: writes.some((w) => w.m === 'PUT') ? 'newsha' : 'oldsha' } });
-      if (p === '/pulls/7') return json(req, { merged: false, head: { sha: 'headsha' } });
+      if (p === '/pulls/5') return json(req, { merged: false, head: { sha: writes.some((w) => w.m === 'PUT') ? 'newsha' : 'oldsha' }, base: { ref: 'main' } });
+      if (p === '/pulls/7') return json(req, { merged: false, head: { sha: 'headsha' }, base: { ref: 'main' } });
       if (p === '/issues/5/comments' || p === '/issues/7/comments') return json(req, []);
       // A list is what the organization shares with the repo. A number is how GitHub answers instead: 422 on a repo a person owns.
       if (p === '/actions/organization-secrets') return Array.isArray(orgSecrets) ? json(req, { secrets: orgSecrets.map((name) => ({ name })) }) : json(req, { message: 'no' }, orgSecrets);
