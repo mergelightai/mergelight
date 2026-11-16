@@ -470,3 +470,22 @@ test("in jobs mode no second AI is set up, and a Claude reviewer with no login s
   assert.equal(none.env.MERGELIGHT_NO_LOGIN, "1");
   assert.match(none.out, /Skipping the jobs: there's no Claude login yet/);
 });
+
+test("a comment that mentions Mergelight reviews again, in a group of its own, and never for a bot", () => {
+  for (const name of ["mergelight.yml", "mergelight-jobs.yml"]) {
+    const workflow = readFileSync(join(root, "examples", name), "utf8");
+    assert.equal(readFileSync(join(root, "packages", "mergelight", "templates", name), "utf8"), workflow, `setup writes the same ${name}`);
+    assert.match(workflow, /\n  issue_comment:\n    types: \[created\]\n/, name);
+    assert.match(workflow, /github\.event\.issue\.pull_request &&\n\s+contains\(github\.event\.comment\.body, '@mergelight-ai'\) &&\n\s+github\.event\.comment\.user\.type != 'Bot'/, name);
+    // Every comment gets a concurrency group of its own: one that doesn't mention Mergelight cancels nothing.
+    assert.match(workflow, /github\.event_name == 'issue_comment' && format\('-comment-\{0\}', github\.event\.comment\.id\)/, name);
+  }
+  // The jobs never run for a comment.
+  assert.match(readFileSync(join(root, "examples", "mergelight-jobs.yml"), "utf8"), /run-jobs:[\s\S]*?if: >\n\s+github\.event_name == 'pull_request' &&/);
+  // The Action passes the comment on only for a comment, and a comment never connects a login.
+  const review = action.slice(action.indexOf("    - name: Review\n"), action.indexOf("      run: |", action.indexOf("    - name: Review\n")));
+  assert.match(review, /github\.event_name == 'issue_comment'\) && env\.MERGELIGHT_NO_LOGIN != '1'/);
+  assert.match(review, /MERGELIGHT_COMMENT_BODY: \$\{\{ github\.event_name == 'issue_comment' && github\.event\.comment\.body \|\| '' \}\}/);
+  assert.match(stepScript("Log in to Codex"), /elif \[ "\$GITHUB_EVENT_NAME" = issue_comment \]; then[\s\S]*?MERGELIGHT_NO_LOGIN=1/);
+  assert.doesNotMatch(action, /github\.event\.pull_request\.number \}\}/, "the pull request's number also comes from a comment's issue");
+});

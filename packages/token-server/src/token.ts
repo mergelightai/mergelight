@@ -36,11 +36,13 @@ interface Jwk {
 const SCOPES = {
   review: {
     permissions: { checks: "write", pull_requests: "write", contents: "read" },
-    events: new Set(["pull_request", "pull_request_target", "pull_request_review"]),
+    // issue_comment: a comment that mentions Mergelight reviews the pull request again. The workflow that
+    // runs is the default branch's, and the Action checks that the comment's author can push.
+    events: new Set(["pull_request", "pull_request_target", "pull_request_review", "issue_comment"]),
   },
   login: {
     permissions: { secrets: "write" },
-    events: new Set(["pull_request", "pull_request_target", "schedule", "workflow_dispatch"]),
+    events: new Set(["pull_request", "pull_request_target", "issue_comment", "schedule", "workflow_dispatch"]),
   },
 } satisfies Record<string, { permissions: Record<string, string>; events: Set<string> }>;
 

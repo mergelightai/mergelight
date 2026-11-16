@@ -47,6 +47,8 @@ export interface ReviewOptions {
   previous?: PriorFinding[];
   /** This review's round on the pull request, counting from 1. From LATE_ROUND on, fewer findings hold the merge. */
   round?: number;
+  /** A comment that mentioned Mergelight, by someone who can push: the team's answer to the earlier findings. */
+  teamAnswer?: { by: string; text: string };
   /** Findings the team declined in earlier pull requests. Only those in files this one changes reach the verifier. */
   memories?: TeamMemory[];
   /** The team's rules. Only those about files this pull request changes are used. */
@@ -350,6 +352,7 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
       diffTruncated: ws.diffTruncated,
       previous: opts.previous,
       ...(opts.round ? { round: opts.round } : {}),
+      ...(opts.teamAnswer ? { teamAnswer: opts.teamAnswer } : {}),
       memories: memoriesFor(opts.memories, ws.changedFiles.map((f) => f.path), pr.number),
       // Matched against every path the pull request touches, exactly as git has it.
       skills: teamSkills,

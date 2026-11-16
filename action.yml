@@ -134,7 +134,7 @@ runs:
       if: >
         inputs.run != 'jobs' &&
         inputs.github-token == github.token &&
-        (github.event_name == 'pull_request' || github.event_name == 'pull_request_target' ||
+        (github.event_name == 'pull_request' || github.event_name == 'pull_request_target' || github.event_name == 'issue_comment' ||
         (github.event_name == 'pull_request_review' && github.event.review.state == 'approved'))
       shell: bash
       env:
@@ -147,7 +147,7 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ steps.app.outputs.token || inputs.github-token }}
-        PR: ${{ github.event.pull_request.number }}
+        PR: ${{ github.event.pull_request.number || github.event.issue.number }}
         BY: ${{ github.event.review.user.login }}
         # The commit the person looked at. An approval of an older commit doesn't cover what was pushed after it.
         COMMIT: ${{ github.event.review.commit_id }}
@@ -378,6 +378,10 @@ runs:
           # The review step connects ChatGPT. Jobs wait for a login, so two steps never ask at once.
           echo "::notice::Skipping the jobs: there's no AI login yet. The review on this pull request connects one."
           echo "MERGELIGHT_NO_LOGIN=1" >> "$GITHUB_ENV"
+        elif [ "$GITHUB_EVENT_NAME" = issue_comment ]; then
+          # A comment asks nothing: the next push connects one, from the pull request.
+          echo "::notice::Skipping the review: there's no AI login yet. Push a commit, and the pull request asks to connect one."
+          echo "MERGELIGHT_NO_LOGIN=1" >> "$GITHUB_ENV"
         elif [ "$GITHUB_EVENT_NAME" = "pull_request" ] || [ "$GITHUB_EVENT_NAME" = "pull_request_target" ]; then
           # No login yet: the next step connects ChatGPT from the pull request.
           printf 'cli_auth_credentials_store = "file"\n' > "$CODEX_HOME/config.toml"
@@ -401,7 +405,7 @@ runs:
       if: >
         inputs.run != 'jobs' &&
         env.MERGELIGHT_CHATGPT == '1' &&
-        (github.event_name == 'pull_request' || github.event_name == 'pull_request_target' ||
+        (github.event_name == 'pull_request' || github.event_name == 'pull_request_target' || github.event_name == 'issue_comment' ||
         github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
       shell: bash
       env:
@@ -441,7 +445,7 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ steps.app.outputs.token || inputs.github-token }}
-        PR: ${{ github.event.pull_request.number }}
+        PR: ${{ github.event.pull_request.number || github.event.issue.number }}
         GITHUB_WORKFLOW_TOKEN: ${{ inputs.github-token }}
         CAN_SAVE: ${{ steps.saving.outputs.can_save }}
         SECRET_NAME: ${{ inputs.auth-secret-name }}
@@ -457,7 +461,7 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ steps.app.outputs.token || inputs.github-token }}
-        PR: ${{ github.event.pull_request.number }}
+        PR: ${{ github.event.pull_request.number || github.event.issue.number }}
         GITHUB_WORKFLOW_TOKEN: ${{ inputs.github-token }}
         CAN_SAVE: ${{ steps.saving.outputs.can_save }}
       run: |
@@ -472,7 +476,7 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ steps.app.outputs.token || inputs.github-token }}
-        PR: ${{ github.event.pull_request.number }}
+        PR: ${{ github.event.pull_request.number || github.event.issue.number }}
         GITHUB_WORKFLOW_TOKEN: ${{ inputs.github-token }}
         CAN_SAVE: ${{ steps.saving.outputs.can_save }}
         SECRET_NAME: ${{ inputs.auth-secret-name }}
@@ -536,9 +540,10 @@ runs:
         fi
         exit 1
 
+    # Also for a comment that mentions Mergelight on a pull request: the review reads it as the team's answer.
     - name: Review
       id: review
-      if: (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && env.MERGELIGHT_NO_LOGIN != '1' && inputs.run != 'jobs'
+      if: (github.event_name == 'pull_request' || github.event_name == 'pull_request_target' || github.event_name == 'issue_comment') && env.MERGELIGHT_NO_LOGIN != '1' && inputs.run != 'jobs'
       shell: bash
       env:
         COMMIT: ${{ inputs.commit }}
@@ -546,11 +551,16 @@ runs:
         JOBS_COMMIT: ${{ inputs.jobs-commit }}
         JOBS_WHY: ${{ inputs.jobs-why }}
         GH_TOKEN: ${{ steps.app.outputs.token || inputs.github-token }}
-        PR: ${{ github.event.pull_request.number }}
+        PR: ${{ github.event.pull_request.number || github.event.issue.number }}
         MODEL: ${{ inputs.model }}
         EFFORT: ${{ inputs.effort }}
         YELLOW_BLOCKS: ${{ inputs.yellow-blocks }}
         AUTO_APPROVE: ${{ inputs.auto-approve }}
+        # The comment that started this run, when one did. Mergelight checks that its author can push.
+        MERGELIGHT_COMMENT_BODY: ${{ github.event_name == 'issue_comment' && github.event.comment.body || '' }}
+        MERGELIGHT_COMMENT_BY: ${{ github.event_name == 'issue_comment' && github.event.comment.user.login || '' }}
+        MERGELIGHT_COMMENT_AT: ${{ github.event_name == 'issue_comment' && github.event.comment.created_at || '' }}
+        MERGELIGHT_COMMENT_URL: ${{ github.event_name == 'issue_comment' && github.event.comment.html_url || '' }}
         MERGELIGHT_ACTION_REF: ${{ github.action_ref }}
         MERGELIGHT_SERVER: ${{ inputs.server }}
         SECRET_NAME: ${{ inputs.auth-secret-name }}
@@ -641,7 +651,7 @@ runs:
         GH_TOKEN: ${{ steps.app.outputs.token || inputs.github-token }}
         # Jobs is part of a paid plan: the org's Mergelight server says whether it is on.
         MERGELIGHT_SERVER: ${{ inputs.server }}
-        PR: ${{ github.event.pull_request.number }}
+        PR: ${{ github.event.pull_request.number || github.event.issue.number }}
         MODEL: ${{ inputs.model }}
         EFFORT: ${{ inputs.effort }}
         SECRET_NAME: ${{ inputs.auth-secret-name }}
