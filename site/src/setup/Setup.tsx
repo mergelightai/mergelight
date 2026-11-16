@@ -149,6 +149,8 @@ interface RolesChange {
   onBase: Ai[];
   /** The workflow leaves the checker to the default, so no run asks for its login: it comes from the command. */
   implicit: boolean;
+  /** What merged was read from the branch, which is what says a held login is safe to save. */
+  mergedRead?: boolean;
 }
 
 export default function Setup() {
@@ -676,8 +678,8 @@ export default function Setup() {
         linkBase.current = current.base;
         void readLinkFile(client, repo, pr.number);
       }
-      // A role PR's workflow that couldn't be read is tried again the same way.
-      if (rolesChange && pr && rolesFileNow.current === 'unknown' && !rolesRetrying.current) {
+      // A role PR's workflow that couldn't be read is tried again the same way, until it's merged.
+      if (rolesChange && pr && !current?.merged && rolesFileNow.current === 'unknown' && !rolesRetrying.current) {
         rolesRetrying.current = true;
         void readRolesFile(client, repo, pr.number, true).finally(() => {
           rolesRetrying.current = false;
@@ -733,11 +735,28 @@ export default function Setup() {
           setView('add');
           return true;
         }
-        setLiveFile(onBranch ?? rolesChange.content);
         if (job !== null) setRefreshLive(job);
         else if (rolesChange.addsRefresh) setRefreshLive(true);
-        // An AI the merged workflow won't use, even once it has a login, isn't one to connect any more.
-        if (onBranch && onBranch !== rolesChange.content) setRolesChange(reconciled(rolesChange, onBranch, secretsNow.current.names, secretsNow.current.shared));
+        // One that couldn't be read is tried again on the next check. Until what merged is read, nothing says a held
+        // login is safe to save: the proposal isn't what merged.
+        if (onBranch !== undefined) {
+          // A read of the PR's merge commit still on its way, or one that failed, is for a PR that's merged now.
+          rolesRead.current++;
+          setRolesFile('known');
+          setLiveFile(onBranch);
+          const { names, shared } = secretsNow.current;
+          // Merged without naming the reviewer chosen, a held login would still move its reviews: this change is over,
+          // and nothing is offered to save.
+          const set = readRoles(onBranch);
+          if (rolesChange.hold && set && rolesChange.needs.some((ai) => connectsAfterMerge(set, loginsIn(onBranch, names), rolesChange.roles, ai))) {
+            setRolesChange(null);
+            setPr(null);
+            if (view === 'connect') setView('live');
+            return true;
+          }
+          // An AI the merged workflow won't use, even once it has a login, isn't one to connect any more.
+          if (!rolesChange.mergedRead || onBranch !== rolesChange.content) setRolesChange({ ...reconciled(rolesChange, onBranch, names, shared), mergedRead: true });
+        }
       } else if (done && !startOnClaude) {
         // What was merged, which an update that kept other changes on its pull request can differ from.
         const onBranch = await client.workflowAt(repo, branch).catch(() => null);
@@ -1028,7 +1047,7 @@ export default function Setup() {
               )}
               {view === 'finish' && repo && <FinishStep repo={repo} branch={branch} fileUrl={fileUrl} pr={pr} capped={scanCapped} onBack={back.finish!} />}
               {/* A new AI to connect, like the reviewer of a workflow read just now, a new PR or a new run starts the step over: what it learned from the last one doesn't hold. */}
-              {view === 'connect' && repo && <ConnectStep key={`${rolesNeed ?? setupNeed ?? ''} ${pr?.number ?? ''} ${pr?.headSha ?? ''}`} repo={repo} pr={pr} status={status} code={connectCode} ask={connectAsk} commandWhy={commandWhy} hold={(rolesChange?.hold || (rolesNeed && rolesChange?.onBase.includes(rolesNeed))) && !prMerged ? branch : null} holdOnBase={!rolesChange?.hold} merged={prMerged} thenPr={Boolean(rolesChange?.connectFirst)} accepts={accepts} acceptsUnknown={(startOnClaude && linkFile === 'unknown') || (rolesChange ? rolesFile === 'unknown' : !startOnClaude && pendingRead === 'unknown')} visibility={repo.visibility} named={readRoles(rolesChange?.content ?? liveFile ?? workflow)?.provider ?? null} ended={runEnded || Boolean(pr && missedSha === pr.headSha)} onBack={back.connect!} onSkip={() => setView('live')} startOnClaude={startOnClaude || rolesNeed === 'claude'} onClaudeCode={(url, c) => client!.sendClaudeCode(repo, url, c)} />}
+              {view === 'connect' && repo && <ConnectStep key={`${rolesNeed ?? setupNeed ?? ''} ${pr?.number ?? ''} ${pr?.headSha ?? ''}`} repo={repo} pr={pr} status={status} code={connectCode} ask={connectAsk} commandWhy={commandWhy} hold={(rolesChange?.hold && !rolesChange.mergedRead) || (rolesNeed && rolesChange?.onBase.includes(rolesNeed) && !prMerged) ? branch : null} holdOnBase={!rolesChange?.hold} merged={prMerged} thenPr={Boolean(rolesChange?.connectFirst)} accepts={accepts} acceptsUnknown={(startOnClaude && linkFile === 'unknown') || (rolesChange ? rolesFile === 'unknown' : !startOnClaude && pendingRead === 'unknown')} visibility={repo.visibility} named={readRoles(rolesChange?.content ?? liveFile ?? workflow)?.provider ?? null} ended={runEnded || Boolean(pr && missedSha === pr.headSha)} onBack={back.connect!} onSkip={() => setView('live')} startOnClaude={startOnClaude || rolesNeed === 'claude'} onClaudeCode={(url, c) => client!.sendClaudeCode(repo, url, c)} />}
               {/* Only an update's own pull request is an update: a change of AI on a repo that could update isn't one. */}
               {view === 'live' && repo && <LiveStep repo={repo} pr={shownPr} backTo={startOnClaude ? pr : null} status={status} hasLogin={hasLogin} merged={merged} updatedTo={startOnClaude || rolesChange ? null : updatePr} ai={yourAi} onAnother={anotherRepo} />}
               {view === 'roles' && repo && liveFile && currentRoles && !rolesLocked && <RolesStep current={currentRoles} openPr={openPr} logins={logins} own={ownLogins} visibility={repo.visibility} refreshMissing={!refreshLive} sharedLogin={sharedChatgpt} defaultBranch={repo.defaultBranch} file={liveFile} branch={branch} changing={changingRoles} failed={rolesFailed} accessUrl={repo.accessUrl} onBack={changingRoles ? () => undefined : back.roles!} onConfirm={(r) => void changeRoles(r)} />}

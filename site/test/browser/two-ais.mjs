@@ -147,6 +147,7 @@ async function scenario(name, start, body) {
         }
         // The commit main is at when the PR's branch is made, which someone may have changed since the page read main.
         if (world.baseShaGone && ref === 'basesha') return json(req, {}, 404);
+        if (world.mainFails && ref === 'main') return json(req, {}, 500);
         // Once the PR is merged, main has what its branch held.
         if (ref === 'main' || ref === 'basesha') return json(req, { sha: 'baseblob', content: b64(world.merged && world.branchFile ? world.branchFile : world.file) });
         // The pull request's own commit, as a link from its run reads it. A number is how GitHub answers instead.
@@ -315,6 +316,49 @@ await scenario('role-pr-merged-into-another-branch-keeps-the-hold', { secrets: [
   await wait(5000);
   const t = await text();
   expect(!/codex login/.test(t) && !/Resume/.test(t), "offers no ChatGPT login, which would make ChatGPT review on main");
+});
+
+await scenario('held-login-waits-for-the-merged-workflow', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'] }, async ({ world, until, reachLive, choose, click, text }) => {
+  await reachLive();
+  await choose('Add ChatGPT');
+  await click('button', 'Open PR');
+  await until((x) => /Merge your PR first/.test(x), 'the step that waits for the merge');
+  // It's merged, but main can't be read for now.
+  world.mainFails = true;
+  world.merged = true;
+  await wait(9000);
+  expect(!/codex login/.test(await text()), "offers no ChatGPT login before what merged is read");
+  world.mainFails = false;
+  await until((x) => /codex login && gh secret set CODEX_AUTH_JSON/.test(x), 'the command, once main names Claude');
+});
+
+await scenario('held-login-edited-out-of-the-merge', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'] }, async ({ world, until, reachLive, choose, click, text }) => {
+  await reachLive();
+  await choose('Add ChatGPT');
+  await click('button', 'Open PR');
+  await until((x) => /Merge your PR first/.test(x), 'the step that waits for the merge');
+  // Someone takes provider out of the PR and merges it, before the page sees the edit.
+  world.branchFile = TEMPLATE;
+  world.merged = true;
+  await until((x) => /Mergelight is on/.test(x), 'live, with the change over');
+  await wait(4000);
+  const t = await text();
+  expect(!/codex login/.test(t) && !/Resume/.test(t), 'offers no ChatGPT login, which would make ChatGPT review on main');
+});
+
+await scenario('merged-role-pr-clears-an-unread-commit', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`) }, async ({ world, until, reachLive, choose, click }) => {
+  await reachLive();
+  await choose('Add ChatGPT');
+  await click('button', 'Open PR');
+  await until((x) => /Connect ChatGPT to check reviews/.test(x), 'the connect step');
+  // A commit and the merge come between two checks, so the PR's merge commit is gone when the page reads it.
+  world.headFile = 404;
+  world.head = 'newsha';
+  world.merged = true;
+  await wait(9000);
+  world.secrets.push('CODEX_AUTH_JSON');
+  const t = await until((x) => /Mergelight is on/.test(x), 'live, once the login is saved', 20000);
+  expect(!/Resume/.test(t), 'goes by what merged, which reads that login');
 });
 
 await scenario('merged-after-the-run-moved-on', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`) }, async ({ world, until, click, reachLive, choose }) => {
