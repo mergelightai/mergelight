@@ -84,6 +84,8 @@ async function run(name, { login = false, apiKey = false, claude = false, orgSec
       // A list is what the organization shares with the repo. A number is how GitHub answers instead: 422 on a repo a person owns.
       if (p === '/actions/organization-secrets') return Array.isArray(orgSecrets) ? json(req, { secrets: orgSecrets.map((name) => ({ name })) }) : json(req, { message: 'no' }, orgSecrets);
       if (p === '/actions/secrets') return json(req, { secrets: [...(login ? [{ name: 'CODEX_AUTH_JSON' }] : []), ...(apiKey ? [{ name: 'OPENAI_API_KEY' }] : []), ...(claude ? [{ name: 'CLAUDE_CODE_OAUTH_TOKEN' }] : [])] });
+      // No workflow files beyond the ones below.
+      if (p === '/contents/.github/workflows') return json(req, {}, 404);
       if (p.startsWith('/contents/')) {
         // A new branch starts with whatever the branch it came from has.
         const raw = u.searchParams.get('ref');

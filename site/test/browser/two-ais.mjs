@@ -137,6 +137,23 @@ async function scenario(name, start, body) {
         const delay = world.orgDelays?.shift() ?? 0;
         return delay ? void setTimeout(answer, delay) : answer();
       }
+      // The workflow files on a branch, which each has by the same rules as its mergelight.yml below, unless a test
+      // gives a branch files of its own.
+      if (p === '/contents/.github/workflows') {
+        const ref = u.searchParams.get('ref');
+        if (world.workflowsFail === ref) return json(req, {}, 500);
+        const review = world.fileGone ? null : ref === 'main' ? (world.merged && world.branchFile ? world.branchFile : world.file) : ref === 'staging' ? (world.stagingFile ?? null) : ['master', 'stage', 'production', 'prod', 'development', 'develop', 'dev', 'trunk'].includes(ref) ? null : world.file;
+        const files = world.branchWorkflows?.[ref] ?? (review ? { 'mergelight.yml': review } : {});
+        world.blobs ??= {};
+        const entries = Object.entries(files).map(([name, content]) => {
+          const sha = `wf-${Object.keys(world.blobs).length}`;
+          world.blobs[sha] = content;
+          return { name, sha, type: 'file' };
+        });
+        return entries.length ? json(req, entries) : json(req, {}, 404);
+      }
+      const wf = p.match(/^\/git\/blobs\/(wf-\d+)$/);
+      if (wf) return json(req, { content: b64(world.blobs?.[wf[1]] ?? '') });
       if (p === '/contents/.github/workflows/mergelight.yml') {
         const ref = u.searchParams.get('ref');
         if (world.fileGone) return json(req, {}, 404);
@@ -1716,6 +1733,18 @@ await scenario('too-many-open-prs-to-check-every-branch', { secrets: ['CLAUDE_CO
 await scenario('recent-prs-unreadable-is-read-only', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], recentFails: true, file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`) }, async ({ page, reachLive }) => {
   const { live } = await reachLive();
   expect(/We couldn't check every branch your PRs go into/.test(live) && (await readOnly(page, live)), "a list that couldn't be read offers no change");
+});
+
+await scenario('review-in-another-file-is-read-only', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], recentPulls: [{ base: { ref: 'release/1.x' }, head: { ref: 'fix/y' } }], branchWorkflows: { 'release/1.x': { 'ci.yml': 'on: push\n', 'code-review.yml': TEMPLATE } }, file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`) }, async ({ page, world, reachLive }) => {
+  const { live } = await reachLive();
+  // release/1.x runs Mergelight from a file of another name, which a new login would reach too.
+  expect(/Mergelight also runs from code-review\.yml on release\/1\.x, so you set provider and verify-with in each workflow by hand\./.test(live), 'names the file');
+  expect(await readOnly(page, live) && world.writes.length === 0, 'offers no change');
+});
+
+await scenario('workflows-that-cant-be-read-are-read-only', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], recentPulls: [{ base: { ref: 'release/1.x' }, head: { ref: 'fix/y' } }], workflowsFail: 'release/1.x', file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`) }, async ({ page, reachLive }) => {
+  const { live } = await reachLive();
+  expect(/We couldn't read every workflow on release\/1\.x/.test(live) && (await readOnly(page, live)), 'offers no change');
 });
 
 await scenario('feature-branch-with-a-copy-is-no-other-review', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], branches: ['main', 'feat/y'], file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`) }, async ({ reachLive }) => {

@@ -82,11 +82,11 @@ export interface RepoDetails {
   /** The refresh workflow on the base branch, if it's there. */
   refresh: string | null;
   /**
-   * Other branches PRs go into, with a Mergelight review workflow of their own, or whose workflow couldn't be read:
-   * long-lived ones, the default branch and the bases of open and recent PRs. A login is the whole repo's, so this page
-   * leaves who reviews to each of them.
+   * The other Mergelight reviews a new login would reach, which this page leaves to set by hand: any workflow file with
+   * a review step on another branch PRs go into (long-lived ones, the default branch and the bases of open and recent
+   * PRs), and one besides mergelight.yml on this branch. `file` is null where the workflows couldn't be read.
    */
-  otherReviewBranches: string[];
+  otherReviews: { branch: string; file: string | null }[];
   /**
    * Whether every branch a PR goes into was looked at. A list of PRs that couldn't be read, or had more open PRs than
    * are looked through, may leave one out.
@@ -553,6 +553,32 @@ export function realClient(token: string): GitHubClient {
     const pull = await openSetupPull(repo, base, reviewOnly);
     return pull && { number: pull.number, url: pull.html_url, headSha: pull.head.sha };
   };
+  /** Each workflow file's text, by its id, so a copy on many branches is read once. */
+  const blobs = new Map<string, Promise<string>>();
+  /**
+   * The workflow files on a branch that run the Mergelight review, the refresh job aside. None on a branch that isn't
+   * there or has no workflows. A list or a file that couldn't be read stops whoever asked.
+   */
+  const reviewFilesOn = async (repo: Repo, branch: string): Promise<string[]> => {
+    let entries: { name: string; sha: string; type: string }[];
+    try {
+      entries = await get(`/repos/${repo.fullName}/contents/${WORKFLOWS}?ref=${encodeURIComponent(branch)}`);
+    } catch (err) {
+      if (err instanceof GitHubError && err.status === 404) return [];
+      throw err;
+    }
+    if (!Array.isArray(entries)) return [];
+    const files = entries.filter((e) => e.type === 'file' && /\.ya?ml$/i.test(e.name) && e.name !== REFRESH_FILE);
+    const runs = await Promise.all(
+      files.map(async ({ name, sha }) => {
+        const text = blobs.get(sha) ?? get<{ content: string }>(`/repos/${repo.fullName}/git/blobs/${sha}`).then((b) => fromBase64(b.content));
+        blobs.set(sha, text);
+        text.catch(() => blobs.delete(sha));
+        return readInstalled(await text) ? name : null;
+      }),
+    );
+    return runs.filter((name): name is string => name !== null);
+  };
   /** The branches open PRs go into, a page at a time. Null past OPEN_PAGES pages, which may leave one out. */
   const openBases = async (repo: Repo): Promise<string[] | null> => {
     const bases = new Set<string>();
@@ -613,11 +639,19 @@ export function realClient(token: string): GitHubClient {
       // Branches PRs go into: the long-lived ones, and the base of each open or recent PR, like a release branch or a
       // stacked PR's. A feature branch that only holds a copy of the workflow has no PRs into it, so it never counts.
       const others = [...new Set([...LONG_LIVED_BRANCHES, repo.defaultBranch, ...pulls.map((p) => p.base.ref), ...(open ?? [])])].filter((b) => b !== base);
-      const [onBase, refresh, onOthers] = await Promise.all([
+      const [onBase, refresh, elsewhere] = await Promise.all([
         workflowOn(repo, base),
         workflowOn(repo, base, REFRESH_FILE),
-        // Each long-lived name is asked for by itself, so a big repo's branches past the first page count too.
-        Promise.all(others.map((b) => workflowOn(repo, b).then((file) => (file && readInstalled(file.content) ? b : null), () => b))),
+        // Each branch is asked for by itself, so a big repo's branches past the first page count too. Workflows that
+        // couldn't be read may have a review.
+        Promise.all(
+          [base, ...others].map((branch) =>
+            reviewFilesOn(repo, branch).then(
+              (files) => files.filter((file) => branch !== base || file !== 'mergelight.yml').map((file) => ({ branch, file })),
+              () => [{ branch, file: null }],
+            ),
+          ),
+        ),
       ]);
       const secrets = seen.names;
       const installed = onBase && readInstalled(onBase.content);
@@ -632,7 +666,7 @@ export function realClient(token: string): GitHubClient {
         hasApiKey: secrets.some((n) => NO_REFRESH_SECRETS.includes(n)),
         installed,
         refresh: refresh?.content ?? null,
-        otherReviewBranches: onOthers.filter((b): b is string => b !== null),
+        otherReviews: elsewhere.flat(),
         branchesKnown: recent !== null && open !== null,
         release,
         reviewApp,
@@ -762,9 +796,9 @@ export function mockClient(): GitHubClient {
     details: (r) =>
       later<RepoDetails>({ reviewApp: r.fullName !== 'acme/docs', ...(
         r.fullName === 'acme/docs'
-          ? { branches: ['main'], base: 'main', skip: ['main'], hasLogin: false, secretNames: namesOf(r.fullName), sharedSecrets: [], otherReviewBranches: [], branchesKnown: true, allSecretsSeen: true, hasApiKey: false, installed: null, refresh: null, release }
+          ? { branches: ['main'], base: 'main', skip: ['main'], hasLogin: false, secretNames: namesOf(r.fullName), sharedSecrets: [], otherReviews: [], branchesKnown: true, allSecretsSeen: true, hasApiKey: false, installed: null, refresh: null, release }
           : r.fullName === 'acme/site'
-          ? { branches: ['main', 'feat/new-landing'], base: 'main', skip: ['main'], hasLogin: false, secretNames: namesOf(r.fullName), sharedSecrets: [], otherReviewBranches: [], branchesKnown: true, allSecretsSeen: true, hasApiKey: false, installed: null, refresh: null, release }
+          ? { branches: ['main', 'feat/new-landing'], base: 'main', skip: ['main'], hasLogin: false, secretNames: namesOf(r.fullName), sharedSecrets: [], otherReviews: [], branchesKnown: true, allSecretsSeen: true, hasApiKey: false, installed: null, refresh: null, release }
           : {
               branches: ['main', 'staging', 'development', 'feat/billing-export', 'fix/invoice-rounding'],
               base: 'staging',
@@ -773,7 +807,7 @@ export function mockClient(): GitHubClient {
               hasApiKey: loginsOf(r.fullName).claude,
               secretNames: namesOf(r.fullName),
               sharedSecrets: [],
-              otherReviewBranches: [],
+              otherReviews: [],
               branchesKnown: true,
               allSecretsSeen: true,
               installed: installedFor(r.fullName),
