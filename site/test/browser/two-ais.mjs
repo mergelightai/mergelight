@@ -158,7 +158,8 @@ async function scenario(name, start, body) {
           const delay = world.mergeDelays?.shift() ?? 0;
           return delay ? void setTimeout(answer, delay) : answer();
         }
-        if (ref === world.open?.ref && world.branchFile) return json(req, { sha: 'prblob', content: b64(world.branchFile) });
+        // The PR's branch, and its newest commit, hold what the PR does.
+        if ((ref === world.open?.ref || (world.open && ref === world.head)) && world.branchFile) return json(req, { sha: 'prblob', content: b64(world.branchFile) });
         // A new branch starts with what main has.
         return json(req, { sha: 'baseblob', content: b64(world.file) });
       }
@@ -392,6 +393,39 @@ await scenario('pull-request-target-new-checker-merges-first', { secrets: ['CLAU
   world.secrets.push('CODEX_AUTH_JSON');
   t = await until((x) => /Mergelight is on/.test(x), 'back to live');
   expect(/Reviews with Claude, checked by ChatGPT/.test(t), 'Claude reviews, checked by ChatGPT');
+});
+
+const TARGET = TEMPLATE.replace('on:\n  pull_request:\n', 'on:\n  pull_request_target:\n');
+await scenario('target-update-pr-merges-first', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], file: TARGET.replace('mergelightai/mergelight@v0', `mergelightai/mergelight@${'b'.repeat(40)} # v0.1.19`).replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`), open: { ...PR, ref: 'mergelight-setup-old' }, branchFile: TARGET.replace('mergelightai/mergelight@v0', `mergelightai/mergelight@${'b'.repeat(40)} # v0.1.19`).replace(LAST_INPUT, `${LAST_INPUT}          provider: codex\n`) }, async ({ page, world, until, click }) => {
+  await page.goto(`${base}/setup/`, { waitUntil: 'networkidle2' });
+  await page.evaluate(() => sessionStorage.setItem('mergelight.setup.state', 's'));
+  await page.goto(`${base}/setup/?code=c&state=s`, { waitUntil: 'networkidle2' });
+  await until((x) => x.includes('Which repo'), 'the list');
+  await click('[role=option]', 'api');
+  await until((x) => /Update Mergelight on api/.test(x), 'the update step');
+  await wait(800);
+  await click('button', 'Update to v0.2.0');
+  // The open PR makes ChatGPT review, but its run reads main's workflow, where Claude reviews and checks.
+  let t = await until((x) => /Merge your PR first/.test(x), 'the step that waits for the merge');
+  expect(/Your workflow runs on pull_request_target, so PR #9 runs the one on main, which doesn't use ChatGPT yet\./.test(t), 'says why');
+  world.merged = true;
+  t = await until((x) => /codex login && gh secret set CODEX_AUTH_JSON/.test(x), 'the command, once merged');
+  expect(/Your PR is merged, so no run on it asks for a code\./.test(t), 'says why the login comes from their computer');
+});
+
+await scenario('target-role-pr-goes-by-the-branch-logins', { secrets: ['CODEX_AUTH_JSON'], refresh: REFRESH, file: TARGET.replace(LAST_INPUT, `${LAST_INPUT}          provider: codex\n          verify-with: claude\n`) }, async ({ world, until, click, reachLive, choose, text }) => {
+  await reachLive();
+  await choose('Add Claude');
+  await click('[role=radiogroup][aria-label="Reviews your PRs"] label', 'Claude');
+  await wait(200);
+  await click('button', 'Open PR');
+  await until((x) => /Connect Claude/.test(x), 'the connect step');
+  // A commit takes Claude's plan input out of the PR, but its run reads main's workflow, which still takes the plan.
+  world.headFile = world.branchFile.replace('          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n', '');
+  world.head = 'newsha';
+  await wait(9000);
+  const t = await text();
+  expect(/Connect Claude/.test(t) && !/Add a secret named ANTHROPIC_API_KEY/.test(t), "offers the ways main's workflow takes, which the run reads");
 });
 
 await scenario('claude-named-adds-chatgpt', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`) }, async ({ page, world, until, click, shot, reachLive, choose }) => {

@@ -194,6 +194,11 @@ export default function Setup() {
   const [pendingFile, setPendingFile] = useState<string | null>(null);
   /** Whether the workflow on a setup or update PR is read, being read again after a commit, or couldn't be. */
   const [pendingRead, setPendingRead] = useState<'known' | 'reading' | 'unknown'>('known');
+  /**
+   * The reviewer a setup or update PR names connects once it's merged: on pull_request_target the PR's run reads the
+   * workflow on the branch, which doesn't use that AI.
+   */
+  const [setupHold, setSetupHold] = useState(false);
   /** The release an update PR from this page moves to: only that says the repo is on a new version. */
   const [updatePr, setUpdatePr] = useState<string | null>(null);
   /** The release of the Action the live workflow runs. Null when it can't be told, and undefined while it's looked up. */
@@ -394,6 +399,7 @@ export default function Setup() {
     setLinkFile(null);
     setPendingFile(null);
     setPendingRead('known');
+    setSetupHold(false);
     pendingReads.current++;
     setUpdatePr(null);
     setRolesFile('known');
@@ -516,6 +522,7 @@ export default function Setup() {
       if (file && !isStandard(file)) return setView('live');
       const named = readRoles(file ?? workflow)?.provider ?? null;
       const ready = named ? loginsIn(file, secretNames, sharedSecrets)[named] : hasLogin;
+      setSetupHold(Boolean(pending && named && liveFile && !ready && waitsForBase(liveFile, loginsIn(liveFile, secretNames), named)));
       setView(ready || (!secretsComplete && Boolean(details?.installed)) ? 'live' : 'connect');
     },
     [hasLogin, secretsComplete, details, liveFile, workflow, secretNames, sharedSecrets],
@@ -613,10 +620,14 @@ export default function Setup() {
    * The workflow a connection is for is being read, or couldn't be: never swapped for the live one. Until it's read, no
    * secret counts as its login, as one it doesn't read would look like one. Only its run saying so does.
    */
-  const connectUnknown = startOnClaude ? !linkContent : rolesChange ? rolesFile !== 'known' : pendingRead !== 'known';
+  // An open PR on pull_request_target runs the workflow on the branch, not its own, until it's merged: that one says
+  // which logins its run takes. Its own still says who it asks for.
+  const prRunsBase = Boolean(pr && !prMerged && !startOnClaude && liveFile && runsOnBase(liveFile));
+  const pendingUnknown = !startOnClaude && !rolesChange && pendingRead !== 'known';
+  const connectUnknown = startOnClaude ? !linkContent : prRunsBase ? false : rolesChange ? rolesFile !== 'known' : pendingUnknown;
   const connectUnknownNow = useRef(connectUnknown);
   connectUnknownNow.current = connectUnknown;
-  const connectFile = connectUnknown ? null : startOnClaude ? linkContent : (rolesChange?.content ?? pendingFile ?? liveFile);
+  const connectFile = connectUnknown ? null : startOnClaude ? linkContent : prRunsBase ? liveFile : (rolesChange?.content ?? pendingFile ?? liveFile);
   const connectLogins = useMemo(() => (connectUnknown ? NO_LOGINS : loginsIn(connectFile, secretNames, sharedSecrets)), [connectUnknown, connectFile, secretNames, sharedSecrets]);
   // Each read of the secrets makes a new list, so the polling reads this without restarting on it.
   const connectLoginsNow = useRef(connectLogins);
@@ -626,7 +637,7 @@ export default function Setup() {
   const ownPlanNow = useRef(ownPlan);
   ownPlanNow.current = ownPlan;
   /** The reviewer the workflow names, while it has no login of the repo's own. Setup isn't done until it has. */
-  const reviewerFile = connectUnknown ? null : (pendingFile ?? liveFile ?? workflow);
+  const reviewerFile = connectUnknown || pendingUnknown ? null : (pendingFile ?? liveFile ?? workflow);
   const namedReviewer = reviewerFile && isStandard(reviewerFile) ? (readRoles(reviewerFile)?.provider ?? null) : null;
   const setupNeed = !rolesChange && !startOnClaude && namedReviewer && !connectLogins[namedReviewer] ? namedReviewer : null;
   const setupNeedNow = useRef(setupNeed);
@@ -855,7 +866,7 @@ export default function Setup() {
    */
   /** What the connect step is for: a change of AI's AI, or the reviewer the workflow names. */
   const connectAsk = rolesAsk ?? (setupNeed ? { ai: setupNeed, forCheck: false } : null);
-  const commandWhy: CommandWhy | null = connectAsk && connectAsk.ai !== 'codex' ? null : sharedChatgpt ? 'shared' : !rolesAsk || !repo ? null : rolesAsk.forCheck && repo.visibility !== 'private' ? repo.visibility : rolesChange?.implicit ? 'hold' : prMerged && rolesChange?.onBase.includes(rolesAsk.ai) ? 'base' : null;
+  const commandWhy: CommandWhy | null = connectAsk && connectAsk.ai !== 'codex' ? null : sharedChatgpt ? 'shared' : !rolesChange && setupHold && prMerged ? 'base' : !rolesAsk || !repo ? null : rolesAsk.forCheck && repo.visibility !== 'private' ? repo.visibility : rolesChange?.implicit ? 'hold' : prMerged && rolesChange?.onBase.includes(rolesAsk.ai) ? 'base' : null;
 
   const openRoles = () => {
     // An update's pull request on its way could end up as a second one beside this change.
@@ -927,6 +938,7 @@ export default function Setup() {
         setUpdatePr(null);
         setPendingFile(null);
         setPendingRead('known');
+        setSetupHold(false);
         pendingReads.current++;
         // A read for an earlier proposal's PR is for one that's gone.
         rolesRead.current++;
@@ -1047,7 +1059,7 @@ export default function Setup() {
               )}
               {view === 'finish' && repo && <FinishStep repo={repo} branch={branch} fileUrl={fileUrl} pr={pr} capped={scanCapped} onBack={back.finish!} />}
               {/* A new AI to connect, like the reviewer of a workflow read just now, a new PR or a new run starts the step over: what it learned from the last one doesn't hold. */}
-              {view === 'connect' && repo && <ConnectStep key={`${rolesNeed ?? setupNeed ?? ''} ${pr?.number ?? ''} ${pr?.headSha ?? ''}`} repo={repo} pr={pr} status={status} code={connectCode} ask={connectAsk} commandWhy={commandWhy} hold={(rolesChange?.hold && !rolesChange.mergedRead) || (rolesNeed && rolesChange?.onBase.includes(rolesNeed) && !prMerged) ? branch : null} holdOnBase={!rolesChange?.hold} merged={prMerged} thenPr={Boolean(rolesChange?.connectFirst)} accepts={accepts} acceptsUnknown={(startOnClaude && linkFile === 'unknown') || (rolesChange ? rolesFile === 'unknown' : !startOnClaude && pendingRead === 'unknown')} visibility={repo.visibility} named={readRoles(rolesChange?.content ?? liveFile ?? workflow)?.provider ?? null} ended={runEnded || Boolean(pr && missedSha === pr.headSha)} onBack={back.connect!} onSkip={() => setView('live')} startOnClaude={startOnClaude || rolesNeed === 'claude'} onClaudeCode={(url, c) => client!.sendClaudeCode(repo, url, c)} />}
+              {view === 'connect' && repo && <ConnectStep key={`${rolesNeed ?? setupNeed ?? ''} ${pr?.number ?? ''} ${pr?.headSha ?? ''}`} repo={repo} pr={pr} status={status} code={connectCode} ask={connectAsk} commandWhy={commandWhy} hold={(rolesChange?.hold && !rolesChange.mergedRead) || (rolesNeed && rolesChange?.onBase.includes(rolesNeed) && !prMerged) || (!rolesChange && setupHold && !prMerged) ? branch : null} holdOnBase={!rolesChange?.hold} merged={prMerged} thenPr={Boolean(rolesChange?.connectFirst)} accepts={accepts} acceptsUnknown={(startOnClaude && linkFile === 'unknown') || (rolesChange ? rolesFile === 'unknown' : !startOnClaude && pendingRead === 'unknown')} visibility={repo.visibility} named={readRoles(rolesChange?.content ?? liveFile ?? workflow)?.provider ?? null} ended={runEnded || Boolean(pr && missedSha === pr.headSha)} onBack={back.connect!} onSkip={() => setView('live')} startOnClaude={startOnClaude || rolesNeed === 'claude'} onClaudeCode={(url, c) => client!.sendClaudeCode(repo, url, c)} />}
               {/* Only an update's own pull request is an update: a change of AI on a repo that could update isn't one. */}
               {view === 'live' && repo && <LiveStep repo={repo} pr={shownPr} backTo={startOnClaude ? pr : null} status={status} hasLogin={hasLogin} merged={merged} updatedTo={startOnClaude || rolesChange ? null : updatePr} ai={yourAi} onAnother={anotherRepo} />}
               {view === 'roles' && repo && liveFile && currentRoles && !rolesLocked && <RolesStep current={currentRoles} openPr={openPr} logins={logins} own={ownLogins} visibility={repo.visibility} refreshMissing={!refreshLive} sharedLogin={sharedChatgpt} defaultBranch={repo.defaultBranch} file={liveFile} branch={branch} changing={changingRoles} failed={rolesFailed} accessUrl={repo.accessUrl} onBack={changingRoles ? () => undefined : back.roles!} onConfirm={(r) => void changeRoles(r)} />}
