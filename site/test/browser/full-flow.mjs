@@ -270,6 +270,19 @@ await run('finish-stops-at-the-scan-limit', { manyOpen: true }, async ({ page, t
   await new Promise((r) => setTimeout(r, 6000));
   expect(!/Finish on GitHub/.test(await text2()), 'goes on once the workflow is on the branch');
 });
+await run('finish-loads-the-merged-workflow', { login: true, refuse: '/contents/.github/workflows/mergelight.yml' }, async ({ page, text2, setOnBase }) => {
+  await page.evaluate(() => {
+    const link = [...document.querySelectorAll('a')].find((a) => a.textContent.includes('Add the file yourself'));
+    link.removeAttribute('target');
+    link.addEventListener('click', (e) => e.preventDefault());
+    link.click();
+  });
+  // They commit the file straight to staging, so there's no PR to find.
+  setOnBase(customized('v0'));
+  let t = '';
+  for (let i = 0; i < 20 && !/Your AI/.test(t); i++) t = await (new Promise((r) => setTimeout(r, 1000)).then(text2));
+  expect(/Your AI/.test(t) && /Reviews with ChatGPT/.test(t), 'goes on with the workflow that is there now, and who reviews');
+});
 await run('chatgpt-and-claude-logins', { login: true, claude: true }, ({ puts }) => {
   expect(puts.length === 2 && puts[1].p.endsWith('/mergelight-refresh.yml'), "a ChatGPT login gets the refresh job, whatever Claude's login is");
 });

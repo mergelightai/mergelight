@@ -540,9 +540,16 @@ export default function Setup() {
     if (view !== 'finish' || !client || !repo) return;
     const forRepo = picked.current;
     return poll(async () => {
-      // The branch first: once the workflow is there, setup is done, however many PRs the repo has.
-      if (await client.hasWorkflow(repo, branch)) {
-        setTimeout(afterAdding, 900);
+      // The branch first: once the workflow is there, setup is done, however many PRs the repo has. It's what runs
+      // now, so the page goes on with it, and with whether the refresh job is there too.
+      const onBranch = await client.workflowAt(repo, branch).catch(() => null);
+      if (onBranch) {
+        const job = await client.workflowAt(repo, branch, REFRESH_FILE).then(Boolean, () => null);
+        if (forRepo !== picked.current) return true;
+        setLiveFile(onBranch);
+        setDetails((d) => d && { ...d, installed: readInstalled(onBranch) });
+        if (job !== null) setRefreshLive(job);
+        setTimeout(() => afterAdding(onBranch), 900);
         return true;
       }
       // A repo with more open PRs than are looked through is never looked through again: only the branch can tell.
