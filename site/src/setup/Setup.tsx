@@ -97,23 +97,27 @@ type CommandWhy = 'public' | 'internal' | 'shared' | 'hold' | 'base';
 /** Who could enter a ChatGPT code shown on a pull request of a repo that isn't private. */
 const seenBy = (visibility: Repo['visibility']) => (visibility === 'internal' ? 'This repo is internal, so anyone in your enterprise who can see your PR' : 'This repo is public, so anyone who can see your PR');
 /**
- * A change of AI matched to the workflow that merged, which someone may have edited on GitHub first: it keeps only the
- * AIs that workflow uses once they have a login, and passes a login to.
+ * A change of AI matched to the workflow that merged, which someone may have edited on GitHub first: it connects the
+ * AIs that workflow uses once they have a login, and passes a login to. `own` is the logins that count as connected.
  */
-function reconciled(change: RolesChange, merged: string, logins: Logins): RolesChange {
+function reconciled(change: RolesChange, merged: string, logins: Logins, own: Logins): RolesChange {
   const set = readRoles(merged);
   const uses = (ai: Ai) => {
     if (!set || !passesLogin(merged, ai)) return false;
     const r = rolesFor(set, { ...logins, [ai]: true });
     return r.reviewer === ai || r.checker === ai;
   };
-  const needs = change.needs.filter(uses);
-  const all = { ...logins, ...Object.fromEntries(needs.map((ai) => [ai, true])) } as Logins;
-  // A merged workflow that still leaves the checker to the default has no run that asks for it, so its login still
-  // comes from the command, whatever else was edited.
+  // Worked out again each time, so an AI an edit names comes in too, like one an earlier commit took out and this
+  // one puts back. One only a default would use, once it had a login, isn't needed unless it was chosen.
+  const named = (ai: Ai) => change.needs.includes(ai) || set?.provider === ai || set?.verifyWith === ai;
+  const missing = (['claude', 'codex'] as const).filter((ai) => !own[ai] && named(ai) && uses(ai));
+  const all = { ...logins, ...Object.fromEntries(missing.map((ai) => [ai, true])) } as Logins;
+  const roles = set ? rolesFor(set, all) : change.roles;
+  // The reviewer first, as a run connects it first.
+  const needs = missing.filter((ai) => ai === roles.reviewer).concat(missing.filter((ai) => ai !== roles.reviewer));
   // Merging first holds until the PR is merged, whatever edits it gets. A workflow that leaves the checker to the
   // default has no run that asks for it, so that login comes from the command.
-  return { ...change, content: merged, needs, roles: set ? rolesFor(set, all) : change.roles, connectFirst: false, implicit: Boolean(set && !set.verifyWith && needs.length) };
+  return { ...change, content: merged, needs, roles, connectFirst: false, implicit: Boolean(set && !set.verifyWith && needs.length) };
 }
 
 /** A pull request that changes who reviews and who checks, and the AIs it still needs a login for. */
@@ -304,7 +308,7 @@ export default function Setup() {
         if (!current()) return;
         if (!content) return setRolesFile('unknown');
         setRolesFile('known');
-        setRolesChange((rc) => rc && reconciled(rc, content, loginsNow.current));
+        setRolesChange((rc) => rc && reconciled(rc, content, loginsNow.current, ownLoginsNow.current));
       },
       () => current() && setRolesFile('unknown'),
     );
@@ -575,6 +579,8 @@ export default function Setup() {
   setupNeedNow.current = setupNeed;
   const loginsNow = useRef(logins);
   loginsNow.current = logins;
+  const ownLoginsNow = useRef(ownLogins);
+  ownLoginsNow.current = ownLogins;
 
   // Following the first review and the merge once the pull request exists. A failed read just waits for the next one.
   useEffect(() => {
@@ -664,7 +670,7 @@ export default function Setup() {
         if (job !== null) setRefreshLive(job);
         else if (rolesChange.addsRefresh) setRefreshLive(true);
         // An AI the merged workflow won't use, even once it has a login, isn't one to connect any more.
-        if (onBranch && onBranch !== rolesChange.content) setRolesChange(reconciled(rolesChange, onBranch, loginsNow.current));
+        if (onBranch && onBranch !== rolesChange.content) setRolesChange(reconciled(rolesChange, onBranch, loginsNow.current, ownLoginsNow.current));
       } else if (done && !startOnClaude) {
         // What was merged, which an update that kept other changes on its pull request can differ from.
         const onBranch = await client.workflowAt(repo, branch).catch(() => null);

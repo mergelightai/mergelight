@@ -1050,6 +1050,22 @@ await scenario('role-pr-edited-to-drop-chatgpt', { secrets: ['CLAUDE_CODE_OAUTH_
   expect(!/Resume|ChatGPT isn't connected/.test(t), 'and no ChatGPT left to connect, as the merged workflow never uses it');
 });
 
+await scenario('role-pr-edited-to-bring-chatgpt-back', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], refresh: REFRESH, file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`) }, async ({ world, until, click, reachLive, choose }) => {
+  await reachLive();
+  await choose('Add ChatGPT');
+  await click('button', 'Open PR');
+  await until((x) => /Connect ChatGPT to check reviews/.test(x), 'the connect step');
+  // A commit on the PR makes Claude check instead, so there's no ChatGPT to connect.
+  world.headFile = TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n          verify-with: claude\n`);
+  world.head = 'claudesha';
+  await until((x) => /Mergelight is on/.test(x) && !/Resume/.test(x), 'no ChatGPT to connect');
+  // The next one puts ChatGPT back.
+  world.headFile = TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n          verify-with: codex\n`);
+  world.head = 'codexsha';
+  const t = await until((x) => /ChatGPT isn't connected yet\./.test(x) && /Resume/.test(x), 'ChatGPT to connect again', 20000);
+  expect(/Resume/.test(t), 'offers to connect it');
+});
+
 await scenario('new-run-asks-for-a-reviewer', { secrets: ['CODEX_AUTH_JSON'], comments: [askToCheck({ url: '', code: '', claudeUrl: CLAUDE })], checks: { rolesha: waitingToCheck('Claude') } }, async ({ page, world, until }) => {
   await page.goto(`${base}/setup/?repo=acme/api&pr=9&connect=claude`, { waitUntil: 'networkidle2' });
   await until((x) => /Connect Claude to check reviews/.test(x), 'the checker step');
