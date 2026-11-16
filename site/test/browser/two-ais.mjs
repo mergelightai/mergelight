@@ -1533,6 +1533,15 @@ await scenario('link-on-pull-request-target-reads-its-own-base', { secrets: ['CO
   expect(/Open Claude/.test(t) && !/ANTHROPIC_API_KEY/.test(t), "goes by the workflow on the PR's own base branch");
 });
 
+await scenario('link-follows-a-retargeted-pr', { secrets: ['CODEX_AUTH_JSON'], stagingFile: CLAUDE_KEY_ONLY.replace('on:\n  pull_request:\n', 'on:\n  pull_request_target:\n'), file: TEMPLATE.replace('on:\n  pull_request:\n', 'on:\n  pull_request_target:\n'), comments: [askToCheck({ url: '', code: '', claudeUrl: CLAUDE })], checks: { rolesha: waitingToCheck('Claude') } }, async ({ page, world, until }) => {
+  await page.goto(`${base}/setup/?repo=acme/api&pr=9&connect=claude`, { waitUntil: 'networkidle2' });
+  await until((x) => /Open Claude/.test(x), "main's plan login");
+  // The PR is moved to staging, on the same commit. staging's workflow takes only a key.
+  world.prBase = 'staging';
+  const t = await until((x) => /ANTHROPIC_API_KEY/.test(x), "staging's way in");
+  expect(!/Open Claude/.test(t), 'and no longer the plan login');
+});
+
 await scenario('recent-pr-base-with-a-review-is-read-only', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], recentPulls: [{ base: { ref: 'release/1.x' }, head: { ref: 'fix/y' } }], file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`) }, async ({ page, world, reachLive }) => {
   const { live } = await reachLive();
   // A PR went into release/1.x, which has the review too and would get the same new login.

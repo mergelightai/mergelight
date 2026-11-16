@@ -658,6 +658,11 @@ export default function Setup() {
         setPr({ ...pr, headSha: current.headSha });
         return true;
       }
+      // A linked PR moved to another branch, on the same commit, runs that branch's workflow or its new merge commit's.
+      if (startOnClaude && pr && current && current.base !== linkBase.current) {
+        linkBase.current = current.base;
+        void readLinkFile(client, repo, pr.number);
+      }
       // A role PR's workflow that couldn't be read is tried again the same way.
       if (rolesChange && pr && rolesFileNow.current === 'unknown' && !rolesRetrying.current) {
         rolesRetrying.current = true;
