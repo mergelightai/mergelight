@@ -7,8 +7,9 @@ const dir = new URL('.', import.meta.url).pathname;
 const parts = (file, n) => Array.from({ length: n }, (_, i) => ({ file, shard: `${i + 1}/${n}` }));
 // The longest first, so the last to start isn't the one everything waits for.
 const jobs = [...parts('two-ais.mjs', Number(process.env.TWO_AIS_PARTS ?? 4)), ...parts('connect-code.mjs', 2), { file: 'full-flow.mjs' }, { file: 'dashboard.mjs' }, { file: 'return-trip.mjs' }];
-// Four at a time measured fastest: more Chromes at once slowed every part down, even with cores to spare.
-const limit = Number(process.env.BROWSER_JOBS ?? Math.min(4, Math.max(2, availableParallelism())));
+// Two at a time: with four Chromes at once on a Mac, every part slowed down about sixfold (984 s against about
+// 160 s each), so more at once only made the whole run longer. BROWSER_JOBS sets another number.
+const limit = Number(process.env.BROWSER_JOBS ?? Math.min(2, Math.max(1, availableParallelism())));
 const started = Date.now();
 const seconds = (since) => `${Math.round((Date.now() - since) / 1000)}s`;
 
