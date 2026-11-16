@@ -152,6 +152,8 @@ export default function Setup() {
   const [fileOpen, setFileOpen] = useState(false);
   const [adding, setAdding] = useState(false);
   const [addFailed, setAddFailed] = useState<'refused' | 'open' | 'scan' | 'other' | null>(null);
+  /** The repo has more open PRs than are looked through for the one added by hand. */
+  const [scanCapped, setScanCapped] = useState(false);
   const [pr, setPr] = useState<SetupPr | null>(null);
   const [status, setStatus] = useState<CheckStatus | null>(null);
   const [connectCode, setConnectCode] = useState<ConnectCode | null>(null);
@@ -359,6 +361,7 @@ export default function Setup() {
     setPrMerged(false);
     setFileOpen(false);
     setAddFailed(null);
+    setScanCapped(false);
     setView('settling');
     client?.details(r).then((d) => {
       setDetails(d);
@@ -493,21 +496,29 @@ export default function Setup() {
   // Waiting for the pull request to show up on GitHub.
   useEffect(() => {
     if (view !== 'finish' || !client || !repo) return;
+    const forRepo = picked.current;
     return poll(async () => {
+      // The branch first: once the workflow is there, setup is done, however many PRs the repo has.
+      if (await client.hasWorkflow(repo, branch)) {
+        setTimeout(afterAdding, 900);
+        return true;
+      }
+      // A repo with more open PRs than are looked through is never looked through again: only the branch can tell.
+      if (scanCapped) return false;
       // Only one that installs the review counts here: a PR with only the refresh job turns nothing on.
-      const found = await client.findSetupPr(repo, undefined, true);
+      const found = await client.findSetupPr(repo, undefined, true).catch((err) => {
+        if (!(err instanceof ScanLimitError)) throw err;
+        if (forRepo === picked.current) setScanCapped(true);
+        return null;
+      });
       if (found) {
         setPr(found);
         setTimeout(afterAdding, 900);
         return true;
       }
-      if (await client.hasWorkflow(repo, branch)) {
-        setTimeout(afterAdding, 900);
-        return true;
-      }
       return false;
     });
-  }, [view, client, repo, branch, afterAdding]);
+  }, [view, client, repo, branch, afterAdding, scanCapped]);
 
   /** Which AIs have a login the workflow that runs now hands on to the Action. */
   // The release the live workflow runs, looked up again when it changes, like after an update merges.
@@ -926,7 +937,7 @@ export default function Setup() {
               {view === 'add' && repo && (
                 <AddStep repo={repo} details={details} ai={yourAi} fileCount={files.length} branch={branch} setBranch={setBranch} scope={scope} setScope={setScope} fileOpen={fileOpen} onToggleFile={() => setFileOpen((v) => !v)} adding={adding} failed={addFailed} blockedBy={addBlockedBy} detailsFailed={detailsFailed} onRetry={() => choose(repo)} update={update} onAdd={() => void addToRepo()} fileUrl={fileUrl} onBack={adding ? () => undefined : back.add!} onByHand={() => { setFileOpen(false); setView('finish'); }} onContinue={() => afterAdding()} />
               )}
-              {view === 'finish' && repo && <FinishStep repo={repo} branch={branch} fileUrl={fileUrl} pr={pr} onBack={back.finish!} />}
+              {view === 'finish' && repo && <FinishStep repo={repo} branch={branch} fileUrl={fileUrl} pr={pr} capped={scanCapped} onBack={back.finish!} />}
               {/* A new AI to connect, a new PR or a new run starts the step over: what it learned from the last one doesn't hold. */}
               {view === 'connect' && repo && <ConnectStep key={`${rolesNeed ?? ''} ${pr?.number ?? ''} ${pr?.headSha ?? ''}`} repo={repo} pr={pr} status={status} code={connectCode} ask={connectAsk} commandWhy={commandWhy} hold={rolesChange?.hold && !prMerged ? branch : null} merged={prMerged} thenPr={Boolean(rolesChange?.connectFirst)} accepts={accepts} acceptsUnknown={(startOnClaude && linkFile === 'unknown') || Boolean(rolesChange && rolesFile === 'unknown')} visibility={repo.visibility} named={readRoles(rolesChange?.content ?? liveFile ?? workflow)?.provider ?? null} ended={runEnded || Boolean(pr && missedSha === pr.headSha)} onBack={back.connect!} onSkip={() => setView('live')} startOnClaude={startOnClaude || rolesNeed === 'claude'} onClaudeCode={(url, c) => client!.sendClaudeCode(repo, url, c)} />}
               {/* Only an update's own pull request is an update: a change of AI on a repo that could update isn't one. */}
@@ -1758,7 +1769,8 @@ function ReviewAppStep({ repo, onCheck, onBack }: { repo: Repo; onCheck: () => v
   );
 }
 
-function FinishStep({ repo, branch, fileUrl, pr, onBack }: { repo: Repo; branch: string; fileUrl: string; pr: SetupPr | null; onBack: () => void }) {
+/** `capped` is a repo with more open PRs than are looked through, so theirs is only known once it's merged. */
+function FinishStep({ repo, branch, fileUrl, pr, capped, onBack }: { repo: Repo; branch: string; fileUrl: string; pr: SetupPr | null; capped: boolean; onBack: () => void }) {
   return (
     <div>
       <BackButton onClick={onBack} />
@@ -1775,7 +1787,7 @@ function FinishStep({ repo, branch, fileUrl, pr, onBack }: { repo: Repo; branch:
         </Numbered>
       </ol>
       <div className={`${WELL} mt-6 px-4 py-3.5`}>
-        {pr ? <Pulse tone="mint" still>Found pull request #{pr.number}</Pulse> : <Pulse>Waiting for your pull request on {repo.fullName.split('/')[1]}</Pulse>}
+        {pr ? <Pulse tone="mint" still>Found pull request #{pr.number}</Pulse> : capped ? <Pulse>This repo has more open PRs than we look through, so we'll see yours once it's merged into {branch}</Pulse> : <Pulse>Waiting for your pull request on {repo.fullName.split('/')[1]}</Pulse>}
       </div>
       <a href={fileUrl} target="_blank" rel="noreferrer" className="mt-4 flex items-center justify-center gap-1 text-[13px] text-muted transition-colors hover:text-fg">
         Open it on GitHub again <External />

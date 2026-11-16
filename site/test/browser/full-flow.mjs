@@ -24,13 +24,15 @@ const expect = (ok, what) => { console.log(`  ${ok ? 'ok ' : 'FAIL'} ${what}`); 
 // ONLY=name,name runs just those, to try one while changing it.
 const only = process.env.ONLY?.split(',');
 
-async function run(name, { login = false, apiKey = false, claude = false, orgSecrets = [], refuse = null, onBase = null, prFile = null, prTitle = 'Add Mergelight code review', prFiles = ['.github/workflows/mergelight.yml'], prRefresh = null, baseRefresh = null, noRelease = false, reviewDone = false, scope = 'new', button = 'Add to api' } = {}, check = () => {}) {
+async function run(name, { login = false, apiKey = false, claude = false, orgSecrets = [], refuse = null, onBase = null, prFile = null, prTitle = 'Add Mergelight code review', prFiles = ['.github/workflows/mergelight.yml'], prRefresh = null, baseRefresh = null, noRelease = false, reviewDone = false, manyOpen = false, scope = 'new', button = 'Add to api' } = {}, check = () => {}) {
   if (only && !only.includes(name)) return {};
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 860, deviceScaleFactor: 2 });
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
   const writes = [];
+  // How many times the open PRs were looked through from the start.
+  let scans = 0;
   let release = !noRelease;
   const json = (req, body, code = 200) => req.respond({ status: code, contentType: 'application/json', headers: cors, body: JSON.stringify(body) });
   await page.setRequestInterception(true);
@@ -61,8 +63,12 @@ async function run(name, { login = false, apiKey = false, claude = false, orgSec
       if (u.pathname === '/user/installations/1/repositories') return json(req, { repositories: [{ full_name: 'acme/api', private: true, default_branch: 'main', archived: false }, { full_name: 'acme/zzz-other', private: true, default_branch: 'main', archived: false }] });
       if (p === '/branches') return json(req, [{ name: 'main' }, { name: 'staging' }, { name: 'feat/x' }]);
       if (p === '/pulls' && u.searchParams.get('state') === 'all') return json(req, [{ base: { ref: 'staging' }, head: { ref: 'feat/x' } }]);
+      if (p === '/pulls' && (u.searchParams.get('page') ?? '1') === '1') scans++;
+      // More open PRs than the page looks through, a full page every time.
+      if (p === '/pulls' && manyOpen) return json(req, Array.from({ length: 100 }, (_, i) => ({ number: 300 + i, html_url: `https://github.com/acme/api/pull/${300 + i}`, title: 'Some feature', base: { ref: 'staging' }, head: { sha: 'othersha', ref: `feat/${i}`, repo: { full_name: 'acme/api' } } })));
       if (p === '/pulls') return json(req, prFile ? [{ number: 5, html_url: 'https://github.com/acme/api/pull/5', title: prTitle, base: { ref: 'staging' }, head: { sha: 'oldsha', ref: 'mergelight-setup-old', repo: { full_name: 'acme/api' } } }] : []);
       if (p === '/pulls/5/files') return json(req, prFiles.map((filename) => ({ filename })));
+      if (/^\/pulls\/3\d\d\/files$/.test(p)) return json(req, [{ filename: 'src/app.ts' }]);
       if (p === '/pulls/5') return json(req, { merged: false, head: { sha: writes.some((w) => w.m === 'PUT') ? 'newsha' : 'oldsha' }, base: { ref: 'main' } });
       if (p === '/pulls/7') return json(req, { merged: false, head: { sha: 'headsha' }, base: { ref: 'main' } });
       if (p === '/issues/5/comments' || p === '/issues/7/comments') return json(req, []);
@@ -136,7 +142,7 @@ async function run(name, { login = false, apiKey = false, claude = false, orgSec
   const refresh = refreshPut ? Buffer.from(refreshPut.body.content, 'base64').toString() : null;
   if (file) writeFileSync(`${out}flow-${name}.yml`, file);
   if (refresh) writeFileSync(`${out}flow-${name}-refresh.yml`, refresh);
-  await check({ before, after, writes, puts, refresh, put, file, pull: writes.find((w) => w.m === 'POST' && w.p === '/pulls'), page, click, text2, setRelease: (v) => { release = v; } });
+  await check({ before, after, writes, puts, refresh, put, file, pull: writes.find((w) => w.m === 'POST' && w.p === '/pulls'), page, click, text2, scans: () => scans, setOnBase: (v) => { onBase = v; }, setRelease: (v) => { release = v; } });
   if (errors.length) { console.log('  page errors', errors.slice(0, 3)); failures++; }
   await page.close();
   return { file, refresh };
@@ -238,6 +244,23 @@ await run('finish-ignores-a-refresh-pr', { prFile: customized('v0'), prFiles: ['
   await new Promise((r) => setTimeout(r, 6000));
   const t = await text2();
   expect(/Waiting for your pull request/.test(t) && !/Found pull request #5/.test(t), "a PR with only the refresh job isn't taken for the one that adds the review");
+});
+await run('finish-stops-at-the-scan-limit', { manyOpen: true }, async ({ page, text2, scans, setOnBase }) => {
+  // The repo has too many open PRs to open one, so they add the file by hand.
+  await page.evaluate(() => {
+    const link = [...document.querySelectorAll('a')].find((a) => a.textContent.includes('Add the file yourself'));
+    link.removeAttribute('target');
+    link.addEventListener('click', (e) => e.preventDefault());
+    link.click();
+  });
+  const before = scans();
+  await new Promise((r) => setTimeout(r, 10000));
+  expect(/more open PRs than we look through, so we'll see yours once it's merged into staging/.test(await text2()), 'says why it waits for the merge');
+  expect(scans() - before === 1, `looks through the open PRs once, not on every check (${scans() - before})`);
+  // They merge it, so the workflow is on staging.
+  setOnBase(customized('v0'));
+  await new Promise((r) => setTimeout(r, 6000));
+  expect(!/Finish on GitHub/.test(await text2()), 'goes on once the workflow is on the branch');
 });
 await run('chatgpt-and-claude-logins', { login: true, claude: true }, ({ puts }) => {
   expect(puts.length === 2 && puts[1].p.endsWith('/mergelight-refresh.yml'), "a ChatGPT login gets the refresh job, whatever Claude's login is");
