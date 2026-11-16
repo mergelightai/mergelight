@@ -11,7 +11,8 @@ permissions:
 jobs:
   tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The browser tests alone take about 15 minutes.
+    timeout-minutes: 35
     # The server's tests need a real Postgres: its row rules are what keeps one org out of another's data.
     services:
       postgres:

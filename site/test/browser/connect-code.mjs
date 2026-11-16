@@ -31,7 +31,12 @@ const askFor = (code = CODE, url = DEVICE) => withState(connectBody({ url, code 
 const comment = (login, body) => ({ user: { login }, body });
 const FAILED = { status: 'completed', conclusion: 'neutral', output: { title: CHECK_FAILED_TITLE } };
 
+// SHARD=k/n runs every nth scenario, from the kth, so the file can run in parts side by side.
+const [shard, shards] = (process.env.SHARD ?? '1/1').split('/').map(Number);
+let scenarioIndex = 0;
+
 async function scenario(name, start, body) {
+  if (scenarioIndex++ % shards !== shard - 1) return;
   console.log(`\n== ${name}`);
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 900, deviceScaleFactor: 2 });
@@ -80,10 +85,10 @@ async function scenario(name, start, body) {
       if (p === '/git/matching-refs/mergelight/claude-code/') return json(req, (world.refs ?? []).filter((r) => r.ref.startsWith('refs/mergelight/claude-code/')));
       if (p === '/branches') return json(req, [{ name: 'main' }]);
       if (p === '/pulls') return json(req, []);
-      if (p === '/pulls/7') return json(req, { merged: false, head: { sha: world.head } });
+      if (p === '/pulls/7') return json(req, { merged: false, head: { sha: world.head }, base: { ref: 'main' } });
       if (p === '/issues/7/comments') return world.commentsStatus === 200 ? json(req, world.comments) : json(req, { message: 'no' }, world.commentsStatus);
-      if (p === '/actions/secrets') return json(req, { secrets: world.login ? [{ name: 'CODEX_AUTH_JSON' }] : [] });
-      if (p.startsWith('/contents/')) return world.installed && p.endsWith('mergelight.yml') || (world.installed && p.includes('mergelight.yml?')) ? json(req, { sha: 'filesha', content: Buffer.from(`    steps:\n      - uses: mergelightai/mergelight@${'b'.repeat(40)} # v0.1.0\n`).toString('base64') }) : json(req, {}, 404);
+      if (p === '/actions/secrets') return json(req, { secrets: [...(world.login ? [{ name: 'CODEX_AUTH_JSON' }] : []), ...(world.claudeSaved ? [{ name: 'CLAUDE_CODE_OAUTH_TOKEN' }] : [])] });
+      if (p.startsWith('/contents/')) return world.installed && p.endsWith('mergelight.yml') || (world.installed && p.includes('mergelight.yml?')) ? json(req, { sha: 'filesha', content: Buffer.from(`    steps:\n      - uses: mergelightai/mergelight@${'b'.repeat(40)} # v0.1.0\n        with:\n          codex-auth-json: \${{ secrets.CODEX_AUTH_JSON }}\n          claude-code-oauth-token: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n`).toString('base64') }) : json(req, {}, 404);
       if (p.startsWith('/git/ref/heads/')) return json(req, { object: { sha: 'basesha' } });
       const run = p.match(/^\/commits\/([^/]+)\/check-runs/);
       if (run) return json(req, { check_runs: world.checks[run[1]] ? [world.checks[run[1]]] : [] });
@@ -293,6 +298,41 @@ await scenario('comment-from-an-older-release', { comments: [comment(BOT, OLD_CO
   expect(true, 'still reads the old layout');
 });
 
+// A Claude reviewer with no login yet: the run offers Claude's link alone, with no ChatGPT code.
+await scenario('only-claude-on-this-run', { comments: [comment(BOT, withState(connectBody(null, 'https://github.com/acme/api/actions/runs/1', CLAUDE, claudeSetupLink('acme/api', 7)), undefined))], checks: { headsha: { status: 'in_progress', conclusion: null, output: { title: 'Waiting for you to connect Claude' } } } }, async ({ page, until, click, reach, shot }) => {
+  await reach();
+  const t = await until((x) => /Open Claude/.test(x), "Claude's link");
+  expect(/Connect Claude/.test(t) && !/Connect your AI/.test(t), 'names Claude as the AI to connect');
+  expect(!/to check reviews/.test(t), "doesn't call it a checker");
+  expect(!(await page.evaluate(() => [...document.querySelectorAll('[role=radiogroup] label')].some((l) => l.textContent.startsWith('ChatGPT')))), 'never offers ChatGPT, whose code never comes on this run');
+  expect(!/Enter this code|Enable device code/.test(t), 'and nothing about a ChatGPT code');
+  await new Promise((r) => setTimeout(r, 700));
+  await shot('only-claude');
+  // Only this run's ChatGPT sign-in failed: an OpenAI key still works, as nothing asked for Claude in particular.
+  await click('label', 'API key');
+  const keys = await until((x) => /OPENAI_API_KEY|ANTHROPIC_API_KEY/.test(x), 'the API key steps');
+  const tiles = await page.evaluate(() => [...document.querySelectorAll('[role=radiogroup][aria-label="Which AI"] label')].map((l) => l.textContent));
+  expect(tiles.includes('OpenAI') && tiles.includes('Anthropic'), `an API key offers both AIs again (${tiles.join(', ')})`);
+  expect(/Connect your AI/.test(keys), 'and the step is for either AI');
+});
+
+await scenario('new-run-offers-both-again', { comments: [comment(BOT, withState(connectBody(null, 'https://github.com/acme/api/actions/runs/1', CLAUDE, claudeSetupLink('acme/api', 7)), undefined))], checks: { headsha: { status: 'in_progress', conclusion: null, output: { title: 'Waiting for you to connect Claude' } } } }, async ({ page, world, until, reach }) => {
+  await reach();
+  await until((x) => /Open Claude/.test(x), "Claude's link, as this run's ChatGPT sign-in failed");
+  // A new commit's run makes a ChatGPT code again.
+  world.comments = [CLAUDE_COMMENT()];
+  world.checks.newsha = WAITING;
+  world.head = 'newsha';
+  await until(() => true, 'a moment');
+  const end = Date.now() + 14000;
+  let tiles = [];
+  while (Date.now() < end && !tiles.includes('ChatGPT')) {
+    tiles = await page.evaluate(() => [...document.querySelectorAll('[role=radiogroup][aria-label="Which AI"] label')].map((l) => l.textContent));
+    await wait(200);
+  }
+  expect(tiles.includes('ChatGPT') && tiles.includes('Claude'), `ChatGPT is offered again (${tiles.join(', ')})`);
+});
+
 await scenario('claude-button-and-paste', { comments: [CLAUDE_COMMENT()], checks: { headsha: WAITING } }, async ({ page, world, click, reach, until }) => {
   await reach();
   await until((x) => x.includes(CODE), 'the code');
@@ -318,6 +358,21 @@ await scenario('claude-button-and-paste', { comments: [CLAUDE_COMMENT()], checks
   const end = Date.now() + 14000;
   while (Date.now() < end && !world.removed?.length) await new Promise((r) => setTimeout(r, 200));
   expect(world.removed?.[0] === `refs/${claudeCodeRef(CLAUDE)}` && world.removed.length === 1, 'removes its own code as soon as the run has connected, before anyone can leave the page');
+});
+
+// The PR's workflow can be read: while it can't, a saved secret alone doesn't count as its login.
+await scenario('another-runs-login-keeps-this-code', { comments: [CLAUDE_COMMENT()], checks: { headsha: WAITING }, installed: true }, async ({ page, world, click, until }) => {
+  await page.goto(claudeSetupLink('acme/api', 7), { waitUntil: 'networkidle2' });
+  await until((x) => /Paste the code Claude shows you/.test(x), 'the Claude step');
+  await wait(900);
+  await page.type('input[aria-label="Code from Claude"]', WHOLE);
+  await click('button', 'Connect');
+  await until((x) => /Connecting to Claude/.test(x), 'the connecting line');
+  // Another pull request's run saves a Claude login, while this run still waits to read its code.
+  world.claudeSaved = true;
+  await until((x) => /Your PR is open|Mergelight is on/.test(x), 'the next screen, as a login is there now');
+  await wait(4000);
+  expect(!world.removed?.length, "keeps this run's code until this run has read it");
 });
 
 await scenario('link-from-the-pull-request', { comments: [CLAUDE_COMMENT()], checks: { headsha: WAITING }, login: true }, async ({ page, world, until, click, shot }) => {
@@ -373,7 +428,8 @@ await scenario('link-to-a-repo-they-cannot-see', { comments: [CLAUDE_COMMENT()],
   world.onlyOther = false;
   await wait(800); // The screen slides in, and a click during that misses.
   await click('a', 'Choose on GitHub');
-  const after = await until((x) => /Paste the code Claude shows you/.test(x), 'the Claude step after giving access');
+  // The link comes with the run's comment, which the page reads a moment after the step shows.
+  const after = await until((x) => /Paste the code Claude shows you/.test(x) && /Open Claude/.test(x), 'the Claude step after giving access');
   expect(/Open Claude/.test(after), 'comes straight back to the pull request that sent them');
 });
 
