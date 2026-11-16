@@ -69,8 +69,6 @@ async function scenario(name, start, body) {
       if (u.pathname === '/repos/mergelightai/mergelight/releases/latest') return json(req, { tag_name: 'v0.2.0' });
       if (u.pathname === '/repos/mergelightai/mergelight/commits/v0.2.0') return json(req, { sha: 'a'.repeat(40) });
       const p = u.pathname.replace('/repos/acme/api', '');
-      // main is the only branch, so no other one has a review workflow.
-      if (m === 'POST' && p === '/graphql') return json(req, { data: { repository: { refs: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [{ name: 'main', target: { file: null } }] } } } });
       world.asked.push(p);
       if (m !== 'GET') {
         const data = req.postData() ? JSON.parse(req.postData()) : null;

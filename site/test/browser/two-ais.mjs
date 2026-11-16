@@ -81,16 +81,6 @@ async function scenario(name, start, body) {
       if (u.pathname === '/repos/mergelightai/mergelight/tags' && world.manyTags && u.searchParams.get('page') !== '2') return json(req, Array.from({ length: 100 }, (_, i) => ({ name: `v0.0.${i}`, commit: { sha: 'e'.repeat(40) } })));
       if (u.pathname === '/repos/mergelightai/mergelight/tags') return json(req, [{ name: 'v0.2.0', commit: { sha: 'a'.repeat(40) } }, { name: 'v0', commit: { sha: world.v0 ?? 'a'.repeat(40) } }, { name: 'v0.1.19', commit: { sha: 'b'.repeat(40) } }, { name: 'v0.1.18', commit: { sha: 'c'.repeat(40) } }]);
       const p = u.pathname.replace('/repos/acme/api', '');
-      // Each branch's review workflow: main's, staging's if a test gives it one, none on the other long-lived names, and
-      // main's on any other branch, which starts with what main has.
-      const onBranch = (name) => (world.fileGone ? null : name === 'main' ? (world.merged && world.branchFile ? world.branchFile : world.file) : name === 'staging' ? (world.stagingFile ?? null) : ['master', 'stage', 'production', 'prod', 'development', 'develop', 'dev', 'trunk'].includes(name) ? null : world.file);
-      if (m === 'POST' && p === '/graphql') {
-        if (world.branchesFail) return json(req, { errors: [{ message: 'no' }] });
-        const nodes = (world.branches ?? ['main']).map((name) => ({ name, target: { file: onBranch(name) ? { oid: `blob-${encodeURIComponent(name)}` } : null } }));
-        return json(req, { data: { repository: { refs: { pageInfo: { hasNextPage: false, endCursor: null }, nodes } } } });
-      }
-      const blob = p.match(/^\/git\/blobs\/blob-(.+)$/);
-      if (m === 'GET' && blob) return json(req, { content: b64(onBranch(decodeURIComponent(blob[1])) ?? '') });
       if (m !== 'GET') {
         const data = req.postData() ? JSON.parse(req.postData()) : null;
         world.writes.push({ m, p, body: data });
@@ -119,13 +109,14 @@ async function scenario(name, start, body) {
         const per = Number(u.searchParams.get('per_page') ?? 30);
         const page = Number(u.searchParams.get('page') ?? 1);
         const list = [...others, ...mine].slice((page - 1) * per, page * per);
-        // An answer can come late, holding what was true when it was asked.
-        const delay = world.openDelays?.shift() ?? 0;
+        // An answer can come late, holding what was true when it was asked. Only a look for a workflow PR, which asks a
+        // page at a time: the repo's details read the open PRs too, for the branches they go into.
+        const delay = u.searchParams.has('page') ? (world.openDelays?.shift() ?? 0) : 0;
         return delay ? void setTimeout(() => json(req, list), delay) : json(req, list);
       }
       if (/^\/pulls\/[12]\d\d\/files$/.test(p)) return json(req, [{ filename: 'src/app.ts' }]);
       // Most new work goes to main, which is the default branch unless a test says otherwise.
-      if (p === '/pulls') return json(req, [{ base: { ref: 'main' }, head: { ref: 'feat/x' } }]);
+      if (p === '/pulls') return json(req, [{ base: { ref: 'main' }, head: { ref: 'feat/x' } }, ...(world.recentPulls ?? [])]);
       if (p === `/pulls/${PR.number}/files` && world.filesFail) return json(req, {}, 500);
       if (p === `/pulls/${PR.number}/files`) {
         // A big PR lists its files a page at a time, with the workflow on the second page.
@@ -1561,7 +1552,7 @@ await scenario('one-change-for-two-quick-clicks', { secrets: ['CLAUDE_CODE_OAUTH
   expect(world.writes.filter((w) => w.m === 'POST' && w.p === '/pulls').length === 1, 'one PR, however many clicks');
 });
 
-await scenario('more-than-one-branch-is-read-only', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], branches: ['main', 'staging'], stagingFile: TEMPLATE, file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`) }, async ({ page, world, reachLive }) => {
+await scenario('more-than-one-branch-is-read-only', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], stagingFile: TEMPLATE, file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`) }, async ({ page, world, reachLive }) => {
   const { live } = await reachLive();
   // staging has a Mergelight review too, and a login is the whole repo's.
   expect(/Mergelight reviews more than one branch here, so you set provider and verify-with in each by hand\./.test(live), 'says why, in one line');
@@ -1592,18 +1583,18 @@ await scenario('link-follows-a-retargeted-pr', { secrets: ['CODEX_AUTH_JSON'], s
   expect(!/Open Claude/.test(t), 'and no longer the plan login');
 });
 
-await scenario('release-branch-with-a-review-is-read-only', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], branches: ['main', 'release/1.x'], file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`) }, async ({ page, world, reachLive }) => {
+await scenario('release-branch-a-pr-goes-into-is-read-only', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], branches: ['main', 'release/1.x'], recentPulls: [{ base: { ref: 'release/1.x' }, head: { ref: 'fix/y' } }], file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`) }, async ({ page, world, reachLive }) => {
   const { live } = await reachLive();
-  // release/1.x has the review too, though no recent PR went into it, and would get the same new login.
+  // A PR went into release/1.x, which has the review too and would get the same new login.
   expect(/Mergelight reviews more than one branch here/.test(live), 'says why');
   expect(await readOnly(page, live), 'offers no change');
   expect(world.writes.length === 0, 'writes nothing');
 });
 
-await scenario('branches-that-cant-be-read-are-read-only', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], branchesFail: true, file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`) }, async ({ page, reachLive }) => {
+await scenario('feature-branch-with-a-copy-is-no-other-review', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], branches: ['main', 'feat/y'], file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`) }, async ({ reachLive }) => {
   const { live } = await reachLive();
-  // Any branch may have a review, so none is changed for sure.
-  expect(/Mergelight reviews more than one branch here/.test(live) && (await readOnly(page, live)), 'offers no change');
+  // feat/y was made from main, so it holds the same workflow, but no PR goes into it.
+  expect(!/more than one branch/.test(live) && /Add ChatGPT/.test(live), 'still offers the change');
 });
 
 await scenario('closed-role-pr-is-no-update', { secrets: ['CODEX_AUTH_JSON', 'CLAUDE_CODE_OAUTH_TOKEN'], refresh: REFRESH, file: BEHIND }, async ({ page, world, until, click, text }) => {
