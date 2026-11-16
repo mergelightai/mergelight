@@ -51,6 +51,8 @@ async function run(name, { login = false, apiKey = false, claude = false, orgSec
       if (u.pathname === '/repos/mergelightai/mergelight/releases/latest') return release ? json(req, { tag_name: RELEASE.tag }) : json(req, {}, 503);
       if (u.pathname === `/repos/mergelightai/mergelight/commits/${RELEASE.tag}`) return json(req, { sha: RELEASE.sha });
       const p = u.pathname.replace('/repos/acme/api', '');
+      // No branch but the one setup goes into has a review workflow of its own.
+      if (m === 'POST' && p === '/graphql') return json(req, { data: { repository: { refs: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: ['main', 'staging', 'feat/x'].map((name) => ({ name, target: { file: null } })) } } } });
       if (m !== 'GET') {
         const body = req.postData() ? JSON.parse(req.postData()) : null;
         writes.push({ m, p, body });

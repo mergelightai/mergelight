@@ -23,6 +23,23 @@ export const INSTALL_URL = 'https://github.com/apps/mergelight-setup/installatio
 export const reviewAppUrl = (repo: Repo) => `https://github.com/apps/mergelight-ai/installations/new/permissions?suggested_target_id=${repo.accountId}&repository_ids[]=${repo.id}`;
 
 /** Branches that hold releases or shared work. PRs from these are promotions, not new code. */
+/** Stands for a branch that may have a review workflow, when the branches couldn't all be read. */
+export const ANY_BRANCH = '*';
+/** How many pages of branches are looked through for a review workflow, a hundred each. Past that, any may have one. */
+const BRANCH_PAGES = 30;
+/** Each branch's review workflow, by the id of its file, so branches with the same copy share one. */
+const BRANCH_FILES = `query($owner: String!, $name: String!, $path: String!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    refs(refPrefix: "refs/heads/", first: 100, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      nodes { name target { ... on Commit { file(path: $path) { oid } } } }
+    }
+  }
+}`;
+interface BranchFiles {
+  data?: { repository: { refs: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: { name: string; target: { file?: { oid: string } | null } | null }[] } } | null };
+  errors?: unknown[];
+}
 /** How many pages of the Action's tags are looked through for a commit's release, a hundred tags each. */
 const TAG_PAGES = 20;
 export const LONG_LIVED_BRANCHES = ['main', 'master', 'staging', 'stage', 'production', 'prod', 'development', 'develop', 'dev'];
@@ -80,8 +97,8 @@ export interface RepoDetails {
   /** The refresh workflow on the base branch, if it's there. */
   refresh: string | null;
   /**
-   * Other long-lived branches, the default branch and the bases of recent PRs, with a Mergelight review workflow of
-   * their own, or whose workflow couldn't be read. A login is the whole repo's, so this page leaves who reviews to each of them.
+   * The other branches with a Mergelight review workflow of their own. A login is the whole repo's, so this page leaves
+   * who reviews to each of them. ANY_BRANCH when the branches couldn't all be read, as any of them may have one.
    */
   otherReviewBranches: string[];
   /** The latest release. Only a pinned repo needs it, so failing to read it doesn't stop a setup. */
@@ -537,6 +554,34 @@ export function realClient(token: string): GitHubClient {
     const pull = await openSetupPull(repo, base, reviewOnly);
     return pull && { number: pull.number, url: pull.html_url, headSha: pull.head.sha };
   };
+  /**
+   * Every branch with a Mergelight review workflow, a hundred branches at a time. Each copy of the file is read once:
+   * branches made from the same commit share it. Past BRANCH_PAGES pages, any branch may have one.
+   */
+  const reviewBranches = async (repo: Repo): Promise<string[]> => {
+    const [owner, name] = repo.fullName.split('/');
+    const byFile = new Map<string, string[]>();
+    let after: string | null = null;
+    for (let page = 0; ; page++) {
+      if (page === BRANCH_PAGES) return [ANY_BRANCH];
+      const answer: BranchFiles = await call<BranchFiles>('POST', '/graphql', { query: BRANCH_FILES, variables: { owner, name, path: WORKFLOW_PATH, after } });
+      const refs = answer.data?.repository?.refs;
+      if (!refs || answer.errors?.length) throw new Error("Couldn't read the branches.");
+      for (const { name: branch, target } of refs.nodes) {
+        const oid = target?.file?.oid;
+        if (oid) byFile.set(oid, [...(byFile.get(oid) ?? []), branch]);
+      }
+      if (!refs.pageInfo.hasNextPage) break;
+      after = refs.pageInfo.endCursor;
+    }
+    const reviews = await Promise.all(
+      [...byFile].map(async ([oid, branches]) => {
+        const blob = await get<{ content: string }>(`/repos/${repo.fullName}/git/blobs/${oid}`);
+        return readInstalled(fromBase64(blob.content)) ? branches : [];
+      }),
+    );
+    return reviews.flat();
+  };
   /** Only our server can ask GitHub this, and it needs the person's token to show they can see the repo. */
   const reviewAppInstalled = async (repo: Repo) => {
     const res = await fetch(`${TOKEN_SERVER}/review-app?repo=${encodeURIComponent(repo.fullName)}`, {
@@ -582,13 +627,11 @@ export function realClient(token: string): GitHubClient {
       ]);
       const names = branches.map((b) => b.name);
       const base = pickBase(pulls.map((p) => ({ base: p.base.ref, head: p.head.ref })), repo.defaultBranch);
-      // The base of each recent PR too, like a release branch, which can have its own review.
-      const others = [...new Set([...LONG_LIVED_BRANCHES, repo.defaultBranch, ...pulls.map((p) => p.base.ref)])].filter((b) => b !== base);
-      const [onBase, refresh, onOthers] = await Promise.all([
+      const [onBase, refresh, reviewing] = await Promise.all([
         workflowOn(repo, base),
         workflowOn(repo, base, REFRESH_FILE),
-        // Each long-lived name is asked for by itself, so a big repo's branches past the first page count too.
-        Promise.all(others.map((b) => workflowOn(repo, b).then((file) => (file && readInstalled(file.content) ? b : null), () => b))),
+        // Every branch, like a release branch no recent PR went into. Ones that couldn't be read may have a review too.
+        reviewBranches(repo).catch(() => [ANY_BRANCH]),
       ]);
       const secrets = seen.names;
       const installed = onBase && readInstalled(onBase.content);
@@ -603,7 +646,7 @@ export function realClient(token: string): GitHubClient {
         hasApiKey: secrets.some((n) => NO_REFRESH_SECRETS.includes(n)),
         installed,
         refresh: refresh?.content ?? null,
-        otherReviewBranches: onOthers.filter((b): b is string => b !== null),
+        otherReviewBranches: reviewing.filter((b) => b !== base),
         release,
         reviewApp,
       };
