@@ -128,13 +128,19 @@ test("the refresh and its save come before the review", () => {
   assert.doesNotMatch(action, /Reply with the single word OK/, "the job no longer spends plan quota on a model call");
 });
 
-function choose({ wanted = "", checker = "", claude = "", codex = "", event = "pull_request", headRepo = "acme/widgets", actor = "someone", visibility = "private" }) {
+function choose({ wanted = "", checker = "", claude = "", codex = "", event = "pull_request", headRepo = "acme/widgets", actor = "someone", visibility = "private", permission = null }) {
   const dir = mkdtempSync(join(tmpdir(), "mergelight-choose-"));
   const envFile = join(dir, "env");
   writeFileSync(envFile, "");
+  // GitHub's answer about the person who commented, when a test gives one.
+  const bin = join(dir, "bin");
+  mkdirSync(bin);
+  if (permission !== null) writeFileSync(join(bin, "gh"), `#!/usr/bin/env bash\necho "$*" > "${dir}/asked"\necho ${permission}\n`);
+  else writeFileSync(join(bin, "gh"), "#!/usr/bin/env bash\nexit 1\n");
+  chmodSync(join(bin, "gh"), 0o755);
   const r = spawnSync("bash", ["-c", stepScript("Choose who reviews and who checks")], {
     encoding: "utf8",
-    env: { PATH: process.env.PATH, GITHUB_ENV: envFile, WANTED: wanted, WANTED_CHECKER: checker, HAS_CLAUDE: claude, HAS_CODEX: codex, GITHUB_EVENT_NAME: event, GITHUB_REPOSITORY: "acme/widgets", GITHUB_ACTOR: actor, HEAD_REPO: headRepo, VISIBILITY: visibility },
+    env: { PATH: `${bin}:${process.env.PATH}`, GITHUB_ENV: envFile, WANTED: wanted, WANTED_CHECKER: checker, HAS_CLAUDE: claude, HAS_CODEX: codex, GITHUB_EVENT_NAME: event, GITHUB_REPOSITORY: "acme/widgets", GITHUB_ACTOR: actor, HEAD_REPO: headRepo, VISIBILITY: visibility, COMMENT_BY: event === "issue_comment" ? "reader" : "" },
   });
   const env = Object.fromEntries(readFileSync(envFile, "utf8").trim().split("\n").filter(Boolean).map((l) => l.split("=")));
   return { code: r.status, out: r.stdout, env };
@@ -488,4 +494,25 @@ test("a comment that mentions Mergelight reviews again, in a group of its own, a
   assert.match(review, /MERGELIGHT_COMMENT_BODY: \$\{\{ github\.event_name == 'issue_comment' && github\.event\.comment\.body \|\| '' \}\}/);
   assert.match(stepScript("Log in to Codex"), /elif \[ "\$GITHUB_EVENT_NAME" = issue_comment \]; then[\s\S]*?MERGELIGHT_NO_LOGIN=1/);
   assert.doesNotMatch(action, /github\.event\.pull_request\.number \}\}/, "the pull request's number also comes from a comment's issue");
+});
+
+test("a comment from someone who can't push starts nothing: no install, no login refresh, no review", () => {
+  for (const permission of ["read", "none", ""]) {
+    const r = choose({ codex: "1", claude: "1", event: "issue_comment", permission });
+    assert.equal(r.code, 0);
+    assert.equal(r.env.MERGELIGHT_NO_LOGIN, "1", permission);
+    assert.equal(r.env.MERGELIGHT_USES_CODEX, "0");
+    assert.equal(r.env.MERGELIGHT_USES_CLAUDE, "0");
+    assert.match(r.out, /reader can't push to this repository/);
+  }
+  // GitHub not answering counts as no.
+  assert.equal(choose({ codex: "1", event: "issue_comment" }).env.MERGELIGHT_NO_LOGIN, "1");
+  // Someone who can push: the review goes on as for a push.
+  for (const permission of ["write", "admin"]) {
+    const ok = choose({ codex: "1", event: "issue_comment", permission });
+    assert.equal(ok.env.MERGELIGHT_NO_LOGIN, "0", permission);
+    assert.equal(ok.env.MERGELIGHT_USES_CODEX, "1");
+  }
+  // A push never asks.
+  assert.equal(choose({ codex: "1" }).env.MERGELIGHT_NO_LOGIN, "0");
 });

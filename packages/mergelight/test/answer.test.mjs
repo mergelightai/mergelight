@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { answerReplyBody, decisionsFromAnswer, MAX_ANSWER, teamAnswerFromEnv, withDecisions } from "../dist/answer.js";
 import { decodeMark, decodeMarks, readMarks } from "../dist/publish/handled.js";
-import { buildVerifierPrompt } from "../dist/prompt.js";
+import { buildVerifierPrompt, RESOLVED_ONLY } from "../dist/prompt.js";
 
 const answer = { by: "steelzeh", at: "2030-01-01T10:00:00Z", url: "https://github.com/o/r/pull/7#issuecomment-9", text: "Fixed: the snapshots. Not worth it: saved workouts, the account has none." };
 
@@ -36,12 +36,15 @@ test("decisions come from the earlier findings the verifier left because the ans
     // A decision made before, with its own reason: the bare form names it, and no new answer replaces it.
     { id: "dddddddddd", title: "Old one", file: "c.sh", line: 1 },
     { id: "eeeeeeeeee", title: "Decided before", file: "c.sh", line: 2, handled: { as: "wont_fix", note: "Only admins", by: "alice", sha: null, from: "mark" } },
+    // A thread resolved without a word: the answer gives its reason.
+    { id: "ffffffffff", title: "Resolved quietly", file: "c.sh", line: 3, handled: { as: "wont_fix", note: RESOLVED_ONLY, by: "alice", sha: null, from: "thread" } },
   ];
   const rejected = [
     { candidate: "aaaaaaaaaa", reason: "The team decided not to fix this: the account has no saved workouts outside programs." },
     { candidate: "bbbbbbbbbb", reason: "the team decided not to fix this: they will fix it in another pull request" },
     { candidate: "dddddddddd", reason: "the team decided not to fix this" },
     { candidate: "eeeeeeeeee", reason: "the team decided not to fix this: another reason" },
+    { candidate: "ffffffffff", reason: "the team decided not to fix this: only staff run it" },
     { candidate: "cccccccccc", reason: "Fixed: the list name now comes first." },
     { candidate: "C3", reason: "the team decided not to fix this: a candidate isn't theirs to decide" },
   ];
@@ -49,6 +52,7 @@ test("decisions come from the earlier findings the verifier left because the ans
   assert.deepEqual(decided, [
     { id: "aaaaaaaaaa", title: "Saved workouts are missing", note: "the account has no saved workouts outside programs." },
     { id: "bbbbbbbbbb", title: "Recipe videos are missing", note: "they will fix it in another pull request" },
+    { id: "ffffffffff", title: "Resolved quietly", note: "only staff run it" },
   ]);
   // Kept as the person's own decisions, so the server can remember their reasons.
   const kept = withDecisions(previous, decided, answer, "head1");

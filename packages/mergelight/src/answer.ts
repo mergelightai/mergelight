@@ -1,4 +1,4 @@
-import type { PriorFinding } from "./prompt.js";
+import { RESOLVED_ONLY, type PriorFinding } from "./prompt.js";
 import { encodeMark, MAX_NOTE } from "./publish/handled.js";
 import { withoutHidden } from "./skills.js";
 import type { Review } from "./types.js";
@@ -49,8 +49,10 @@ export function decisionsFromAnswer(previous: PriorFinding[] | undefined, reject
   for (const r of rejected) {
     const p = earlier.get(r.candidate);
     const m = DECIDED.exec(r.reason);
-    // A finding someone decided on before keeps their decision, with its reason and their name.
-    if (!p || !m || decided.has(p.id) || p.handled?.as === "wont_fix") continue;
+    // A finding someone decided on before, with a reason, keeps their decision and their name. A thread
+    // resolved without a word gets its reason from the answer.
+    const reasoned = p?.handled?.as === "wont_fix" && Boolean(p.handled.note) && p.handled.note !== RESOLVED_ONLY;
+    if (!p || !m || decided.has(p.id) || reasoned) continue;
     decided.set(p.id, { id: p.id, title: p.title, note: m[1]!.replace(/\s+/g, " ").trim() });
   }
   return [...decided.values()];
