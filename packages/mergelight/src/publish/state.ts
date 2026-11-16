@@ -20,6 +20,8 @@ export interface StateFinding {
   how?: string;
   /** The rest of the finding, for the MCP server. Only while it's open, and older state doesn't have it. */
   likelihood?: Finding["likelihood"];
+  /** Whether it is a security problem, which the loop breaker never leaves alone when major. Older state doesn't say. */
+  security?: boolean;
   what_breaks?: string;
   fix?: string;
   fix_cost?: Finding["fix_cost"];
@@ -53,7 +55,7 @@ const MAX_STATE = 40_000;
 const pack = (state: ReviewState) => `<!-- ${MARKER} ${gzipSync(JSON.stringify(state)).toString("base64")} -->`;
 
 function withoutDetails(f: StateFinding): StateFinding {
-  const { likelihood: _l, what_breaks: _w, fix: _f, fix_cost: _c, verdict: _v, rank: _r, ...rest } = f;
+  const { likelihood: _l, what_breaks: _w, fix: _f, fix_cost: _c, verdict: _v, rank: _r, security: _s, ...rest } = f;
   return rest;
 }
 
@@ -110,6 +112,7 @@ export function nextState(prev: ReviewState | null, findings: Finding[], sha: st
       end_line: f.end_line,
       how: f.how_it_happens,
       likelihood: f.likelihood,
+      ...(f.security !== undefined ? { security: f.security } : {}),
       what_breaks: f.what_breaks,
       fix: f.fix,
       fix_cost: f.fix_cost,

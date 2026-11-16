@@ -590,6 +590,9 @@ test("the loop breaker: rare cases never hold the merge, and from round 4 on onl
   assert.deepEqual(placeFinding(f({ class: "bug", severity: "minor", rank: 2 }), 9), { tier: "hardening", left_alone: "late" });
   assert.deepEqual(placeFinding(f({ recommendation: "decide" }), 4), { tier: "hardening", left_alone: "late" });
   assert.deepEqual(placeFinding(f({ class: "bug", severity: "minor", likelihood: "common" }), 9), { tier: "list" });
+  // A major bug or security problem the verifier said to leave, as for a costly fix, still holds it: a person decides.
+  assert.deepEqual(placeFinding(f({ security: true, recommendation: "leave" }), 9), { tier: "decision" });
+  assert.deepEqual(placeFinding(f({ class: "bug", recommendation: "leave" }), 1), { tier: "decision" });
   // One left alone anyway isn't counted as one the loop breaker left alone.
   assert.deepEqual(placeFinding(f({ recommendation: "leave" }), 9), { tier: "hardening" });
   assert.deepEqual(placeFinding(f({ severity: "minor" }), 9), { tier: "hardening" });
@@ -606,6 +609,8 @@ test("the summary says when the loop breaker leaves the rest alone, and why each
   assert.equal(loopBreakerLine({ findings: [left, { tier: "list" }] }, 5), "Round 5: 1 unlikely finding is left alone. From round 4 on, only likely problems, major bugs and security problems hold the merge.");
   assert.doesNotMatch(loopBreakerLine({ findings: [left], needs_human: ["billing.ts"] }, 5), /Merge it/, "a file the team guards still needs a person");
   assert.equal(loopBreakerLine({ findings: [{ tier: "hardening", left_alone: "rare" }] }, 9), null, "a rare case alone needs no line");
+  assert.doesNotMatch(loopBreakerLine({ findings: [left], team_checks: [{ outcome: "fail" }] }, 5), /Merge it/, "one of the team's own checks still holds it");
+  assert.match(loopBreakerLine({ findings: [left], team_checks: [{ outcome: "pass" }, { outcome: "skipped" }] }, 5), /Merge it/);
   // In the summary: the line under the AI's own, and each one's reason in place of a verdict that may still say fix it.
   const findings = [finding({ id: "6666666666", tier: "hardening", left_alone: "late", verdict: "Fix it." }), finding({ id: "7777777777", tier: "hardening", left_alone: "rare", verdict: "Fix it." })];
   const review = {

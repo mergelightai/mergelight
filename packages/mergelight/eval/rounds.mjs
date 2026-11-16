@@ -6,8 +6,8 @@
 //
 //   node eval/rounds.mjs owner/repo#123
 //
-// Saved states don't have the security field, which came with the loop breaker: a major risk there
-// counts as not a security problem, so it is listed for a person to check.
+// States saved before the loop breaker don't have the security field: a major risk there counts as not
+// a security problem, so it is listed for a person to check.
 
 import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";

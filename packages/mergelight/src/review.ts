@@ -146,7 +146,10 @@ export function placeFinding(f: ModelFinding & { rank?: number | null }, round =
   const majorBug = f.class === "bug" && f.severity !== "minor";
   const tier: Tier =
     !majorBug && f.class === "risk" && f.severity === "minor" ? "hardening" : f.rank ? "post" : f.recommendation === "fix" ? "list" : f.recommendation === "decide" ? "decision" : "hardening";
-  if (tier === "hardening" || mustHold(f)) return { tier };
+  // A major bug or a major security problem holds the merge even when the verifier said to leave it,
+  // as for a costly fix: a person decides.
+  if (mustHold(f)) return { tier: tier === "hardening" ? "decision" : tier };
+  if (tier === "hardening") return { tier };
   if (f.likelihood === "rare" || f.likelihood === "theoretical") return { tier: "hardening", left_alone: "rare" };
   if (round >= LATE_ROUND && f.likelihood !== "common") return { tier: "hardening", left_alone: "late" };
   return { tier };

@@ -182,10 +182,12 @@ const LEFT_ALONE_WHY = {
  * From LATE_ROUND on: what the loop breaker left alone, and whether anything still holds the merge. Only
  * likely problems, major bugs and major security problems hold it by then.
  */
-export function loopBreakerLine(r: Pick<Review, "findings" | "needs_human">, round: number): string | null {
+export function loopBreakerLine(r: Pick<Review, "findings" | "needs_human" | "team_checks">, round: number): string | null {
   const late = r.findings.filter((f) => f.left_alone === "late").length;
   if (!late) return null;
-  if (r.findings.some((f) => f.tier !== "hardening") || r.needs_human?.length) {
+  // A guarded file, or one of the team's own checks that didn't pass, still holds it.
+  const teamHolds = r.team_checks?.some((c) => c.outcome !== "pass" && c.outcome !== "skipped");
+  if (r.findings.some((f) => f.tier !== "hardening") || r.needs_human?.length || teamHolds) {
     return `Round ${round}: ${late === 1 ? "1 unlikely finding is" : `${late} unlikely findings are`} left alone. From round ${LATE_ROUND} on, only likely problems, major bugs and security problems hold the merge.`;
   }
   return `Round ${round}: only unlikely cases are left, so they don't hold the merge. Merge it.`;
