@@ -24,7 +24,7 @@ const expect = (ok, what) => { console.log(`  ${ok ? 'ok ' : 'FAIL'} ${what}`); 
 // ONLY=name,name runs just those, to try one while changing it.
 const only = process.env.ONLY?.split(',');
 
-async function run(name, { login = false, apiKey = false, claude = false, orgSecrets = [], refuse = null, onBase = null, prFile = null, prTitle = 'Add Mergelight code review', prFiles = ['.github/workflows/mergelight.yml'], prRefresh = null, baseRefresh = null, noRelease = false, reviewDone = false, manyOpen = false, scope = 'new', button = 'Add to api' } = {}, check = () => {}) {
+async function run(name, { login = false, apiKey = false, claude = false, orgSecrets = [], refuse = null, onBase = null, prFile = null, prTitle = 'Add Mergelight code review', prFiles = ['.github/workflows/mergelight.yml'], prRefresh = null, baseRefresh = null, noRelease = false, reviewDone = false, manyOpen = false, headFails = 0, checkTitle = null, scope = 'new', button = 'Add to api' } = {}, check = () => {}) {
   if (only && !only.includes(name)) return {};
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 860, deviceScaleFactor: 2 });
@@ -33,6 +33,8 @@ async function run(name, { login = false, apiKey = false, claude = false, orgSec
   const writes = [];
   // How many times the open PRs were looked through from the start.
   let scans = 0;
+  // A commit a test pushes to PR #5, and the workflow it holds.
+  let pushed = null;
   let release = !noRelease;
   const json = (req, body, code = 200) => req.respond({ status: code, contentType: 'application/json', headers: cors, body: JSON.stringify(body) });
   await page.setRequestInterception(true);
@@ -69,7 +71,7 @@ async function run(name, { login = false, apiKey = false, claude = false, orgSec
       if (p === '/pulls') return json(req, prFile ? [{ number: 5, html_url: 'https://github.com/acme/api/pull/5', title: prTitle, base: { ref: 'staging' }, head: { sha: 'oldsha', ref: 'mergelight-setup-old', repo: { full_name: 'acme/api' } } }] : []);
       if (p === '/pulls/5/files') return json(req, prFiles.map((filename) => ({ filename })));
       if (/^\/pulls\/3\d\d\/files$/.test(p)) return json(req, [{ filename: 'src/app.ts' }]);
-      if (p === '/pulls/5') return json(req, { merged: false, head: { sha: writes.some((w) => w.m === 'PUT') ? 'newsha' : 'oldsha' }, base: { ref: 'main' } });
+      if (p === '/pulls/5') return json(req, { merged: false, head: { sha: pushed?.sha ?? (writes.some((w) => w.m === 'PUT') ? 'newsha' : 'oldsha') }, base: { ref: 'main' } });
       if (p === '/pulls/7') return json(req, { merged: false, head: { sha: 'headsha' }, base: { ref: 'main' } });
       if (p === '/issues/5/comments' || p === '/issues/7/comments') return json(req, []);
       // A list is what the organization shares with the repo. A number is how GitHub answers instead: 422 on a repo a person owns.
@@ -81,6 +83,12 @@ async function run(name, { login = false, apiKey = false, claude = false, orgSec
         // The base branch's commit is staging's, which a new branch starts from.
         const ref = (raw.startsWith('mergelight-setup-') && raw !== 'mergelight-setup-old') || raw === 'basesha' ? 'staging' : raw;
         const isRefresh = p.endsWith('mergelight-refresh.yml');
+        if (pushed && raw === pushed.sha) return isRefresh ? json(req, {}, 404) : json(req, { sha: 'pushedblob', content: b64(pushed.file) });
+        // The PR's workflow can't be read at its new commit, the first few times.
+        if (raw === 'newsha' && !isRefresh && headFails > 0) {
+          headFails--;
+          return json(req, {}, 500);
+        }
         // The PR's head commit holds what its branch does.
         if (ref === 'mergelight-setup-old' || ref === 'oldsha' || (ref === 'newsha' && prFile)) {
           const body = isRefresh ? prRefresh : prFile;
@@ -92,7 +100,7 @@ async function run(name, { login = false, apiKey = false, claude = false, orgSec
       }
       if (p === '/git/ref/heads/staging' || p === '/git/ref/heads/main') return json(req, { object: { sha: 'basesha' } });
       if (p.includes('/check-runs') && reviewDone) return json(req, { check_runs: [{ status: 'completed', conclusion: 'success', output: { title: '🟢 Safe to merge: Nothing worth fixing' } }] });
-      if (p.includes('/check-runs')) return json(req, { check_runs: [{ status: 'in_progress', conclusion: null, output: { title: login ? 'Reviewing' : 'Waiting for you to connect ChatGPT' } }] });
+      if (p.includes('/check-runs')) return json(req, { check_runs: [{ status: 'in_progress', conclusion: null, output: { title: checkTitle ?? (login ? 'Reviewing' : 'Waiting for you to connect ChatGPT') } }] });
       return json(req, {}, 404);
     }
     if (dist && u.origin === base) {
@@ -142,7 +150,7 @@ async function run(name, { login = false, apiKey = false, claude = false, orgSec
   const refresh = refreshPut ? Buffer.from(refreshPut.body.content, 'base64').toString() : null;
   if (file) writeFileSync(`${out}flow-${name}.yml`, file);
   if (refresh) writeFileSync(`${out}flow-${name}-refresh.yml`, refresh);
-  await check({ before, after, writes, puts, refresh, put, file, pull: writes.find((w) => w.m === 'POST' && w.p === '/pulls'), page, click, text2, scans: () => scans, setOnBase: (v) => { onBase = v; }, setRelease: (v) => { release = v; } });
+  await check({ before, after, writes, puts, refresh, put, file, pull: writes.find((w) => w.m === 'POST' && w.p === '/pulls'), page, click, text2, scans: () => scans, push: (sha, file) => { pushed = { sha, file }; }, setOnBase: (v) => { onBase = v; }, setRelease: (v) => { release = v; } });
   if (errors.length) { console.log('  page errors', errors.slice(0, 3)); failures++; }
   await page.close();
   return { file, refresh };
@@ -269,6 +277,21 @@ const claudeOnPr = customized(`${OLD_SHA} # v0.1.0`).replace('          codex-au
 await run('update-goes-by-the-prs-reviewer', { onBase: customized(`${OLD_SHA} # v0.1.0`), prFile: claudeOnPr, login: true, button: 'Update to v0.2.0' }, ({ after }) => {
   // The open PR makes Claude the reviewer, so after the update Claude is the AI to connect.
   expect(/Connect Claude/.test(after), "goes by the PR's own reviewer, not main's");
+});
+await run('update-pr-read-fails-then-works', { onBase: customized(`${OLD_SHA} # v0.1.0`), prFile: claudeOnPr, login: true, button: 'Update to v0.2.0', headFails: 2, checkTitle: 'Waiting for you to connect Claude' }, async ({ after, text2 }) => {
+  // main's ChatGPT is connected, but the PR's workflow, which makes Claude review, can't be read for now.
+  expect(/couldn't read the workflow on this PR/.test(after) && !/Mergelight is on/.test(after), "doesn't go by main's workflow, which would call it ready");
+  let t = '';
+  for (let i = 0; i < 20 && !/Connect Claude/.test(t); i++) t = await (new Promise((r) => setTimeout(r, 1000)).then(text2));
+  expect(/Connect Claude/.test(t) && !/couldn't read the workflow/.test(t), "reads it again, and goes by the PR's reviewer");
+});
+await run('update-pr-commit-changes-the-login', { onBase: customized(`${OLD_SHA} # v0.1.0`), prFile: claudeOnPr, login: true, button: 'Update to v0.2.0', checkTitle: 'Waiting for you to connect Claude' }, async ({ after, text2, push }) => {
+  expect(/Connect Claude/.test(after) && !/ANTHROPIC_API_KEY/.test(after), "Claude's plan login, which the PR's workflow takes");
+  // A commit on the PR takes Claude's plan login out, and takes an API key instead.
+  push('pushedsha', claudeOnPr.replace('claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}', 'anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}'));
+  let t = '';
+  for (let i = 0; i < 20 && !/ANTHROPIC_API_KEY/.test(t); i++) t = await (new Promise((r) => setTimeout(r, 1000)).then(text2));
+  expect(/Add a secret named ANTHROPIC_API_KEY/.test(t), "follows the PR's workflow after the commit");
 });
 await run('update-keeps-the-prs-refresh-job', { onBase: customized(`${OLD_SHA} # v0.1.0`), prFile: customized(`${OLD_SHA} # v0.1.0`), prRefresh: ourRefresh(`${OLD_SHA} # v0.1.0`), login: true, button: 'Update to v0.2.0' }, ({ puts }) => {
   const job = puts.find((w) => w.p.endsWith('/mergelight-refresh.yml'));
