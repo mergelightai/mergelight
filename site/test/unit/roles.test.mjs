@@ -391,3 +391,19 @@ test("waitsForBase: on pull_request_target, a PR's run asks only for the AIs the
   assert.equal(waitsForBase(withRoles(onBase, { reviewer: 'claude', checker: 'codex' }), claudeOnly, 'codex'), false, 'or checks');
   assert.equal(waitsForBase(withInputs(template, [['provider', 'claude']]), claudeOnly, 'codex'), false, "on pull_request, the PR's run reads its own");
 });
+
+test('with both events, the PR runs its own workflow only where pull_request surely runs on its new commits', () => {
+  const on = (pr) => `on:\n  pull_request_target:\n  pull_request:${pr}\njobs: {}\n`;
+  assert.equal(runsOnBase(on('\n    types: [closed]')), true, 'pull_request only when closed');
+  assert.equal(runsOnBase(on('\n    branches: [main]')), true, 'a filter may keep it from running');
+  assert.equal(runsOnBase(on(' { types: [opened, synchronize] }')), true, "settings on its own line aren't read");
+  assert.equal(runsOnBase(on('\n    types: [opened, synchronize]')), false, 'it runs on new commits');
+  assert.equal(runsOnBase(on('\n    types:\n      - opened\n      - synchronize # a commit')), false, 'and with the types in a list');
+  assert.equal(runsOnBase(on('')), false, 'and with nothing set');
+});
+
+test('a Mergelight step with an anchor is set up its own way, as an alias can use it in another job', () => {
+  const anchored = 'jobs:\n  review:\n    steps:\n      - &review\n        uses: mergelightai/mergelight@v0\n        with:\n          codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}\n  prod:\n    environment: prod\n    steps:\n      - *review\n';
+  assert.equal(isStandard(anchored), false);
+  assert.equal(isStandard(anchored.replace('- &review\n        uses', '- uses').replace('      - *review\n', '      - run: echo\n').replace('    environment: prod\n', '')), true, 'the same step without one is standard');
+});

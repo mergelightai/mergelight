@@ -294,6 +294,8 @@ export function readRoles(content: string): SetRoles | null {
 export function isStandard(content: string): boolean {
   const step = locate(content);
   if (!step || stepInScalar(content)) return false;
+  // A step with an anchor can be used again by an alias, in another job with its own secrets, so one edit changes both.
+  if (/^ *- +&/.test(step.text[step.start]!)) return false;
   // A commit, a moving tag like v0, or a release. A branch can change under the job that keeps a login fresh, which
   // this page would add, so a workflow on one is theirs to set up.
   const ref = step.text[step.usesLine]!.match(/mergelightai\/mergelight@([^\s#"']+)/)?.[1] ?? '';
@@ -374,20 +376,49 @@ export function loginsIn(content: string | null, secretNames: string[], shared: 
  */
 export function runsOnBase(content: string | null): boolean {
   if (!content) return false;
-  const on = events(content);
-  return on.includes('pull_request_target') && !on.includes('pull_request');
+  const on = triggers(content);
+  if (!on.has('pull_request_target')) return false;
+  // With both, the PR's own run is the one that asks only where pull_request surely runs on its new commits.
+  const own = on.get('pull_request');
+  return own === undefined || !runsOnCommits(own);
+}
+
+/**
+ * Whether a pull_request event, by what's under it, runs on every new commit of any PR: no filter at all, or only a
+ * `types` that has synchronize. A branch or path filter, or anything this can't read, may keep it from running.
+ */
+function runsOnCommits(config: string[] | null): boolean {
+  if (config === null) return false;
+  if (!config.length) return true;
+  const indent = indentOf(config[0]!);
+  const types: string[] = [];
+  for (let i = 0; i < config.length; i++) {
+    const t = config[i]!;
+    if (indentOf(t) !== indent) continue;
+    const key = t.trim().match(/^(["']?)([\w-]+)\1[ \t]*:(.*)$/);
+    if (!key || key[2] !== 'types') return false;
+    const inline = key[3]!.replace(/(^|[ \t])#.*$/, '').trim();
+    const flow = inline.match(/^\[(.*)\]$/);
+    if (flow) types.push(...flow[1]!.split(',').map((x) => x.trim().replace(/^(["'])(.*)\1$/, '$2')));
+    else if (inline) types.push(inline.replace(/^(["'])(.*)\1$/, '$2'));
+    // A list under it, one type a line.
+    else for (let j = i + 1; j < config.length && /^ *-[ \t]/.test(config[j]!) && indentOf(config[j]!) >= indent; j++) types.push(config[j]!.replace(/^ *-[ \t]+/, '').replace(/(^|[ \t])#.*$/, '').trim().replace(/^(["'])(.*)\1$/, '$2'));
+  }
+  return types.includes('synchronize');
 }
 
 /**
  * The events a workflow runs on: the keys of its `on:`, or the names in `on: push` and `on: [push, pull_request]`. Never
- * what's under an event, like the branches or paths it filters on, which can look like an event's name.
+ * what's under an event, like the branches or paths it filters on, which can look like an event's name. Each has the
+ * lines under it, none when it has nothing set, or null when what it has is set on its own line, which isn't read.
  */
-function events(content: string): string[] {
+function triggers(content: string): Map<string, string[] | null> {
+  const found = new Map<string, string[] | null>();
   const lines = content.split(/\r?\n/);
   // The root mapping can be set in, as long as all of it is: `on` is a key at its indent.
   const root = indentOf(lines.find((l) => !NOTE.test(l) && !/^(?:---|\.\.\.)/.test(l)) ?? '');
   const at = lines.findIndex((l) => indentOf(l) === root && /^ *["']?on["']?[ \t]*:/.test(l));
-  if (at < 0) return [];
+  if (at < 0) return found;
   const unquote = (s: string) => s.trim().replace(/^(["'])(.*)\1$/, '$2');
   const uncomment = (line: string) => line.replace(/(^|[ \t])#.*$/, '').trim();
   const open = (text: string) => (text.match(/[[{]/g)?.length ?? 0) - (text.match(/[\]}]/g)?.length ?? 0);
@@ -396,7 +427,7 @@ function events(content: string): string[] {
   for (let i = at + 1; /^[[{]/.test(inline) && open(inline) > 0 && i < lines.length; i++) inline += ` ${uncomment(lines[i]!)}`;
   if (inline) {
     const flow = inline.match(/^([[{])(.*)[\]}]$/);
-    if (!flow) return [unquote(inline)];
+    if (!flow) return found.set(unquote(inline), []);
     // Only what's at the top of the list or map: `{ pull_request_target: { paths: [a] } }` is that one event.
     const parts = [''];
     let depth = 0;
@@ -409,10 +440,19 @@ function events(content: string): string[] {
       if (ch === ']' || ch === '}') depth--;
       parts[parts.length - 1] += ch;
     }
-    return parts.map((p) => unquote(flow[1] === '{' ? p.replace(/:[\s\S]*$/, '') : p)).filter(Boolean);
+    for (const part of parts) {
+      if (flow[1] === '[') {
+        if (unquote(part)) found.set(unquote(part), []);
+        continue;
+      }
+      const [name, ...value] = part.split(':');
+      const set = value.join(':').trim();
+      if (unquote(name ?? '')) found.set(unquote(name!), !set || /^(?:\{\s*\}|null|~)$/.test(set) ? [] : null);
+    }
+    return found;
   }
-  const found: string[] = [];
   let indent = -1;
+  let current: string[] | null = null;
   for (let i = at + 1; i < lines.length; i++) {
     const t = lines[i]!;
     if (NOTE.test(t)) continue;
@@ -421,9 +461,18 @@ function events(content: string): string[] {
     if (col < root || (col === root && !/^ *-[ \t]/.test(t))) break;
     if (indent < 0) indent = col;
     // Deeper is what an event filters on.
-    if (col !== indent) continue;
-    const key = t.slice(col).match(/^(?:-[ \t]+)?(["']?)([^"':#\s]+)\1[ \t]*(?::|#|$)/);
-    if (key) found.push(key[2]!);
+    if (col !== indent) {
+      current?.push(t);
+      continue;
+    }
+    const key = t.slice(col).match(/^(?:-[ \t]+)?(["']?)([^"':#\s]+)\1[ \t]*(?::(.*)|#.*|$)/);
+    if (!key) {
+      current = null;
+      continue;
+    }
+    const set = uncomment(key[3] ?? '');
+    current = !set || /^(?:\{\s*\}|null|~)$/.test(set) ? [] : null;
+    found.set(key[2]!, current);
   }
   return found;
 }
