@@ -78,6 +78,10 @@ async function scenario(name, start, body) {
       if (u.pathname === '/repos/mergelightai/mergelight/commits/v0.1.19') return world.tagCommitFails ? json(req, {}, 500) : json(req, { sha: 'b'.repeat(40) });
       // v0 points at a release with two AIs, unless a test moves it back. b is v0.1.19, the first with them, and c is older.
       if (u.pathname === '/repos/mergelightai/mergelight/commits/v0') return json(req, { sha: world.v0 ?? 'a'.repeat(40) });
+      if (u.pathname === '/repos/mergelightai/mergelight/tags' && world.tagsFails > 0) {
+        world.tagsFails--;
+        return json(req, {}, 500);
+      }
       // With many tags, a hundred others come first, and these are on the second page.
       if (u.pathname === '/repos/mergelightai/mergelight/tags' && world.manyTags && u.searchParams.get('page') !== '2') return json(req, Array.from({ length: 100 }, (_, i) => ({ name: `v0.0.${i}`, commit: { sha: 'e'.repeat(40) } })));
       if (u.pathname === '/repos/mergelightai/mergelight/tags') return json(req, [{ name: 'v0.2.0', commit: { sha: 'a'.repeat(40) } }, { name: 'v0', commit: { sha: world.v0 ?? 'a'.repeat(40) } }, { name: 'v0.1.19', commit: { sha: 'b'.repeat(40) } }, { name: 'v0.1.18', commit: { sha: 'c'.repeat(40) } }]);
@@ -1808,6 +1812,50 @@ await scenario('pinned-release-on-the-second-page-of-tags', { secrets: ['CODEX_A
   await wait(3000);
   // v0.1.19's tag is past the first hundred.
   expect(!/needs Mergelight v0\.1\.19 or newer/.test(await text()), "finds the pinned commit's release on a later page");
+});
+
+await scenario('version-lookup-tried-again', { secrets: ['CODEX_AUTH_JSON', 'CLAUDE_CODE_OAUTH_TOKEN'], refresh: REFRESH, tagsFails: 1, file: BEHIND }, async ({ page, until, click }) => {
+  await page.goto(`${base}/setup/`, { waitUntil: 'networkidle2' });
+  await page.evaluate(() => sessionStorage.setItem('mergelight.setup.state', 's'));
+  await page.goto(`${base}/setup/?code=c&state=s`, { waitUntil: 'networkidle2' });
+  await until((x) => x.includes('Which repo'), 'the list');
+  await click('[role=option]', 'api');
+  // The first look at the Action's tags fails, so the version can't be told for now.
+  await until((x) => /needs Mergelight v0\.1\.19 or newer/.test(x), 'the version, unknown');
+  await until((x) => /Your AI/.test(x) && !/needs Mergelight v0\.1\.19 or newer/.test(x), 'the version, once a later look works', 20000);
+});
+
+await scenario('target-update-pr-moved-to-another-branch', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], file: TARGET.replace('mergelightai/mergelight@v0', `mergelightai/mergelight@${'b'.repeat(40)} # v0.1.19`).replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`), open: { ...PR, ref: 'mergelight-setup-old' }, branchFile: TARGET.replace('mergelightai/mergelight@v0', `mergelightai/mergelight@${'b'.repeat(40)} # v0.1.19`).replace(LAST_INPUT, `${LAST_INPUT}          provider: codex\n`) }, async ({ page, world, until, click, text }) => {
+  await page.goto(`${base}/setup/`, { waitUntil: 'networkidle2' });
+  await page.evaluate(() => sessionStorage.setItem('mergelight.setup.state', 's'));
+  await page.goto(`${base}/setup/?code=c&state=s`, { waitUntil: 'networkidle2' });
+  await until((x) => x.includes('Which repo'), 'the list');
+  await click('[role=option]', 'api');
+  await until((x) => /Update Mergelight on api/.test(x), 'the update step');
+  await wait(800);
+  await click('button', 'Update to v0.2.0');
+  await until((x) => /Merge your PR first/.test(x), 'the step that waits for the merge');
+  // It's moved to staging and merged there, so main still has Claude reviewing by default.
+  world.prBase = 'staging';
+  world.merged = true;
+  await until((x) => !/Merge your PR first/.test(x), 'the PR, no longer followed');
+  await wait(4000);
+  expect(!/codex login/.test(await text()), 'offers no ChatGPT login, which would make ChatGPT review on main');
+});
+
+await scenario('merged-roles-read-again-after-a-failure', { secrets: ['CODEX_AUTH_JSON', 'CLAUDE_CODE_OAUTH_TOKEN'], refresh: REFRESH, file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n          verify-with: codex\n`) }, async ({ world, until, click, reachLive, choose }) => {
+  await reachLive();
+  await choose('Change');
+  await click('[role=radiogroup][aria-label="Reviews your PRs"] label', 'ChatGPT');
+  await wait(200);
+  await click('button', 'Open PR');
+  await until((x) => /Merge PR #9/.test(x), 'the change, with both connected');
+  // It's merged, but main can't be read for a while.
+  world.mainFails = true;
+  world.merged = true;
+  await wait(9000);
+  world.mainFails = false;
+  await until((x) => /Reviews with ChatGPT, checked by Claude/.test(x) && !/Merge PR #9/.test(x), 'the merged roles, once main can be read', 20000);
 });
 
 await scenario('review-taken-out-before-merge', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], refresh: REFRESH, file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`) }, async ({ world, until, click, reachLive, choose }) => {

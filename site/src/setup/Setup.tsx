@@ -85,6 +85,8 @@ const SCAN_NOTE = 'This repo has more open PRs than we look through for one that
  * An older one can't do what choosing who checks here asks of it.
  */
 const MIN_ACTION_VERSION = 'v0.1.19';
+/** How many times the release a workflow runs is looked up when it can't be told. */
+const VERSION_TRIES = 4;
 
 /** No login at all: what counts while the workflow a connection is for is still being read. */
 const NO_LOGINS: Logins = { claude: false, codex: false };
@@ -358,6 +360,8 @@ export default function Setup() {
   };
   /** The repo picked, counted, so an answer for one picked before is never applied to this one. */
   const picked = useRef(0);
+  /** The branch a setup or update PR is for, so one moved to another branch is no longer followed. */
+  const setupBase = useRef<string | null>(null);
   /** The branch the linked PR goes into, which can be another one than the branch picked here. */
   const linkBase = useRef('');
   /**
@@ -382,6 +386,7 @@ export default function Setup() {
     picked.current++;
     changingNow.current = false;
     loginsBefore.current = null;
+    setupBase.current = null;
     openPrLookup.current++;
     linkRead.current++;
     rolesRead.current++;
@@ -549,6 +554,7 @@ export default function Setup() {
     try {
       const opened = await client.proposeWorkflows(repo, branch, prFiles, update ? { kind: 'update', release: update } : { kind: 'setup' });
       setPr(opened);
+      setupBase.current = branch;
       setUpdatePr(opened && update ? update.tag : null);
       // What the PR holds, which an open one can have changed in other ways, like who reviews.
       setPendingFile(null);
@@ -589,6 +595,8 @@ export default function Setup() {
       });
       if (found) {
         setPr(found);
+        // It was made by hand, into whichever branch they picked there: the first one seen is the one it's for.
+        setupBase.current = null;
         setTimeout(afterAdding, 900);
         return true;
       }
@@ -607,13 +615,23 @@ export default function Setup() {
     }
     const forRepo = picked.current;
     let standing = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     setActionVersion(undefined);
-    client.actionVersion(live.ref, live.version).then(
-      (version) => standing && forRepo === picked.current && setActionVersion(version),
-      () => standing && forRepo === picked.current && setActionVersion(null),
-    );
+    // A lookup that failed, or found no release, is tried again a few times, further apart each time: GitHub may only
+    // have failed for a moment. A version that's too old stays as it is.
+    const look = (tries: number) =>
+      client.actionVersion(live.ref, live.version).then(
+        (version) => version,
+        () => null,
+      ).then((version) => {
+        if (!standing || forRepo !== picked.current) return;
+        setActionVersion(version);
+        if (version === null && tries < VERSION_TRIES) timer = setTimeout(() => void look(tries + 1), 4000 * 2 ** tries);
+      });
+    void look(1);
     return () => {
       standing = false;
+      clearTimeout(timer);
     };
   }, [client, liveFile]);
 
@@ -677,6 +695,20 @@ export default function Setup() {
         setPr(null);
         if (view === 'connect') setView('live');
         return true;
+      }
+      // So with a setup or update PR moved to another branch than the one it was for: merged there, it releases nothing.
+      if (!rolesChange && !startOnClaude && pr && current) {
+        setupBase.current ??= current.base;
+        if (current.base !== setupBase.current) {
+          pendingReads.current++;
+          setPr(null);
+          setPendingFile(null);
+          setPendingRead('known');
+          setSetupHold(false);
+          setUpdatePr(null);
+          if (view === 'connect') setView('live');
+          return true;
+        }
       }
       // A new commit is a new run, like the one that gets a new code after the last one ran out. This starts over on it.
       if (pr && current && current.headSha !== pr.headSha) {
@@ -742,6 +774,7 @@ export default function Setup() {
       setMerged(done);
       setPrMerged(Boolean(current?.merged));
       // Once it's merged, the branch has what merged, which someone may have edited on GitHub before merging.
+      let mergedUnread = false;
       if (done && rolesChange) {
         // Null is a workflow that's gone from the branch, and undefined one that couldn't be read.
         const onBranch = await client.workflowAt(repo, branch).catch(() => undefined);
@@ -760,6 +793,7 @@ export default function Setup() {
         }
         if (job !== null) setRefreshLive(job);
         else if (rolesChange.addsRefresh) setRefreshLive(true);
+        mergedUnread = onBranch === undefined;
         // One that couldn't be read is tried again on the next check. Until what merged is read, nothing says a held
         // login is safe to save: the proposal isn't what merged.
         if (onBranch !== undefined) {
@@ -822,8 +856,9 @@ export default function Setup() {
         if (connected && (/^connected/i.test(check?.title ?? '') || isReviewing(check))) void client.clearClaudeCode(repo).catch(() => undefined);
         setView('live');
       }
-      // A change of AI that still needs a login keeps being followed, so Resume goes once they're all there.
-      const waiting = Boolean(rolesChange?.needs.some((ai) => !has(ai, seen)));
+      // A change of AI that still needs a login keeps being followed, so Resume goes once they're all there. So does
+      // one whose merged workflow couldn't be read yet.
+      const waiting = Boolean(rolesChange?.needs.some((ai) => !has(ai, seen))) || mergedUnread;
       return view === 'live' && (done || !pr) && !waiting;
     });
     return () => {
