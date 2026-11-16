@@ -331,6 +331,11 @@ await run('update-keeps-the-prs-refresh-job', { onBase: customized(`${OLD_SHA} #
   expect(job?.body.branch === 'mergelight-setup-old' && job?.body.sha === 'prrefreshblob', "updates the refresh job that PR has, though main has none");
   expect(content === ourRefresh(`${RELEASE.sha} # ${RELEASE.tag}`), 'moves only its version lines, and keeps the rest of it');
 });
+await run('update-moves-the-prs-refresh-job-whatever-main-reads', { onBase: customized(`${OLD_SHA} # v0.1.0`).replace('secrets.CODEX_AUTH_JSON', 'secrets.TEAM_CODEX'), prFile: customized(`${OLD_SHA} # v0.1.0`), prRefresh: ourRefresh(`${OLD_SHA} # v0.1.0`), login: true, button: 'Update to v0.2.0' }, ({ puts }) => {
+  // main reads TEAM_CODEX, but the open PR moves the review to CODEX_AUTH_JSON and adds the job that keeps it fresh.
+  const job = puts.find((w) => w.p.endsWith('/mergelight-refresh.yml'));
+  expect(job?.body.branch === 'mergelight-setup-old' && Buffer.from(job.body.content, 'base64').toString() === ourRefresh(`${RELEASE.sha} # ${RELEASE.tag}`), "moves the PR's refresh job to the new version too");
+});
 await run('open-pr-already-current', { prFile: withLogin.file, prRefresh: withLogin.refresh, login: true }, ({ writes, after }) => {
   expect(writes.length === 0, 'writes nothing');
   expect(/PR #5 opened/.test(after), 'reuses it');

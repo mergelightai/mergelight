@@ -492,22 +492,31 @@ export default function Setup() {
    * The review, and the job that keeps a ChatGPT login fresh. Without that job reviews refresh the login themselves,
    * and one that starts during another's refresh can fail. An API key needs no refreshing.
    */
-  const files = useMemo<WorkflowFile[]>(() => {
+  /**
+   * `files` is what the page shows, and `prFiles` what the PR gets: for an update, also the refresh job, so one an open
+   * PR has gets its version moved whatever main's workflow reads.
+   */
+  const { files, prFiles } = useMemo<{ files: WorkflowFile[]; prFiles: WorkflowFile[] }>(() => {
     // An update moves the version lines of what the pull request's branch holds, so a change of AI waiting there stays.
     // One whose Mergelight step is gone has no version to move, so it stops the update rather than claiming it worked.
     const moves = update ? { edit: (current: string) => (readInstalled(current) ? pinned(current, update) : null) } : {};
     const list: WorkflowFile[] = [{ name: 'mergelight.yml', content: workflow, ...moves }];
-    if (!details || !repo) return list;
+    if (!details || !repo) return { files: list, prFiles: list };
     const version = (content: string) => (pinTo ? pinned(content, pinTo) : content);
     // A refresh job an open PR has already, edited or not, only gets its version lines moved. Where the branch has one,
     // a PR that took it out stops the change rather than getting it back. Where it has none, it goes in only where the
     // PR has none either.
-    if (details.refresh) list.push({ name: REFRESH_FILE, content: version(details.refresh), edit: version });
-    // Only for a workflow that reads the ChatGPT plan's login: another tool's login of that name isn't the review's to refresh.
-    // A ChatGPT plan's login gets it whatever key another AI has. A repo with only keys or a Claude login doesn't.
-    // Whether it goes in is decided again by the workflow the PR ends up with, which an open one may have changed.
-    else if ((details.secretNames.includes(CHATGPT_SECRET) || !details.hasApiKey) && readsChatgpt(details.installed?.content)) list.push({ name: REFRESH_FILE, content: refreshJob(pinTo), edit: version, orAdd: true, addIf: readsPlanLogin });
-    return list;
+    if (details.refresh) {
+      list.push({ name: REFRESH_FILE, content: version(details.refresh), edit: version });
+      return { files: list, prFiles: list };
+    }
+    // A ChatGPT plan's login gets it whatever key another AI has. A repo with only keys or a Claude login doesn't. It goes
+    // in only where the workflow the PR ends up with reads the plan's login: another tool's login of that name isn't
+    // the review's to refresh, and an open PR may have changed which one it reads.
+    const wanted = details.secretNames.includes(CHATGPT_SECRET) || !details.hasApiKey;
+    const job: WorkflowFile = { name: REFRESH_FILE, content: refreshJob(pinTo), edit: version, orAdd: true, addIf: (review) => wanted && readsPlanLogin(review) };
+    const shown = wanted && readsChatgpt(details.installed?.content) ? [...list, job] : list;
+    return { files: shown, prFiles: update ? [...list, job] : shown };
   }, [workflow, details, repo, pinTo, update]);
   const fileUrl = repo ? newFileUrl(repo.fullName, branch, workflow) : '#';
   // A repo that's on, whose secrets couldn't all be read, may well have a login, so it isn't sent to connect one.
@@ -535,7 +544,7 @@ export default function Setup() {
     setAddFailed(null);
     setFileOpen(false);
     try {
-      const opened = await client.proposeWorkflows(repo, branch, files, update ? { kind: 'update', release: update } : { kind: 'setup' });
+      const opened = await client.proposeWorkflows(repo, branch, prFiles, update ? { kind: 'update', release: update } : { kind: 'setup' });
       setPr(opened);
       setUpdatePr(opened && update ? update.tag : null);
       // What the PR holds, which an open one can have changed in other ways, like who reviews.
