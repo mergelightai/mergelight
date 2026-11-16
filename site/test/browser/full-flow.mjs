@@ -15,12 +15,13 @@ const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/cs
 const RELEASE = { tag: 'v0.2.0', sha: 'a'.repeat(40) };
 const OLD_SHA = 'b'.repeat(40);
 const b64 = (s) => Buffer.from(s).toString('base64');
+const ourRefresh = (use) => `# Ours: every day\n${customized(use)}`;
 const customized = (use) => `# Our own note, keep this\nname: Mergelight\njobs:\n  review:\n    runs-on: self-hosted\n    steps:\n      - uses: mergelightai/mergelight@${use}\n        with:\n          effort: medium\n          codex-auth-json: \${{ secrets.CODEX_AUTH_JSON }}\n`;
 
 let failures = 0;
 const expect = (ok, what) => { console.log(`  ${ok ? 'ok ' : 'FAIL'} ${what}`); if (!ok) failures++; };
 
-async function run(name, { login = false, apiKey = false, claude = false, orgSecrets = [], refuse = null, onBase = null, prFile = null, prTitle = 'Add Mergelight code review', prRefresh = null, baseRefresh = null, noRelease = false, reviewDone = false, scope = 'new', button = 'Add to api' } = {}, check = () => {}) {
+async function run(name, { login = false, apiKey = false, claude = false, orgSecrets = [], refuse = null, onBase = null, prFile = null, prTitle = 'Add Mergelight code review', prFiles = ['.github/workflows/mergelight.yml'], prRefresh = null, baseRefresh = null, noRelease = false, reviewDone = false, scope = 'new', button = 'Add to api' } = {}, check = () => {}) {
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 860, deviceScaleFactor: 2 });
   const errors = [];
@@ -57,7 +58,7 @@ async function run(name, { login = false, apiKey = false, claude = false, orgSec
       if (p === '/branches') return json(req, [{ name: 'main' }, { name: 'staging' }, { name: 'feat/x' }]);
       if (p === '/pulls' && u.searchParams.get('state') === 'all') return json(req, [{ base: { ref: 'staging' }, head: { ref: 'feat/x' } }]);
       if (p === '/pulls') return json(req, prFile ? [{ number: 5, html_url: 'https://github.com/acme/api/pull/5', title: prTitle, base: { ref: 'staging' }, head: { sha: 'oldsha', ref: 'mergelight-setup-old', repo: { full_name: 'acme/api' } } }] : []);
-      if (p === '/pulls/5/files') return json(req, [{ filename: '.github/workflows/mergelight.yml' }]);
+      if (p === '/pulls/5/files') return json(req, prFiles.map((filename) => ({ filename })));
       if (p === '/pulls/5') return json(req, { merged: false, head: { sha: writes.some((w) => w.m === 'PUT') ? 'newsha' : 'oldsha' } });
       if (p === '/pulls/7') return json(req, { merged: false, head: { sha: 'headsha' } });
       if (p === '/issues/5/comments' || p === '/issues/7/comments') return json(req, []);
@@ -206,10 +207,19 @@ await run('update-checks-every-file-first', { onBase: customized(`${OLD_SHA} # v
   expect(writes.length === 0, 'writes nothing, not even the file it could update');
   expect(/That didn't work/.test(after), 'and says it failed');
 });
-const ourRefresh = (use) => `# Ours: every day\n${customized(use)}`;
 await run('update-waits-for-a-refresh-pr', { onBase: customized(`${OLD_SHA} # v0.1.0`), prFile: customized(`${OLD_SHA} # v0.1.0`), prTitle: 'Keep the ChatGPT login fresh for Mergelight', login: true, button: 'Update to v0.2.0' }, ({ writes, after }) => {
   expect(writes.length === 0, 'an update never goes into the PR that adds the refresh job');
   expect(/PR #5 changes your Mergelight workflow already\. Merge or close it first, then update\./.test(after), 'says to merge or close it first');
+});
+await run('update-waits-for-a-renamed-refresh-pr', { onBase: customized(`${OLD_SHA} # v0.1.0`), prFile: customized(`${OLD_SHA} # v0.1.0`), prTitle: 'chore: keep the login fresh', prFiles: ['.github/workflows/mergelight-refresh.yml'], login: true, button: 'Update to v0.2.0' }, ({ writes, after }) => {
+  expect(writes.length === 0, 'a PR that changes only the refresh job is told apart by its files, whatever its title');
+  expect(/PR #5 changes your Mergelight workflow already\. Merge or close it first, then update\./.test(after), 'and says to merge or close it first');
+});
+await run('setup-keeps-the-prs-refresh-job', { baseRefresh: customized('v0'), prFile: customized('v0'), prRefresh: ourRefresh('v0') }, ({ puts }) => {
+  const job = puts.find((w) => w.p.endsWith('/mergelight-refresh.yml'));
+  const content = job && Buffer.from(job.body.content, 'base64').toString();
+  expect(job?.body.branch === 'mergelight-setup-old', 'updates the open PR');
+  expect(content === ourRefresh(`${RELEASE.sha} # ${RELEASE.tag}`), "keeps that PR's own refresh job, and moves only its version");
 });
 await run('update-keeps-the-prs-refresh-job', { onBase: customized(`${OLD_SHA} # v0.1.0`), prFile: customized(`${OLD_SHA} # v0.1.0`), prRefresh: ourRefresh(`${OLD_SHA} # v0.1.0`), login: true, button: 'Update to v0.2.0' }, ({ puts }) => {
   const job = puts.find((w) => w.p.endsWith('/mergelight-refresh.yml'));

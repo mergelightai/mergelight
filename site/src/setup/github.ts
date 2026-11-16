@@ -112,6 +112,16 @@ export class WorkflowEditError extends Error {
   }
 }
 
+/** How many open pull requests' files are looked through for one that changes the workflow already. */
+const PULLS_CHECKED = 150;
+
+/** There were too many open pull requests to look through them all, so a change could go beside one. Nothing was written. */
+export class ScanLimitError extends Error {
+  constructor() {
+    super(`More than ${PULLS_CHECKED} open pull requests to look through.`);
+  }
+}
+
 /** A pull request that changes the workflow is open already, and this change doesn't go into it. Nothing was written. */
 export class OpenPrError extends Error {
   pr: SetupPr;
@@ -461,24 +471,37 @@ export function realClient(token: string): GitHubClient {
   };
   /** With `base`, only one into that branch: a change made on one into another branch would never reach this one. */
   /** Whether a pull request changes a Mergelight workflow, looking through all its files a page at a time. */
-  const changesWorkflow = async (repo: Repo, number: number) => {
+  /** Which Mergelight workflows a pull request changes, looking through all its files a page at a time. */
+  const workflowsChanged = async (repo: Repo, number: number) => {
+    const changed = { review: false, refresh: false };
     for (let page = 1; ; page++) {
       // A list that can't be read stops whoever asked: an unread PR may change the workflow already.
       const files = await get<{ filename: string }[]>(`/repos/${repo.fullName}/pulls/${number}/files?per_page=100&page=${page}`);
-      if (files.some((f) => f.filename === WORKFLOW_PATH || f.filename === REFRESH_PATH)) return true;
-      if (files.length < 100) return false;
+      for (const f of files) {
+        if (f.filename === WORKFLOW_PATH) changed.review = true;
+        if (f.filename === REFRESH_PATH) changed.refresh = true;
+      }
+      if (files.length < 100) return changed;
     }
   };
-  /** Every open pull request, a page at a time, so one far down the list is still found. */
+  /**
+   * Every open pull request, a page at a time, so one far down the list is still found. Each one's files cost a request,
+   * so past PULLS_CHECKED of them the scan stops: a repo with that many open PRs is told so, rather than having its
+   * hourly GitHub requests used up.
+   */
   const openSetupPull = async (repo: Repo, base?: string) => {
     const into = base ? `&base=${encodeURIComponent(base)}` : '';
+    let checked = 0;
     for (let page = 1; ; page++) {
       const pulls = await get<{ number: number; html_url: string; title: string; base: { ref: string }; head: { sha: string; ref: string; repo: { full_name: string } | null } }[]>(`/repos/${repo.fullName}/pulls?state=open&sort=created&direction=desc&per_page=100&page=${page}${into}`);
       for (const pull of pulls) {
         // A fork's pull request isn't ours to update.
         if (pull.head.repo?.full_name !== repo.fullName) continue;
         if (base && pull.base?.ref !== base) continue;
-        if (await changesWorkflow(repo, pull.number)) return pull;
+        if (++checked > PULLS_CHECKED) throw new ScanLimitError();
+        const changed = await workflowsChanged(repo, pull.number);
+        // One that changes only the refresh job is told apart by its files, whatever it's called.
+        if (changed.review || changed.refresh) return { ...pull, refreshOnly: changed.refresh && !changed.review };
       }
       if (pulls.length < 100) return null;
     }
@@ -582,7 +605,7 @@ export function realClient(token: string): GitHubClient {
       const open = await openSetupPull(repo, branch);
       if (open) {
         // A change of AI is a pull request of its own, and an update never goes into one: each says only what it changes.
-        if (change.kind === 'roles' || change.kind === 'refresh' || (change.kind === 'update' && (open.title === ROLES_TITLE || open.title === REFRESH_TITLE))) throw new OpenPrError({ number: open.number, url: open.html_url, headSha: open.head.sha });
+        if (change.kind === 'roles' || change.kind === 'refresh' || (change.kind === 'update' && (open.refreshOnly || open.title === ROLES_TITLE || open.title === REFRESH_TITLE))) throw new OpenPrError({ number: open.number, url: open.html_url, headSha: open.head.sha });
         const planned = await plan(open.head.ref);
         const commit = await write(open.head.ref, commitFor(change), planned);
         return { number: open.number, url: open.html_url, headSha: commit ?? open.head.sha };

@@ -9,7 +9,7 @@ import { OPENAI_PATH } from '../brandIcons';
 import Ambient from '../sections/Ambient';
 import { Check, GitHubIcon, SURFACE, WELL } from '../ui';
 import type { ConnectLink } from './github';
-import { compareVersions, cleanUrl, finishSignIn, GitHubError, INSTALL_URL, onlyAi, onRef, OpenPrError, readConnectLink, readInstalled, rememberConnect, rememberRepo, reviewAppUrl, takeRememberedConnect, takeRememberedRepo, isPinned, mockClient, pinned, realClient, REFRESH_FILE, signInUrl, wakeTokenServer, withReviewer, WorkflowEditError, type CheckStatus, type ConnectCode, type GitHubClient, type Release, type Repo, type RepoDetails, type SetupPr, type WorkflowFile } from './github';
+import { compareVersions, cleanUrl, finishSignIn, GitHubError, INSTALL_URL, onlyAi, onRef, OpenPrError, ScanLimitError, readConnectLink, readInstalled, rememberConnect, rememberRepo, reviewAppUrl, takeRememberedConnect, takeRememberedRepo, isPinned, mockClient, pinned, realClient, REFRESH_FILE, signInUrl, wakeTokenServer, withReviewer, WorkflowEditError, type CheckStatus, type ConnectCode, type GitHubClient, type Release, type Repo, type RepoDetails, type SetupPr, type WorkflowFile } from './github';
 import { aiName, connectsAfterMerge, isStandard, LOGIN_INPUTS, LOGIN_SECRET, loginInputs, loginsFrom, loginsIn, otherAi, passesLogin, readRoles, reviewerFixedBy, rolesFor, withInputs, withoutInputs, withRoles, type Ai, type Logins, type Roles } from './roles';
 
 const CHATGPT_SECURITY = 'https://chatgpt.com/settings/security';
@@ -70,7 +70,10 @@ const ORDER: View[] = ['welcome', 'settling', 'repo', 'review-app', 'add', 'fini
 const RAIL: Record<View, number> = { welcome: 0, settling: 1, repo: 1, 'review-app': 1, add: 2, finish: 2, connect: 3, live: 4, roles: 4 };
 
 /** Why a change of AI didn't open a pull request. */
-type RolesFailure = 'no-file' | 'no-step' | 'changed' | 'refused' | 'other';
+type RolesFailure = 'no-file' | 'no-step' | 'changed' | 'scan' | 'refused' | 'other';
+
+/** Why nothing was proposed in a repo with more open PRs than are looked through. */
+const SCAN_NOTE = 'This repo has more open PRs than we look through for one that changes your Mergelight workflow, so nothing was changed.';
 
 /**
  * The first release of the Action that has two AIs: a checker that's connected, or stood in for, when it has no login.
@@ -110,6 +113,12 @@ function reconciled(change: RolesChange, merged: string, logins: Logins): RolesC
   return { ...change, content: merged, needs, roles: set ? rolesFor(set, all) : change.roles, connectFirst: false, implicit: Boolean(set && !set.verifyWith && needs.length) };
 }
 
+/** A branch whose workflow has to name its reviewer first, and the AI that reviews there now when that can be told. */
+interface OtherBranch {
+  branch: string;
+  reviewer: Ai | null;
+}
+
 /** A pull request that changes who reviews and who checks, and the AIs it still needs a login for. */
 interface RolesChange {
   roles: Roles;
@@ -127,6 +136,11 @@ interface RolesChange {
   hold: boolean;
   /** The workflow leaves the checker to the default, so no run asks for its login: it comes from the command. */
   implicit: boolean;
+  /**
+   * Other long-lived branches whose workflow doesn't name its reviewer, which a login saved now would move to the other
+   * AI. The connection waits until each names it.
+   */
+  others: OtherBranch[];
 }
 
 export default function Setup() {
@@ -145,7 +159,7 @@ export default function Setup() {
   const [scope, setScope] = useState<Scope>('all');
   const [fileOpen, setFileOpen] = useState(false);
   const [adding, setAdding] = useState(false);
-  const [addFailed, setAddFailed] = useState<'refused' | 'open' | 'other' | null>(null);
+  const [addFailed, setAddFailed] = useState<'refused' | 'open' | 'scan' | 'other' | null>(null);
   const [pr, setPr] = useState<SetupPr | null>(null);
   const [status, setStatus] = useState<CheckStatus | null>(null);
   const [connectCode, setConnectCode] = useState<ConnectCode | null>(null);
@@ -415,16 +429,20 @@ export default function Setup() {
     const list: WorkflowFile[] = [{ name: 'mergelight.yml', content: workflow, ...moves }];
     if (!details || !repo) return list;
     const version = (content: string) => (pinTo ? pinned(content, pinTo) : content);
-    if (details.refresh) list.push({ name: REFRESH_FILE, content: version(details.refresh), ...moves });
+    // A refresh job an open PR has already, edited or not, only gets its version lines moved. Where the branch has one,
+    // a PR that took it out stops the change rather than getting it back. Where it has none, it goes in only where the
+    // PR has none either.
+    if (details.refresh) list.push({ name: REFRESH_FILE, content: version(details.refresh), edit: version });
     // Only for a workflow that reads the ChatGPT plan's login: another tool's login of that name isn't the review's to refresh.
-    // An update moves one an open PR already has, kept as it is, and adds one only where that branch has none.
-    else if (!details.hasApiKey && readsChatgpt(details.installed?.content)) list.push({ name: REFRESH_FILE, content: refreshJob(pinTo), ...(update && { ...moves, orAdd: true }) });
+    else if (!details.hasApiKey && readsChatgpt(details.installed?.content)) list.push({ name: REFRESH_FILE, content: refreshJob(pinTo), edit: version, orAdd: true });
     return list;
   }, [workflow, details, repo, pinTo, update]);
   const fileUrl = repo ? newFileUrl(repo.fullName, branch, workflow) : '#';
   // A repo that's on, whose secrets couldn't all be read, may well have a login, so it isn't sent to connect one.
   // A workflow that names its reviewer needs that AI's own login: another one being there doesn't make reviews work.
   const afterAdding = useCallback(() => {
+    // A workflow set up its own way may read its logins from secrets of its own, so it's never sent to connect one.
+    if (liveFile && !isStandard(liveFile)) return setView('live');
     const named = readRoles(liveFile ?? workflow)?.provider ?? null;
     const ready = named ? loginsIn(liveFile, secretNames, sharedSecrets)[named] : hasLogin;
     setView(ready || (!secretsComplete && Boolean(details?.installed)) ? 'live' : 'connect');
@@ -441,7 +459,7 @@ export default function Setup() {
       afterAdding();
     } catch (err) {
       setAddBlockedBy(err instanceof OpenPrError ? err.pr : null);
-      setAddFailed(err instanceof OpenPrError ? 'open' : err instanceof GitHubError && (err.status === 403 || err.status === 404) ? 'refused' : 'other');
+      setAddFailed(err instanceof OpenPrError ? 'open' : err instanceof ScanLimitError ? 'scan' : err instanceof GitHubError && (err.status === 403 || err.status === 404) ? 'refused' : 'other');
     } finally {
       setAdding(false);
     }
@@ -504,7 +522,7 @@ export default function Setup() {
   const connectLoginsNow = useRef(connectLogins);
   connectLoginsNow.current = connectLogins;
   /** The reviewer the workflow names, while it has no login of the repo's own. Setup isn't done until it has. */
-  const namedReviewer = readRoles(liveFile ?? workflow)?.provider ?? null;
+  const namedReviewer = isStandard(liveFile ?? workflow) ? (readRoles(liveFile ?? workflow)?.provider ?? null) : null;
   const setupNeed = !rolesChange && !startOnClaude && namedReviewer && !connectLogins[namedReviewer] ? namedReviewer : null;
   const setupNeedNow = useRef(setupNeed);
   setupNeedNow.current = setupNeed;
@@ -521,6 +539,12 @@ export default function Setup() {
     const stop = poll(async () => {
       const current = pr ? await client.prState(repo, pr.number).catch(() => null) : null;
       if (gone()) return true;
+      // Other branches that had to name their reviewer: once each does, the connection can go on.
+      if (rolesChange?.others.length) {
+        const left = await branchesToName(client, repo, rolesChange.needs, rolesChange.others.map((o) => o.branch));
+        if (gone()) return true;
+        if (left.length !== rolesChange.others.length) setRolesChange((rc) => rc && { ...rc, others: left });
+      }
       // A change of AI whose PR was closed without merging has nothing left to wait for.
       if (current?.closed && rolesChange && pr) {
         setRolesChange(null);
@@ -600,8 +624,11 @@ export default function Setup() {
       // A run asking for a checker goes on without it after a while, so only that AI's login ends this step.
       const asked = code?.purpose === 'check' ? onlyAi(code) : null;
       if (asked && asked !== askedCheck) setAskedCheck(asked);
+      // A link's run that offers both AIs lets either connect, so Claude's login is no longer the only one that counts.
+      const both = Boolean(startOnClaude && code && code.purpose === 'review' && code.code && code.claudeUrl);
+      if (both && askedCheck) setAskedCheck(null);
       // A change of AI waits for the login of the AI it connects now. Its run can be reviewing with the other AI before it asks.
-      const need = rolesChange?.needs.find((ai) => !connectLoginsNow.current[ai]) ?? asked ?? askedCheck ?? setupNeedNow.current;
+      const need = rolesChange?.needs.find((ai) => !connectLoginsNow.current[ai]) ?? asked ?? (both ? null : askedCheck) ?? setupNeedNow.current;
       const connected = need ? Boolean(seen?.[need]) || /^connected/i.test(check?.title ?? '') : movedOn;
       if (view === 'connect' && (need ? connected : (login && !code && !startOnClaude) || movedOn)) {
         // Only once this run has moved on: it has read the code then, and the next screen can send them back to GitHub at
@@ -674,9 +701,36 @@ export default function Setup() {
     setOpenPr(undefined);
     client.findSetupPr(repo, branch).then(
       (found) => lookup === openPrLookup.current && setOpenPr(found),
-      () => lookup === openPrLookup.current && setOpenPr(null),
+      (err) => {
+        if (lookup !== openPrLookup.current) return;
+        setOpenPr(null);
+        if (err instanceof ScanLimitError) setRolesFailed('scan');
+      },
     );
     setView('roles');
+  };
+
+  /**
+   * The other long-lived branches whose workflow a login for `needs` would move to the other AI, as it doesn't name its
+   * reviewer. `only` looks at just these branches again. One whose workflow can't be read counts, as it can't be told.
+   */
+  const branchesToName = async (c: GitHubClient, r: Repo, needs: Ai[], only?: string[]): Promise<OtherBranch[]> => {
+    const list = only ?? [...new Set([...(details?.skip ?? []), r.defaultBranch])].filter((b) => b !== branch);
+    const found = await Promise.all(
+      list.map(async (b): Promise<OtherBranch | null> => {
+        let content: string | null;
+        try {
+          content = await c.workflowAt(r, b);
+        } catch {
+          return { branch: b, reviewer: null };
+        }
+        const set = content ? readRoles(content) : null;
+        if (!set || set.provider) return null;
+        const now = rolesFor(set, loginsNow.current).reviewer;
+        return needs.some((ai) => rolesFor(set, { ...loginsNow.current, [ai]: true }).reviewer !== now) ? { branch: b, reviewer: now } : null;
+      }),
+    );
+    return found.filter((o): o is OtherBranch => o !== null);
   };
 
   /** Opens a pull request that sets who reviews and who checks, the same way a setup or an update does. */
@@ -692,18 +746,24 @@ export default function Setup() {
     // Every chosen AI without a login of the repo's own, the reviewer first, as a run connects it first.
     let needs = [...new Set([want.reviewer, want.checker])].filter((ai) => !ownLogins[ai]);
     const set = readRoles(liveFile);
+    // A login is the whole repo's, so it reaches the workflow on every branch. Other long-lived ones that don't name their
+    // reviewer would move to the other AI, and a PR here can't change them: they have to name it first.
+    const others = needs.length ? await branchesToName(client, repo, needs) : [];
+    if (forRepo !== picked.current) return;
     // The branch doesn't name its reviewer, and a new login would move its reviews. The pull request then names only the
     // reviewer, and takes out a checker the branch sets: with no checker set, its own run has none to ask for, so no
     // login can be saved before it's merged. Once there is one, the Action's default makes the other AI check, the choice.
+    // The same goes while another branch still has to name its reviewer.
     const hold = Boolean(set && needs.some((ai) => connectsAfterMerge(set, logins, want, ai)));
+    const leaveChecker = hold || others.length > 0;
     const named = withInputs(liveFile, [['provider', want.reviewer]]);
-    const content = hold && named ? (withoutInputs(named, ['verify-with']) ?? full) : full;
+    const content = leaveChecker && named ? (withoutInputs(named, ['verify-with']) ?? full) : full;
     // A ChatGPT login needs refreshing, also one saved before that nothing used: the same job a setup adds. With only an
     // API key, the job has nothing to do and does nothing. A workflow that doesn't read the plan's login gets none. It's
     // added also where the roles are set already, as a PR of its own.
     const usesPlan = (want.reviewer === 'codex' || want.checker === 'codex') && readsChatgpt(liveFile);
     const addsRefresh = !refreshLive && usesPlan;
-    const changes = full !== liveFile || addsRefresh;
+    const changes = content !== liveFile || addsRefresh;
     // The organization's ChatGPT login can't be refreshed here, so ChatGPT gets the repo's own before any PR uses it.
     const connectFirst = changes && needs.includes('codex') && sharedSecrets.includes(CHATGPT_SECRET) && readsChatgpt(liveFile);
     if (connectFirst) needs = ['codex', ...needs.filter((ai) => ai !== 'codex')];
@@ -715,7 +775,7 @@ export default function Setup() {
       setMerged(false);
       setPrMerged(false);
       setPr(opened);
-      setRolesChange({ roles: want, content, needs, connectFirst: connectFirst && !opened, addsRefresh, hold, implicit: hold });
+      setRolesChange({ roles: want, content, needs, connectFirst: connectFirst && !opened, addsRefresh, hold, implicit: leaveChecker, others });
       setRolesFile('known');
       setView(needs.length ? 'connect' : 'live');
     };
@@ -742,7 +802,7 @@ export default function Setup() {
     setChangingRoles(true);
     setRolesFailed(null);
     try {
-      const opened = await client.proposeWorkflows(repo, branch, list, full !== liveFile ? { kind: 'roles', roles: want } : { kind: 'refresh' });
+      const opened = await client.proposeWorkflows(repo, branch, list, content !== liveFile ? { kind: 'roles', roles: want } : { kind: 'refresh' });
       if (forRepo !== picked.current) return;
       // Null means the branch already has all of it, like a refresh job someone else added since. A login still missing
       // is still to connect.
@@ -757,7 +817,7 @@ export default function Setup() {
     } catch (err) {
       if (forRepo !== picked.current) return;
       if (err instanceof OpenPrError) setOpenPr(err.pr);
-      else setRolesFailed(err instanceof WorkflowEditError ? err.reason : err instanceof GitHubError && (err.status === 403 || err.status === 404) ? 'refused' : 'other');
+      else setRolesFailed(err instanceof WorkflowEditError ? err.reason : err instanceof ScanLimitError ? 'scan' : err instanceof GitHubError && (err.status === 403 || err.status === 404) ? 'refused' : 'other');
       // A PR that opens by itself, after a login, shows why it didn't on the choice.
       setView('roles');
     } finally {
@@ -830,7 +890,7 @@ export default function Setup() {
               )}
               {view === 'finish' && repo && <FinishStep repo={repo} branch={branch} fileUrl={fileUrl} pr={pr} onBack={back.finish!} />}
               {/* A new AI to connect, a new PR or a new run starts the step over: what it learned from the last one doesn't hold. */}
-              {view === 'connect' && repo && <ConnectStep key={`${rolesNeed ?? ''} ${pr?.number ?? ''} ${pr?.headSha ?? ''}`} repo={repo} pr={pr} status={status} code={connectCode} ask={connectAsk} commandWhy={commandWhy} hold={rolesChange?.hold && !prMerged ? branch : null} merged={prMerged} thenPr={Boolean(rolesChange?.connectFirst)} accepts={accepts} acceptsUnknown={(startOnClaude && linkFile === 'unknown') || Boolean(rolesChange && rolesFile === 'unknown')} visibility={repo.visibility} named={readRoles(rolesChange?.content ?? liveFile ?? workflow)?.provider ?? null} ended={runEnded || Boolean(pr && missedSha === pr.headSha)} onBack={back.connect!} onSkip={() => setView('live')} startOnClaude={startOnClaude || rolesNeed === 'claude'} onClaudeCode={(url, c) => client!.sendClaudeCode(repo, url, c)} />}
+              {view === 'connect' && repo && <ConnectStep key={`${rolesNeed ?? ''} ${pr?.number ?? ''} ${pr?.headSha ?? ''}`} repo={repo} pr={pr} status={status} code={connectCode} ask={connectAsk} commandWhy={commandWhy} hold={rolesChange?.hold && !prMerged ? branch : null} others={rolesChange?.others ?? []} merged={prMerged} thenPr={Boolean(rolesChange?.connectFirst)} accepts={accepts} acceptsUnknown={(startOnClaude && linkFile === 'unknown') || Boolean(rolesChange && rolesFile === 'unknown')} visibility={repo.visibility} named={readRoles(rolesChange?.content ?? liveFile ?? workflow)?.provider ?? null} ended={runEnded || Boolean(pr && missedSha === pr.headSha)} onBack={back.connect!} onSkip={() => setView('live')} startOnClaude={startOnClaude || rolesNeed === 'claude'} onClaudeCode={(url, c) => client!.sendClaudeCode(repo, url, c)} />}
               {/* Only an update's own pull request is an update: a change of AI on a repo that could update isn't one. */}
               {view === 'live' && repo && <LiveStep repo={repo} pr={shownPr} backTo={startOnClaude ? pr : null} status={status} hasLogin={hasLogin} merged={merged} updatedTo={startOnClaude || rolesChange ? null : (update?.tag ?? null)} ai={yourAi} onAnother={anotherRepo} />}
               {view === 'roles' && repo && liveFile && currentRoles && !rolesLocked && <RolesStep current={currentRoles} openPr={openPr} logins={logins} own={ownLogins} visibility={repo.visibility} refreshMissing={!refreshLive} sharedLogin={sharedChatgpt} defaultBranch={repo.defaultBranch} file={liveFile} branch={branch} changing={changingRoles} failed={rolesFailed} accessUrl={repo.accessUrl} onBack={changingRoles ? () => undefined : back.roles!} onConfirm={(r) => void changeRoles(r)} />}
@@ -1267,7 +1327,7 @@ function AddStep(props: {
   fileOpen: boolean;
   onToggleFile: () => void;
   adding: boolean;
-  failed: 'refused' | 'open' | 'other' | null;
+  failed: 'refused' | 'open' | 'scan' | 'other' | null;
   /** The pull request that changes who reviews, which an update waits for. */
   blockedBy: SetupPr | null;
   detailsFailed: boolean;
@@ -1327,7 +1387,7 @@ function AddStep(props: {
         </a>
         {failed && (
           <div role="alert" className="mt-4 text-center text-[13px] leading-relaxed text-muted">
-            <p>{failed === 'open' && blockedBy ? `PR #${blockedBy.number} changes your Mergelight workflow already. Merge or close it first, then update.` : failed === 'refused' ? "GitHub didn't let us open the PR. Your install may need to approve the access." : "That didn't work. Please try again."}</p>
+            <p>{failed === 'open' && blockedBy ? `PR #${blockedBy.number} changes your Mergelight workflow already. Merge or close it first, then update.` : failed === 'scan' ? SCAN_NOTE : failed === 'refused' ? "GitHub didn't let us open the PR. Your install may need to approve the access." : "That didn't work. Please try again."}</p>
             {failed === 'open' && blockedBy && (
               <a href={blockedBy.url} target="_blank" rel="noreferrer" className="mx-auto mt-1.5 flex w-fit items-center gap-1 text-lilac transition-colors hover:text-fg">
                 Open PR #{blockedBy.number} <External />
@@ -1442,7 +1502,7 @@ function AddStep(props: {
           </button>
           {failed && (
             <div role="alert" className="mt-4 text-center text-[13px] leading-relaxed text-muted">
-              <p>{failed === 'refused' ? "GitHub didn't let us open the PR. Your install may need to approve the access." : "That didn't work. Please try again."}</p>
+              <p>{failed === 'scan' ? SCAN_NOTE : failed === 'refused' ? "GitHub didn't let us open the PR. Your install may need to approve the access." : "That didn't work. Please try again."}</p>
               <p className="mt-1.5 flex flex-wrap items-center justify-center gap-x-4 gap-y-1">
                 {failed === 'refused' && (
                   <a href={repo.accessUrl} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-lilac transition-colors hover:text-fg">
@@ -1694,7 +1754,7 @@ function FinishStep({ repo, branch, fileUrl, pr, onBack }: { repo: Repo; branch:
  * `merged` is a pull request that's merged already, so a new commit on it starts no run. `accepts` is the login inputs
  * the workflow has, when that's known: a login saved for an input it doesn't have would never be used.
  */
-function ConnectStep({ repo, pr, status, code: found, ask = null, commandWhy = null, visibility = 'private', hold = null, merged = false, thenPr = false, accepts = null, acceptsUnknown = false, named = null, ended = false, onBack, onSkip, startOnClaude, onClaudeCode }: { repo: Repo; pr: SetupPr | null; status: CheckStatus | null; code: ConnectCode | null; ask?: { ai: Ai; forCheck: boolean } | null; commandWhy?: CommandWhy | null; visibility?: Repo['visibility']; hold?: string | null; merged?: boolean; thenPr?: boolean; accepts?: string[] | null; acceptsUnknown?: boolean; named?: Ai | null; ended?: boolean; onBack: () => void; onSkip: () => void; startOnClaude: boolean; onClaudeCode: (url: string, code: string) => Promise<void> }) {
+function ConnectStep({ repo, pr, status, code: found, ask = null, commandWhy = null, visibility = 'private', hold = null, others = [], merged = false, thenPr = false, accepts = null, acceptsUnknown = false, named = null, ended = false, onBack, onSkip, startOnClaude, onClaudeCode }: { repo: Repo; pr: SetupPr | null; status: CheckStatus | null; code: ConnectCode | null; ask?: { ai: Ai; forCheck: boolean } | null; commandWhy?: CommandWhy | null; visibility?: Repo['visibility']; hold?: string | null; others?: { branch: string; reviewer: Ai | null }[]; merged?: boolean; thenPr?: boolean; accepts?: string[] | null; acceptsUnknown?: boolean; named?: Ai | null; ended?: boolean; onBack: () => void; onSkip: () => void; startOnClaude: boolean; onClaudeCode: (url: string, code: string) => Promise<void> }) {
   const failed = couldntFinish(status) || ended;
   // A code from a run that has gone on without it can't be used any more.
   const code = found?.code && !failed ? found : null;
@@ -1800,6 +1860,34 @@ function ConnectStep({ repo, pr, status, code: found, ask = null, commandWhy = n
   const busy = gettingCode || gettingClaude || (mode === 'claude' && sending === 'sent' && !failed);
   const slow = useLongWait(busy, `${mode} ${pr?.headSha ?? ''} ${sending}`);
   const slowNote = mode === 'chatgpt' ? "No code came yet. Check that the Mergelight run started on your pull request." : sending === 'sent' ? "Claude hasn't answered yet. Check the Mergelight run on your pull request." : 'No link came from your pull request, so connect by hand with these steps.';
+
+  // Another long-lived branch doesn't name its reviewer, so a login saved now would move its reviews too. Only a change
+  // there names it, which this page leaves to them.
+  if (!hold && others.length && only) {
+    const names = others.map((o) => o.branch).join(' and ');
+    return (
+      <div>
+        <BackButton onClick={onBack} />
+        <Heading title={others.length === 1 ? `Name the reviewer on ${names} first` : 'Name the reviewer on your other branches first'} sub={`Your workflow on ${names} doesn't say which AI reviews, so a ${aiName(only)} login saved now would make ${aiName(only)} review there.`} />
+        <ol className="mt-6 space-y-4">
+          {others.map((o, i) => (
+            <Numbered key={o.branch} n={i + 1}>
+              Add <span className="font-mono text-[12.5px] text-fg">provider: {o.reviewer ?? 'claude or codex'}</span> under <span className="font-mono text-[12.5px] text-fg">with:</span> on {o.branch}
+              <a href={`https://github.com/${repo.fullName}/edit/${o.branch.split('/').map(encodeURIComponent).join('/')}/.github/workflows/mergelight.yml`} target="_blank" rel="noreferrer" className="mt-1 flex w-fit items-center gap-1 text-[13.5px] text-lilac transition-colors hover:text-fg">
+                Open the workflow on {o.branch} <External />
+              </a>
+            </Numbered>
+          ))}
+          <Numbered n={others.length + 1}>Connect {aiName(only)} here. The steps show up once {others.length === 1 ? 'it names its reviewer' : 'they name their reviewers'}.</Numbered>
+        </ol>
+        <div className={`${WELL} mt-6 px-4 py-3.5`}>
+          <div role="status">
+            <Pulse>Waiting for {names} to name {others.length === 1 ? 'its' : 'their'} reviewer</Pulse>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // The branch doesn't name its reviewer, so a login saved now would move its reviews. The pull request names it.
   if (hold && pr && only) {
@@ -2197,7 +2285,11 @@ function YourAi({ roles, logins, locked, oldNote, onUpdate, pending, resume, bus
 function RolesStep(props: { current: Roles; openPr: SetupPr | null | undefined; logins: Logins; own: Logins; visibility: Repo['visibility']; refreshMissing: boolean; sharedLogin: boolean; defaultBranch: string; file: string; branch: string; changing: boolean; failed: RolesFailure | null; accessUrl: string; onBack: () => void; onConfirm: (roles: Roles) => void }) {
   const { current, openPr, logins, own, visibility, refreshMissing, sharedLogin, defaultBranch, file, branch, changing, failed, accessUrl, onBack, onConfirm } = props;
   const [reviewer, setReviewer] = useState<Ai>(current.reviewer);
-  const [checker, setChecker] = useState<Ai>(otherAi(current.reviewer));
+  // A model goes to the reviewer as it is, and only one AI takes it, so the reviewer stays until that's changed. An
+  // effort only one AI takes goes to the checker too, so the checker stays that AI as well.
+  const fixedBy = reviewerFixedBy(file);
+  const checkerFixed = fixedBy === 'effort';
+  const [checker, setChecker] = useState<Ai>(checkerFixed ? current.reviewer : otherAi(current.reviewer));
   const pick = { reviewer, checker };
   const edited = withRoles(file, pick);
   // Set like this already. With an AI still to connect, connecting it is all that's left to do, after the refresh job
@@ -2208,8 +2300,6 @@ function RolesStep(props: { current: Roles; openPr: SetupPr | null | undefined; 
   const need = chosen.filter((ai) => !own[ai]);
   // An AI the workflow hands no login to could never review or check, so that line has to be added first.
   const unpassed = chosen.find((ai) => !passesLogin(file, ai)) ?? null;
-  // A model goes to the reviewer as it is, and only one AI takes it, so the reviewer stays until that's changed.
-  const fixedBy = reviewerFixedBy(file);
   const set = readRoles(file);
   const afterMerge = (ai: Ai) => Boolean(set && connectsAfterMerge(set, logins, pick, ai));
   const problem: RolesFailure | null = edited === null ? 'no-step' : failed;
@@ -2252,12 +2342,12 @@ function RolesStep(props: { current: Roles; openPr: SetupPr | null | undefined; 
         top="mt-2"
       />
       <p className="mt-4 text-[13px] font-medium text-faint">Checks what it finds</p>
-      <Choices label="Checks what it finds" options={options(otherAi(reviewer))} value={checker} onChange={setChecker} top="mt-2" />
+      <Choices label="Checks what it finds" options={options(checkerFixed ? null : otherAi(reviewer), checkerFixed)} value={checker} onChange={setChecker} top="mt-2" />
       <ul className="mt-3 divide-y divide-white/[0.06]">
         <Fact icon={<Check className="size-4" />}>Two AIs from different companies catch more than one.</Fact>
         {fixedBy && (
           <Fact icon={<span className="size-1.5 rounded-full bg-lilac" />}>
-            Your workflow sets <span className="font-mono text-[12.5px] text-fg">{fixedBy}:</span> for the AI that reviews now. Change or remove it first to choose another reviewer.
+            Your workflow sets <span className="font-mono text-[12.5px] text-fg">{fixedBy}:</span> for the AI that reviews now{checkerFixed ? ', and the checker gets it too' : ''}. Change or remove it first to choose another {checkerFixed ? 'AI' : 'reviewer'}.
           </Fact>
         )}
         {unpassed ? (
@@ -2299,6 +2389,7 @@ function RolesStep(props: { current: Roles; openPr: SetupPr | null | undefined; 
             </p>
           )}
           {problem === 'changed' && <p>Your workflow on {branch} changed since this page read it, so nothing was changed. Reload this page to see it.</p>}
+          {problem === 'scan' && <p>{SCAN_NOTE} You can set provider and verify-with in it yourself.</p>}
           {problem === 'no-file' && (
             <p>
               We couldn't find <span className="font-mono text-[12.5px] text-fg">.github/workflows/mergelight.yml</span> on {branch}, so nothing was changed.

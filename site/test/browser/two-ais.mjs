@@ -91,7 +91,7 @@ async function scenario(name, start, body) {
       if (u.pathname === '/user/installations') return json(req, { installations: [{ id: 1, html_url: 'https://github.com/settings/installations/1', account: { id: 1, login: 'acme', avatar_url: `${base}/logo.png` } }] });
       if (p === `/pulls/${PR.number}` && world.closed) return json(req, { merged: false, state: 'closed', head: { sha: world.head } });
       if (u.pathname === '/user/installations/1/repositories') return json(req, { repositories: [{ id: 2, full_name: 'acme/api', private: world.isPrivate, visibility: world.visibility ?? (world.isPrivate ? 'private' : 'public'), default_branch: world.defaultBranch, archived: false }, { id: 3, full_name: 'acme/zzz-other', private: true, default_branch: 'main', archived: false }] });
-      if (p === '/branches') return json(req, [{ name: 'main' }]);
+      if (p === '/branches') return json(req, (world.branches ?? ['main']).map((name) => ({ name })));
       if (p === '/pulls' && u.searchParams.get('state') === 'open') {
         // Other open PRs come first when a test asks for them, a page at a time as GitHub hands them out.
         const others = Array.from({ length: world.otherOpen ?? 0 }, (_, i) => ({ number: 100 + i, html_url: `https://github.com/acme/api/pull/${100 + i}`, title: 'Some feature', base: { ref: 'main' }, head: { sha: 'othersha', ref: `feat/${i}`, repo: { full_name: 'acme/api' } } }));
@@ -127,6 +127,8 @@ async function scenario(name, start, body) {
       if (p === '/contents/.github/workflows/mergelight.yml') {
         const ref = u.searchParams.get('ref');
         if (world.fileGone) return json(req, {}, 404);
+        // Another long-lived branch, with a workflow of its own when a test gives it one.
+        if (ref === 'staging') return world.stagingFile ? json(req, { sha: 'stagingblob', content: b64(world.stagingFile) }) : json(req, {}, 404);
         // The commit main is at when the PR's branch is made, which someone may have changed since the page read main.
         if (world.baseShaGone && ref === 'basesha') return json(req, {}, 404);
         // Once the PR is merged, main has what its branch held.
@@ -1371,6 +1373,64 @@ await scenario('workflow-takes-no-login', { secrets: [], file: TEMPLATE.replace(
   const t = await until((x) => /Connect your AI/.test(x), 'the connect step');
   expect(/Your workflow doesn't pass an AI login to Mergelight\. Add codex-auth-json: \$\{\{ secrets\.CODEX_AUTH_JSON \}\} or claude-code-oauth-token: \$\{\{ secrets\.CLAUDE_CODE_OAUTH_TOKEN \}\} under with: in it first\./.test(t), 'says which line to add');
   expect(!/Enable device code sign-in|claude setup-token|Add a secret named/.test(t), 'and offers no sign-in that could never reach the review');
+});
+
+await scenario('other-branch-names-its-reviewer', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], refresh: REFRESH, branches: ['main', 'staging'], stagingFile: TEMPLATE, file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`) }, async ({ page, world, until, click, reachLive, choose, text }) => {
+  await reachLive();
+  await choose('Add ChatGPT');
+  await click('button', 'Open PR');
+  // main names Claude, but staging's workflow doesn't, so a ChatGPT login would make ChatGPT review there.
+  let t = await until((x) => /Name the reviewer on staging first/.test(x), 'the step for the other branch');
+  expect(/Your workflow on staging doesn't say which AI reviews, so a ChatGPT login saved now would make ChatGPT review there\./.test(t) && /Add provider: claude under with: on staging/.test(t), 'says which branch and which line');
+  expect((await page.evaluate(() => [...document.querySelectorAll('a')].find((a) => a.textContent.includes('Open the workflow on staging'))?.href)) === 'https://github.com/acme/api/edit/staging/.github/workflows/mergelight.yml', 'links to that file');
+  expect(!/codex login|Enter this code/.test(t), 'and no login yet');
+  // They name Claude on staging.
+  world.stagingFile = TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`);
+  t = await until((x) => /codex login/.test(x), 'the login, once staging names its reviewer');
+  expect(!/Name the reviewer/.test(t), 'nothing left to name');
+});
+
+await scenario('effort-keeps-the-checker', { secrets: ['CODEX_AUTH_JSON', 'CLAUDE_CODE_OAUTH_TOKEN'], refresh: REFRESH, file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: codex\n          effort: xhigh\n`) }, async ({ page, picked, reachLive, choose }) => {
+  await reachLive();
+  const t = await choose('Change');
+  expect(/Your workflow sets effort: for the AI that reviews now, and the checker gets it too\. Change or remove it first to choose another AI\./.test(t), 'says the checker gets the effort too');
+  const off = await page.evaluate(() => [...document.querySelectorAll('[role=radiogroup][aria-label="Checks what it finds"] input')].filter((i) => i.disabled).map((i) => i.closest('label').textContent));
+  expect(off.length === 1 && off[0].startsWith('Claude'), 'Claude as checker is off, as it would get an effort it rejects');
+  expect((await picked('Checks what it finds'))?.startsWith('ChatGPT'), 'and ChatGPT checks');
+});
+
+await scenario('link-run-offers-both-chatgpt-connects', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: codex\n`), comments: [{ user: { login: BOT }, body: withState(connectBody({ url: 'https://auth.openai.com/codex/device', code: CODE }, 'https://github.com/acme/api/actions/runs/1', CLAUDE), undefined) }], checks: { rolesha: WAITING } }, async ({ page, world, until }) => {
+  await page.goto(`${base}/setup/?repo=acme/api&pr=9&connect=claude`, { waitUntil: 'networkidle2' });
+  await until((x) => /Open Claude/.test(x), "Claude's link, from a run that offers both");
+  // They connect ChatGPT instead, and the run goes on before the page sees it say so.
+  world.secrets.push('CODEX_AUTH_JSON');
+  world.comments = [{ user: { login: BOT }, body: withState(pendingSummaryBody(), undefined) }];
+  world.checks.rolesha = { status: 'in_progress', conclusion: null, output: { title: 'Reviewing' } };
+  const t = await until((x) => /Mergelight is on|This link has ended/.test(x), 'the outcome');
+  expect(/Mergelight is on/.test(t), "ChatGPT's login counts, as that run offered both");
+});
+
+await scenario('too-many-open-prs', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`), otherOpen: 160 }, async ({ world, until, click, reachLive }) => {
+  await reachLive();
+  await wait(800);
+  await click('button', 'Add ChatGPT');
+  const t = await until((x) => /more open PRs than we look through/.test(x), 'the message', 30000);
+  expect(/This repo has more open PRs than we look through for one that changes your Mergelight workflow, so nothing was changed\./.test(t), 'says why it stops');
+  expect(world.writes.length === 0, 'and writes nothing');
+});
+
+await scenario('customized-skips-connect', { secrets: ['TEAM_CLAUDE', 'CODEX_AUTH_JSON'], file: TEMPLATE.replace('secrets.CLAUDE_CODE_OAUTH_TOKEN', 'secrets.TEAM_CLAUDE').replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`) }, async ({ page, until, click }) => {
+  await page.goto(`${base}/setup/`, { waitUntil: 'networkidle2' });
+  await page.evaluate(() => sessionStorage.setItem('mergelight.setup.state', 's'));
+  await page.goto(`${base}/setup/?code=c&state=s`, { waitUntil: 'networkidle2' });
+  await until((x) => x.includes('Which repo'), 'the list');
+  await click('[role=option]', 'api');
+  await until((x) => /It's already on main/.test(x), 'the add step');
+  await wait(800);
+  await click('button', 'Continue');
+  // Its Claude login is TEAM_CLAUDE, which this page can't map, so it asks for no standard secret.
+  const t = await until((x) => /Mergelight is on|Connect/.test(x), 'the next step');
+  expect(/Mergelight is on/.test(t) && /Your workflow is customized/.test(t), 'a customized workflow is left as it is, with no login steps');
 });
 
 await scenario('step-cant-be-found', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], file: `${TEMPLATE}  again:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: mergelightai/mergelight@v0\n` }, async ({ world, reachLive }) => {
