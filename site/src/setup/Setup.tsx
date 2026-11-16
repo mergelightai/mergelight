@@ -915,7 +915,7 @@ export default function Setup() {
   const connectAsk = rolesAsk ?? (setupNeed ? { ai: setupNeed, forCheck: false } : null);
   // A merged PR starts no run, so where none ran on it, or none showed a code, a code can't come: the command is the way.
   const noRun = prMerged && Boolean(pr) && !status && !connectCode?.code;
-  const commandWhy: CommandWhy | null = connectAsk && connectAsk.ai !== 'codex' ? null : sharedChatgpt ? 'shared' : rolesAsk && repo && rolesAsk.forCheck && repo.visibility !== 'private' ? repo.visibility : rolesAsk && rolesChange?.implicit ? 'hold' : noRun ? 'base' : null;
+  const commandWhy: CommandWhy | null = connectAsk && connectAsk.ai !== 'codex' ? null : sharedChatgpt ? 'shared' : rolesAsk && repo && rolesAsk.forCheck && repo.visibility !== 'private' ? repo.visibility : rolesAsk?.forCheck && rolesChange?.implicit ? 'hold' : noRun ? 'base' : null;
 
   const openRoles = () => {
     // An update's pull request on its way could end up as a second one beside this change.
