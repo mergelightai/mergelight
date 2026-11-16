@@ -542,6 +542,10 @@ export default function Setup() {
   // Each read of the secrets makes a new list, so the polling reads this without restarting on it.
   const connectLoginsNow = useRef(connectLogins);
   connectLoginsNow.current = connectLogins;
+  /** The repo's own ChatGPT login, from a complete read: what a PR waiting for it waits for. */
+  const ownPlan = secretsComplete && secretNames.includes(CHATGPT_SECRET) && !sharedSecrets.includes(CHATGPT_SECRET);
+  const ownPlanNow = useRef(ownPlan);
+  ownPlanNow.current = ownPlan;
   /** The reviewer the workflow names, while it has no login of the repo's own. Setup isn't done until it has. */
   const reviewerFile = pendingFile ?? liveFile ?? workflow;
   const namedReviewer = isStandard(reviewerFile) ? (readRoles(reviewerFile)?.provider ?? null) : null;
@@ -658,14 +662,18 @@ export default function Setup() {
       const both = Boolean(startOnClaude && code && code.purpose === 'review' && code.code && code.claudeUrl);
       if (both && askedCheck) setAskedCheck(null);
       // A change of AI waits for the login of the AI it connects now. Its run can be reviewing with the other AI before it asks.
-      const need = rolesChange?.needs.find((ai) => !connectLoginsNow.current[ai]) ?? asked ?? (both ? null : askedCheck) ?? setupNeedNow.current;
+      // While a PR waits for ChatGPT's own login, only a complete read that shows the repo's own counts: not a partial
+      // one, and not an API key the organization's login would win over.
+      const ownPlanSeen = Boolean(names?.complete && names.names.includes(CHATGPT_SECRET) && !names.shared.includes(CHATGPT_SECRET));
+      const has = (ai: Ai, logins: Logins | null) => (rolesChange?.connectFirst && ai === 'codex' ? ownPlanSeen : Boolean(logins?.[ai]));
+      const need = rolesChange?.needs.find((ai) => !(rolesChange.connectFirst && ai === 'codex' ? ownPlanNow.current : connectLoginsNow.current[ai])) ?? asked ?? (both ? null : askedCheck) ?? setupNeedNow.current;
       const title = /^connected/i.test(check?.title ?? '');
       // A run that offers both AIs is done once either gets a login it didn't have when the page first looked, or the
       // run goes on. One saved before doesn't count: a run that asks has no login it can use.
       if (both && seen && !loginsBefore.current) loginsBefore.current = seen;
       const before = loginsBefore.current;
       const newLogin = Boolean(seen && before && ((seen.claude && !before.claude) || (seen.codex && !before.codex)));
-      const connected = need ? Boolean(seen?.[need]) || title : both ? newLogin || title || movedOn : movedOn;
+      const connected = need ? has(need, seen) || title : both ? newLogin || title || movedOn : movedOn;
       if (view === 'connect' && (need || both ? connected : (login && !code && !startOnClaude) || movedOn)) {
         // Only once this run has moved on: it has read the code then, and the next screen can send them back to GitHub at
         // once. A login another run saved doesn't say this one has, so the code stays for its own timer to remove.
@@ -673,7 +681,7 @@ export default function Setup() {
         setView('live');
       }
       // A change of AI that still needs a login keeps being followed, so Resume goes once they're all there.
-      const waiting = Boolean(rolesChange?.needs.some((ai) => !seen?.[ai]));
+      const waiting = Boolean(rolesChange?.needs.some((ai) => !has(ai, seen)));
       return view === 'live' && (done || !pr) && !waiting;
     });
     return () => {
@@ -706,7 +714,7 @@ export default function Setup() {
     liveUse && /^v\d+$/.test(liveUse.ref) ? ` It arrives by itself once ${liveUse.ref} moves to ${MIN_ACTION_VERSION}.` : actionVersion === null ? " We can't tell which version this workflow runs." : updateOk ? '' : " Update once it's out."
   }`;
   /** The AI a change of AI connects now: the first of its AIs still without a login. */
-  const rolesNeed = rolesChange?.needs.find((ai) => !connectLogins[ai]) ?? null;
+  const rolesNeed = rolesChange?.needs.find((ai) => !(rolesChange.connectFirst && ai === 'codex' ? ownPlan : connectLogins[ai])) ?? null;
   /** The AI this connect step is for, when it's one: a change of AI's, or a checker a run asked for. */
   const need = rolesNeed ?? askedCheck;
   /**
@@ -851,7 +859,6 @@ export default function Setup() {
   // Once ChatGPT has the repo's own login, the pull request that was waiting for it opens. Only once: it's cleared first.
   useEffect(() => {
     // Only a complete read that shows the repo's own ChatGPT login: a partial one, or an API key, isn't that.
-    const ownPlan = secretsComplete && secretNames.includes(CHATGPT_SECRET) && !sharedSecrets.includes(CHATGPT_SECRET);
     if (!rolesChange?.connectFirst || !ownPlan || changingRoles) return;
     setRolesChange({ ...rolesChange, connectFirst: false });
     void changeRoles(rolesChange.roles);

@@ -71,7 +71,8 @@ async function run(name, { login = false, apiKey = false, claude = false, orgSec
         // The base branch's commit is staging's, which a new branch starts from.
         const ref = (raw.startsWith('mergelight-setup-') && raw !== 'mergelight-setup-old') || raw === 'basesha' ? 'staging' : raw;
         const isRefresh = p.endsWith('mergelight-refresh.yml');
-        if (ref === 'mergelight-setup-old') {
+        // The PR's head commit holds what its branch does.
+        if (ref === 'mergelight-setup-old' || ref === 'oldsha' || (ref === 'newsha' && prFile)) {
           const body = isRefresh ? prRefresh : prFile;
           return body ? json(req, { sha: isRefresh ? 'prrefreshblob' : 'prblob', content: b64(body) }) : json(req, {}, 404);
         }
@@ -233,6 +234,14 @@ await run('finish-ignores-a-refresh-pr', { prFile: customized('v0'), prFiles: ['
   await new Promise((r) => setTimeout(r, 6000));
   const t = await text2();
   expect(/Waiting for your pull request/.test(t) && !/Found pull request #5/.test(t), "a PR with only the refresh job isn't taken for the one that adds the review");
+});
+await run('chatgpt-and-claude-logins', { login: true, claude: true }, ({ puts }) => {
+  expect(puts.length === 2 && puts[1].p.endsWith('/mergelight-refresh.yml'), "a ChatGPT login gets the refresh job, whatever Claude's login is");
+});
+const claudeOnPr = customized(`${OLD_SHA} # v0.1.0`).replace('          codex-auth-json:', '          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n          provider: claude\n          codex-auth-json:');
+await run('update-goes-by-the-prs-reviewer', { onBase: customized(`${OLD_SHA} # v0.1.0`), prFile: claudeOnPr, login: true, button: 'Update to v0.2.0' }, ({ after }) => {
+  // The open PR makes Claude the reviewer, so after the update Claude is the AI to connect.
+  expect(/Connect Claude/.test(after), "goes by the PR's own reviewer, not main's");
 });
 await run('update-keeps-the-prs-refresh-job', { onBase: customized(`${OLD_SHA} # v0.1.0`), prFile: customized(`${OLD_SHA} # v0.1.0`), prRefresh: ourRefresh(`${OLD_SHA} # v0.1.0`), login: true, button: 'Update to v0.2.0' }, ({ puts }) => {
   const job = puts.find((w) => w.p.endsWith('/mergelight-refresh.yml'));
