@@ -1108,6 +1108,20 @@ await scenario('role-pr-edited-to-bring-chatgpt-back', { secrets: ['CLAUDE_CODE_
   expect(/Resume/.test(t), 'offers to connect it');
 });
 
+await scenario('role-pr-edit-leaves-a-login-unread', { secrets: ['CODEX_AUTH_JSON', 'CLAUDE_CODE_OAUTH_TOKEN'], refresh: REFRESH, file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n          verify-with: codex\n`) }, async ({ world, until, click, reachLive, choose }) => {
+  await reachLive();
+  await choose('Change');
+  await click('[role=radiogroup][aria-label="Reviews your PRs"] label', 'ChatGPT');
+  await wait(200);
+  await click('button', 'Open PR');
+  await until((x) => /Mergelight is on/.test(x) && /Merge PR #9/.test(x), 'the change, with both connected');
+  // A commit takes out the plan login's input. Its OpenAI key input reads a secret that isn't there.
+  world.headFile = world.branchFile.replace('          codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}\n', '');
+  world.head = 'newsha';
+  const t = await until((x) => /ChatGPT isn't connected yet\./.test(x) && /Resume/.test(x), 'ChatGPT to connect', 20000);
+  expect(/Resume/.test(t), "goes by the PR's workflow, which can't read the ChatGPT login there is");
+});
+
 await scenario('new-run-asks-for-a-reviewer', { secrets: ['CODEX_AUTH_JSON'], comments: [askToCheck({ url: '', code: '', claudeUrl: CLAUDE })], checks: { rolesha: waitingToCheck('Claude') } }, async ({ page, world, until }) => {
   await page.goto(`${base}/setup/?repo=acme/api&pr=9&connect=claude`, { waitUntil: 'networkidle2' });
   await until((x) => /Connect Claude to check reviews/.test(x), 'the checker step');

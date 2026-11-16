@@ -102,10 +102,13 @@ type CommandWhy = 'public' | 'internal' | 'shared' | 'hold' | 'base';
 const seenBy = (visibility: Repo['visibility']) => (visibility === 'internal' ? 'This repo is internal, so anyone in your enterprise who can see your PR' : 'This repo is public, so anyone who can see your PR');
 /**
  * A change of AI matched to the workflow that merged, which someone may have edited on GitHub first: it connects the
- * AIs that workflow uses once they have a login, and passes a login to. `own` is the logins that count as connected.
+ * AIs that workflow uses once they have a login, and passes a login to. Its logins are the ones that workflow reads,
+ * from the secrets there now, as an edit can take out the input a secret was read by.
  */
-function reconciled(change: RolesChange, merged: string, logins: Logins, own: Logins): RolesChange {
+function reconciled(change: RolesChange, merged: string, names: string[], shared: string[]): RolesChange {
   const set = readRoles(merged);
+  const logins = loginsIn(merged, names);
+  const own = loginsIn(merged, names, shared);
   const uses = (ai: Ai) => {
     if (!set || !passesLogin(merged, ai)) return false;
     const r = rolesFor(set, { ...logins, [ai]: true });
@@ -338,7 +341,7 @@ export default function Setup() {
         if (!current()) return;
         if (!content) return setRolesFile('unknown');
         setRolesFile('known');
-        setRolesChange((rc) => rc && reconciled(rc, content, loginsNow.current, ownLoginsNow.current));
+        setRolesChange((rc) => rc && reconciled(rc, content, secretsNow.current.names, secretsNow.current.shared));
       },
       () => current() && setRolesFile('unknown'),
     );
@@ -626,10 +629,9 @@ export default function Setup() {
   const setupNeed = !rolesChange && !startOnClaude && namedReviewer && !connectLogins[namedReviewer] ? namedReviewer : null;
   const setupNeedNow = useRef(setupNeed);
   setupNeedNow.current = setupNeed;
-  const loginsNow = useRef(logins);
-  loginsNow.current = logins;
-  const ownLoginsNow = useRef(ownLogins);
-  ownLoginsNow.current = ownLogins;
+  /** The secrets there are now, which a PR's edited workflow is matched against. */
+  const secretsNow = useRef({ names: secretNames, shared: sharedSecrets });
+  secretsNow.current = { names: secretNames, shared: sharedSecrets };
 
   // Following the first review and the merge once the pull request exists. A failed read just waits for the next one.
   useEffect(() => {
@@ -735,7 +737,7 @@ export default function Setup() {
         if (job !== null) setRefreshLive(job);
         else if (rolesChange.addsRefresh) setRefreshLive(true);
         // An AI the merged workflow won't use, even once it has a login, isn't one to connect any more.
-        if (onBranch && onBranch !== rolesChange.content) setRolesChange(reconciled(rolesChange, onBranch, loginsNow.current, ownLoginsNow.current));
+        if (onBranch && onBranch !== rolesChange.content) setRolesChange(reconciled(rolesChange, onBranch, secretsNow.current.names, secretsNow.current.shared));
       } else if (done && !startOnClaude) {
         // What was merged, which an update that kept other changes on its pull request can differ from.
         const onBranch = await client.workflowAt(repo, branch).catch(() => null);
