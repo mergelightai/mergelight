@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { RotateCwIcon, ExternalLinkIcon, EllipsisIcon, PuzzleIcon, BrainIcon, LifeBuoyIcon, SendIcon, ChevronDownIcon, ChevronsUpDownIcon, CheckIcon, GitPullRequestIcon, ListChecksIcon, ScrollTextIcon, LogOutIcon } from '@/lib/icons';
+import { RotateCwIcon, ExternalLinkIcon, EllipsisIcon, PuzzleIcon, BrainIcon, LifeBuoyIcon, SendIcon, ChevronDownIcon, ChevronsUpDownIcon, CheckIcon, GitPullRequestIcon, ListChecksIcon, ScrollTextIcon, LogOutIcon, SettingsIcon } from '@/lib/icons';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Toaster } from '@/components/ui/sonner';
@@ -11,7 +11,7 @@ import { ADD_REPOS_URL, signInUrl, type Org, type Session } from './api';
 import { ago } from './format';
 import { EMAIL, GITHUB } from '../links';
 
-export type ViewId = 'reviews' | 'rules' | 'skills' | 'checks' | 'decisions';
+export type ViewId = 'reviews' | 'rules' | 'skills' | 'checks' | 'decisions' | 'settings';
 
 /** The views, in the order of the menu. New views (the team view, settings) go into these groups later. */
 export const VIEWS: { group: string; items: { id: ViewId; label: string; icon: typeof GitPullRequestIcon }[] }[] = [
@@ -25,6 +25,7 @@ export const VIEWS: { group: string; items: { id: ViewId; label: string; icon: t
       { id: 'decisions', label: 'Decisions', icon: BrainIcon },
     ],
   },
+  { group: 'Org', items: [{ id: 'settings', label: 'Settings', icon: SettingsIcon }] },
 ];
 
 /** The org's picture from GitHub, or its first letter while that loads or if it fails. */

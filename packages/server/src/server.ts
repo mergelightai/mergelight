@@ -44,7 +44,8 @@ export function createDataServer(api: (request: Request) => Promise<Response>): 
         const value = req.headers[name];
         if (value) headers[name] = value;
       }
-      const body = req.method === "POST" ? await readBody(req) : undefined;
+      // A DELETE can carry a body too: deleting an org's data sends its name to confirm.
+      const body = req.method === "POST" || req.method === "DELETE" ? await readBody(req) : undefined;
       const request = new Request(new URL(req.url ?? "/", "http://mergelight-server"), { method: req.method, headers, body: body?.length ? new Uint8Array(body) : undefined });
       const response = await api(request);
       res.writeHead(response.status, Object.fromEntries(response.headers));
@@ -68,8 +69,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const pool = createPool(DATABASE_URL);
   let api: (request: Request) => Promise<Response>;
   try {
-    api = createApi({ pool, publicUrl: PUBLIC_URL, origins: parseOrigins(process.env.DASHBOARD_ORIGINS), signInApp: process.env.SIGN_IN_APP || undefined, jobsOrgs: parseJobsOrgs(process.env.JOBS_ORGS) });
     const orgs = parseConnectOrgs(process.env.CONNECT_ORGS);
+    api = createApi({ pool, publicUrl: PUBLIC_URL, origins: parseOrigins(process.env.DASHBOARD_ORIGINS), signInApp: process.env.SIGN_IN_APP || undefined, jobsOrgs: parseJobsOrgs(process.env.JOBS_ORGS), keptOn: new Set(orgs.map((o) => o.id)) });
     await assertRowRulesHold(pool);
     await migrate(pool);
     for (const org of orgs) await connectOrg(pool, org.id, org.login);
