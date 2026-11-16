@@ -303,3 +303,11 @@ test('input names are read without regard to case, as GitHub reads them', () => 
   assert.equal(passesLogin(step(['Codex-Auth-Json: ${{ secrets.CODEX_AUTH_JSON }}']), 'codex'), true);
   assert.equal(readRoles(step(['provider: codex', 'PROVIDER: claude'])), null, 'the same input twice is not read');
 });
+
+test('a step that starts with a multiline if has its uses as a sibling, not inside the if', () => {
+  const withIf = template.replace('      - uses: mergelightai/mergelight@v0\n', '      - if: >-\n          github.event.pull_request.draft == false\n        uses: mergelightai/mergelight@v0\n');
+  assert.notEqual(withIf, template);
+  assert.equal(stepInScalar(withIf), false);
+  assert.deepEqual(readRoles(withIf), { provider: null, verifyWith: null });
+  assert.equal(isStandard(withIf), true);
+});

@@ -118,6 +118,8 @@ interface Step {
 }
 
 const indentOf = (line: string) => line.match(/^ */)![0].length;
+/** Where a line's key starts: after its indent, and after a sequence dash if it has one. */
+const keyColumn = (line: string) => line.match(/^ *(?:- +)?/)![0].length;
 
 /**
  * Whether this line is text inside a block scalar, like a `run: |` script or a heredoc in one: a line above it that's
@@ -127,7 +129,8 @@ function insideScalar(text: string[], at: number): boolean {
   let least = indentOf(text[at]!);
   for (let i = at - 1; i >= 0 && least > 0; i--) {
     const t = text[i]!;
-    if (NOTE.test(t) || indentOf(t) >= least) continue;
+    // A key after a sequence dash starts where the key does, so `- if: >-` is a sibling of the `uses` below it.
+    if (NOTE.test(t) || keyColumn(t) >= least) continue;
     if (/:[ \t]*[|>][-+0-9]*[ \t]*(?:#.*)?$/.test(t)) return true;
     least = indentOf(t);
   }
