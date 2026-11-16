@@ -35,6 +35,9 @@ function workflowFor(scope: Scope, branch: string, longLived: string[]): string 
   return scoped.replace(SKIP_MARKER, () => `${SKIP_MARKER} &&\n      !contains(fromJSON('${JSON.stringify(skip)}'), github.head_ref)`);
 }
 
+/** The commit a review's release tag is on couldn't be read, so no refresh job can be pinned to it. */
+class TagError extends Error {}
+
 /** The job that keeps a ChatGPT login fresh, on the same version of the Action as the review. */
 const refreshJob = (pin: Release | null) => (pin ? pinned(refreshFile, pin) : refreshFile);
 
@@ -72,7 +75,7 @@ const RAIL: Record<View, number> = { welcome: 0, settling: 1, repo: 1, 'review-a
 /** Why a change of AI didn't open a pull request. */
 /** Why the roles can't be changed here: set up its own way, another branch reviews, not all branches or secrets seen, no login, or the version. */
 type RolesLock = 'custom' | 'branches' | 'unchecked' | 'secrets' | 'none' | 'checking' | 'old';
-type RolesFailure = 'no-file' | 'no-step' | 'changed' | 'scan' | 'refused' | 'other';
+type RolesFailure = 'no-file' | 'no-step' | 'changed' | 'scan' | 'refused' | 'tag' | 'other';
 
 /** Why nothing was proposed in a repo with more open PRs than are looked through. */
 const SCAN_NOTE = 'This repo has more open PRs than we look through for one that changes your Mergelight workflow, so nothing was changed.';
@@ -970,9 +973,15 @@ export default function Setup() {
       };
       // The review workflow is always checked, also when only the refresh job is added and it stays as it is.
       const list: WorkflowFile[] = [{ name: 'mergelight.yml', content, edit }];
-      // On the same version as the review, a tag as much as a commit. Always there for the plan's login: a job that's
-      // there stays as it is, and one taken away since the page read the branch comes back.
-      if (usesPlan) list.push({ name: REFRESH_FILE, content: refreshLike(content), keep: true });
+      // On the same version as the review: the same commit, or the same moving tag. A release tag can be moved, so a new
+      // job runs on the commit it's on now, written the way an update writes it. Without that commit, nothing is changed.
+      const review = readInstalled(content);
+      const tagged = review && /^v\d+\.\d+\.\d+$/.test(review.ref) ? review.ref : null;
+      const job = usesPlan && tagged ? pinned(refreshFile, { sha: await client.releaseCommit(tagged).catch(() => { throw new TagError(); }), tag: tagged }) : refreshLike(content);
+      if (forRepo !== picked.current) return;
+      // Always there for the plan's login: a job that's there stays as it is, and one taken away since the page read the
+      // branch comes back.
+      if (usesPlan) list.push({ name: REFRESH_FILE, content: job, keep: true });
       const opened = await client.proposeWorkflows(repo, branch, list, content !== liveFile ? { kind: 'roles', roles: want } : { kind: 'refresh' });
       if (forRepo !== picked.current) return;
       // Null means the branch already has all of it, like a refresh job someone else added since. A login still missing
@@ -990,7 +999,7 @@ export default function Setup() {
     } catch (err) {
       if (forRepo !== picked.current) return;
       if (err instanceof OpenPrError) setOpenPr(err.pr);
-      else setRolesFailed(err instanceof WorkflowEditError ? err.reason : err instanceof ScanLimitError ? 'scan' : err instanceof GitHubError && (err.status === 403 || err.status === 404) ? 'refused' : 'other');
+      else setRolesFailed(err instanceof WorkflowEditError ? err.reason : err instanceof TagError ? 'tag' : err instanceof ScanLimitError ? 'scan' : err instanceof GitHubError && (err.status === 403 || err.status === 404) ? 'refused' : 'other');
       // A PR that opens by itself, after a login, shows why it didn't on the choice.
       setView('roles');
     } finally {
@@ -2562,6 +2571,7 @@ function RolesStep(props: { current: Roles; openPr: SetupPr | null | undefined; 
               </a>
             </>
           )}
+          {problem === 'tag' && <p>We couldn't read which commit your workflow's release is on, so we can't add the job that keeps a ChatGPT login fresh on it. Nothing was changed. Please try again.</p>}
           {problem === 'other' && <p>That didn't work. Please try again.</p>}
         </div>
       )}

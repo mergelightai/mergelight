@@ -249,6 +249,8 @@ export interface GitHubClient {
    * the one it names. Null when that can't be told, like a branch or a commit that's in no release.
    */
   actionVersion(ref: string, comment: string | null): Promise<string | null>;
+  /** The commit a release tag of the Action, like v0.1.19, is on now. */
+  releaseCommit(tag: string): Promise<string>;
   /**
    * The names of the secrets a run gets, the repo's own and those its organization shares with it. The values can't
    * be read. `complete` is false when a list couldn't be read.
@@ -498,10 +500,10 @@ export function realClient(token: string): GitHubClient {
     }
     return null;
   };
+  const releaseCommit = async (tag: string) => (await get<{ sha: string }>(`/repos/${ACTION_REPO}/commits/${encodeURIComponent(tag)}`)).sha;
   const latestRelease = async (): Promise<Release> => {
     const { tag_name: tag } = await get<{ tag_name: string }>(`/repos/${ACTION_REPO}/releases/latest`);
-    const { sha } = await get<{ sha: string }>(`/repos/${ACTION_REPO}/commits/${encodeURIComponent(tag)}`);
-    return { tag, sha };
+    return { tag, sha: await releaseCommit(tag) };
   };
   /** With `base`, only one into that branch: a change made on one into another branch would never reach this one. */
   /** Whether a pull request changes a Mergelight workflow, looking through all its files a page at a time. */
@@ -701,6 +703,7 @@ export function realClient(token: string): GitHubClient {
     hasWorkflow,
     workflowAt: async (repo, ref, name) => (await workflowOn(repo, ref, name))?.content ?? null,
     actionVersion,
+    releaseCommit,
     secrets: secretNames,
     checkStatus: async (repo, sha) => {
       const { check_runs } = await get<{ check_runs: { status: string; conclusion: string | null; output: { title: string | null } }[] }>(`/repos/${repo.fullName}/commits/${sha}/check-runs?check_name=Mergelight`);
@@ -783,6 +786,7 @@ export function mockClient(): GitHubClient {
     hasWorkflow: () => later(false),
     workflowAt: (r, _, name) => later(name ? null : (installedFor(r.fullName)?.content ?? null)),
     actionVersion: (ref, comment) => later(comment ?? (ref === 'v0' ? release.tag : null)),
+    releaseCommit: () => later(release.sha),
     // ChatGPT shows up on acme/claude once its code has been used, like a run saving the login.
     secrets: (r) => later({ names: namesOf(r.fullName, r.fullName === 'acme/claude' && checks >= 4 ? ['CODEX_AUTH_JSON'] : []), shared: [], complete: true }),
     checkStatus: () => {

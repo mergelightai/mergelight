@@ -75,6 +75,7 @@ async function scenario(name, start, body) {
       if (m === 'OPTIONS') return req.respond({ status: 204, headers: cors });
       if (u.pathname === '/repos/mergelightai/mergelight/releases/latest') return json(req, { tag_name: 'v0.2.0' });
       if (u.pathname === '/repos/mergelightai/mergelight/commits/v0.2.0') return json(req, { sha: 'a'.repeat(40) });
+      if (u.pathname === '/repos/mergelightai/mergelight/commits/v0.1.19') return world.tagCommitFails ? json(req, {}, 500) : json(req, { sha: 'b'.repeat(40) });
       // v0 points at a release with two AIs, unless a test moves it back. b is v0.1.19, the first with them, and c is older.
       if (u.pathname === '/repos/mergelightai/mergelight/commits/v0') return json(req, { sha: world.v0 ?? 'a'.repeat(40) });
       // With many tags, a hundred others come first, and these are on the second page.
@@ -426,6 +427,25 @@ await scenario('target-role-pr-goes-by-the-branch-logins', { secrets: ['CODEX_AU
   await wait(9000);
   const t = await text();
   expect(/Connect Claude/.test(t) && !/Add a secret named ANTHROPIC_API_KEY/.test(t), "offers the ways main's workflow takes, which the run reads");
+});
+
+const ON_TAG = TEMPLATE.replace('mergelightai/mergelight@v0', 'mergelightai/mergelight@v0.1.19').replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`);
+await scenario('tagged-review-gets-a-pinned-refresh-job', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], file: ON_TAG }, async ({ world, until, click, reachLive, choose }) => {
+  await reachLive();
+  await choose('Add ChatGPT');
+  await click('button', 'Open PR');
+  await until((x) => /Connect ChatGPT to check reviews/.test(x), 'the connect step');
+  // A tag can be moved, so the new job runs on the commit v0.1.19 is on now.
+  const job = world.writes.find((w) => w.m === 'PUT' && w.p.endsWith('/mergelight-refresh.yml'));
+  expect(job && unb64(job.body.content).includes(`uses: mergelightai/mergelight@${'b'.repeat(40)} # v0.1.19`) && !unb64(job.body.content).includes('@v0.1.19'), "pins the job to the tag's commit");
+});
+
+await scenario('tagged-review-commit-unreadable', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], file: ON_TAG, tagCommitFails: true }, async ({ world, until, click, reachLive, choose }) => {
+  await reachLive();
+  await choose('Add ChatGPT');
+  await click('button', 'Open PR');
+  await until((x) => /We couldn't read which commit your workflow's release is on/.test(x), 'the message');
+  expect(world.writes.length === 0, 'adds no job, and changes nothing');
 });
 
 await scenario('claude-named-adds-chatgpt', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`) }, async ({ page, world, until, click, shot, reachLive, choose }) => {
