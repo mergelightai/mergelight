@@ -31,7 +31,12 @@ const askFor = (code = CODE, url = DEVICE) => withState(connectBody({ url, code 
 const comment = (login, body) => ({ user: { login }, body });
 const FAILED = { status: 'completed', conclusion: 'neutral', output: { title: CHECK_FAILED_TITLE } };
 
+// SHARD=k/n runs every nth scenario, from the kth, so the file can run in parts side by side.
+const [shard, shards] = (process.env.SHARD ?? '1/1').split('/').map(Number);
+let scenarioIndex = 0;
+
 async function scenario(name, start, body) {
+  if (scenarioIndex++ % shards !== shard - 1) return;
   console.log(`\n== ${name}`);
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 900, deviceScaleFactor: 2 });

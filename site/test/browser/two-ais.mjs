@@ -40,7 +40,12 @@ const waitingToCheck = (who) => ({ status: 'in_progress', conclusion: null, outp
 /** Whether any tile on the page offers this AI. */
 const offers = (page, name) => page.evaluate((n) => [...document.querySelectorAll('[role=radiogroup] label')].some((l) => l.textContent.startsWith(n)), name);
 
+// SHARD=k/n runs every nth scenario, from the kth, so the file can run in parts side by side.
+const [shard, shards] = (process.env.SHARD ?? '1/1').split('/').map(Number);
+let scenarioIndex = 0;
+
 async function scenario(name, start, body) {
+  if (scenarioIndex++ % shards !== shard - 1) return;
   console.log(`\n== ${name}`);
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 900, deviceScaleFactor: 2 });
