@@ -403,11 +403,13 @@ test("the notice for saving a checker's login names the secret this workflow rea
   assert.notEqual(home, "/home/me/.codex", "never the person's own Codex login");
   assert.ok(!existsSync(home), "the login's folder is deleted once it is saved");
   assert.match(ran.stdout, /after=\/home\/me\/\.codex/);
-  // It says it saved the login only when the save worked.
+  // It says it saved the login only when the save worked, and ends with the save's status, not the cleanup's.
   assert.match(ran.stdout, /^Saved the ChatGPT login in acme\/widgets\.$/m);
+  assert.equal(spawnSync("bash", ["-c", command], { encoding: "utf8", env: { PATH: `${bin}:${process.env.PATH}` } }).status, 0);
   writeFileSync(join(bin, "gh"), "#!/usr/bin/env bash\ncat > /dev/null\nexit 1\n");
   const refused = spawnSync("bash", ["-c", command], { encoding: "utf8", env: { PATH: `${bin}:${process.env.PATH}` } });
   assert.doesNotMatch(refused.stdout, /Saved the ChatGPT login/);
+  assert.equal(refused.status, 1, "a refused save fails the line");
   // When no temporary folder can be made, nothing signs in, saves or removes anything.
   rmSync(homes, { force: true });
   rmSync(saved, { force: true });
