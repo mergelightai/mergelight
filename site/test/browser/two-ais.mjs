@@ -1556,6 +1556,7 @@ await scenario('more-than-one-branch-is-read-only', { secrets: ['CLAUDE_CODE_OAU
   const { live } = await reachLive();
   // staging has a Mergelight review too, and a login is the whole repo's.
   expect(/Mergelight reviews more than one branch here, so you set provider and verify-with in each by hand\./.test(live), 'says why, in one line');
+  expect(/Reviews with Claude, checked by Claude/.test(live), 'and still says who reviews and checks, which it can tell');
   expect(await readOnly(page, live), 'offers no change, and links to how to set them');
   expect(world.writes.length === 0, 'writes nothing');
 });

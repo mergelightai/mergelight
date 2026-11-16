@@ -801,7 +801,9 @@ export default function Setup() {
   // reviews as well. Each is set by hand there.
   const rolesLocked: 'custom' | 'branches' | 'secrets' | 'none' | 'checking' | 'old' | null = !liveFile || !currentSet ? null : !isStandard(liveFile) ? 'custom' : details?.otherReviewBranches.length ? 'branches' : !secretsComplete ? 'secrets' : !logins.claude && !logins.codex ? 'none' : actionVersion === undefined ? 'checking' : !versionOk ? 'old' : null;
   /** Who reviews and who checks, only where that's sure: with the Action's defaults, or written out in full. */
-  const currentRoles = currentSet && (!rolesLocked || rolesLocked === 'checking' || rolesLocked === 'old' ? rolesFor(currentSet, logins) : currentSet.provider && currentSet.verifyWith ? { reviewer: currentSet.provider, checker: currentSet.verifyWith } : null);
+  // Another branch with a review stops a change, but with every secret seen the roles here can still be told.
+  const rolesKnown = !rolesLocked || rolesLocked === 'checking' || rolesLocked === 'old' || (rolesLocked === 'branches' && secretsComplete);
+  const currentRoles = currentSet && (rolesKnown ? rolesFor(currentSet, logins) : currentSet.provider && currentSet.verifyWith ? { reviewer: currentSet.provider, checker: currentSet.verifyWith } : null);
   /** An update that brings a release new enough, which the page's Update button already offers. */
   const updateOk = Boolean(update && compareVersions(update.tag, MIN_ACTION_VERSION) >= 0);
   const liveUse = liveFile ? readInstalled(liveFile) : null;
