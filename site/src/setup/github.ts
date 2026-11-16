@@ -775,6 +775,8 @@ export function mockClient(): GitHubClient {
   const repo = (name: string, isPrivate = true): Repo => ({ id: name.length, fullName: `acme/${name}`, account: 'acme', accountId: 1, avatarUrl, isPrivate, visibility: isPrivate ? 'private' : 'public', defaultBranch: 'main', accessUrl });
   let finds = 0;
   let checks = 0;
+  /** The branch the demo's PR goes into: the one it was opened into here. */
+  let prBase = 'main';
   const later = <T,>(value: T) => new Promise<T>((r) => setTimeout(() => r(value), 300));
   const release: Release = { tag: 'v0.2.0', sha: 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0' };
   // Both logins' inputs, as setup writes them, so a repo with both secrets can try every change of AI.
@@ -817,7 +819,10 @@ export function mockClient(): GitHubClient {
               release,
             }) }),
     // acme/site plays an install that hasn't approved the access, to show the way around it.
-    proposeWorkflows: (r) => (r.fullName === 'acme/site' ? Promise.reject(new GitHubError(403)) : new Promise((done) => setTimeout(() => done({ number: 128, url: 'https://github.com/acme/api/pull/128', headSha: 'abc' }), 900))),
+    proposeWorkflows: (r, branch) => {
+      prBase = branch;
+      return r.fullName === 'acme/site' ? Promise.reject(new GitHubError(403)) : new Promise((done) => setTimeout(() => done({ number: 128, url: 'https://github.com/acme/api/pull/128', headSha: 'abc' }), 900));
+    },
     findSetupPr: (_, base) => later(!base && ++finds > 1 ? { number: 128, url: 'https://github.com/acme/api/pull/128', headSha: 'abc' } : null),
     hasWorkflow: () => later(false),
     workflowAt: (r, _, name) => later(name ? null : (installedFor(r.fullName)?.content ?? null)),
@@ -835,6 +840,6 @@ export function mockClient(): GitHubClient {
     sendClaudeCode: () => later(undefined),
     clearClaudeCode: () => later(undefined),
     connectCode: () => later(checks < 4 ? { url: 'https://auth.openai.com/codex/device', code: '2ZYY-TEST1', claudeUrl: 'https://claude.com/cai/oauth/authorize?code_challenge=x', purpose: 'review' } : null),
-    prState: () => later({ merged: checks >= 11, closed: false, headSha: 'abc', base: 'main' }),
+    prState: () => later({ merged: checks >= 11, closed: false, headSha: 'abc', base: prBase }),
   };
 }

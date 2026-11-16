@@ -82,7 +82,8 @@ export function rolesFor(set: SetRoles, logins: Logins): Roles {
  * own choice, since nobody has approved it yet.
  */
 export function connectsAfterMerge(set: SetRoles, logins: Logins, _want: Roles, adding: Ai | null): boolean {
-  if (!adding) return false;
+  // With no login yet, nothing reviews now, so the first login can't move a live review.
+  if (!adding || (!logins.claude && !logins.codex)) return false;
   return rolesFor(set, { ...logins, [adding]: true }).reviewer !== rolesFor(set, logins).reviewer;
 }
 
@@ -375,12 +376,13 @@ export function loginsIn(content: string | null, secretNames: string[], shared: 
  * branch, not the one on the pull request.
  */
 /**
- * Whether a workflow can review pull requests: it runs on pull_request or pull_request_target, or its events can't be
- * read, which counts as yes. The approval workflow runs only on pull_request_review and never reviews.
+ * Whether a workflow can review pull requests: it runs on pull_request or pull_request_target, it is a reusable
+ * workflow (workflow_call) that another workflow's pull request run can call, or its events can't be read, which
+ * counts as yes. The approval workflow runs only on pull_request_review and never reviews.
  */
 export function reviewsPullRequests(content: string): boolean {
   const on = triggers(content);
-  return on.size === 0 || on.has('pull_request') || on.has('pull_request_target');
+  return on.size === 0 || on.has('pull_request') || on.has('pull_request_target') || on.has('workflow_call');
 }
 
 export function runsOnBase(content: string | null): boolean {

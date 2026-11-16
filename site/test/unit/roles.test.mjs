@@ -198,6 +198,7 @@ test('a login waits for the merge only when it would move reviews the person cho
   assert.equal(connectsAfterMerge(unset, claudeOnly, { reviewer: 'codex', checker: 'claude' }, 'codex'), true, 'moving reviews to ChatGPT waits for the merge too, since nobody approved it yet');
   assert.equal(connectsAfterMerge(unset, codexOnly, { reviewer: 'codex', checker: 'claude' }, 'claude'), false, 'a Claude login never moves reviews away from ChatGPT');
   assert.equal(connectsAfterMerge(unset, claudeOnly, keepClaude, null), false, 'nothing to connect');
+  assert.equal(connectsAfterMerge(unset, { claude: false, codex: false }, { reviewer: 'claude', checker: 'claude' }, 'claude'), false, 'a first login moves no live review');
 });
 
 test('passesLogin tells whether the Mergelight step has any login input for an AI', () => {
@@ -412,5 +413,6 @@ test('only a workflow that runs on pull requests counts as a review', () => {
   assert.equal(reviewsPullRequests('on:\n  pull_request_review:\n    types: [submitted]\njobs: {}\n'), false, 'the approval workflow never reviews');
   assert.equal(reviewsPullRequests('on:\n  pull_request:\njobs: {}\n'), true);
   assert.equal(reviewsPullRequests('on: [pull_request_target]\njobs: {}\n'), true);
+  assert.equal(reviewsPullRequests('on:\n  workflow_call:\njobs: {}\n'), true, 'a reusable workflow another PR run can call');
   assert.equal(reviewsPullRequests('jobs: {}\n'), true, 'events it cannot read count as a review');
 });

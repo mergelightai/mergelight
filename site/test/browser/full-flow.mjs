@@ -78,8 +78,8 @@ async function run(name, { login = false, apiKey = false, claude = false, orgSec
         fileReads++;
         return json(req, [{ filename: 'src/app.ts' }]);
       }
-      if (p === '/pulls/5') return json(req, { merged: false, head: { sha: pushed?.sha ?? (writes.some((w) => w.m === 'PUT') ? 'newsha' : 'oldsha') }, base: { ref: 'main' } });
-      if (p === '/pulls/7') return json(req, { merged: false, head: { sha: 'headsha' }, base: { ref: 'main' } });
+      if (p === '/pulls/5') return json(req, { merged: false, head: { sha: pushed?.sha ?? (writes.some((w) => w.m === 'PUT') ? 'newsha' : 'oldsha') }, base: { ref: 'staging' } });
+      if (p === '/pulls/7') return json(req, { merged: false, head: { sha: 'headsha' }, base: { ref: 'staging' } });
       if (p === '/issues/5/comments' || p === '/issues/7/comments') return json(req, []);
       // A list is what the organization shares with the repo. A number is how GitHub answers instead: 422 on a repo a person owns.
       if (p === '/actions/organization-secrets') return Array.isArray(orgSecrets) ? json(req, { secrets: orgSecrets.map((name) => ({ name })) }) : json(req, { message: 'no' }, orgSecrets);
