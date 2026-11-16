@@ -1,5 +1,5 @@
 /** What the setup page reads from GitHub, in the browser, with the person's own token. */
-import { aiName, defaultReviewer, withInputs, type Logins, type Roles } from './roles';
+import { aiName, defaultReviewer, reviewsPullRequests, withInputs, type Logins, type Roles } from './roles';
 import { readConnectCode, type ConnectCode } from './connect';
 
 const API = 'https://api.github.com';
@@ -574,7 +574,9 @@ export function realClient(token: string): GitHubClient {
         const text = blobs.get(sha) ?? get<{ content: string }>(`/repos/${repo.fullName}/git/blobs/${sha}`).then((b) => fromBase64(b.content));
         blobs.set(sha, text);
         text.catch(() => blobs.delete(sha));
-        return readInstalled(await text) ? name : null;
+        const content = await text;
+        // The approval workflow uses the Action too, but only when someone approves, never to review.
+        return readInstalled(content) && reviewsPullRequests(content) ? name : null;
       }),
     );
     return runs.filter((name): name is string => name !== null);

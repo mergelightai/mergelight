@@ -78,12 +78,12 @@ export function rolesFor(set: SetRoles, logins: Logins): Roles {
 /**
  * Whether the login for `adding` has to wait until the pull request that sets `want` is merged. A login is a secret of
  * the whole repo, so it reaches the workflow that runs now at once. When that workflow doesn't name the reviewer, the
- * new login can move its reviews to the other AI, while the person chose to keep the reviewer they have.
+ * new login can move its reviews to the other AI before anyone merges the change: also when moving them is the person's
+ * own choice, since nobody has approved it yet.
  */
-export function connectsAfterMerge(set: SetRoles, logins: Logins, want: Roles, adding: Ai | null): boolean {
+export function connectsAfterMerge(set: SetRoles, logins: Logins, _want: Roles, adding: Ai | null): boolean {
   if (!adding) return false;
-  const now = rolesFor(set, logins).reviewer;
-  return want.reviewer === now && rolesFor(set, { ...logins, [adding]: true }).reviewer !== now;
+  return rolesFor(set, { ...logins, [adding]: true }).reviewer !== rolesFor(set, logins).reviewer;
 }
 
 /* ---------- Reading and editing the Mergelight step ---------- */
@@ -374,6 +374,15 @@ export function loginsIn(content: string | null, secretNames: string[], shared: 
  * Whether the workflow runs on pull_request_target and not on pull_request. Such a run reads the workflow on the base
  * branch, not the one on the pull request.
  */
+/**
+ * Whether a workflow can review pull requests: it runs on pull_request or pull_request_target, or its events can't be
+ * read, which counts as yes. The approval workflow runs only on pull_request_review and never reviews.
+ */
+export function reviewsPullRequests(content: string): boolean {
+  const on = triggers(content);
+  return on.size === 0 || on.has('pull_request') || on.has('pull_request_target');
+}
+
 export function runsOnBase(content: string | null): boolean {
   if (!content) return false;
   const on = triggers(content);

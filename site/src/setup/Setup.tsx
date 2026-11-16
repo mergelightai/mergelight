@@ -2101,7 +2101,7 @@ function ConnectStep({ repo, pr, status, code: found, ask = null, commandWhy = n
     return (
       <div>
         <BackButton onClick={onBack} />
-        <Heading title="Merge your PR first" sub={holdOnBase ? `Your workflow runs on pull_request_target, so PR #${pr.number} runs the one on ${hold}, which doesn't use ${aiName(only)} yet.` : `Your workflow on ${hold} doesn't say which AI reviews, so a ${aiName(only)} login saved now would make ${aiName(only)} review there. PR #${pr.number} keeps ${aiName(otherAi(only))} reviewing.`} />
+        <Heading title="Merge your PR first" sub={holdOnBase ? `Your workflow runs on pull_request_target, so PR #${pr.number} runs the one on ${hold}, which doesn't use ${aiName(only)} yet.` : `Your workflow on ${hold} doesn't say which AI reviews, so a ${aiName(only)} login saved now would make ${aiName(only)} review there before anyone merges a change. PR #${pr.number} says who reviews, so connect ${aiName(only)} once it's merged.`} />
         <ol className="mt-6 space-y-4">
           <Numbered n={1}>
             Merge pull request #{pr.number}

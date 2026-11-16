@@ -299,7 +299,7 @@ await scenario('claude-only-adds-chatgpt', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'
   expect(pull?.body.title === 'Set who reviews and who checks in Mergelight' && pull?.body.base === 'main', 'a pull request into the branch it runs from');
   expect(/Only the `provider` and `verify-with` lines/.test(pull?.body.body ?? ''), 'whose text says only those lines change');
   expect(/also adds a small job that keeps a ChatGPT login fresh/.test(pull?.body.body ?? ''), 'and that it adds the job');
-  expect(/Your workflow on main doesn't say which AI reviews, so a ChatGPT login saved now would make ChatGPT review there\. PR #9 keeps Claude reviewing\./.test(t), 'says why the merge comes first');
+  expect(/Your workflow on main doesn't say which AI reviews, so a ChatGPT login saved now would make ChatGPT review there before anyone merges a change\. PR #9 says who reviews, so connect ChatGPT once it's merged\./.test(t), 'says why the merge comes first');
   expect(/Waiting for you to merge PR #9/.test(t), 'and waits for it');
 
   await shot('connect-after-merge', true);
@@ -593,7 +593,8 @@ await scenario('tagged-repo-gets-a-tagged-job', { secrets: ['CLAUDE_CODE_OAUTH_T
   await click('button', 'Open PR');
   await until((x) => /Merge your PR first/.test(x), 'the next step');
   const job = world.writes.find((w) => w.m === 'PUT' && w.p.endsWith('/mergelight-refresh.yml'));
-  expect(job && unb64(job.body.content).includes('uses: mergelightai/mergelight@v0.2.0\n'), 'the job runs the same tag as the review');
+  const ran = job && unb64(job.body.content).match(/uses: mergelightai\/mergelight@([0-9a-f]{40}) # v0\.2\.0\n/);
+  expect(Boolean(ran), "the job is pinned to the commit of the review's release tag, with the tag beside it");
 });
 
 
@@ -1760,6 +1761,12 @@ await scenario('review-in-another-file-is-read-only', { secrets: ['CLAUDE_CODE_O
 await scenario('workflows-that-cant-be-read-are-read-only', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], recentPulls: [{ base: { ref: 'release/1.x' }, head: { ref: 'fix/y' } }], workflowsFail: 'release/1.x', file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`) }, async ({ page, reachLive }) => {
   const { live } = await reachLive();
   expect(/We couldn't read every workflow on release\/1\.x/.test(live) && (await readOnly(page, live)), 'offers no change');
+});
+
+await scenario('approval-workflow-is-no-other-review', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], branchWorkflows: { main: { 'mergelight.yml': TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`), 'mergelight-approve.yml': readFileSync(`${root}/examples/mergelight-approve.yml`, 'utf8') } }, file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`) }, async ({ reachLive }) => {
+  const { live } = await reachLive();
+  // mergelight setup adds the approval workflow, which uses the Action only when someone approves, never to review.
+  expect(!/also runs from mergelight-approve\.yml/.test(live) && /Add ChatGPT/.test(live), 'still offers the change');
 });
 
 await scenario('feature-branch-with-a-copy-is-no-other-review', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], branches: ['main', 'feat/y'], file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`) }, async ({ reachLive }) => {

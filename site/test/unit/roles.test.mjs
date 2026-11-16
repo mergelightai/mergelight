@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { connectsAfterMerge, isStandard, readsPlanLogin, runsOnBase, waitsForBase, stepInScalar, loginsFrom, loginsIn, passesLogin, readRoles, reviewerFixedBy, rolesFor, withInputs, withoutInputs, withRoles } from '../../src/setup/roles.ts';
+import { connectsAfterMerge, reviewsPullRequests, isStandard, readsPlanLogin, runsOnBase, waitsForBase, stepInScalar, loginsFrom, loginsIn, passesLogin, readRoles, reviewerFixedBy, rolesFor, withInputs, withoutInputs, withRoles } from '../../src/setup/roles.ts';
 
 const template = readFileSync(new URL('../../../examples/mergelight.yml', import.meta.url), 'utf8');
 const both = { claude: true, codex: true };
@@ -195,7 +195,7 @@ test('a login waits for the merge only when it would move reviews the person cho
   const keepClaude = { reviewer: 'claude', checker: 'codex' };
   assert.equal(connectsAfterMerge(unset, claudeOnly, keepClaude, 'codex'), true, 'Claude reviews only as the one login, so ChatGPT would take over');
   assert.equal(connectsAfterMerge({ provider: 'claude', verifyWith: null }, claudeOnly, keepClaude, 'codex'), false, 'a file that names Claude keeps Claude');
-  assert.equal(connectsAfterMerge(unset, claudeOnly, { reviewer: 'codex', checker: 'claude' }, 'codex'), false, 'moving reviews to ChatGPT is the choice itself');
+  assert.equal(connectsAfterMerge(unset, claudeOnly, { reviewer: 'codex', checker: 'claude' }, 'codex'), true, 'moving reviews to ChatGPT waits for the merge too, since nobody approved it yet');
   assert.equal(connectsAfterMerge(unset, codexOnly, { reviewer: 'codex', checker: 'claude' }, 'claude'), false, 'a Claude login never moves reviews away from ChatGPT');
   assert.equal(connectsAfterMerge(unset, claudeOnly, keepClaude, null), false, 'nothing to connect');
 });
@@ -406,4 +406,11 @@ test('a Mergelight step with an anchor is set up its own way, as an alias can us
   const anchored = 'jobs:\n  review:\n    steps:\n      - &review\n        uses: mergelightai/mergelight@v0\n        with:\n          codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}\n  prod:\n    environment: prod\n    steps:\n      - *review\n';
   assert.equal(isStandard(anchored), false);
   assert.equal(isStandard(anchored.replace('- &review\n        uses', '- uses').replace('      - *review\n', '      - run: echo\n').replace('    environment: prod\n', '')), true, 'the same step without one is standard');
+});
+
+test('only a workflow that runs on pull requests counts as a review', () => {
+  assert.equal(reviewsPullRequests('on:\n  pull_request_review:\n    types: [submitted]\njobs: {}\n'), false, 'the approval workflow never reviews');
+  assert.equal(reviewsPullRequests('on:\n  pull_request:\njobs: {}\n'), true);
+  assert.equal(reviewsPullRequests('on: [pull_request_target]\njobs: {}\n'), true);
+  assert.equal(reviewsPullRequests('jobs: {}\n'), true, 'events it cannot read count as a review');
 });
