@@ -10,7 +10,7 @@ import { nextStep, reviewStatus } from "../dist/mcp/findings.js";
 import { GitHub } from "../dist/publish/api.js";
 import { decodeMark, encodeMark, findingState, readMarks } from "../dist/publish/handled.js";
 import { pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "../dist/publish/markdown.js";
-import { answerRemembered, APPROVAL_MARKER, APPROVALS_OFF, confirmReasons, previousFindings, publishReview, startSummary } from "../dist/publish/publish.js";
+import { answerRemembered, APPROVAL_MARKER, APPROVALS_OFF, confirmReasons, previousFindings, previousReview, publishReview, startSummary } from "../dist/publish/publish.js";
 import { decodeState, encodeState, nextState } from "../dist/publish/state.js";
 import { buildVerifierPrompt } from "../dist/prompt.js";
 
@@ -479,6 +479,14 @@ test("a decision not to fix reaches the verifier even past the cap on earlier fi
   const previous = await withFakeGh(env, () => previousFindings(new GitHub("o", "r"), 7));
   assert.equal(previous.length, 40);
   assert.ok(previous.some((p) => p.id === decided));
+});
+
+test("the earlier review says how many rounds there were, so the next one knows its own", async () => {
+  const two = stateOf([finding({})], new Map(), stateOf([finding({})]));
+  const { env } = useScenario({ issueComments: [summaryComment(two)] });
+  assert.equal((await withFakeGh(env, () => previousReview(new GitHub("o", "r"), 7))).round, 2);
+  const none = useScenario({ issueComments: [] });
+  assert.equal((await withFakeGh(none.env, () => previousReview(new GitHub("o", "r"), 7))).round, 0);
 });
 
 test("a failed permission lookup keeps the team's marks, and only GitHub's no drops one", async () => {

@@ -1,5 +1,5 @@
 import type { UpdateNotice } from "../update.js";
-import type { Finding, Light, Review, JobsReport } from "../types.js";
+import { LATE_ROUND, type Finding, type Light, type Review, type JobsReport } from "../types.js";
 import type { Handled } from "./closed.js";
 import type { Mark } from "./handled.js";
 import { encodeState, type ReviewState } from "./state.js";
@@ -172,6 +172,25 @@ function duration(ms: number): string {
   return s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`;
 }
 
+/** Why the loop breaker left a finding alone, in place of the verdict, which may still say to fix it. */
+const LEFT_ALONE_WHY = {
+  rare: "Rare, so it doesn't hold the merge.",
+  late: `Unlikely, so from round ${LATE_ROUND} on it doesn't hold the merge.`,
+};
+
+/**
+ * From LATE_ROUND on: what the loop breaker left alone, and whether anything still holds the merge. Only
+ * likely problems, major bugs and major security problems hold it by then.
+ */
+export function loopBreakerLine(r: Pick<Review, "findings" | "needs_human">, round: number): string | null {
+  const late = r.findings.filter((f) => f.left_alone === "late").length;
+  if (!late) return null;
+  if (r.findings.some((f) => f.tier !== "hardening") || r.needs_human?.length) {
+    return `Round ${round}: ${late === 1 ? "1 unlikely finding is" : `${late} unlikely findings are`} left alone. From round ${LATE_ROUND} on, only likely problems, major bugs and security problems hold the merge.`;
+  }
+  return `Round ${round}: only unlikely cases are left, so they don't hold the merge. Merge it.`;
+}
+
 function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
@@ -316,7 +335,8 @@ export function summaryBody({ review: r, state, urls, marks = new Map(), handled
 
   // The other AI not checking is said first, above the AI's own summary, so a cut never takes it.
   const missed = checkerMissedLine(r);
-  const out: string[] = [SUMMARY_MARKER, ...(update ? updateBanner(update) : []), `### ${light.dot} Mergelight: ${light.label}`, "", ...(missed ? [missed, ""] : []), clean(r.summary), "", `**${headline(r, done.length)}**`];
+  const loop = loopBreakerLine(r, state.round);
+  const out: string[] = [SUMMARY_MARKER, ...(update ? updateBanner(update) : []), `### ${light.dot} Mergelight: ${light.label}`, "", ...(missed ? [missed, ""] : []), clean(r.summary), ...(loop ? ["", loop] : []), "", `**${headline(r, done.length)}**`];
 
   if (top.length) {
     out.push("", "#### To fix");
@@ -356,7 +376,7 @@ export function summaryBody({ review: r, state, urls, marks = new Map(), handled
 
   if (leftAlone.length) {
     out.push("", `<details><summary>Left alone: ${plural(leftAlone.length, "smaller finding")}</summary>`, "");
-    for (const f of leftAlone) out.push(`- ${clean(f.title)} ${where(f)}: ${clean(f.verdict)}`);
+    for (const f of leftAlone) out.push(`- ${clean(f.title)} ${where(f)}: ${f.left_alone ? LEFT_ALONE_WHY[f.left_alone] : clean(f.verdict)}`);
     out.push("", "</details>");
   }
 

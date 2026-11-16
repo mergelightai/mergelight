@@ -1,6 +1,6 @@
 import type { TeamSkill } from "./skills.js";
 import type { ActionSource } from "./action-source.js";
-import type { PullRequest } from "./types.js";
+import { LATE_ROUND, type PullRequest } from "./types.js";
 
 export interface PromptInput {
   pr: PullRequest;
@@ -18,6 +18,8 @@ export interface PromptInput {
   diffFile?: string;
   /** What earlier review rounds of this pull request found, for the verifier to check again. */
   previous?: PriorFinding[];
+  /** This review's round on the pull request, counting from 1, so the verifier's summary matches what holds the merge. */
+  round?: number;
   /** The source of actions the changed workflow files use, for the reviewers that judge them. */
   actionSources?: ActionSource[];
   /** Findings the team declined in earlier pull requests of this repository, in files this one changes. */
@@ -583,6 +585,15 @@ ${list}
 `;
 }
 
+/**
+ * From LATE_ROUND on, only likely problems, major bugs and major security problems hold the merge, so the
+ * summary must not call a pull request unsafe for the rest.
+ */
+function lateRoundNote(round: number | undefined): string {
+  if (!round || round < LATE_ROUND) return "";
+  return ` This is review round ${round} of this pull request. From round ${LATE_ROUND} on, only likely problems, major bugs and major security problems hold the merge: judge whether it looks safe to merge by those alone.`;
+}
+
 export function buildVerifierPrompt(input: PromptInput, candidates: Candidate[]): string {
   const list = candidates.length
     ? candidates
@@ -634,8 +645,9 @@ Third-party code that can reach secrets or write access through a reference that
 - title: under 80 characters, plain words.
 - file, line, end_line: the lines in the head version that hold the problem. Prefer lines this pull request changed.
 - how_it_happens: the concrete trigger in one or two plain sentences.
-- likelihood: common (happens in normal use), plausible (needs specific but realistic conditions), rare (needs unusual timing or data), theoretical (possible in principle, no realistic path).
+- likelihood: common (happens in normal use), plausible (a real user with an ordinary setup hits it through steps they would really take), rare (needs a setup, timing or data most users never have), theoretical (possible in principle, no realistic path). Rare includes: a hand-edited or uncommon configuration, such as YAML anchors, renamed or remapped secrets, or settings that contradict each other; two people acting at the same moment; very large counts; a service failing at exactly the wrong step; a pull request moved to another base branch. Calling such a case plausible makes the team spend another round on it.
 - severity: major or minor, as defined above.
+- security: true when it lets someone see secrets or other people's data, act as someone else, or do what they shouldn't be able to. Otherwise false.
 - what_breaks: what the user sees or what happens to the data. Say whether it can be recovered.
 - fix: the smallest fix that solves it, in one or two sentences. Prefer a one line guard over a redesign.
 - fix_cost: trivial (a line or two), small (one function or file), medium (several files or a migration), large (a redesign, locking or new infrastructure).
@@ -654,7 +666,7 @@ top: the findings a careful senior reviewer would hold the merge for, at most 3,
 
 # Summary
 
-summary: two plain sentences for someone who does not read code. Say what the pull request does and whether it looks safe to merge. No praise and no filler.
+summary: two plain sentences for someone who does not read code. Say what the pull request does and whether it looks safe to merge. No praise and no filler.${lateRoundNote(input.round)}
 
 ${diffBlock(input)}`;
 }

@@ -7,9 +7,9 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { parsePatch, place } from "../dist/publish/diff-lines.js";
-import { mergeLight, tierOf } from "../dist/review.js";
+import { LATE_ROUND, mergeLight, placeFinding, tierOf } from "../dist/review.js";
 import { closedBody, patchTouches, readClosed, reopenedBody, resolvedByPeople, threadAction } from "../dist/publish/closed.js";
-import { checkerMissedLine, clean, failedSummaryBody, heldLoginNotice, isFailedSummary, limitNotice, notReadLine, loginNotice, FINDING_MARKER_RE, inlineBody, isPendingSummary, pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "../dist/publish/markdown.js";
+import { checkerMissedLine, clean, failedSummaryBody, heldLoginNotice, loopBreakerLine, isFailedSummary, limitNotice, notReadLine, loginNotice, FINDING_MARKER_RE, inlineBody, isPendingSummary, pendingSummaryBody, SUMMARY_MARKER, summaryBody } from "../dist/publish/markdown.js";
 import { APPROVAL_MARKER, approvalHold, approvalLight, checkHeldTitle, checkLimitTitle as limitTitle, failSummary, startCheck, startSummary, UNREVIEWED, checkConclusion, isYellowCheck, syncApproval, trustedComment, CHECK_FAILED_TITLE, checkLimitTitle, checkLoginTitle, isFailedCheckTitle } from "../dist/publish/publish.js";
 import { decodeState, encodeState, nextState } from "../dist/publish/state.js";
 import { buildVerifierPrompt } from "../dist/prompt.js";
@@ -568,6 +568,57 @@ test("minor risks and rare findings are left alone, but a major bug never is", (
   assert.equal(tierOf(f({ class: "bug", severity: "minor" })), "list", "a minor bug that really happens stays");
   assert.equal(tierOf(f({ class: "bug", likelihood: "rare" })), "list", "a rare major bug stays, because it turns the check red");
   assert.equal(tierOf(f({ class: "bug", likelihood: "rare", rank: 1 })), "post");
+});
+
+test("the loop breaker: rare cases never hold the merge, and from round 4 on only likely problems, major bugs and major security problems do", () => {
+  const f = (over) => ({ class: "risk", severity: "major", likelihood: "plausible", recommendation: "fix", rank: null, ...over });
+  assert.equal(LATE_ROUND, 4);
+  // Rare or theoretical, in any round.
+  assert.deepEqual(placeFinding(f({ class: "bug", severity: "minor", likelihood: "rare" })), { tier: "hardening", left_alone: "rare" });
+  assert.deepEqual(placeFinding(f({ likelihood: "theoretical", rank: 1 })), { tier: "hardening", left_alone: "rare" });
+  // A major bug, or a major security problem, holds the merge in every round, however unlikely.
+  for (const round of [1, 4, 17]) {
+    assert.deepEqual(placeFinding(f({ class: "bug", likelihood: "rare" }), round), { tier: "list" }, `major bug, round ${round}`);
+    assert.deepEqual(placeFinding(f({ class: "bug", rank: 1 }), round), { tier: "post" });
+    assert.deepEqual(placeFinding(f({ security: true, likelihood: "rare" }), round), { tier: "list" }, `major security risk, round ${round}`);
+  }
+  // Before round 4, a plausible finding still holds it.
+  assert.deepEqual(placeFinding(f({}), 3), { tier: "list" });
+  assert.deepEqual(placeFinding(f({ class: "bug", severity: "minor" }), 3), { tier: "list" });
+  // From round 4 on, only a likely one does.
+  assert.deepEqual(placeFinding(f({}), 4), { tier: "hardening", left_alone: "late" });
+  assert.deepEqual(placeFinding(f({ class: "bug", severity: "minor", rank: 2 }), 9), { tier: "hardening", left_alone: "late" });
+  assert.deepEqual(placeFinding(f({ recommendation: "decide" }), 4), { tier: "hardening", left_alone: "late" });
+  assert.deepEqual(placeFinding(f({ class: "bug", severity: "minor", likelihood: "common" }), 9), { tier: "list" });
+  // One left alone anyway isn't counted as one the loop breaker left alone.
+  assert.deepEqual(placeFinding(f({ recommendation: "leave" }), 9), { tier: "hardening" });
+  assert.deepEqual(placeFinding(f({ severity: "minor" }), 9), { tier: "hardening" });
+  // With everything left alone, the light goes green; a major bug still turns it red.
+  const late = [f({ class: "bug", severity: "minor" }), f({})].map((x) => ({ ...x, ...placeFinding(x, 5) }));
+  assert.equal(mergeLight(late), "green");
+  const bug = { ...f({ class: "bug" }), ...placeFinding(f({ class: "bug" }), 5) };
+  assert.equal(mergeLight([...late, bug]), "red");
+});
+
+test("the summary says when the loop breaker leaves the rest alone, and why each one is left", () => {
+  const left = { tier: "hardening", left_alone: "late" };
+  assert.equal(loopBreakerLine({ findings: [left, left] }, 17), "Round 17: only unlikely cases are left, so they don't hold the merge. Merge it.");
+  assert.equal(loopBreakerLine({ findings: [left, { tier: "list" }] }, 5), "Round 5: 1 unlikely finding is left alone. From round 4 on, only likely problems, major bugs and security problems hold the merge.");
+  assert.doesNotMatch(loopBreakerLine({ findings: [left], needs_human: ["billing.ts"] }, 5), /Merge it/, "a file the team guards still needs a person");
+  assert.equal(loopBreakerLine({ findings: [{ tier: "hardening", left_alone: "rare" }] }, 9), null, "a rare case alone needs no line");
+  // In the summary: the line under the AI's own, and each one's reason in place of a verdict that may still say fix it.
+  const findings = [finding({ id: "6666666666", tier: "hardening", left_alone: "late", verdict: "Fix it." }), finding({ id: "7777777777", tier: "hardening", left_alone: "rare", verdict: "Fix it." })];
+  const review = {
+    pr: { owner: "o", repo: "r", number: 1, title: "t", url: "u", base_sha: "b", head_sha: "abcdef1234" },
+    provider: { name: "codex", model: null }, verifier: null, light: "green", summary: "Summary.", findings, stats: { duration_ms: 1000 },
+  };
+  let state = null;
+  for (let i = 0; i < 6; i++) state = nextState(state, findings, "abcdef1234", "green", new Map());
+  const body = summaryBody({ review, state, urls: new Map() });
+  assert.match(body, /Summary\.\n\nRound 6: only unlikely cases are left, so they don't hold the merge\. Merge it\./);
+  assert.match(body, /: Unlikely, so from round 4 on it doesn't hold the merge\./);
+  assert.match(body, /: Rare, so it doesn't hold the merge\./);
+  assert.doesNotMatch(body, /Fix it\./);
 });
 
 test("a pull request with only minor risks can go green", () => {

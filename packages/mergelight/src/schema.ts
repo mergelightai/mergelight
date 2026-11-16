@@ -95,6 +95,7 @@ export const reviewSchema = {
           "how_it_happens",
           "likelihood",
           "severity",
+          "security",
           "what_breaks",
           "fix",
           "fix_cost",
@@ -115,6 +116,10 @@ export const reviewSchema = {
             type: "string",
             enum: ["major", "minor"],
             description: "major: breaks something, loses data or money, or exposes data. minor: a small but real visible problem.",
+          },
+          security: {
+            type: "boolean",
+            description: "True when it lets someone see secrets or other people's data, act as someone else, or do what they shouldn't be able to.",
           },
           what_breaks: { type: "string", description: "The user-visible or data consequence." },
           fix: { type: "string", description: "The smallest fix that solves it, in one or two sentences." },

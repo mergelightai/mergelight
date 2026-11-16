@@ -105,6 +105,11 @@ function unchangedSince(api: GitHub, since: string | undefined, headSha: string 
  * headSha: the commit this review is about, to tell a reason from a fix.
  */
 export async function previousFindings(api: GitHub, number: number, headSha?: string): Promise<PriorFinding[]> {
+  return (await previousReview(api, number, headSha)).findings;
+}
+
+/** What earlier rounds found, and how many rounds there were: the next review is round + 1. */
+export async function previousReview(api: GitHub, number: number, headSha?: string): Promise<{ findings: PriorFinding[]; round: number }> {
   const { summary, state, marks } = await readPrReviewState(api, number);
   const threads = await reviewThreads(api, number).catch(() => []);
   const resolved = await resolvedByPeople(threads, writeAccess(api));
@@ -116,7 +121,7 @@ export async function previousFindings(api: GitHub, number: number, headSha?: st
   // A decision not to fix must reach the verifier however long the list gets, or the problem comes back as new.
   const order = (f: StateFinding) => (marks.get(f.id)?.as === "wont_fix" || resolved.has(f.id) ? 0 : f.status === "gone" ? 2 : 1);
   const kept = (state?.findings ?? []).sort((a, b) => order(a) - order(b)).slice(0, MAX_PREVIOUS);
-  return Promise.all(
+  const findings = await Promise.all(
     kept.map(async (f) => {
       const { id, title, file, line, end_line, how } = f;
       const mark = marks.get(id);
@@ -148,6 +153,7 @@ export async function previousFindings(api: GitHub, number: number, headSha?: st
       return { id, title, file, line, end_line, how, ...(handled ? { handled } : {}) };
     }),
   );
+  return { findings, round: state?.round ?? 0 };
 }
 
 /** How many reviews send a waiting reason before it is given up on. */
