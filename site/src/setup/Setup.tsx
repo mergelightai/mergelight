@@ -10,7 +10,7 @@ import Ambient from '../sections/Ambient';
 import { Check, GitHubIcon, SURFACE, WELL } from '../ui';
 import type { ConnectLink } from './github';
 import { compareVersions, cleanUrl, finishSignIn, GitHubError, INSTALL_URL, onlyAi, onRef, OpenPrError, ScanLimitError, readConnectLink, readInstalled, rememberConnect, rememberRepo, reviewAppUrl, takeRememberedConnect, takeRememberedRepo, isPinned, mockClient, pinned, realClient, REFRESH_FILE, signInUrl, wakeTokenServer, withReviewer, WorkflowEditError, type CheckStatus, type ConnectCode, type GitHubClient, type Release, type Repo, type RepoDetails, type SetupPr, type WorkflowFile } from './github';
-import { aiName, connectsAfterMerge, isStandard, runsOnBase, LOGIN_INPUTS, LOGIN_SECRET, loginInputs, loginsFrom, loginsIn, otherAi, passesLogin, readRoles, reviewerFixedBy, rolesFor, withInputs, withoutInputs, withRoles, type Ai, type Logins, type Roles } from './roles';
+import { aiName, connectsAfterMerge, isStandard, readsPlanLogin, runsOnBase, LOGIN_INPUTS, LOGIN_SECRET, loginInputs, loginsFrom, loginsIn, otherAi, passesLogin, readRoles, reviewerFixedBy, rolesFor, withInputs, withoutInputs, withRoles, type Ai, type Logins, type Roles } from './roles';
 
 const CHATGPT_SECURITY = 'https://chatgpt.com/settings/security';
 /** Where the Action's docs say how provider and verify-with work, for a workflow set by hand. */
@@ -85,8 +85,11 @@ const MIN_ACTION_VERSION = 'v0.1.19';
 const CHATGPT_SECRET = LOGIN_SECRET[LOGIN_INPUTS.codex[0]]!;
 /** Why a repo whose organization shares a ChatGPT login saves one of its own. */
 const SHARED_LOGIN_NOTE = "Your organization's ChatGPT login is shared, so this repo gets its own.";
-/** Whether a workflow reads the ChatGPT plan's login. Without a workflow yet, the one setup writes does. */
-const readsChatgpt = (file: string | null | undefined) => !file || loginInputs(file).includes(LOGIN_INPUTS.codex[0]);
+/**
+ * Whether a workflow reads the ChatGPT plan's login from CODEX_AUTH_JSON and saves it back there, the login the refresh
+ * job keeps fresh. Without a workflow yet, the one setup writes does.
+ */
+const readsChatgpt = (file: string | null | undefined) => !file || readsPlanLogin(file);
 
 /** Why a ChatGPT login is saved from the person's own computer: no code comes for it on a pull request. */
 type CommandWhy = 'public' | 'internal' | 'shared' | 'hold';

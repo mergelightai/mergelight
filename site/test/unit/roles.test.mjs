@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { connectsAfterMerge, isStandard, runsOnBase, stepInScalar, loginsFrom, loginsIn, passesLogin, readRoles, reviewerFixedBy, rolesFor, withInputs, withoutInputs, withRoles } from '../../src/setup/roles.ts';
+import { connectsAfterMerge, isStandard, readsPlanLogin, runsOnBase, stepInScalar, loginsFrom, loginsIn, passesLogin, readRoles, reviewerFixedBy, rolesFor, withInputs, withoutInputs, withRoles } from '../../src/setup/roles.ts';
 
 const template = readFileSync(new URL('../../../examples/mergelight.yml', import.meta.url), 'utf8');
 const both = { claude: true, codex: true };
@@ -354,4 +354,12 @@ test('a line in a | value that looks like a comment is its text, so new inputs g
   // After a plain value, a deeper comment is still a comment, and stays when that input is replaced.
   const note = step(['provider: codex', '  # the old one', 'effort: low']);
   assert.equal(withRoles(note, { reviewer: 'claude', checker: 'codex' }), step(['provider: claude', 'verify-with: codex', '  # the old one', 'effort: low']));
+});
+
+test('readsPlanLogin: the refresh job is only for a review that reads CODEX_AUTH_JSON and saves it back there', () => {
+  assert.equal(readsPlanLogin(template), true);
+  assert.equal(readsPlanLogin(step(['codex-auth-json: ${{ secrets.TEAM_CODEX }}'])), false, 'another secret');
+  assert.equal(readsPlanLogin(step(['codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}', 'auth-secret-name: TEAM_CODEX'])), false, 'saved to another one');
+  assert.equal(readsPlanLogin(step(['codex-auth-json: ${{ secrets.codex_auth_json }}', 'auth-secret-name: CODEX_AUTH_JSON'])), true, 'the same secret, in either case');
+  assert.equal(readsPlanLogin(step(['openai-api-key: ${{ secrets.OPENAI_API_KEY }}'])), false, 'no plan login');
 });

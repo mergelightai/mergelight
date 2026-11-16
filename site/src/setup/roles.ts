@@ -332,6 +332,19 @@ export function loginInputs(content: string): string[] {
 }
 
 /**
+ * Whether the review reads the ChatGPT plan's login from CODEX_AUTH_JSON, and saves a refreshed one back there: the one
+ * login the refresh job setup adds keeps fresh. One read from another secret, or saved to one, is set up its own way.
+ */
+export function readsPlanLogin(content: string): boolean {
+  const step = locate(content);
+  if (!step) return false;
+  const plan = LOGIN_INPUTS.codex[0];
+  const secret = LOGIN_SECRET[plan]!;
+  const saved = step.entries.some((e) => e.key === 'auth-secret-name') ? readValue(step, 'auth-secret-name') : secret;
+  return new RegExp(`^\\$\\{\\{\\s*secrets\\.${secret}\\s*\\}\\}$`, 'i').test(readValue(step, plan) ?? '') && saved?.toUpperCase() === secret;
+}
+
+/**
  * Which AIs have a login the Action gets: a secret that's there, read by an input the step has, whatever else the
  * workflow does its own way. A secret no input reads, like an app's own API key, never counts. Without a workflow yet,
  * the one setup writes reads them all. A step that can't be found reads none.

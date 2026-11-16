@@ -21,7 +21,11 @@ const customized = (use) => `# Our own note, keep this\nname: Mergelight\njobs:\
 let failures = 0;
 const expect = (ok, what) => { console.log(`  ${ok ? 'ok ' : 'FAIL'} ${what}`); if (!ok) failures++; };
 
+// ONLY=name,name runs just those, to try one while changing it.
+const only = process.env.ONLY?.split(',');
+
 async function run(name, { login = false, apiKey = false, claude = false, orgSecrets = [], refuse = null, onBase = null, prFile = null, prTitle = 'Add Mergelight code review', prFiles = ['.github/workflows/mergelight.yml'], prRefresh = null, baseRefresh = null, noRelease = false, reviewDone = false, scope = 'new', button = 'Add to api' } = {}, check = () => {}) {
+  if (only && !only.includes(name)) return {};
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 860, deviceScaleFactor: 2 });
   const errors = [];
@@ -281,6 +285,11 @@ await run('pinned-with-refresh-missing', { onBase: customized(`${OLD_SHA} # v0.1
   expect(puts.length === 2, 'adds the refresh job');
   expect(refresh?.includes(`mergelight@${RELEASE.sha} # ${RELEASE.tag}`), 'pinned like the rest');
   expect(!/Not pinned/.test(refresh ?? ''), "without the note saying it isn't");
+});
+await run('update-leaves-another-login-alone', { onBase: customized(`${OLD_SHA} # v0.1.0`).replace('secrets.CODEX_AUTH_JSON', 'secrets.TEAM_CODEX'), login: true, button: 'Update to v0.2.0' }, ({ before, puts }) => {
+  // The review reads TEAM_CODEX, so CODEX_AUTH_JSON is some other tool's, which the refresh job would sign out.
+  expect(puts.length === 1 && puts[0].p.endsWith('/mergelight.yml'), 'adds no refresh job');
+  expect(!/Adds the small job/.test(before), "and doesn't say it would");
 });
 await run('old-refresh-job-too', { onBase: customized(`${OLD_SHA} # v0.1.0`), baseRefresh: customized(`${OLD_SHA} # v0.1.0`), login: true, button: 'Update to v0.2.0' }, ({ before, puts, refresh, pull }) => {
   expect(/Changes only the Mergelight version lines in both files/.test(before), 'says both files');
