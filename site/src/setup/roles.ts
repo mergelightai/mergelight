@@ -384,10 +384,16 @@ export function runsOnBase(content: string | null): boolean {
  */
 function events(content: string): string[] {
   const lines = content.split(/\r?\n/);
-  const at = lines.findIndex((l) => /^["']?on["']?[ \t]*:/.test(l));
+  // The root mapping can be set in, as long as all of it is: `on` is a key at its indent.
+  const root = indentOf(lines.find((l) => !NOTE.test(l) && !/^(?:---|\.\.\.)/.test(l)) ?? '');
+  const at = lines.findIndex((l) => indentOf(l) === root && /^ *["']?on["']?[ \t]*:/.test(l));
   if (at < 0) return [];
   const unquote = (s: string) => s.trim().replace(/^(["'])(.*)\1$/, '$2');
-  const inline = lines[at]!.replace(/^[^:]*:/, '').replace(/(^|[ \t])#.*$/, '').trim();
+  const uncomment = (line: string) => line.replace(/(^|[ \t])#.*$/, '').trim();
+  const open = (text: string) => (text.match(/[[{]/g)?.length ?? 0) - (text.match(/[\]}]/g)?.length ?? 0);
+  let inline = uncomment(lines[at]!.replace(/^[^:]*:/, ''));
+  // A list or a map on `on:` can go on over more lines, until its brackets close.
+  for (let i = at + 1; /^[[{]/.test(inline) && open(inline) > 0 && i < lines.length; i++) inline += ` ${uncomment(lines[i]!)}`;
   if (inline) {
     const flow = inline.match(/^([[{])(.*)[\]}]$/);
     if (!flow) return [unquote(inline)];
@@ -411,8 +417,8 @@ function events(content: string): string[] {
     const t = lines[i]!;
     if (NOTE.test(t)) continue;
     const col = indentOf(t);
-    // A list of events can start right under `on:`, as in `- push`.
-    if (col === 0 && !/^-[ \t]/.test(t)) break;
+    // A list of events can start right under `on:`, as in `- push`. Any other line there is the next root key.
+    if (col < root || (col === root && !/^ *-[ \t]/.test(t))) break;
     if (indent < 0) indent = col;
     // Deeper is what an event filters on.
     if (col !== indent) continue;

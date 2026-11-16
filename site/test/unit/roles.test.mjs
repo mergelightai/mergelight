@@ -357,6 +357,14 @@ test("an event is only an event's name: a path or a branch it filters on isn't o
   assert.equal(runsOnBase('on:\n  push:\n    branches: [pull_request_target]\n'), false, 'a branch named like the event');
 });
 
+test('events are read in a workflow set in as a whole, and from a list over more lines', () => {
+  assert.equal(runsOnBase('  name: x\n  on:\n    pull_request_target:\n      paths: [pull_request.ts]\n  jobs: {}\n'), true, 'the whole root set in');
+  assert.equal(runsOnBase('  # x\n  on: [pull_request_target]\n  jobs: {}\n'), true, 'and a list on one line there');
+  assert.equal(runsOnBase('on: [\n  pull_request_target, # the base runs\n  push\n]\njobs: {}\n'), true, 'a list over more lines');
+  assert.equal(runsOnBase('on: [\n  pull_request,\n  pull_request_target\n]\n'), false, 'both, over more lines');
+  assert.equal(runsOnBase('on: {\n  pull_request_target: { branches: [main] }\n}\n'), true, 'a map over more lines');
+});
+
 test('a line in a | value that looks like a comment is its text, so new inputs go after it', () => {
   const file = step(['effort: low', 'jobs-why: |', '  #123 is why', '  # and this too', '', '  the end']);
   const out = withRoles(file, { reviewer: 'claude', checker: 'codex' });
