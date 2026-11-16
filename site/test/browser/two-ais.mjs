@@ -1077,15 +1077,32 @@ await scenario('new-run-asks-for-a-reviewer', { secrets: ['CODEX_AUTH_JSON'], co
   expect(!/checks its findings/.test(t), 'no longer says Claude checks');
 });
 
-await scenario('link-unreadable-checks-the-secret', { secrets: ['CODEX_AUTH_JSON'], file: CLAUDE_KEY_ONLY, headFile: 500, comments: [askToCheck({ url: '', code: '', claudeUrl: CLAUDE })], checks: { rolesha: waitingToCheck('Claude') } }, async ({ page, world, until }) => {
+await scenario('link-unreadable-waits-for-the-read', { secrets: ['CODEX_AUTH_JSON'], file: CLAUDE_KEY_ONLY, headFile: 500, comments: [askToCheck({ url: '', code: '', claudeUrl: CLAUDE })], checks: { rolesha: waitingToCheck('Claude') } }, async ({ page, world, until, text }) => {
   await page.goto(`${base}/setup/?repo=acme/api&pr=9&connect=claude`, { waitUntil: 'networkidle2' });
   await until((x) => /Open Claude/.test(x) && /We couldn't read the workflow on this PR/.test(x), "Claude's link, with the PR's workflow unknown");
   // The login is saved, and the run goes on before the page sees it say so. main's workflow doesn't read it.
   world.secrets.push('CLAUDE_CODE_OAUTH_TOKEN');
   world.comments = [{ user: { login: BOT }, body: withState(pendingSummaryBody(), undefined) }];
   world.checks.rolesha = { status: 'in_progress', conclusion: null, output: { title: 'Reviewing' } };
-  const t = await until((x) => /Mergelight is on|This link has ended/.test(x), 'the outcome');
-  expect(/Mergelight is on/.test(t), "an unknown workflow isn't swapped for main's, so the saved login counts");
+  await wait(9000);
+  const t = await text();
+  expect(/Connect Claude/.test(t) && !/This link has ended/.test(t), "an unknown workflow isn't swapped for main's, and a secret alone doesn't say it's read");
+  // The workflow can be read, and it reads that secret.
+  world.headFile = TEMPLATE;
+  await until((x) => /Mergelight is on/.test(x), 'on, once the workflow is read');
+});
+
+await scenario('link-unreadable-counts-no-secret-already-there', { secrets: ['CODEX_AUTH_JSON', 'CLAUDE_CODE_OAUTH_TOKEN'], file: CLAUDE_KEY_ONLY, headFile: 500, comments: [askToCheck({ url: '', code: '', claudeUrl: CLAUDE })], checks: { rolesha: waitingToCheck('Claude') } }, async ({ page, world, until, text }) => {
+  await page.goto(`${base}/setup/?repo=acme/api&pr=9&connect=claude`, { waitUntil: 'networkidle2' });
+  await until((x) => /We couldn't read the workflow on this PR/.test(x), 'the unknown workflow');
+  // A Claude plan login is there already, which the PR's workflow may not read.
+  await wait(9000);
+  expect(/Connect Claude/.test(await text()), "an unread workflow isn't taken to read the secret that's there");
+  // It can be read, and takes only an API key.
+  world.headFile = CLAUDE_KEY_ONLY;
+  await until((x) => /Add a secret named ANTHROPIC_API_KEY/.test(x), "the PR's workflow, once read");
+  world.secrets.push('ANTHROPIC_API_KEY');
+  await until((x) => /Mergelight is on/.test(x), 'on, once the login it reads is there');
 });
 
 await scenario('link-read-is-tried-again', { secrets: ['CODEX_AUTH_JSON'], file: CLAUDE_KEY_ONLY, headFile: 500, comments: [askToCheck({ url: '', code: '', claudeUrl: CLAUDE })], checks: { rolesha: waitingToCheck('Claude') } }, async ({ page, world, until }) => {

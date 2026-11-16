@@ -81,6 +81,7 @@ const SCAN_NOTE = 'This repo has more open PRs than we look through for one that
  */
 const MIN_ACTION_VERSION = 'v0.1.19';
 
+const NO_LOGINS: Logins = { claude: false, codex: false };
 /** The secret that holds a ChatGPT plan's login. */
 const CHATGPT_SECRET = LOGIN_SECRET[LOGIN_INPUTS.codex[0]]!;
 /** Why a repo whose organization shares a ChatGPT login saves one of its own. */
@@ -561,9 +562,15 @@ export default function Setup() {
   const linkContent = typeof linkFile === 'object' && linkFile ? linkFile.content : null;
   const linkFileNow = useRef(linkFile);
   linkFileNow.current = linkFile;
-  // A linked PR's workflow that can't be read is unknown, never the live one: a login is then checked by its secret alone.
-  const connectFile = startOnClaude ? linkContent : rolesChange && rolesFile !== 'known' ? null : (rolesChange?.content ?? pendingFile ?? liveFile);
-  const connectLogins = useMemo(() => loginsIn(connectFile, secretNames, sharedSecrets), [connectFile, secretNames, sharedSecrets]);
+  /**
+   * The workflow a connection is for is being read, or couldn't be: never swapped for the live one. Until it's read, no
+   * secret counts as its login, as one it doesn't read would look like one. Only its run saying so does.
+   */
+  const connectUnknown = startOnClaude ? !linkContent : Boolean(rolesChange && rolesFile !== 'known');
+  const connectUnknownNow = useRef(connectUnknown);
+  connectUnknownNow.current = connectUnknown;
+  const connectFile = connectUnknown ? null : startOnClaude ? linkContent : (rolesChange?.content ?? pendingFile ?? liveFile);
+  const connectLogins = useMemo(() => (connectUnknown ? NO_LOGINS : loginsIn(connectFile, secretNames, sharedSecrets)), [connectUnknown, connectFile, secretNames, sharedSecrets]);
   // Each read of the secrets makes a new list, so the polling reads this without restarting on it.
   const connectLoginsNow = useRef(connectLogins);
   connectLoginsNow.current = connectLogins;
@@ -633,7 +640,8 @@ export default function Setup() {
       }
       const check = pr ? await client.checkStatus(repo, pr.headSha).catch(() => null) : null;
       const names = view === 'connect' || !check || rolesChange ? await client.secrets(repo) : null;
-      const seen = names && loginsIn(connectFile, names.names, names.shared);
+      const unknown = connectUnknownNow.current;
+      const seen = names && (unknown ? NO_LOGINS : loginsIn(connectFile, names.names, names.shared));
       const login = seen ? seen.claude || seen.codex : true;
       const code = view === 'connect' && pr ? await client.connectCode(repo, pr.number).catch(() => null) : null;
       if (gone()) return true;
@@ -641,7 +649,7 @@ export default function Setup() {
       const done = Boolean(current?.merged) && (view === 'live' || Boolean(rolesChange));
       if (check) setStatus(check);
       setConnectCode(code);
-      setHasLogin(login);
+      if (!unknown) setHasLogin(login);
       if (names) {
         setSecretNames(names.names);
         setSharedSecrets(names.shared);
@@ -700,7 +708,7 @@ export default function Setup() {
       const title = /^connected/i.test(check?.title ?? '');
       // A run that offers both AIs is done once either gets a login it didn't have when the page first looked, or the
       // run goes on. One saved before doesn't count: a run that asks has no login it can use.
-      if (both && seen && !loginsBefore.current) loginsBefore.current = seen;
+      if (both && seen && !unknown && !loginsBefore.current) loginsBefore.current = seen;
       const before = loginsBefore.current;
       const newLogin = Boolean(seen && before && ((seen.claude && !before.claude) || (seen.codex && !before.codex)));
       const connected = need ? has(need, seen) || title : both ? newLogin || title || movedOn : movedOn;
@@ -749,9 +757,9 @@ export default function Setup() {
   const need = rolesNeed ?? askedCheck;
   /**
    * A run that went past asking without connecting the AI it needed: it finished, it's reviewing already, or it says
-   * the checker wasn't connected. A new commit gets a new one.
+   * the checker wasn't connected. A new commit gets a new one. While its workflow is unknown, that can't be told.
    */
-  const runEnded = Boolean(need && status && !connectLogins[need] && !/^connected/i.test(status.title ?? '') && (status.status === 'completed' || /^review/i.test(status.title ?? '') || /wasn't connected$/i.test(status.title ?? '')));
+  const runEnded = Boolean(need && status && !connectUnknown && !connectLogins[need] && !/^connected/i.test(status.title ?? '') && (status.status === 'completed' || /^review/i.test(status.title ?? '') || /wasn't connected$/i.test(status.title ?? '')));
   /** What a change of AI asks the run for: one AI, for the review or for checking another AI's review. */
   const rolesAsk = rolesChange && rolesNeed ? { ai: rolesNeed, forCheck: rolesNeed === rolesChange.roles.checker && rolesNeed !== rolesChange.roles.reviewer } : null;
   /** The organization shares the ChatGPT plan's login this workflow reads, so the repo saves one of its own. */
@@ -900,7 +908,7 @@ export default function Setup() {
   }, [rolesChange, secretsComplete, secretNames, sharedSecrets, changingRoles]);
   const yourAi = liveFile && <YourAi roles={currentRoles} logins={ownLogins} locked={rolesLocked} oldNote={oldNote} onUpdate={updateOk && update && view !== 'add' ? { tag: update.tag, go: () => setView('add') } : null} pending={rolesChange && pr && !merged ? { pr, roles: rolesChange.roles } : null} resume={resume} busy={adding} onChange={openRoles} onConnect={() => setView('connect')} />;
   /** The login inputs the workflow a connection is for has, when the page can tell. Null offers every way. */
-  const accepts = (startOnClaude && !linkContent) || (rolesChange && rolesFile !== 'known') ? null : connectFile && isStandard(connectFile) ? loginInputs(connectFile) : null;
+  const accepts = connectUnknown ? null : connectFile && isStandard(connectFile) ? loginInputs(connectFile) : null;
 
   const anotherRepo = () => {
     picked.current++;
