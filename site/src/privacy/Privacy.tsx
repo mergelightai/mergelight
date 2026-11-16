@@ -141,7 +141,7 @@ const SECTIONS: Section[] = [
           'A rule, check or skill you delete stops being used at once. The log of changes keeps the text of a deleted rule or check, and the name and description of a deleted skill, until your organization\'s data is deleted.',
           'Everything else stays until your organization deletes it.',
           'An owner of the organization can delete all of its data on the dashboard, under Settings. It is deleted at once, the log of changes too, and the dashboard turns off.',
-          <>Or write to {mail}. We check on GitHub that you own the organization, and delete everything within one month.</>,
+          <>Where the dashboard says to write to us instead, or if you prefer, write to {mail}. We check on GitHub that you own the organization, and delete everything within one month.</>,
         ]}
       />
     ),

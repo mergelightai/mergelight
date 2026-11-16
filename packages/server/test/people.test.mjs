@@ -978,6 +978,22 @@ test("only an owner can delete an org's data, with its name typed again, and nev
   assert.equal((await withOrgRows(OTHER.id, "select 1 from reviews")).length, 1);
 });
 
+test("over HTTP: an owner's delete reaches the server with the org's name, and deletes", async () => {
+  const server = createDataServer(api);
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const { token } = await signIn(ADA);
+    const res = await fetch(`${base}/v1/orgs/${ACME.id}`, { method: "DELETE", headers: { origin: SITE, authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ confirm: "acme" }) });
+    assert.equal(res.status, 204);
+    assert.deepEqual(await withOrgRows(ACME.id, "select 1 from orgs"), []);
+    // Signing out sends no body, and still works.
+    assert.equal((await fetch(`${base}/v1/session`, { method: "DELETE", headers: { origin: SITE, authorization: `Bearer ${token}` } })).status, 204);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test("an org the server turns on at each start can't be deleted from the dashboard: it would come back", async () => {
   api = createApi({ pool, publicUrl: PUBLIC_URL, origins: [SITE], fetchImpl, now: () => clock, keptOn: new Set([ACME.id]) });
   const { token } = await signIn(ADA);
