@@ -10,7 +10,7 @@ import Ambient from '../sections/Ambient';
 import { Check, GitHubIcon, SURFACE, WELL } from '../ui';
 import type { ConnectLink } from './github';
 import { compareVersions, cleanUrl, finishSignIn, GitHubError, INSTALL_URL, onlyAi, onRef, OpenPrError, ScanLimitError, readConnectLink, readInstalled, rememberConnect, rememberRepo, reviewAppUrl, takeRememberedConnect, takeRememberedRepo, isPinned, mockClient, pinned, realClient, REFRESH_FILE, signInUrl, wakeTokenServer, withReviewer, WorkflowEditError, type CheckStatus, type ConnectCode, type GitHubClient, type Release, type Repo, type RepoDetails, type SetupPr, type WorkflowFile } from './github';
-import { aiName, connectsAfterMerge, isStandard, readsPlanLogin, runsOnBase, LOGIN_INPUTS, LOGIN_SECRET, loginInputs, loginsFrom, loginsIn, otherAi, passesLogin, readRoles, reviewerFixedBy, rolesFor, withInputs, withoutInputs, withRoles, type Ai, type Logins, type Roles } from './roles';
+import { aiName, connectsAfterMerge, isStandard, readsPlanLogin, runsOnBase, waitsForBase, LOGIN_INPUTS, LOGIN_SECRET, loginInputs, loginsFrom, loginsIn, otherAi, passesLogin, readRoles, reviewerFixedBy, rolesFor, withInputs, withoutInputs, withRoles, type Ai, type Logins, type Roles } from './roles';
 
 const CHATGPT_SECURITY = 'https://chatgpt.com/settings/security';
 /** Where the Action's docs say how provider and verify-with work, for a workflow set by hand. */
@@ -92,7 +92,7 @@ const SHARED_LOGIN_NOTE = "Your organization's ChatGPT login is shared, so this 
 const readsChatgpt = (file: string | null | undefined) => !file || readsPlanLogin(file);
 
 /** Why a ChatGPT login is saved from the person's own computer: no code comes for it on a pull request. */
-type CommandWhy = 'public' | 'internal' | 'shared' | 'hold';
+type CommandWhy = 'public' | 'internal' | 'shared' | 'hold' | 'base';
 
 /** Who could enter a ChatGPT code shown on a pull request of a repo that isn't private. */
 const seenBy = (visibility: Repo['visibility']) => (visibility === 'internal' ? 'This repo is internal, so anyone in your enterprise who can see your PR' : 'This repo is public, so anyone who can see your PR');
@@ -131,6 +131,11 @@ interface RolesChange {
   addsRefresh: boolean;
   /** The login waits until the pull request is merged, as one saved before that would move reviews on the branch. */
   hold: boolean;
+  /**
+   * The AIs whose login waits until the pull request is merged, as its own run can't ask for them: on
+   * pull_request_target it runs the workflow the branch has now. The PR keeps every role chosen.
+   */
+  onBase: Ai[];
   /** The workflow leaves the checker to the default, so no run asks for its login: it comes from the command. */
   implicit: boolean;
 }
@@ -752,7 +757,7 @@ export default function Setup() {
    */
   /** What the connect step is for: a change of AI's AI, or the reviewer the workflow names. */
   const connectAsk = rolesAsk ?? (setupNeed ? { ai: setupNeed, forCheck: false } : null);
-  const commandWhy: CommandWhy | null = connectAsk && connectAsk.ai !== 'codex' ? null : sharedChatgpt ? 'shared' : !rolesAsk || !repo ? null : rolesAsk.forCheck && repo.visibility !== 'private' ? repo.visibility : rolesChange?.implicit ? 'hold' : null;
+  const commandWhy: CommandWhy | null = connectAsk && connectAsk.ai !== 'codex' ? null : sharedChatgpt ? 'shared' : !rolesAsk || !repo ? null : rolesAsk.forCheck && repo.visibility !== 'private' ? repo.visibility : rolesChange?.implicit ? 'hold' : prMerged && rolesChange?.onBase.includes(rolesAsk.ai) ? 'base' : null;
 
   const openRoles = () => {
     // An update's pull request on its way could end up as a second one beside this change.
@@ -799,6 +804,7 @@ export default function Setup() {
       // no login can be saved before it's merged. Once there is one, the Action's default makes the other AI check, the
       // choice. One AI for both is written out in full, as the default would make the other AI check.
       const hold = Boolean(set && needs.some((ai) => connectsAfterMerge(set, logins, want, ai)));
+      const onBase = needs.filter((ai) => waitsForBase(liveFile, logins, ai));
       const leaveChecker = hold && want.checker !== want.reviewer;
       const named = withInputs(liveFile, [['provider', want.reviewer]]);
       const content = leaveChecker && named ? (withoutInputs(named, ['verify-with']) ?? full) : full;
@@ -819,7 +825,7 @@ export default function Setup() {
         setMerged(false);
         setPrMerged(false);
         setPr(opened);
-        setRolesChange({ roles: want, content, needs, connectFirst: connectFirst && !opened, addsRefresh, hold, implicit: leaveChecker });
+        setRolesChange({ roles: want, content, needs, connectFirst: connectFirst && !opened, addsRefresh, hold, onBase, implicit: leaveChecker });
         setUpdatePr(null);
         setPendingFile(null);
         // A read for an earlier proposal's PR is for one that's gone.
@@ -939,7 +945,7 @@ export default function Setup() {
               )}
               {view === 'finish' && repo && <FinishStep repo={repo} branch={branch} fileUrl={fileUrl} pr={pr} capped={scanCapped} onBack={back.finish!} />}
               {/* A new AI to connect, a new PR or a new run starts the step over: what it learned from the last one doesn't hold. */}
-              {view === 'connect' && repo && <ConnectStep key={`${rolesNeed ?? ''} ${pr?.number ?? ''} ${pr?.headSha ?? ''}`} repo={repo} pr={pr} status={status} code={connectCode} ask={connectAsk} commandWhy={commandWhy} hold={rolesChange?.hold && !prMerged ? branch : null} merged={prMerged} thenPr={Boolean(rolesChange?.connectFirst)} accepts={accepts} acceptsUnknown={(startOnClaude && linkFile === 'unknown') || Boolean(rolesChange && rolesFile === 'unknown')} visibility={repo.visibility} named={readRoles(rolesChange?.content ?? liveFile ?? workflow)?.provider ?? null} ended={runEnded || Boolean(pr && missedSha === pr.headSha)} onBack={back.connect!} onSkip={() => setView('live')} startOnClaude={startOnClaude || rolesNeed === 'claude'} onClaudeCode={(url, c) => client!.sendClaudeCode(repo, url, c)} />}
+              {view === 'connect' && repo && <ConnectStep key={`${rolesNeed ?? ''} ${pr?.number ?? ''} ${pr?.headSha ?? ''}`} repo={repo} pr={pr} status={status} code={connectCode} ask={connectAsk} commandWhy={commandWhy} hold={(rolesChange?.hold || (rolesNeed && rolesChange?.onBase.includes(rolesNeed))) && !prMerged ? branch : null} holdOnBase={!rolesChange?.hold} merged={prMerged} thenPr={Boolean(rolesChange?.connectFirst)} accepts={accepts} acceptsUnknown={(startOnClaude && linkFile === 'unknown') || Boolean(rolesChange && rolesFile === 'unknown')} visibility={repo.visibility} named={readRoles(rolesChange?.content ?? liveFile ?? workflow)?.provider ?? null} ended={runEnded || Boolean(pr && missedSha === pr.headSha)} onBack={back.connect!} onSkip={() => setView('live')} startOnClaude={startOnClaude || rolesNeed === 'claude'} onClaudeCode={(url, c) => client!.sendClaudeCode(repo, url, c)} />}
               {/* Only an update's own pull request is an update: a change of AI on a repo that could update isn't one. */}
               {view === 'live' && repo && <LiveStep repo={repo} pr={shownPr} backTo={startOnClaude ? pr : null} status={status} hasLogin={hasLogin} merged={merged} updatedTo={startOnClaude || rolesChange ? null : updatePr} ai={yourAi} onAnother={anotherRepo} />}
               {view === 'roles' && repo && liveFile && currentRoles && !rolesLocked && <RolesStep current={currentRoles} openPr={openPr} logins={logins} own={ownLogins} visibility={repo.visibility} refreshMissing={!refreshLive} sharedLogin={sharedChatgpt} defaultBranch={repo.defaultBranch} file={liveFile} branch={branch} changing={changingRoles} failed={rolesFailed} accessUrl={repo.accessUrl} onBack={changingRoles ? () => undefined : back.roles!} onConfirm={(r) => void changeRoles(r)} />}
@@ -1800,11 +1806,12 @@ function FinishStep({ repo, branch, fileUrl, pr, capped, onBack }: { repo: Repo;
 /**
  * `ended` is a run that finished without the login this step is for, which its check title alone can't tell. `ask` is
  * what the page knows the run asks for before it says so: one AI, for the review or for checking another AI's review.
- * `hold` is the branch whose reviews a login saved now would move, so the pull request has to be merged first.
+ * `hold` is the branch whose reviews a login saved now would move, so the pull request has to be merged first. With
+ * `holdOnBase`, it's the branch whose workflow the pull request's run reads, which doesn't ask for this AI.
  * `merged` is a pull request that's merged already, so a new commit on it starts no run. `accepts` is the login inputs
  * the workflow has, when that's known: a login saved for an input it doesn't have would never be used.
  */
-function ConnectStep({ repo, pr, status, code: found, ask = null, commandWhy = null, visibility = 'private', hold = null, merged = false, thenPr = false, accepts = null, acceptsUnknown = false, named = null, ended = false, onBack, onSkip, startOnClaude, onClaudeCode }: { repo: Repo; pr: SetupPr | null; status: CheckStatus | null; code: ConnectCode | null; ask?: { ai: Ai; forCheck: boolean } | null; commandWhy?: CommandWhy | null; visibility?: Repo['visibility']; hold?: string | null; merged?: boolean; thenPr?: boolean; accepts?: string[] | null; acceptsUnknown?: boolean; named?: Ai | null; ended?: boolean; onBack: () => void; onSkip: () => void; startOnClaude: boolean; onClaudeCode: (url: string, code: string) => Promise<void> }) {
+function ConnectStep({ repo, pr, status, code: found, ask = null, commandWhy = null, visibility = 'private', hold = null, holdOnBase = false, merged = false, thenPr = false, accepts = null, acceptsUnknown = false, named = null, ended = false, onBack, onSkip, startOnClaude, onClaudeCode }: { repo: Repo; pr: SetupPr | null; status: CheckStatus | null; code: ConnectCode | null; ask?: { ai: Ai; forCheck: boolean } | null; commandWhy?: CommandWhy | null; visibility?: Repo['visibility']; hold?: string | null; holdOnBase?: boolean; merged?: boolean; thenPr?: boolean; accepts?: string[] | null; acceptsUnknown?: boolean; named?: Ai | null; ended?: boolean; onBack: () => void; onSkip: () => void; startOnClaude: boolean; onClaudeCode: (url: string, code: string) => Promise<void> }) {
   const failed = couldntFinish(status) || ended;
   // A code from a run that has gone on without it can't be used any more.
   const code = found?.code && !failed ? found : null;
@@ -1873,7 +1880,7 @@ function ConnectStep({ repo, pr, status, code: found, ask = null, commandWhy = n
   // With a pull request open, the run that makes the code is on its way or already going.
   const coming = Boolean(pr) && !failed && !waiting;
   const noteEnded = 'This link has ended';
-  const note = byCommand ? (thenPr ? "We'll open your PR once it's saved" : commandWhy === 'shared' ? "We'll move on when it's saved" : "Until it's saved, Claude checks its own reviews") : mode !== 'chatgpt' ? "We'll move on when you're connected" : code ? 'Waiting for you to enter the code' : failed ? "Couldn't connect. Check that step 1 is on." : waiting ? 'Your code is ready on the pull request' : "We'll move on when you're connected";
+  const note = byCommand ? (thenPr ? "We'll open your PR once it's saved" : commandWhy === 'shared' || commandWhy === 'base' ? "We'll move on when it's saved" : "Until it's saved, Claude checks its own reviews") : mode !== 'chatgpt' ? "We'll move on when you're connected" : code ? 'Waiting for you to enter the code' : failed ? "Couldn't connect. Check that step 1 is on." : waiting ? 'Your code is ready on the pull request' : "We'll move on when you're connected";
   // The run takes a little while to make the code, so this has to look busy, not stuck.
   const gettingCode = mode === 'chatgpt' && coming && !code && !byCommand;
   // The run offers Claude too. Once it has posted without a Claude link, none is coming: the repo was set up before that existed.
@@ -1916,7 +1923,7 @@ function ConnectStep({ repo, pr, status, code: found, ask = null, commandWhy = n
     return (
       <div>
         <BackButton onClick={onBack} />
-        <Heading title="Merge your PR first" sub={`Your workflow on ${hold} doesn't say which AI reviews, so a ${aiName(only)} login saved now would make ${aiName(only)} review there. PR #${pr.number} keeps ${aiName(otherAi(only))} reviewing.`} />
+        <Heading title="Merge your PR first" sub={holdOnBase ? `Your workflow runs on pull_request_target, so PR #${pr.number} runs the one on ${hold}, which doesn't use ${aiName(only)} yet.` : `Your workflow on ${hold} doesn't say which AI reviews, so a ${aiName(only)} login saved now would make ${aiName(only)} review there. PR #${pr.number} keeps ${aiName(otherAi(only))} reviewing.`} />
         <ol className="mt-6 space-y-4">
           <Numbered n={1}>
             Merge pull request #{pr.number}
@@ -1938,7 +1945,7 @@ function ConnectStep({ repo, pr, status, code: found, ask = null, commandWhy = n
       <BackButton onClick={onBack} />
       <Heading
         title={checking ? `Connect ${aiName(checking)} to check reviews` : one ? `Connect ${aiName(one)}` : 'Connect your AI'}
-        sub={byCommand ? (commandWhy === 'shared' ? SHARED_LOGIN_NOTE : commandWhy === 'hold' ? 'Your workflow makes ChatGPT check once it has a login, so no PR asks for a code. Save the login from your own computer instead.' : `${seenBy(visibility)} could enter a ChatGPT code. Save the login from your own computer instead.`) : checking ? `${aiName(otherAi(checking))}'s review then starts by itself, and ${aiName(checking)} checks its findings.` : billing === 'plan' ? 'Reviews use the subscription you already have.' : 'You pay your AI provider for each review.'}
+        sub={byCommand ? (commandWhy === 'shared' ? SHARED_LOGIN_NOTE : commandWhy === 'hold' ? 'Your workflow makes ChatGPT check once it has a login, so no PR asks for a code. Save the login from your own computer instead.' : commandWhy === 'base' ? 'Your PR is merged, so no run on it asks for a code. Save the login from your own computer instead.' : `${seenBy(visibility)} could enter a ChatGPT code. Save the login from your own computer instead.`) : checking ? `${aiName(otherAi(checking))}'s review then starts by itself, and ${aiName(checking)} checks its findings.` : billing === 'plan' ? 'Reviews use the subscription you already have.' : 'You pay your AI provider for each review.'}
       />
 
       {billings.length > 1 && <Segment label="How to pay" options={[{ id: 'plan' as const, title: 'Your plan' }, { id: 'key' as const, title: 'API key' }]} value={billing} onChange={setBilling} />}
@@ -2324,6 +2331,9 @@ function RolesStep(props: { current: Roles; openPr: SetupPr | null | undefined; 
   const unpassed = chosen.find((ai) => !passesLogin(file, ai)) ?? null;
   const set = readRoles(file);
   const afterMerge = (ai: Ai) => Boolean(set && connectsAfterMerge(set, logins, pick, ai));
+  // On pull_request_target the PR's run reads the workflow the branch has now, which may not use this AI yet.
+  const onBase = (ai: Ai) => !afterMerge(ai) && waitsForBase(file, logins, ai);
+  const baseNote = `Next, merge the PR, then connect it here. Your workflow runs on pull_request_target, so PRs use the one on ${branch} until then.`;
   const problem: RolesFailure | null = edited === null ? 'no-step' : failed;
   const checking = openPr === undefined;
   const refreshAdds = refreshMissing && chosen.includes('codex') && readsChatgpt(file);
@@ -2384,11 +2394,15 @@ function RolesStep(props: { current: Roles; openPr: SetupPr | null | undefined; 
                 ? `${SHARED_LOGIN_NOTE} Next, you save it from your own computer${nothing ? '' : ', and then we open the PR'}.`
                 : ai === checker && ai !== reviewer
                   ? ai === 'codex' && visibility !== 'private'
-                    ? `${seenBy(visibility)} could enter a ChatGPT code. Next, ${afterMerge(ai) ? 'merge the PR, then ' : 'you '}save the login from your own computer.`
+                    ? `${seenBy(visibility)} could enter a ChatGPT code. Next, ${afterMerge(ai) || onBase(ai) ? 'merge the PR, then ' : 'you '}save the login from your own computer.`
                     : afterMerge(ai)
                       ? `Next, merge the PR, then save its login from your own computer. A ${aiName(ai)} login saved before that would make ${aiName(ai)} review on ${branch}.`
-                      : 'Next, you connect it to check reviews.'
-                  : 'You connect it next.'}
+                      : onBase(ai)
+                        ? baseNote
+                        : 'Next, you connect it to check reviews.'
+                  : onBase(ai)
+                    ? baseNote
+                    : 'You connect it next.'}
             </Fact>
           ))
         )}

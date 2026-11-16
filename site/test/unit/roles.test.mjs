@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { connectsAfterMerge, isStandard, readsPlanLogin, runsOnBase, stepInScalar, loginsFrom, loginsIn, passesLogin, readRoles, reviewerFixedBy, rolesFor, withInputs, withoutInputs, withRoles } from '../../src/setup/roles.ts';
+import { connectsAfterMerge, isStandard, readsPlanLogin, runsOnBase, waitsForBase, stepInScalar, loginsFrom, loginsIn, passesLogin, readRoles, reviewerFixedBy, rolesFor, withInputs, withoutInputs, withRoles } from '../../src/setup/roles.ts';
 
 const template = readFileSync(new URL('../../../examples/mergelight.yml', import.meta.url), 'utf8');
 const both = { claude: true, codex: true };
@@ -362,4 +362,13 @@ test('readsPlanLogin: the refresh job is only for a review that reads CODEX_AUTH
   assert.equal(readsPlanLogin(step(['codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}', 'auth-secret-name: TEAM_CODEX'])), false, 'saved to another one');
   assert.equal(readsPlanLogin(step(['codex-auth-json: ${{ secrets.codex_auth_json }}', 'auth-secret-name: CODEX_AUTH_JSON'])), true, 'the same secret, in either case');
   assert.equal(readsPlanLogin(step(['openai-api-key: ${{ secrets.OPENAI_API_KEY }}'])), false, 'no plan login');
+});
+
+test("waitsForBase: on pull_request_target, a PR's run asks only for the AIs the branch's workflow uses now", () => {
+  const onBase = template.replace('on:\n  pull_request:\n', 'on:\n  pull_request_target:\n');
+  const claude = withInputs(onBase, [['provider', 'claude']]);
+  assert.equal(waitsForBase(claude, claudeOnly, 'codex'), true, 'Claude reviews and checks there now, so no run asks for ChatGPT');
+  assert.equal(waitsForBase(withInputs(onBase, [['provider', 'codex']]), claudeOnly, 'codex'), false, 'ChatGPT reviews there now, so its run asks');
+  assert.equal(waitsForBase(withRoles(onBase, { reviewer: 'claude', checker: 'codex' }), claudeOnly, 'codex'), false, 'or checks');
+  assert.equal(waitsForBase(withInputs(template, [['provider', 'claude']]), claudeOnly, 'codex'), false, "on pull_request, the PR's run reads its own");
 });

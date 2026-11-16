@@ -311,6 +311,27 @@ await scenario('merged-after-the-run-moved-on', { secrets: ['CLAUDE_CODE_OAUTH_T
   expect(/Connect ChatGPT to check reviews/.test(t) && !/push a new commit/.test(t), "doesn't ask for a commit on a merged PR");
 });
 
+await scenario('pull-request-target-new-checker-merges-first', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], file: TEMPLATE.replace('on:\n  pull_request:\n', 'on:\n  pull_request_target:\n').replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`) }, async ({ page, world, until, click, reachLive, choose }) => {
+  await reachLive();
+  let t = await choose('Add ChatGPT');
+  // The PR's run reads main's workflow, where Claude reviews and checks, so it never asks for ChatGPT.
+  expect(/ChatGPT isn't connected yet\. Next, merge the PR, then connect it here\. Your workflow runs on pull_request_target, so PRs use the one on main until then\./.test(t), 'says ChatGPT connects once the PR is merged, and why');
+  await click('button', 'Open PR');
+  t = await until((x) => /Merge your PR first/.test(x), 'the step that waits for the merge');
+  expect(/Your workflow runs on pull_request_target, so PR #9 runs the one on main, which doesn't use ChatGPT yet\./.test(t), 'says why the merge comes first');
+  expect(!/Enter the code/.test(t), "doesn't wait for a code that can't come");
+  const put = world.writes.find((w) => w.m === 'PUT' && w.p.endsWith('/mergelight.yml'));
+  expect(put && /provider: claude\n {10}verify-with: codex\n/.test(unb64(put.body.content)), 'the PR keeps both roles chosen');
+
+  world.merged = true;
+  t = await until((x) => /codex login && gh secret set CODEX_AUTH_JSON --repo acme\/api/.test(x), 'the command, once merged');
+  expect(/Your PR is merged, so no run on it asks for a code\. Save the login from your own computer instead\./.test(t), 'says why the login comes from their computer');
+  expect(!(await offers(page, 'Claude')), 'and only ChatGPT');
+  world.secrets.push('CODEX_AUTH_JSON');
+  t = await until((x) => /Mergelight is on/.test(x), 'back to live');
+  expect(/Reviews with Claude, checked by ChatGPT/.test(t), 'Claude reviews, checked by ChatGPT');
+});
+
 await scenario('claude-named-adds-chatgpt', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`) }, async ({ page, world, until, click, shot, reachLive, choose }) => {
   await reachLive();
   let t = await choose('Add ChatGPT');

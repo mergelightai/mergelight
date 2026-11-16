@@ -384,6 +384,17 @@ export function runsOnBase(content: string | null): boolean {
   return /\bpull_request_target\b/.test(on) && !/\bpull_request\b(?!_)/.test(on);
 }
 
+/**
+ * Whether a pull request's own run can't ask for `adding`'s login, so it connects once the PR is merged. A workflow on
+ * pull_request_target runs the one the branch has now, whatever the PR changes, and that asks only for the AIs it uses.
+ */
+export function waitsForBase(content: string, logins: Logins, adding: Ai): boolean {
+  const set = readRoles(content);
+  if (!set || !runsOnBase(content)) return false;
+  const now = rolesFor(set, logins);
+  return adding !== now.reviewer && adding !== now.checker;
+}
+
 /** Whether the Mergelight step hands this AI a login at all: without one of its inputs, it can never review or check. */
 export const passesLogin = (content: string, ai: Ai): boolean => LOGIN_INPUTS[ai].some((input) => loginInputs(content).includes(input));
 
