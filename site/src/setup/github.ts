@@ -101,6 +101,11 @@ export interface WorkflowFile {
   keep?: boolean;
   /** With `edit`: a branch without the file gets `content`, rather than the change failing. */
   orAdd?: boolean;
+  /**
+   * A file the branch doesn't have goes in only if the review workflow this change leaves there passes this, like one
+   * that reads the login this job keeps fresh. One an open pull request changed may read another.
+   */
+  addIf?: (review: string) => boolean;
 }
 
 /** What a pull request from this page is for. */
@@ -596,7 +601,9 @@ export function realClient(token: string): GitHubClient {
        */
       const plan = async (head: string) => {
         const current = await Promise.all(files.map((f) => workflowOn(repo, head, f.name)));
-        return files.map((file, i) => ({ file, current: current[i] ?? null, content: wanted(file, current[i]?.content ?? null) }));
+        const planned = files.map((file, i) => ({ file, current: current[i] ?? null, content: wanted(file, current[i]?.content ?? null) }));
+        const review = planned.find(({ file }) => file.name === 'mergelight.yml')?.content;
+        return planned.filter(({ file, current }) => !(file.addIf && !current && review !== undefined && !file.addIf(review)));
       };
       type Plan = Awaited<ReturnType<typeof plan>>;
       /** Writes the files that differ on this branch. Returns the last commit, if anything changed. */

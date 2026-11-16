@@ -337,6 +337,10 @@ await run('update-leaves-another-login-alone', { onBase: customized(`${OLD_SHA} 
   expect(puts.length === 1 && puts[0].p.endsWith('/mergelight.yml'), 'adds no refresh job');
   expect(!/Adds the small job/.test(before), "and doesn't say it would");
 });
+await run('update-goes-by-the-prs-login-for-the-refresh-job', { onBase: customized(`${OLD_SHA} # v0.1.0`), prFile: customized(`${OLD_SHA} # v0.1.0`).replace('secrets.CODEX_AUTH_JSON }}\n', 'secrets.TEAM_CODEX }}\n          auth-secret-name: TEAM_CODEX\n'), login: true, button: 'Update to v0.2.0' }, ({ puts }) => {
+  // main's review reads CODEX_AUTH_JSON, but the open PR moves it to TEAM_CODEX, so CODEX_AUTH_JSON may be another tool's.
+  expect(puts.length === 1 && puts[0].p.endsWith('/mergelight.yml') && puts[0].body.branch === 'mergelight-setup-old', 'updates the PR, and adds no refresh job');
+});
 await run('old-refresh-job-too', { onBase: customized(`${OLD_SHA} # v0.1.0`), baseRefresh: customized(`${OLD_SHA} # v0.1.0`), login: true, button: 'Update to v0.2.0' }, ({ before, puts, refresh, pull }) => {
   expect(/Changes only the Mergelight version lines in both files/.test(before), 'says both files');
   expect(!/Adds the small job/.test(before), "doesn't claim to add the job");

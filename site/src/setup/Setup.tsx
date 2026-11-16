@@ -491,7 +491,8 @@ export default function Setup() {
     if (details.refresh) list.push({ name: REFRESH_FILE, content: version(details.refresh), edit: version });
     // Only for a workflow that reads the ChatGPT plan's login: another tool's login of that name isn't the review's to refresh.
     // A ChatGPT plan's login gets it whatever key another AI has. A repo with only keys or a Claude login doesn't.
-    else if ((details.secretNames.includes(CHATGPT_SECRET) || !details.hasApiKey) && readsChatgpt(details.installed?.content)) list.push({ name: REFRESH_FILE, content: refreshJob(pinTo), edit: version, orAdd: true });
+    // Whether it goes in is decided again by the workflow the PR ends up with, which an open one may have changed.
+    else if ((details.secretNames.includes(CHATGPT_SECRET) || !details.hasApiKey) && readsChatgpt(details.installed?.content)) list.push({ name: REFRESH_FILE, content: refreshJob(pinTo), edit: version, orAdd: true, addIf: readsPlanLogin });
     return list;
   }, [workflow, details, repo, pinTo, update]);
   const fileUrl = repo ? newFileUrl(repo.fullName, branch, workflow) : '#';
