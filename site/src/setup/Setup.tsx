@@ -70,6 +70,8 @@ const ORDER: View[] = ['welcome', 'settling', 'repo', 'review-app', 'add', 'fini
 const RAIL: Record<View, number> = { welcome: 0, settling: 1, repo: 1, 'review-app': 1, add: 2, finish: 2, connect: 3, live: 4, roles: 4 };
 
 /** Why a change of AI didn't open a pull request. */
+/** Why the roles can't be changed here: set up its own way, another branch reviews, not all branches or secrets seen, no login, or the version. */
+type RolesLock = 'custom' | 'branches' | 'unchecked' | 'secrets' | 'none' | 'checking' | 'old';
 type RolesFailure = 'no-file' | 'no-step' | 'changed' | 'scan' | 'refused' | 'other';
 
 /** Why nothing was proposed in a repo with more open PRs than are looked through. */
@@ -799,10 +801,11 @@ export default function Setup() {
   const versionOk = typeof actionVersion === 'string' && compareVersions(actionVersion, MIN_ACTION_VERSION) >= 0;
   // A login is the whole repo's, so where Mergelight reviews another branch too, a change here would move that one's
   // reviews as well. Each is set by hand there.
-  const rolesLocked: 'custom' | 'branches' | 'secrets' | 'none' | 'checking' | 'old' | null = !liveFile || !currentSet ? null : !isStandard(liveFile) ? 'custom' : details?.otherReviewBranches.length ? 'branches' : !secretsComplete ? 'secrets' : !logins.claude && !logins.codex ? 'none' : actionVersion === undefined ? 'checking' : !versionOk ? 'old' : null;
+  const rolesLocked: RolesLock | null = !liveFile || !currentSet ? null : !isStandard(liveFile) ? 'custom' : details?.otherReviewBranches.length ? 'branches' : details && !details.branchesKnown ? 'unchecked' : !secretsComplete ? 'secrets' : !logins.claude && !logins.codex ? 'none' : actionVersion === undefined ? 'checking' : !versionOk ? 'old' : null;
   /** Who reviews and who checks, only where that's sure: with the Action's defaults, or written out in full. */
-  // Another branch with a review stops a change, but with every secret seen the roles here can still be told.
-  const rolesKnown = !rolesLocked || rolesLocked === 'checking' || rolesLocked === 'old' || (rolesLocked === 'branches' && secretsComplete);
+  // Another branch with a review, or one that may have one, stops a change, but with every secret seen the roles here
+  // can still be told.
+  const rolesKnown = !rolesLocked || rolesLocked === 'checking' || rolesLocked === 'old' || ((rolesLocked === 'branches' || rolesLocked === 'unchecked') && secretsComplete);
   const currentRoles = currentSet && (rolesKnown ? rolesFor(currentSet, logins) : currentSet.provider && currentSet.verifyWith ? { reviewer: currentSet.provider, checker: currentSet.verifyWith } : null);
   /** An update that brings a release new enough, which the page's Update button already offers. */
   const updateOk = Boolean(update && compareVersions(update.tag, MIN_ACTION_VERSION) >= 0);
@@ -2313,7 +2316,7 @@ const rolesGoal = (r: Roles) => (r.reviewer === r.checker ? `review and check wi
  * could be read, or no AI has a login yet, so connecting one comes first. `resume` is an AI a change of AI still has to
  * connect.
  */
-function YourAi({ roles, logins, locked, oldNote, onUpdate, pending, resume, busy, onChange, onConnect }: { roles: Roles | null; logins: Logins; locked: 'custom' | 'branches' | 'secrets' | 'none' | 'checking' | 'old' | null; oldNote: string; onUpdate: { tag: string; go: () => void } | null; pending: { pr: SetupPr; roles: Roles } | null; resume: Ai | null; busy: boolean; onChange: () => void; onConnect: () => void }) {
+function YourAi({ roles, logins, locked, oldNote, onUpdate, pending, resume, busy, onChange, onConnect }: { roles: Roles | null; logins: Logins; locked: RolesLock | null; oldNote: string; onUpdate: { tag: string; go: () => void } | null; pending: { pr: SetupPr; roles: Roles } | null; resume: Ai | null; busy: boolean; onChange: () => void; onConnect: () => void }) {
   const action = logins.claude && !logins.codex ? 'Add ChatGPT' : logins.codex && !logins.claude ? 'Add Claude' : 'Change';
   const small = 'h-8 shrink-0 rounded-lg bg-white/[0.07] px-2.5 text-[13px] font-medium text-fg outline-none transition-[background-color,transform] duration-100 hover:bg-white/[0.11] focus-visible:ring-2 focus-visible:ring-lilac active:scale-[0.97] disabled:pointer-events-none disabled:opacity-40';
   return (
@@ -2356,9 +2359,9 @@ function YourAi({ roles, logins, locked, oldNote, onUpdate, pending, resume, bus
           )}
         </div>
       )}
-      {(locked === 'custom' || locked === 'branches' || locked === 'secrets') && (
+      {(locked === 'custom' || locked === 'branches' || locked === 'unchecked' || locked === 'secrets') && (
         <div className="mt-2.5 text-[13.5px] leading-relaxed text-muted [text-wrap:pretty]">
-          {locked === 'custom' ? 'Your workflow is customized, so you set provider and verify-with in it by hand.' : locked === 'branches' ? 'Mergelight reviews more than one branch here, so you set provider and verify-with in each by hand.' : "We can't read all of this repo's secrets, so we can't tell which AIs are connected. You set provider and verify-with in your workflow by hand."}
+          {locked === 'custom' ? 'Your workflow is customized, so you set provider and verify-with in it by hand.' : locked === 'branches' ? 'Mergelight reviews more than one branch here, so you set provider and verify-with in each by hand.' : locked === 'unchecked' ? "We couldn't check every branch your PRs go into, so you set provider and verify-with in your workflow by hand." : "We can't read all of this repo's secrets, so we can't tell which AIs are connected. You set provider and verify-with in your workflow by hand."}
           <a href={ROLES_DOCS} target="_blank" rel="noreferrer" className="mt-1 flex w-fit items-center gap-1 text-lilac transition-colors hover:text-fg">
             How to set them <External />
           </a>

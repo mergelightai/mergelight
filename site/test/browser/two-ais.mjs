@@ -109,13 +109,14 @@ async function scenario(name, start, body) {
         const per = Number(u.searchParams.get('per_page') ?? 30);
         const page = Number(u.searchParams.get('page') ?? 1);
         const list = [...others, ...mine].slice((page - 1) * per, page * per);
-        // An answer can come late, holding what was true when it was asked. Only a look for a workflow PR, which asks a
-        // page at a time: the repo's details read the open PRs too, for the branches they go into.
-        const delay = u.searchParams.has('page') ? (world.openDelays?.shift() ?? 0) : 0;
+        // An answer can come late, holding what was true when it was asked. Only a look for a workflow PR, newest first:
+        // the repo's details read the open PRs too, for the branches they go into.
+        const delay = u.searchParams.has('sort') ? (world.openDelays?.shift() ?? 0) : 0;
         return delay ? void setTimeout(() => json(req, list), delay) : json(req, list);
       }
       if (/^\/pulls\/[12]\d\d\/files$/.test(p)) return json(req, [{ filename: 'src/app.ts' }]);
       // Most new work goes to main, which is the default branch unless a test says otherwise.
+      if (p === '/pulls' && world.recentFails) return json(req, {}, 500);
       if (p === '/pulls') return json(req, [{ base: { ref: 'main' }, head: { ref: 'feat/x' } }, ...(world.recentPulls ?? [])]);
       if (p === `/pulls/${PR.number}/files` && world.filesFail) return json(req, {}, 500);
       if (p === `/pulls/${PR.number}/files`) {
@@ -1590,6 +1591,19 @@ await scenario('release-branch-a-pr-goes-into-is-read-only', { secrets: ['CLAUDE
   expect(/Mergelight reviews more than one branch here/.test(live), 'says why');
   expect(await readOnly(page, live), 'offers no change');
   expect(world.writes.length === 0, 'writes nothing');
+});
+
+await scenario('too-many-open-prs-to-check-every-branch', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], otherOpen: 1001, file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`) }, async ({ page, world, reachLive }) => {
+  const { live } = await reachLive();
+  // Past ten pages of open PRs, one into another branch with a review may be left out.
+  expect(/We couldn't check every branch your PRs go into, so you set provider and verify-with in your workflow by hand\./.test(live), 'says why');
+  expect(await readOnly(page, live) && /Reviews with Claude, checked by Claude/.test(live), 'offers no change, and still says who reviews');
+  expect(world.writes.length === 0, 'writes nothing');
+});
+
+await scenario('recent-prs-unreadable-is-read-only', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], recentFails: true, file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`) }, async ({ page, reachLive }) => {
+  const { live } = await reachLive();
+  expect(/We couldn't check every branch your PRs go into/.test(live) && (await readOnly(page, live)), "a list that couldn't be read offers no change");
 });
 
 await scenario('feature-branch-with-a-copy-is-no-other-review', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], branches: ['main', 'feat/y'], file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`) }, async ({ reachLive }) => {

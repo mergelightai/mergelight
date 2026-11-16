@@ -23,6 +23,8 @@ export const INSTALL_URL = 'https://github.com/apps/mergelight-setup/installatio
 export const reviewAppUrl = (repo: Repo) => `https://github.com/apps/mergelight-ai/installations/new/permissions?suggested_target_id=${repo.accountId}&repository_ids[]=${repo.id}`;
 
 /** Branches that hold releases or shared work. PRs from these are promotions, not new code. */
+/** How many pages of open PRs are looked through for the branches they go into, a hundred each. */
+const OPEN_PAGES = 10;
 /** How many pages of the Action's tags are looked through for a commit's release, a hundred tags each. */
 const TAG_PAGES = 20;
 export const LONG_LIVED_BRANCHES = ['main', 'master', 'staging', 'stage', 'production', 'prod', 'development', 'develop', 'dev'];
@@ -85,6 +87,11 @@ export interface RepoDetails {
    * leaves who reviews to each of them.
    */
   otherReviewBranches: string[];
+  /**
+   * Whether every branch a PR goes into was looked at. A list of PRs that couldn't be read, or had more open PRs than
+   * are looked through, may leave one out.
+   */
+  branchesKnown: boolean;
   /** The latest release. Only a pinned repo needs it, so failing to read it doesn't stop a setup. */
   release: Release | null;
   /** If the app that posts reviews is on this repo. Null if that can't be told, which doesn't stop a setup. */
@@ -538,6 +545,16 @@ export function realClient(token: string): GitHubClient {
     const pull = await openSetupPull(repo, base, reviewOnly);
     return pull && { number: pull.number, url: pull.html_url, headSha: pull.head.sha };
   };
+  /** The branches open PRs go into, a page at a time. Null past OPEN_PAGES pages, which may leave one out. */
+  const openBases = async (repo: Repo): Promise<string[] | null> => {
+    const bases = new Set<string>();
+    for (let page = 1; page <= OPEN_PAGES; page++) {
+      const pulls = await get<{ base: { ref: string } }[]>(`/repos/${repo.fullName}/pulls?state=open&per_page=100&page=${page}`);
+      for (const pull of pulls) bases.add(pull.base.ref);
+      if (pulls.length < 100) return [...bases];
+    }
+    return null;
+  };
   /** Only our server can ask GitHub this, and it needs the person's token to show they can see the repo. */
   const reviewAppInstalled = async (repo: Repo) => {
     const res = await fetch(`${TOKEN_SERVER}/review-app?repo=${encodeURIComponent(repo.fullName)}`, {
@@ -574,19 +591,20 @@ export function realClient(token: string): GitHubClient {
       return lists.flat().sort((a, b) => a.fullName.localeCompare(b.fullName));
     },
     details: async (repo) => {
-      const [branches, pulls, open, seen, release, reviewApp] = await Promise.all([
+      const [branches, recent, open, seen, release, reviewApp] = await Promise.all([
         get<{ name: string }[]>(`/repos/${repo.fullName}/branches?per_page=100`),
-        get<{ base: { ref: string }; head: { ref: string } }[]>(`/repos/${repo.fullName}/pulls?state=all&per_page=50`).catch(() => []),
-        get<{ base: { ref: string } }[]>(`/repos/${repo.fullName}/pulls?state=open&per_page=100`).catch(() => []),
+        get<{ base: { ref: string }; head: { ref: string } }[]>(`/repos/${repo.fullName}/pulls?state=all&per_page=50`).catch(() => null),
+        openBases(repo).catch(() => null),
         secretNames(repo),
         latestRelease().catch(() => null),
         reviewAppInstalled(repo).catch(() => null),
       ]);
       const names = branches.map((b) => b.name);
+      const pulls = recent ?? [];
       const base = pickBase(pulls.map((p) => ({ base: p.base.ref, head: p.head.ref })), repo.defaultBranch);
       // Branches PRs go into: the long-lived ones, and the base of each open or recent PR, like a release branch or a
       // stacked PR's. A feature branch that only holds a copy of the workflow has no PRs into it, so it never counts.
-      const others = [...new Set([...LONG_LIVED_BRANCHES, repo.defaultBranch, ...[...pulls, ...open].map((p) => p.base.ref)])].filter((b) => b !== base);
+      const others = [...new Set([...LONG_LIVED_BRANCHES, repo.defaultBranch, ...pulls.map((p) => p.base.ref), ...(open ?? [])])].filter((b) => b !== base);
       const [onBase, refresh, onOthers] = await Promise.all([
         workflowOn(repo, base),
         workflowOn(repo, base, REFRESH_FILE),
@@ -607,6 +625,7 @@ export function realClient(token: string): GitHubClient {
         installed,
         refresh: refresh?.content ?? null,
         otherReviewBranches: onOthers.filter((b): b is string => b !== null),
+        branchesKnown: recent !== null && open !== null,
         release,
         reviewApp,
       };
@@ -734,9 +753,9 @@ export function mockClient(): GitHubClient {
     details: (r) =>
       later<RepoDetails>({ reviewApp: r.fullName !== 'acme/docs', ...(
         r.fullName === 'acme/docs'
-          ? { branches: ['main'], base: 'main', skip: ['main'], hasLogin: false, secretNames: namesOf(r.fullName), sharedSecrets: [], otherReviewBranches: [], allSecretsSeen: true, hasApiKey: false, installed: null, refresh: null, release }
+          ? { branches: ['main'], base: 'main', skip: ['main'], hasLogin: false, secretNames: namesOf(r.fullName), sharedSecrets: [], otherReviewBranches: [], branchesKnown: true, allSecretsSeen: true, hasApiKey: false, installed: null, refresh: null, release }
           : r.fullName === 'acme/site'
-          ? { branches: ['main', 'feat/new-landing'], base: 'main', skip: ['main'], hasLogin: false, secretNames: namesOf(r.fullName), sharedSecrets: [], otherReviewBranches: [], allSecretsSeen: true, hasApiKey: false, installed: null, refresh: null, release }
+          ? { branches: ['main', 'feat/new-landing'], base: 'main', skip: ['main'], hasLogin: false, secretNames: namesOf(r.fullName), sharedSecrets: [], otherReviewBranches: [], branchesKnown: true, allSecretsSeen: true, hasApiKey: false, installed: null, refresh: null, release }
           : {
               branches: ['main', 'staging', 'development', 'feat/billing-export', 'fix/invoice-rounding'],
               base: 'staging',
@@ -746,6 +765,7 @@ export function mockClient(): GitHubClient {
               secretNames: namesOf(r.fullName),
               sharedSecrets: [],
               otherReviewBranches: [],
+              branchesKnown: true,
               allSecretsSeen: true,
               installed: installedFor(r.fullName),
               refresh: null,
