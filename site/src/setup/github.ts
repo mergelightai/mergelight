@@ -78,8 +78,8 @@ export interface RepoDetails {
   /** The refresh workflow on the base branch, if it's there. */
   refresh: string | null;
   /**
-   * Other long-lived branches, and the default branch, with a Mergelight review workflow of their own, or whose
-   * workflow couldn't be read. A login is the whole repo's, so this page leaves who reviews to each of them.
+   * Other long-lived branches, the default branch and the bases of recent PRs, with a Mergelight review workflow of
+   * their own, or whose workflow couldn't be read. A login is the whole repo's, so this page leaves who reviews to each of them.
    */
   otherReviewBranches: string[];
   /** The latest release. Only a pinned repo needs it, so failing to read it doesn't stop a setup. */
@@ -561,7 +561,8 @@ export function realClient(token: string): GitHubClient {
       ]);
       const names = branches.map((b) => b.name);
       const base = pickBase(pulls.map((p) => ({ base: p.base.ref, head: p.head.ref })), repo.defaultBranch);
-      const others = [...new Set([...LONG_LIVED_BRANCHES, repo.defaultBranch])].filter((b) => b !== base);
+      // The base of each recent PR too, like a release branch, which can have its own review.
+      const others = [...new Set([...LONG_LIVED_BRANCHES, repo.defaultBranch, ...pulls.map((p) => p.base.ref)])].filter((b) => b !== base);
       const [onBase, refresh, onOthers] = await Promise.all([
         workflowOn(repo, base),
         workflowOn(repo, base, REFRESH_FILE),

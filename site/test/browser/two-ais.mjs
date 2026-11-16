@@ -113,7 +113,7 @@ async function scenario(name, start, body) {
       }
       if (/^\/pulls\/[12]\d\d\/files$/.test(p)) return json(req, [{ filename: 'src/app.ts' }]);
       // Most new work goes to main, which is the default branch unless a test says otherwise.
-      if (p === '/pulls') return json(req, [{ base: { ref: 'main' }, head: { ref: 'feat/x' } }]);
+      if (p === '/pulls') return json(req, [{ base: { ref: 'main' }, head: { ref: 'feat/x' } }, ...(world.recentPulls ?? [])]);
       if (p === `/pulls/${PR.number}/files` && world.filesFail) return json(req, {}, 500);
       if (p === `/pulls/${PR.number}/files`) {
         // A big PR lists its files a page at a time, with the workflow on the second page.
@@ -1465,6 +1465,14 @@ await scenario('link-on-pull-request-target-reads-its-own-base', { secrets: ['CO
   // The PR goes into staging, whose workflow takes Claude's plan login. main's, which the page picked, takes only a key.
   const t = await until((x) => /Open Claude|ANTHROPIC_API_KEY/.test(x), "Claude's step");
   expect(/Open Claude/.test(t) && !/ANTHROPIC_API_KEY/.test(t), "goes by the workflow on the PR's own base branch");
+});
+
+await scenario('recent-pr-base-with-a-review-is-read-only', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], recentPulls: [{ base: { ref: 'release/1.x' }, head: { ref: 'fix/y' } }], file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`) }, async ({ page, world, reachLive }) => {
+  const { live } = await reachLive();
+  // A PR went into release/1.x, which has the review too and would get the same new login.
+  expect(/Mergelight reviews more than one branch here/.test(live), 'says why');
+  expect(await readOnly(page, live), 'offers no change');
+  expect(world.writes.length === 0, 'writes nothing');
 });
 
 await scenario('closed-role-pr-is-no-update', { secrets: ['CODEX_AUTH_JSON', 'CLAUDE_CODE_OAUTH_TOKEN'], refresh: REFRESH, file: BEHIND }, async ({ page, world, until, click, text }) => {
