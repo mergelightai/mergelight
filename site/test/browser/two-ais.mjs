@@ -301,6 +301,20 @@ await scenario('claude-only-adds-chatgpt', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'
   expect(!t.includes(CODE), 'and no code is left on screen');
 });
 
+await scenario('role-pr-merged-into-another-branch-keeps-the-hold', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'] }, async ({ world, until, reachLive, choose, click, text }) => {
+  await reachLive();
+  await choose('Add ChatGPT');
+  await click('button', 'Open PR');
+  await until((x) => /Merge your PR first/.test(x), 'the step that waits for the merge');
+  // The PR is moved to staging and merged there, so main still doesn't name Claude.
+  world.prBase = 'staging';
+  world.merged = true;
+  await until((x) => /Mergelight is on/.test(x) && !/Merge PR #9/.test(x), 'live, with the PR no longer followed');
+  await wait(5000);
+  const t = await text();
+  expect(!/codex login/.test(t) && !/Resume/.test(t), "offers no ChatGPT login, which would make ChatGPT review on main");
+});
+
 await scenario('merged-after-the-run-moved-on', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`) }, async ({ world, until, click, reachLive, choose }) => {
   await reachLive();
   await choose('Add ChatGPT');

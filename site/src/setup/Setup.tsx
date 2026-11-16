@@ -639,8 +639,9 @@ export default function Setup() {
     const stop = poll(async () => {
       const current = pr ? await client.prState(repo, pr.number).catch(() => null) : null;
       if (gone()) return true;
-      // A change of AI whose PR was closed without merging has nothing left to wait for.
-      if (current?.closed && rolesChange && pr) {
+      // A change of AI whose PR was closed without merging has nothing left to wait for. Nor has one moved to another
+      // branch: merged there, it leaves this branch as it was, so a login saved then could still move its reviews.
+      if (rolesChange && pr && current && (current.closed || current.base !== branch)) {
         // A read of its workflow still on its way is for a PR that's gone.
         rolesRead.current++;
         setRolesChange(null);
