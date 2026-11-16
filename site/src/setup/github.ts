@@ -518,6 +518,8 @@ export function realClient(token: string): GitHubClient {
       if (files.length < 100) return changed;
     }
   };
+  /** Which workflows each pull request changes, by its number and commits. */
+  const changedAt = new Map<string, { review: boolean; refresh: boolean }>();
   /**
    * Every open pull request, a page at a time, so one far down the list is still found. Each one's files cost a request,
    * so past PULLS_CHECKED of them the scan stops: a repo with that many open PRs is told so, rather than having its
@@ -527,13 +529,17 @@ export function realClient(token: string): GitHubClient {
     const into = base ? `&base=${encodeURIComponent(base)}` : '';
     let checked = 0;
     for (let page = 1; ; page++) {
-      const pulls = await get<{ number: number; html_url: string; title: string; base: { ref: string }; head: { sha: string; ref: string; repo: { full_name: string } | null } }[]>(`/repos/${repo.fullName}/pulls?state=open&sort=created&direction=desc&per_page=100&page=${page}${into}`);
+      const pulls = await get<{ number: number; html_url: string; title: string; base: { ref: string; sha?: string }; head: { sha: string; ref: string; repo: { full_name: string } | null } }[]>(`/repos/${repo.fullName}/pulls?state=open&sort=created&direction=desc&per_page=100&page=${page}${into}`);
       for (const pull of pulls) {
         // A fork's pull request isn't ours to update.
         if (pull.head.repo?.full_name !== repo.fullName) continue;
         if (base && pull.base?.ref !== base) continue;
         if (++checked > PULLS_CHECKED) throw new ScanLimitError();
-        const changed = await workflowsChanged(repo, pull.number);
+        // The same commits change the same files, so a look made again, like each check while setup waits, reads only
+        // the PRs that are new or have new commits.
+        const key = `${repo.fullName}#${pull.number} ${pull.head.sha} ${pull.base.sha ?? ''}`;
+        const changed = changedAt.get(key) ?? (await workflowsChanged(repo, pull.number));
+        changedAt.set(key, changed);
         // One that changes only the refresh job is told apart by its files, whatever it's called.
         // `reviewOnly` is for finding the PR that installs the review: one with only the refresh job doesn't.
         if (changed.review || (!reviewOnly && changed.refresh)) return { ...pull, refreshOnly: changed.refresh && !changed.review };
