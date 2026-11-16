@@ -118,6 +118,8 @@ interface Step {
 }
 
 const indentOf = (line: string) => line.match(/^ */)![0].length;
+/** A key whose value is a block scalar, `|` or `>`. An anchor or a tag can come before it, as in `run: &fixture |`. */
+const OPENS_SCALAR = /:[ \t]*(?:[&!]\S*[ \t]+)*[|>][-+0-9]*[ \t]*(?:#.*)?$/;
 /** Where a line's key starts: after its indent, and after a sequence dash if it has one. */
 const keyColumn = (line: string) => line.match(/^ *(?:- +)?/)![0].length;
 
@@ -131,8 +133,7 @@ function insideScalar(text: string[], at: number): boolean {
     const t = text[i]!;
     // A key after a sequence dash starts where the key does, so `- if: >-` is a sibling of the `uses` below it.
     if (NOTE.test(t) || keyColumn(t) >= least) continue;
-    // An anchor or a tag can come before the `|` or `>`, as in `run: &fixture |`.
-    if (/:[ \t]*(?:[&!]\S*[ \t]+)*[|>][-+0-9]*[ \t]*(?:#.*)?$/.test(t)) return true;
+    if (OPENS_SCALAR.test(t)) return true;
     least = indentOf(t);
   }
   return false;
@@ -205,10 +206,17 @@ function locate(content: string): Step | null {
   let childIndent = -1;
   const entries: Entry[] = [];
   let blockEnd = withLine + 1;
+  // Whether the value above is a `|` or `>` block, whose lines are text even where they look like a comment, like `#123`.
+  let scalar = false;
   for (let i = withLine + 1; i < end; i++) {
     const t = text[i]!;
-    if (NOTE.test(t)) continue;
     const indent = indentOf(t);
+    if (scalar && t.trim() && indent > childIndent) {
+      entries.at(-1)!.end = i + 1;
+      blockEnd = i + 1;
+      continue;
+    }
+    if (NOTE.test(t)) continue;
     if (indent <= keyCol) break;
     if (childIndent < 0) childIndent = indent;
     if (indent < childIndent) return null;
@@ -218,6 +226,7 @@ function locate(content: string): Step | null {
       // GitHub reads input names without regard to case, so PROVIDER is provider. Two that differ only in case are
       // one input given twice, which isn't read below.
       entries.push({ key: key[1]!.toLowerCase(), start: i, end: i + 1 });
+      scalar = OPENS_SCALAR.test(t);
     } else {
       // More of the value above, like the lines of a `|` block.
       entries.at(-1)!.end = i + 1;
@@ -356,7 +365,8 @@ export function runsOnBase(content: string | null): boolean {
   const at = lines.findIndex((l) => /^["']?on["']?[ \t]*:/.test(l));
   if (at < 0) return false;
   const block = [lines[at]!.replace(/^[^:]*:/, '')];
-  for (let i = at + 1; i < lines.length && (/^[ \t]/.test(lines[i]!) || !lines[i]!.trim()); i++) block.push(lines[i]!);
+  // The block goes on past blank lines and comments, even ones at the start of a line.
+  for (let i = at + 1; i < lines.length && (/^[ \t]/.test(lines[i]!) || NOTE.test(lines[i]!)); i++) block.push(lines[i]!);
   const on = block.join('\n').replace(/#.*$/gm, '');
   return /\bpull_request_target\b/.test(on) && !/\bpull_request\b(?!_)/.test(on);
 }

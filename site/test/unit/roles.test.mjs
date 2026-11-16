@@ -341,4 +341,17 @@ test('a workflow on pull_request_target runs the base branch workflow', () => {
   assert.equal(runsOnBase('on: [pull_request_target]\njobs: {}\n'), true);
   assert.equal(runsOnBase('on: [pull_request, pull_request_target]\n'), false, 'with both, a PR run reads its own');
   assert.equal(runsOnBase(null), false);
+  // A comment at the start of a line doesn't end the block.
+  assert.equal(runsOnBase('on:\n# The PR runs from its base.\n  pull_request_target:\njobs: {}\n'), true);
+  assert.equal(runsOnBase('on:\n  pull_request_target:\n# And its own.\n  pull_request:\njobs: {}\n'), false);
+});
+
+test('a line in a | value that looks like a comment is its text, so new inputs go after it', () => {
+  const file = step(['effort: low', 'jobs-why: |', '  #123 is why', '  # and this too', '', '  the end']);
+  const out = withRoles(file, { reviewer: 'claude', checker: 'codex' });
+  assert.equal(out, `${file}      provider: claude\n      verify-with: codex\n`);
+  assert.equal(withoutInputs(file, ['jobs-why']), step(['effort: low']), 'and goes with its input');
+  // After a plain value, a deeper comment is still a comment, and stays when that input is replaced.
+  const note = step(['provider: codex', '  # the old one', 'effort: low']);
+  assert.equal(withRoles(note, { reviewer: 'claude', checker: 'codex' }), step(['provider: claude', 'verify-with: codex', '  # the old one', 'effort: low']));
 });
