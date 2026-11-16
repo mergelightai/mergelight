@@ -374,14 +374,52 @@ export function loginsIn(content: string | null, secretNames: string[], shared: 
  */
 export function runsOnBase(content: string | null): boolean {
   if (!content) return false;
+  const on = events(content);
+  return on.includes('pull_request_target') && !on.includes('pull_request');
+}
+
+/**
+ * The events a workflow runs on: the keys of its `on:`, or the names in `on: push` and `on: [push, pull_request]`. Never
+ * what's under an event, like the branches or paths it filters on, which can look like an event's name.
+ */
+function events(content: string): string[] {
   const lines = content.split(/\r?\n/);
   const at = lines.findIndex((l) => /^["']?on["']?[ \t]*:/.test(l));
-  if (at < 0) return false;
-  const block = [lines[at]!.replace(/^[^:]*:/, '')];
-  // The block goes on past blank lines and comments, even ones at the start of a line.
-  for (let i = at + 1; i < lines.length && (/^[ \t]/.test(lines[i]!) || NOTE.test(lines[i]!)); i++) block.push(lines[i]!);
-  const on = block.join('\n').replace(/#.*$/gm, '');
-  return /\bpull_request_target\b/.test(on) && !/\bpull_request\b(?!_)/.test(on);
+  if (at < 0) return [];
+  const unquote = (s: string) => s.trim().replace(/^(["'])(.*)\1$/, '$2');
+  const inline = lines[at]!.replace(/^[^:]*:/, '').replace(/(^|[ \t])#.*$/, '').trim();
+  if (inline) {
+    const flow = inline.match(/^([[{])(.*)[\]}]$/);
+    if (!flow) return [unquote(inline)];
+    // Only what's at the top of the list or map: `{ pull_request_target: { paths: [a] } }` is that one event.
+    const parts = [''];
+    let depth = 0;
+    for (const ch of flow[2]!) {
+      if (ch === ',' && depth === 0) {
+        parts.push('');
+        continue;
+      }
+      if (ch === '[' || ch === '{') depth++;
+      if (ch === ']' || ch === '}') depth--;
+      parts[parts.length - 1] += ch;
+    }
+    return parts.map((p) => unquote(flow[1] === '{' ? p.replace(/:[\s\S]*$/, '') : p)).filter(Boolean);
+  }
+  const found: string[] = [];
+  let indent = -1;
+  for (let i = at + 1; i < lines.length; i++) {
+    const t = lines[i]!;
+    if (NOTE.test(t)) continue;
+    const col = indentOf(t);
+    // A list of events can start right under `on:`, as in `- push`.
+    if (col === 0 && !/^-[ \t]/.test(t)) break;
+    if (indent < 0) indent = col;
+    // Deeper is what an event filters on.
+    if (col !== indent) continue;
+    const key = t.slice(col).match(/^(?:-[ \t]+)?(["']?)([^"':#\s]+)\1[ \t]*(?::|#|$)/);
+    if (key) found.push(key[2]!);
+  }
+  return found;
 }
 
 /**

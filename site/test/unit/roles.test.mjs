@@ -346,6 +346,17 @@ test('a workflow on pull_request_target runs the base branch workflow', () => {
   assert.equal(runsOnBase('on:\n  pull_request_target:\n# And its own.\n  pull_request:\njobs: {}\n'), false);
 });
 
+test("an event is only an event's name: a path or a branch it filters on isn't one", () => {
+  assert.equal(runsOnBase('on:\n  pull_request_target:\n    paths-ignore:\n      - src/pull_request.ts\n    branches: [pull_request]\njobs: {}\n'), true, 'filters under the event');
+  assert.equal(runsOnBase('on:\n  pull_request_target:\n    paths:\n    - src/pull_request.ts\njobs: {}\n'), true, 'a list set in line with its key');
+  assert.equal(runsOnBase('on: { pull_request_target: { paths: [pull_request.ts] } }\n'), true, 'a map on one line');
+  assert.equal(runsOnBase('on: pull_request_target # not pull_request\n'), true, 'one event, and a comment');
+  assert.equal(runsOnBase('on:\n- pull_request_target\n- push\njobs: {}\n'), true, 'a list right under on');
+  assert.equal(runsOnBase('on:\n  - pull_request_target\n  - "pull_request"\n'), false, 'both, in a list');
+  assert.equal(runsOnBase('on: { pull_request: {}, pull_request_target: {} }\n'), false, 'both, in a map on one line');
+  assert.equal(runsOnBase('on:\n  push:\n    branches: [pull_request_target]\n'), false, 'a branch named like the event');
+});
+
 test('a line in a | value that looks like a comment is its text, so new inputs go after it', () => {
   const file = step(['effort: low', 'jobs-why: |', '  #123 is why', '  # and this too', '', '  the end']);
   const out = withRoles(file, { reviewer: 'claude', checker: 'codex' });
