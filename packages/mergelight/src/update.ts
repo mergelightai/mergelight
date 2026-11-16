@@ -7,7 +7,8 @@ import type { GitHub } from "./publish/api.js";
  * here just means no hint.
  */
 
-const CURRENT = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
+/** This package's version, like 0.1.19. */
+export const CURRENT = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
 
 const parts = (version: string) => version.replace(/^v/, "").split(".").map(Number);
 

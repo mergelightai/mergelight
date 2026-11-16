@@ -14,6 +14,7 @@ import { renderRejected, renderTerminal } from "./render.js";
 import { reviewPullRequest } from "./review.js";
 import { jobsCommand } from "./jobs-command.js";
 import { pushJobs } from "./push-jobs.js";
+import { CURRENT } from "./update.js";
 import { jobsReport } from "./run-jobs.js";
 import { askForApp, connect, githubConnect } from "./connect.js";
 import { init, realInitDeps } from "./init.js";
@@ -73,6 +74,7 @@ Options
                         For connect: connect the AI that checks another AI's review. Nobody
                         connecting it holds nothing up: the reviewer checks instead
   -h, --help            Show this help
+  -v, --version         Show the version
 
 Reviews run on your own logged-in Codex CLI, and Claude Code if you check with it.
 Your code and your AI login are never sent to Mergelight.
@@ -107,8 +109,17 @@ function progressPrinter() {
 
 const log = (line: string) => process.stderr.write(`${line}\n`);
 
+/** parseArgs throws on an option it doesn't know, like a typo. That gets one line, not a stack trace. */
+function argsOrError<T>(read: () => T): T | Error {
+  try {
+    return read();
+  } catch (err) {
+    return err instanceof Error ? err : new Error(String(err));
+  }
+}
+
 async function main(): Promise<number> {
-  const { values, positionals } = parseArgs({
+  const parsed = argsOrError(() => parseArgs({
     allowPositionals: true,
     options: {
       repo: { type: "string" },
@@ -144,10 +155,21 @@ async function main(): Promise<number> {
       "jobs-commit": { type: "string" },
       "jobs-why": { type: "string" },
       help: { type: "boolean", short: "h" },
+      version: { type: "boolean", short: "v" },
     },
-  });
+  }));
+  if (parsed instanceof Error) {
+    // Node's message goes on to explain "--" for positionals, which helps nobody here: the first sentence says it.
+    log(`mergelight: ${(parsed.message.split(/\.\s/)[0] ?? parsed.message).replace(/\.$/, "")}. Run mergelight --help to see the options.`);
+    return 1;
+  }
+  const { values, positionals } = parsed;
 
   const [command, target] = positionals;
+  if (values.version) {
+    process.stdout.write(`${CURRENT}\n`);
+    return 0;
+  }
   if (values.help || !command) {
     process.stdout.write(HELP);
     return values.help ? 0 : 1;
