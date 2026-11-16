@@ -100,7 +100,9 @@ When someone marks a finding "won't fix" and says why, the next review of that p
 - One GitHub setting widens who can send a decision. If an org lets pull requests from forks of a private repository run with write tokens, a fork's run can send one too. With that setting on, treat decisions as coming from anyone who can open such a pull request.
 - The server takes a run's word for a decision. Someone who can push a branch can send one that nobody made on GitHub. That is the same group of people who can decline a finding for real, and the dashboard shows every decision with its pull request, so a made-up one can be found and removed. A decision is text for the reviewer to weigh, never an instruction to it.
 
-`node dist/admin.js delete <github-account-id>` removes everything stored for an org. Take the org out of `CONNECT_ORGS` first: the server turns on every org listed there at each start, so a deleted org that is still listed comes back at the next deploy. The command refuses an org listed in `CONNECT_ORGS` in its own environment.
+An owner of the org deletes everything stored for it on the dashboard, under Settings, by typing the org's name (`DELETE /v1/orgs/<id>` with `{"confirm": "<login>"}`). For a personal account, that is the account's own person. Everything goes at once, the log of changes too, and nothing is kept about the delete itself. The dashboard is then off for the org, and its runs store nothing. An org listed in `CONNECT_ORGS` can't be deleted there, as the next start would turn it on again: the answer says to write to us.
+
+`node dist/admin.js delete <github-account-id>` does the same from the server's host. Take the org out of `CONNECT_ORGS` first: the server turns on every org listed there at each start, so a deleted org that is still listed comes back at the next deploy. The command refuses an org listed in `CONNECT_ORGS` in its own environment.
 
 ## The dashboard's side
 

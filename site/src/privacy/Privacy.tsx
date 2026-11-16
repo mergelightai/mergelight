@@ -4,7 +4,7 @@ import { EMAIL, GITHUB } from '../links';
 
 // Every sentence here must stay true to the code. When a change touches what the token server,
 // the server, the Action or the pages send or keep, change this page in the same pull request.
-const UPDATED = 'November 12, 2026';
+const UPDATED = 'November 16, 2026';
 
 type Section = { id: string; title: string; body: ReactNode };
 
@@ -139,8 +139,9 @@ const SECTIONS: Section[] = [
           'A decision that no review has used for 90 days is deleted on its own. A repository keeps 500 decisions at most.',
           'Forget on the dashboard deletes a decision\'s title and reason at once. A marker without text stays: the finding\'s id, its line and the pull request.',
           'A rule, check or skill you delete stops being used at once. The log of changes keeps the text of a deleted rule or check, and the name and description of a deleted skill, until your organization\'s data is deleted.',
-          'Everything else stays until your organization asks us to delete it.',
-          <>To delete all of your organization's data, write to {mail}. We check on GitHub that you own the organization, and delete everything within one month.</>,
+          'Everything else stays until your organization deletes it.',
+          'An owner of the organization can delete all of its data on the dashboard, under Settings. It is deleted at once, the log of changes too, and the dashboard turns off.',
+          <>Or write to {mail}. We check on GitHub that you own the organization, and delete everything within one month.</>,
         ]}
       />
     ),

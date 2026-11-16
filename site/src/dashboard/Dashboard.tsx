@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { addCheck, addRule, addSkill, finishSignIn, forgetDecision, loadChecks, loadDecisions, loadOverview, loadRules, loadSkills, mayRenew, NotConnected, rememberedSession, removeCheck, removeRule, removeSkill, SignedOut, signInUrl, signOut, tidyAddress, type Checks, type Decision, type Overview, type Rules, type Session, type Skills } from './api';
+import { addCheck, addRule, addSkill, deleteOrgData, finishSignIn, forgetDecision, loadChecks, loadDecisions, loadOverview, loadRules, loadSkills, mayRenew, NotConnected, rememberedSession, removeCheck, removeRule, removeSkill, SignedOut, signInUrl, signOut, tidyAddress, type Checks, type Decision, type Overview, type Rules, type Session, type Skills } from './api';
 import { AppShell, VIEWS, type ViewId } from './AppShell';
 import { claimTab, forgetTab, keepOrg, keptOrg, keepView, keptView, takeResume } from './kit';
 import { ChecksView } from './views/ChecksView';
@@ -8,6 +8,7 @@ import { DecisionsView } from './views/DecisionsView';
 import { NO_FILTERS, ReviewsView, type ReviewFilters } from './views/ReviewsView';
 import { RulesView } from './views/RulesView';
 import { SkillsView } from './views/SkillsView';
+import { SettingsView } from './views/SettingsView';
 import { Centered, LoadError, NoOrg, NothingYet, NotOn, SignIn, Spinning } from './views/States';
 
 const ALL_VIEWS = VIEWS.flatMap((g) => g.items.map((i) => i.id));
@@ -292,6 +293,18 @@ export default function Dashboard() {
             await signedIn(() => forgetDecision(session, org.id, d.id));
             // Only counts down if the decision was still in the list: a reload in between already left it out.
             setView((v) => (v.kind === 'ready' ? { ...v, decisions: v.decisions.filter((x) => x.id !== d.id), total: v.decisions.some((x) => x.id === d.id) ? v.total - 1 : v.total } : v));
+          }}
+        />
+      )}
+      {ready && tab === 'settings' && (
+        <SettingsView
+          key={org.id}
+          org={org}
+          canDelete={ready.overview.can_delete === true}
+          onDelete={async (confirm) => {
+            await signedIn(() => deleteOrgData(session, org.id, confirm));
+            toast.success(`Everything stored for ${org.login} is deleted.`);
+            setView({ kind: 'off' });
           }}
         />
       )}

@@ -10,7 +10,7 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import { HttpError } from "../../token-server/dist/token.js";
-import { isId, MEMORY_DAYS, withOrg, type Db, type Pool } from "./db.js";
+import { deleteOrg, isId, MEMORY_DAYS, withOrg, type Db, type Pool } from "./db.js";
 import { DEFAULT_SIGN_IN_APP, lookUp, looksLikePersonToken, type Person, type Reach } from "./github.js";
 import { hiddenCharacter, isCheckName, isLineOfText, isPathPattern, isSkillPath, isSkillText, plainEmoji, SKILL_TEXT_MAX } from "./validate.js";
 
@@ -74,6 +74,8 @@ export interface PeopleOptions {
   origins: string[];
   /** The GitHub App people sign in with. Only its tokens count as a sign-in. */
   signInApp?: string;
+  /** Orgs the server turns on at each start. Deleting their data here would only last until the next start. */
+  keptOn?: ReadonlySet<number>;
   fetchImpl?: typeof fetch;
   now?: () => number;
 }
@@ -100,7 +102,7 @@ const bearer = (request: Request): string => {
 /** Sessions are kept under a hash, so the list in memory holds nothing that could be used as a token. */
 const keyOf = (token: string) => createHash("sha256").update(token).digest("hex");
 
-export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP, fetchImpl = fetch, now = () => Date.now() }: PeopleOptions) {
+export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP, keptOn = new Set(), fetchImpl = fetch, now = () => Date.now() }: PeopleOptions) {
   const sessions = new Map<string, Session>();
   const persons = new Map<number, PersonState>();
   /** GitHub tokens that signed in a moment ago, by hash, with when each may sign in again. */
@@ -233,6 +235,8 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
       status: 200,
       body: {
         org: { id: orgId, login: reach.login },
+        // Deleting everything stored takes the person who runs the account: an owner of the org, or the account's own person.
+        can_delete: reach.admin,
         repos: found.repos.map((r) => ({ id: Number(r.id), name: r.name, last_review_at: r.last_review_at, reviews: r.reviews })),
         reviews: found.reviews.map((v) => ({ ...v, repo_id: Number(v.repo_id) })),
       },
@@ -296,6 +300,34 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
     });
     if (outcome === "missing") throw new HttpError(404, "not_found", "No such decision.");
     if (outcome === "read_only") throw new HttpError(403, "read_only", "Only people who can push to this repository can remove a decision.");
+    return { status: 204, body: null };
+  }
+
+  /**
+   * Deletes everything stored for an org, and so turns the dashboard off for it: reviews, rules, skills, checks, decisions
+   * and the log. It takes the person who runs the account, and the account's name typed again, so a stray request can't.
+   * Nothing is kept about it afterwards, not even that it happened: the log goes with the rest.
+   */
+  async function deleteAll(session: Session, orgId: number, request: Request): Promise<{ status: number; body: unknown }> {
+    const reach = session.reach.get(orgId);
+    if (!reach) throw new HttpError(404, "not_found", "No such org.");
+    if (!reach.admin) throw new HttpError(403, "read_only", `Only an owner of ${reach.login} can delete its data.`);
+    const raw = await request.text();
+    if (Buffer.byteLength(raw) > 1024) throw new HttpError(413, "too_large", "The request is too large.");
+    let confirm: unknown;
+    try {
+      confirm = (JSON.parse(raw) as { confirm?: unknown } | null)?.confirm;
+    } catch {
+      throw new HttpError(400, "bad_request", "The request isn't JSON.");
+    }
+    // GitHub's names don't care about case, so neither does this.
+    if (typeof confirm !== "string" || confirm.trim().toLowerCase() !== reach.login.toLowerCase()) {
+      throw new HttpError(400, "bad_request", `Type ${reach.login} to confirm.`);
+    }
+    if (keptOn.has(orgId)) {
+      throw new HttpError(409, "kept_on", `This server turns the dashboard on for ${reach.login} each time it starts, so its data would come back. Write to hello@mergelight.dev, and we delete it.`);
+    }
+    if (!(await deleteOrg(pool, orgId))) throw new HttpError(404, "not_connected", "This org hasn't turned the Mergelight dashboard on.");
     return { status: 204, body: null };
   }
 
@@ -669,7 +701,9 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
    */
   return async function handle(request: Request, pathname: string): Promise<Response | null> {
     const org = /^\/v1\/orgs\/(\d{1,18})\/(overview|memories|rules|skills|checks|written-skills)(?:\/(\d{1,18}))?$/.exec(pathname);
-    if (pathname !== "/v1/session" && !org) return null;
+    // The org itself: deleting it deletes everything stored for it.
+    const whole = /^\/v1\/orgs\/(\d{1,18})$/.exec(pathname);
+    if (pathname !== "/v1/session" && !org && !whole) return null;
     // Only one decision or one rule at a time has an address of its own.
     if (org && org[3] && org[2] === "overview") return null;
 
@@ -678,7 +712,7 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
     if (origin && !origins.includes(origin)) return json(403, { error: "origin_not_allowed" }, {});
     const cors: Record<string, string> = origin ? { "access-control-allow-origin": origin, vary: "Origin" } : {};
     const writable = org ? ["rules", "skills", "checks", "written-skills"].includes(org[2]!) : false;
-    const methods = !org ? "POST, DELETE" : org[3] ? "DELETE" : writable ? "GET, POST" : "GET";
+    const methods = whole ? "DELETE" : !org ? "POST, DELETE" : org[3] ? "DELETE" : writable ? "GET, POST" : "GET";
     if (request.method === "OPTIONS") {
       return json(204, null, { ...cors, "access-control-allow-methods": methods, "access-control-allow-headers": "authorization, content-type", "access-control-max-age": "600" });
     }
@@ -686,7 +720,12 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
     try {
       const at = now();
       let result: { status: number; body: unknown };
-      if (org) {
+      if (whole) {
+        const orgId = Number(whole[1]);
+        if (request.method !== "DELETE") return json(405, { error: "method_not_allowed" }, cors);
+        if (!isId(orgId)) throw new HttpError(404, "not_found", "No such org.");
+        result = await deleteAll(sessionOf(request, at).session, orgId, request);
+      } else if (org) {
         const orgId = Number(org[1]);
         const what = org[2];
         const itemId = org[3] ? Number(org[3]) : null;

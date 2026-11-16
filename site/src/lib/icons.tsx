@@ -33,6 +33,8 @@ import {
   SquareLock02Icon,
   Tick02Icon,
   UnfoldMoreIcon,
+  Delete02Icon,
+  Settings01Icon,
 } from '@hugeicons/core-free-icons';
 
 export type IconProps = { className?: string; strokeWidth?: number };
@@ -44,6 +46,8 @@ const make =
   ({ className, strokeWidth = 1.8 }) => <HugeiconsIcon icon={icon} className={className} strokeWidth={strokeWidth} aria-hidden="true" />;
 
 export const PlusIcon = make(Add01Icon);
+export const SettingsIcon = make(Settings01Icon);
+export const TrashIcon = make(Delete02Icon);
 export const TriangleAlertIcon = make(Alert02Icon);
 export const ChevronDownIcon = make(ArrowDown01Icon);
 export const ChevronRightIcon = make(ArrowRight01Icon);

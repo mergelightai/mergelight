@@ -78,16 +78,20 @@ const WRITTEN = {
 const OVERVIEWS = {
   1001: {
     org: { id: 1001, login: 'acme' },
+    can_delete: true,
     repos: [{ id: 501, name: 'acme/widgets', last_review_at: hoursAgo(1), reviews: 2 }, { id: 502, name: 'acme/api', last_review_at: hoursAgo(30), reviews: 1 }],
     reviews: [review({}), review({ pr: 41, light: 'green', bugs: 0, risks: 0, hardening: 0, major: 0, provider: 'codex', model: null, duration_ms: 95_000, created_at: hoursAgo(5) }), review({ repo_id: 502, repo: 'acme/api', pr: 7, light: 'red', bugs: 1, risks: 0, hardening: 0, created_at: hoursAgo(30) })],
   },
-  4004: { org: { id: 4004, login: 'fresh' }, repos: [], reviews: [] },
+  4004: { org: { id: 4004, login: 'fresh' }, can_delete: false, repos: [], reviews: [] },
 };
 
 let failures = 0;
 const expect = (ok, what) => { console.log(`  ${ok ? 'ok ' : 'FAIL'} ${what}`); if (!ok) failures++; };
 
-async function open(name, { signedOutAfter = Infinity, serverDown = false, forgetFails = false, signedOutOnAdd = false, signedOutOnWrite = false, noOrgs = false, skillsFail = false } = {}) {
+async function open(name, { signedOutAfter = Infinity, serverDown = false, forgetFails = false, signedOutOnAdd = false, signedOutOnWrite = false, noOrgs = false, skillsFail = false, keptOn = false } = {}) {
+  /** Orgs the page asked the server to delete everything of, with what was typed. A deleted one is off from then on. */
+  const deletes = [];
+  const deleted = new Set();
   /** Whether the one Add that finds the session ran out has happened. */
   let addSignedOut = false;
   /** Decisions the page asked the server to forget. */
@@ -134,6 +138,16 @@ async function open(name, { signedOutAfter = Infinity, serverDown = false, forge
       // Like the real server: a sign-in with nothing to show gets no session token.
       if (u.pathname === '/v1/session' && m === 'POST') return json(req, noOrgs ? { ...SESSION, token: null, expires_at: null, orgs: [] } : SESSION, 201);
       if (u.pathname === '/v1/session' && m === 'DELETE') return req.respond({ status: 204, headers: cors });
+      const whole = /^\/v1\/orgs\/(\d+)$/.exec(u.pathname)?.[1];
+      if (whole && m === 'DELETE') {
+        const { confirm } = JSON.parse(req.postData() ?? '{}');
+        deletes.push({ org: Number(whole), confirm });
+        if (keptOn) return json(req, { error: 'kept_on', message: 'This server turns the dashboard on for acme each time it starts, so its data would come back. Write to hello@mergelight.dev, and we delete it.' }, 409);
+        if (confirm?.toLowerCase() !== OVERVIEWS[whole]?.org.login) return json(req, { error: 'bad_request', message: 'Type acme to confirm.' }, 400);
+        deleted.add(whole);
+        return req.respond({ status: 204, headers: cors });
+      }
+      if (/^\/v1\/orgs\/(\d+)\//.test(u.pathname) && deleted.has(/^\/v1\/orgs\/(\d+)\//.exec(u.pathname)[1])) return json(req, { error: 'not_connected' }, 404);
       const rules = /^\/v1\/orgs\/(\d+)\/rules(?:\/(\d+))?$/.exec(u.pathname);
       if (rules && !RULES[rules[1]]) return json(req, { error: 'not_connected' }, 404);
       if (rules && m === 'POST') {
@@ -313,7 +327,7 @@ async function open(name, { signedOutAfter = Infinity, serverDown = false, forge
     return { href, state };
   };
   console.log(`\n== ${name}`);
-  return { page, calls, exchanges, renewals, forgotten, added, removed, skillsAdded, skillsRemoved, written, writtenRemoved, checksAdded, checksRemoved, errors, text, click, toggleMenu, menu, view, options, choose, dialog, signIn, comeBackFromGitHub, shot: (file) => page.screenshot({ path: `${out}${file}.png`, fullPage: true }).catch(() => {}) };
+  return { page, calls, deletes, exchanges, renewals, forgotten, added, removed, skillsAdded, skillsRemoved, written, writtenRemoved, checksAdded, checksRemoved, errors, text, click, toggleMenu, menu, view, options, choose, dialog, signIn, comeBackFromGitHub, shot: (file) => page.screenshot({ path: `${out}${file}.png`, fullPage: true }).catch(() => {}) };
 }
 const done = async (t) => {
   if (t.errors.length) { console.log('  page errors', t.errors.slice(0, 3)); failures++; }
@@ -744,6 +758,51 @@ const done = async (t) => {
   await t.click('[role=dialog] button', 'Save skill');
   await wait(800);
   expect(t.written.length === 1 && t.written[0].name === 'Migrations', 'one more click saves it');
+  await done(t);
+}
+
+{
+  const t = await open('delete-all-data');
+  await t.signIn();
+  await t.view('Settings');
+  let page = await t.text();
+  expect(/Delete all data/.test(page) && /It happens at once, and it can't be undone\./.test(page), 'Settings says what deleting all data does');
+  const button = () => t.page.evaluate(() => [...document.querySelectorAll('main button')].find((b) => b.textContent.trim() === 'Delete everything')?.disabled);
+  expect((await button()) === true, 'the delete button waits for the org name');
+  await t.shot('settings');
+  await t.page.type('#confirm-delete', 'acm');
+  expect((await button()) === true, 'a name that is only close is not enough');
+  await t.page.type('#confirm-delete', 'E');
+  expect((await button()) === false, "the org's name, in any case, opens the button");
+  await t.click('main button', 'Delete everything');
+  await new Promise((r) => setTimeout(r, 900));
+  page = await t.text();
+  expect(t.deletes.length === 1 && t.deletes[0].org === 1001 && t.deletes[0].confirm === 'acmE', 'it asks the server once, with what was typed');
+  expect(/Everything stored for acme is deleted\./.test(page) && /The dashboard isn't on for acme/.test(page), 'it says the data is gone, and the dashboard is off for the org');
+  await t.view('Rules');
+  expect(/The dashboard isn't on for acme/.test(await t.text()), 'and the other views say so too');
+  await done(t);
+}
+
+{
+  const t = await open('delete-refused', { keptOn: true });
+  await t.signIn();
+  await t.view('Settings');
+  await t.page.type('#confirm-delete', 'acme');
+  await t.click('main button', 'Delete everything');
+  await new Promise((r) => setTimeout(r, 900));
+  const page = await t.text();
+  expect(/Write to hello@mergelight\.dev, and we delete it\./.test(page) && /Delete everything/.test(page), "when the server says no, the page shows the server's words and keeps the form");
+  await done(t);
+}
+
+{
+  const t = await open('delete-not-owner');
+  await t.signIn();
+  await t.menu('Switch org', 'fresh');
+  await t.view('Settings');
+  const page = await t.text();
+  expect(/Only an owner of fresh can delete its data\./.test(page) && !/Delete everything/.test(page), 'someone who is not an owner sees who can delete, and no button');
   await done(t);
 }
 

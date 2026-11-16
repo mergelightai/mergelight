@@ -68,8 +68,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const pool = createPool(DATABASE_URL);
   let api: (request: Request) => Promise<Response>;
   try {
-    api = createApi({ pool, publicUrl: PUBLIC_URL, origins: parseOrigins(process.env.DASHBOARD_ORIGINS), signInApp: process.env.SIGN_IN_APP || undefined, jobsOrgs: parseJobsOrgs(process.env.JOBS_ORGS) });
     const orgs = parseConnectOrgs(process.env.CONNECT_ORGS);
+    api = createApi({ pool, publicUrl: PUBLIC_URL, origins: parseOrigins(process.env.DASHBOARD_ORIGINS), signInApp: process.env.SIGN_IN_APP || undefined, jobsOrgs: parseJobsOrgs(process.env.JOBS_ORGS), keptOn: new Set(orgs.map((o) => o.id)) });
     await assertRowRulesHold(pool);
     await migrate(pool);
     for (const org of orgs) await connectOrg(pool, org.id, org.login);

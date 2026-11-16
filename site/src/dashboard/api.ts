@@ -54,6 +54,8 @@ export interface Review {
 
 export interface Overview {
   org: { id: number; login: string };
+  /** Whether this person may delete everything stored for the org: an owner of it, or the account's own person. */
+  can_delete?: boolean;
   repos: { id: number; name: string; last_review_at: string | null; reviews: number }[];
   reviews: Review[];
 }
@@ -298,6 +300,19 @@ export async function call(session: Session, path: string, init: { method?: stri
     throw new SignedOut();
   }
   return res;
+}
+
+/**
+ * Deletes everything stored for the org, which turns the dashboard off for it. The server wants the org's name typed
+ * again. Throws with the server's own words when it says no, so the person sees why.
+ */
+export async function deleteOrgData(session: Session, orgId: number, confirm: string): Promise<void> {
+  const res = await call(session, `/v1/orgs/${orgId}`, { method: 'DELETE', body: JSON.stringify({ confirm }) });
+  if (res.ok) return;
+  const answer = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
+  // Already gone, by another tab or another owner, counts as done.
+  if (res.status === 404 && answer.error === 'not_connected') return;
+  throw new Error(answer.message ?? `The Mergelight server answered ${res.status}.`);
 }
 
 export async function loadRules(session: Session, orgId: number): Promise<Rules> {

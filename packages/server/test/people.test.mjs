@@ -940,3 +940,56 @@ test("over HTTP: a browser's preflight and sign-in work through the real server"
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+test("an owner deletes everything stored for the org, which turns the dashboard off for it", async () => {
+  const { token } = await signIn(ADA);
+  assert.equal((await call(`/v1/orgs/${ACME.id}/rules`, { method: "POST", token, body: JSON.stringify({ text: "Money is in cents", kind: "rule" }) })).status, 201);
+  const overview = await (await call(`/v1/orgs/${ACME.id}/overview`, { token })).json();
+  assert.equal(overview.can_delete, true);
+
+  const res = await call(`/v1/orgs/${ACME.id}`, { method: "DELETE", token, body: JSON.stringify({ confirm: "ACME" }) });
+  assert.equal(res.status, 204);
+  // Every row of the org is gone, the ones of repositories Ada can't see too, and the log with them.
+  for (const table of ["orgs", "repos", "reviews", "rules", "audit_log"]) assert.deepEqual(await withOrgRows(ACME.id, `select 1 from ${table}`), [], table);
+  assert.equal((await (await call(`/v1/orgs/${ACME.id}/overview`, { token })).json()).error, "not_connected");
+  // A run afterwards stores nothing.
+  assert.equal((await report({})).status, 404);
+  // The other org keeps its data.
+  assert.equal((await withOrgRows(OTHER.id, "select 1 from reviews")).length, 1);
+});
+
+test("only an owner can delete an org's data, with its name typed again, and never another org's", async () => {
+  const eve = (await signIn(EVE)).token;
+  assert.equal((await (await call(`/v1/orgs/${ACME.id}/overview`, { token: eve })).json()).can_delete, false);
+  const notOwner = await call(`/v1/orgs/${ACME.id}`, { method: "DELETE", token: eve, body: JSON.stringify({ confirm: "acme" }) });
+  assert.equal(notOwner.status, 403);
+  assert.equal((await notOwner.json()).error, "read_only");
+
+  const ada = (await signIn(ADA)).token;
+  for (const body of [undefined, "{}", JSON.stringify({ confirm: "acm" }), "not json"]) {
+    assert.equal((await call(`/v1/orgs/${ACME.id}`, { method: "DELETE", token: ada, body })).status, 400, String(body));
+  }
+  assert.equal((await call(`/v1/orgs/${OTHER.id}`, { method: "DELETE", token: ada, body: JSON.stringify({ confirm: "other" }) })).status, 404);
+  assert.equal((await call(`/v1/orgs/${ACME.id}`, { method: "DELETE", body: JSON.stringify({ confirm: "acme" }) })).status, 401);
+  assert.equal((await call(`/v1/orgs/${ACME.id}`, { method: "POST", token: ada, body: JSON.stringify({ confirm: "acme" }) })).status, 405);
+  assert.equal((await call(`/v1/orgs/${QUIET.id}`, { method: "DELETE", token: ada, body: JSON.stringify({ confirm: "quiet" }) })).status, 403);
+  // Nothing was deleted.
+  assert.equal((await withOrgRows(ACME.id, "select 1 from reviews")).length, 2);
+  assert.equal((await withOrgRows(OTHER.id, "select 1 from reviews")).length, 1);
+});
+
+test("an org the server turns on at each start can't be deleted from the dashboard: it would come back", async () => {
+  api = createApi({ pool, publicUrl: PUBLIC_URL, origins: [SITE], fetchImpl, now: () => clock, keptOn: new Set([ACME.id]) });
+  const { token } = await signIn(ADA);
+  const res = await call(`/v1/orgs/${ACME.id}`, { method: "DELETE", token, body: JSON.stringify({ confirm: "acme" }) });
+  assert.equal(res.status, 409);
+  assert.match((await res.json()).message, /hello@mergelight\.dev/);
+  assert.equal((await withOrgRows(ACME.id, "select 1 from reviews")).length, 2);
+});
+
+test("a browser on the dashboard's site may send the delete", async () => {
+  const res = await call(`/v1/orgs/${ACME.id}`, { method: "OPTIONS" });
+  assert.equal(res.status, 204);
+  assert.equal(res.headers.get("access-control-allow-methods"), "DELETE");
+  assert.match(res.headers.get("access-control-allow-headers"), /content-type/);
+});

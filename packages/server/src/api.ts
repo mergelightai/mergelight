@@ -120,6 +120,11 @@ export interface ApiOptions {
   signInApp?: string;
   /** Orgs whose plan includes Jobs, by GitHub's number for the account. It stands in until payments exist. */
   jobsOrgs?: ReadonlySet<number>;
+  /**
+   * Orgs the server turns the dashboard on for at each start (CONNECT_ORGS). Their owners can't delete their data on the
+   * dashboard: the next start would turn them on again, and store their runs again.
+   */
+  keptOn?: ReadonlySet<number>;
   fetchImpl?: typeof fetch;
   now?: () => number;
 }
@@ -201,10 +206,10 @@ export function parseUsedMemories(value: unknown): number[] {
   });
 }
 
-export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"], signInApp, jobsOrgs = new Set(), fetchImpl = fetch, now = () => Date.now() }: ApiOptions): (request: Request) => Promise<Response> {
+export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"], signInApp, jobsOrgs = new Set(), keptOn = new Set(), fetchImpl = fetch, now = () => Date.now() }: ApiOptions): (request: Request) => Promise<Response> {
   const audience = audienceOf(publicUrl);
   /** The dashboard's side: signed-in people. Runs and people never share a route or a kind of token. */
-  const people = createPeopleApi({ pool, origins, signInApp, fetchImpl, now });
+  const people = createPeopleApi({ pool, origins, signInApp, keptOn, fetchImpl, now });
   /** The path the server is mounted under, if any. A proxy may strip it or pass it on, so both forms are routed. */
   const mount = new URL(audience).pathname.replace(/\/+$/, "");
   /** Token ids already used, with when each expires. A token works once, so a copied one is worth nothing. */
