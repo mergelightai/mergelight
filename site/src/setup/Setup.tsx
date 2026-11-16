@@ -162,7 +162,7 @@ export default function Setup() {
   const [scope, setScope] = useState<Scope>('all');
   const [fileOpen, setFileOpen] = useState(false);
   const [adding, setAdding] = useState(false);
-  const [addFailed, setAddFailed] = useState<'refused' | 'open' | 'scan' | 'other' | null>(null);
+  const [addFailed, setAddFailed] = useState<'refused' | 'open' | 'scan' | 'no-step' | 'other' | null>(null);
   /** The repo has more open PRs than are looked through for the one added by hand. */
   const [scanCapped, setScanCapped] = useState(false);
   const [pr, setPr] = useState<SetupPr | null>(null);
@@ -481,7 +481,8 @@ export default function Setup() {
    */
   const files = useMemo<WorkflowFile[]>(() => {
     // An update moves the version lines of what the pull request's branch holds, so a change of AI waiting there stays.
-    const moves = update ? { edit: (current: string) => pinned(current, update) } : {};
+    // One whose Mergelight step is gone has no version to move, so it stops the update rather than claiming it worked.
+    const moves = update ? { edit: (current: string) => (readInstalled(current) ? pinned(current, update) : null) } : {};
     const list: WorkflowFile[] = [{ name: 'mergelight.yml', content: workflow, ...moves }];
     if (!details || !repo) return list;
     const version = (content: string) => (pinTo ? pinned(content, pinTo) : content);
@@ -529,7 +530,7 @@ export default function Setup() {
       afterAdding(pending ?? null, pending === undefined);
     } catch (err) {
       setAddBlockedBy(err instanceof OpenPrError ? err.pr : null);
-      setAddFailed(err instanceof OpenPrError ? 'open' : err instanceof ScanLimitError ? 'scan' : err instanceof GitHubError && (err.status === 403 || err.status === 404) ? 'refused' : 'other');
+      setAddFailed(err instanceof OpenPrError ? 'open' : err instanceof ScanLimitError ? 'scan' : err instanceof WorkflowEditError && err.reason === 'no-step' ? 'no-step' : err instanceof GitHubError && (err.status === 403 || err.status === 404) ? 'refused' : 'other');
     } finally {
       setAdding(false);
     }
@@ -1453,7 +1454,7 @@ function AddStep(props: {
   fileOpen: boolean;
   onToggleFile: () => void;
   adding: boolean;
-  failed: 'refused' | 'open' | 'scan' | 'other' | null;
+  failed: 'refused' | 'open' | 'scan' | 'no-step' | 'other' | null;
   /** The pull request that changes who reviews, which an update waits for. */
   blockedBy: SetupPr | null;
   detailsFailed: boolean;
@@ -1513,7 +1514,7 @@ function AddStep(props: {
         </a>
         {failed && (
           <div role="alert" className="mt-4 text-center text-[13px] leading-relaxed text-muted">
-            <p>{failed === 'open' && blockedBy ? `PR #${blockedBy.number} changes your Mergelight workflow already. Merge or close it first, then update.` : failed === 'scan' ? SCAN_NOTE : failed === 'refused' ? "GitHub didn't let us open the PR. Your install may need to approve the access." : "That didn't work. Please try again."}</p>
+            <p>{failed === 'open' && blockedBy ? `PR #${blockedBy.number} changes your Mergelight workflow already. Merge or close it first, then update.` : failed === 'scan' ? SCAN_NOTE : failed === 'no-step' ? 'The workflow on your open PR has no Mergelight step, so nothing was changed.' : failed === 'refused' ? "GitHub didn't let us open the PR. Your install may need to approve the access." : "That didn't work. Please try again."}</p>
             {failed === 'open' && blockedBy && (
               <a href={blockedBy.url} target="_blank" rel="noreferrer" className="mx-auto mt-1.5 flex w-fit items-center gap-1 text-lilac transition-colors hover:text-fg">
                 Open PR #{blockedBy.number} <External />
