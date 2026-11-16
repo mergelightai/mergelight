@@ -694,6 +694,30 @@ await scenario('update-pr-then-change', { secrets: ['CODEX_AUTH_JSON', 'CLAUDE_C
   expect(world.writes.filter((w) => w.m === 'PUT').length === 2, 'and the update PR gets no change of AI');
 });
 
+await scenario('update-merged-without-its-refresh-job', { secrets: ['CODEX_AUTH_JSON', 'CLAUDE_CODE_OAUTH_TOKEN'], file: BEHIND }, async ({ page, world, until, click }) => {
+  await page.goto(`${base}/setup/`, { waitUntil: 'networkidle2' });
+  await page.evaluate(() => sessionStorage.setItem('mergelight.setup.state', 's'));
+  await page.goto(`${base}/setup/?code=c&state=s`, { waitUntil: 'networkidle2' });
+  await until((x) => x.includes('Which repo'), 'the list');
+  await click('[role=option]', 'api');
+  await until((x) => /Update Mergelight on api/.test(x), 'the update step');
+  await wait(800);
+  await click('button', 'Update to v0.2.0');
+  await until((x) => /Your PR is open/.test(x), 'the update PR');
+  expect(world.writes.filter((w) => w.m === 'PUT').length === 2, 'the PR adds the refresh job');
+  // Someone takes the job out of the PR, then merges it.
+  world.branchRefresh = null;
+  world.file = world.branchFile;
+  world.open = null;
+  world.merged = true;
+  await until((x) => /You're on v0\.2\.0/.test(x), 'the update, merged');
+  world.merged = false;
+  await wait(800);
+  await click('section[aria-label="Your AI"] button', 'Change');
+  const t = await until((x) => /Choose your AI/.test(x), 'the choice');
+  expect(/Adds the small job that keeps a ChatGPT login fresh/.test(t), 'still offers the job, which main lacks');
+});
+
 await scenario('no-change-while-an-update-opens', { secrets: ['CODEX_AUTH_JSON', 'CLAUDE_CODE_OAUTH_TOKEN'], refresh: REFRESH, file: BEHIND, slowPut: 2500 }, async ({ page, until, click, text }) => {
   await page.goto(`${base}/setup/`, { waitUntil: 'networkidle2' });
   await page.evaluate(() => sessionStorage.setItem('mergelight.setup.state', 's'));

@@ -737,9 +737,12 @@ export default function Setup() {
       } else if (done && !startOnClaude) {
         // What was merged, which an update that kept other changes on its pull request can differ from.
         const onBranch = await client.workflowAt(repo, branch).catch(() => null);
+        // Whether the refresh job is there, as someone may have taken it out of the PR before merging.
+        const job = await client.workflowAt(repo, branch, REFRESH_FILE).then(Boolean, () => null);
         if (gone()) return true;
         setLiveFile((known) => onBranch ?? known ?? workflow);
-        if (files.some((f) => f.name === REFRESH_FILE)) setRefreshLive(true);
+        if (job !== null) setRefreshLive(job);
+        else if (files.some((f) => f.name === REFRESH_FILE)) setRefreshLive(true);
       }
       // A checker nobody connected lets the review go on, so that run going ahead doesn't mean it connected. The check
       // says so while the review goes on, so only for a moment.
