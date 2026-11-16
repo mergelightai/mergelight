@@ -311,3 +311,16 @@ test('a step that starts with a multiline if has its uses as a sibling, not insi
   assert.deepEqual(readRoles(withIf), { provider: null, verifyWith: null });
   assert.equal(isStandard(withIf), true);
 });
+
+test('an effort only one AI takes ties the checker too, also beside a model', () => {
+  assert.equal(reviewerFixedBy(step(['model: o3', 'effort: xhigh'])), 'effort');
+  assert.equal(reviewerFixedBy(step(['model: o3', 'effort: high'])), 'model');
+});
+
+test('a step in an anchored run script is an example too', () => {
+  const example = `      - run: &fixture |\n          steps:\n            - uses: mergelightai/mergelight@v0\n`;
+  const both = template.replace('      - uses: mergelightai/mergelight@v0\n', `${example}      - uses: mergelightai/mergelight@v0\n`);
+  assert.equal(stepInScalar(both), true);
+  assert.equal(isStandard(both), false);
+  assert.deepEqual(readRoles(both), { provider: null, verifyWith: null }, 'and the real step is still the one read');
+});

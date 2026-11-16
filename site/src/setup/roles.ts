@@ -131,7 +131,8 @@ function insideScalar(text: string[], at: number): boolean {
     const t = text[i]!;
     // A key after a sequence dash starts where the key does, so `- if: >-` is a sibling of the `uses` below it.
     if (NOTE.test(t) || keyColumn(t) >= least) continue;
-    if (/:[ \t]*[|>][-+0-9]*[ \t]*(?:#.*)?$/.test(t)) return true;
+    // An anchor or a tag can come before the `|` or `>`, as in `run: &fixture |`.
+    if (/:[ \t]*(?:[&!]\S*[ \t]+)*[|>][-+0-9]*[ \t]*(?:#.*)?$/.test(t)) return true;
     least = indentOf(t);
   }
   return false;
@@ -310,9 +311,9 @@ export function reviewerFixedBy(content: string): 'model' | 'effort' | null {
   if (!step) return null;
   // An empty value is left out by the Action, the same as none. One over more lines can't be told, so it counts.
   const set = (key: string) => step.entries.some((e) => e.key === key) && readValue(step, key) !== '';
-  if (set('model')) return 'model';
-  if (!set('effort')) return null;
-  return /^(low|medium|high)$/.test(readValue(step, 'effort') ?? '') ? null : 'effort';
+  // Effort first: it ties the checker too, which a model alongside it mustn't hide.
+  if (set('effort') && !/^(low|medium|high)$/.test(readValue(step, 'effort') ?? '')) return 'effort';
+  return set('model') ? 'model' : null;
 }
 
 /** The login inputs the Mergelight step has. In a standard step each one reads its own secret. */
