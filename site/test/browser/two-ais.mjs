@@ -127,8 +127,12 @@ async function scenario(name, start, body) {
       if (p === '/contents/.github/workflows/mergelight.yml') {
         const ref = u.searchParams.get('ref');
         if (world.fileGone) return json(req, {}, 404);
-        // Another long-lived branch, with a workflow of its own when a test gives it one.
-        if (ref === 'staging') return world.stagingFile ? json(req, { sha: 'stagingblob', content: b64(world.stagingFile) }) : json(req, {}, 404);
+        // Other long-lived branches have no workflow, or none at all, unless a test gives staging one. Its read can be slow.
+        if (['master', 'staging', 'stage', 'production', 'prod', 'development', 'develop', 'dev', 'trunk'].includes(ref)) {
+          const file = ref === 'staging' ? world.stagingFile : null;
+          const answer = () => (file ? json(req, { sha: 'stagingblob', content: b64(file) }) : json(req, {}, 404));
+          return world.stagingDelay && ref === 'staging' ? void setTimeout(answer, world.stagingDelay) : answer();
+        }
         // The commit main is at when the PR's branch is made, which someone may have changed since the page read main.
         if (world.baseShaGone && ref === 'basesha') return json(req, {}, 404);
         // Once the PR is merged, main has what its branch held.
@@ -1431,6 +1435,61 @@ await scenario('customized-skips-connect', { secrets: ['TEAM_CLAUDE', 'CODEX_AUT
   // Its Claude login is TEAM_CLAUDE, which this page can't map, so it asks for no standard secret.
   const t = await until((x) => /Mergelight is on|Connect/.test(x), 'the next step');
   expect(/Mergelight is on/.test(t) && /Your workflow is customized/.test(t), 'a customized workflow is left as it is, with no login steps');
+});
+
+await scenario('same-ai-for-both-stays-written', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], refresh: REFRESH, stagingFile: TEMPLATE }, async ({ world, until, click, reachLive, choose }) => {
+  await reachLive();
+  await choose('Add ChatGPT');
+  // ChatGPT for both, while staging still has to name its reviewer.
+  await click('[role=radiogroup][aria-label="Reviews your PRs"] label', 'ChatGPT');
+  await wait(200);
+  await click('[role=radiogroup][aria-label="Checks what it finds"] label', 'ChatGPT');
+  await wait(300);
+  await click('button', 'Open PR');
+  await until((x) => /Name the reviewer on staging first|Connect ChatGPT/.test(x), 'the next step');
+  const put = world.writes.find((w) => w.m === 'PUT' && w.p.endsWith('/mergelight.yml'));
+  expect(put && unb64(put.body.content).includes('          provider: codex\n          verify-with: codex\n'), 'the choice of ChatGPT for both is written out, so Claude never checks by default');
+});
+
+await scenario('other-branch-goes-by-its-own-inputs', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], refresh: REFRESH, stagingFile: TEMPLATE.replace('          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}\n', ''), file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`) }, async ({ until, click, reachLive, choose }) => {
+  await reachLive();
+  await choose('Add ChatGPT');
+  await click('button', 'Open PR');
+  // staging passes only ChatGPT's inputs, so it reviews with ChatGPT already: a ChatGPT login doesn't move it.
+  const t = await until((x) => /Connect ChatGPT to check reviews/.test(x), 'the connect step');
+  expect(!/Name the reviewer on staging/.test(t), "staging goes by its own inputs, and isn't held up");
+});
+
+await scenario('other-branch-past-the-first-page', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], refresh: REFRESH, branches: ['main'], stagingFile: TEMPLATE, file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`) }, async ({ until, click, reachLive, choose }) => {
+  await reachLive();
+  await choose('Add ChatGPT');
+  await click('button', 'Open PR');
+  // The branch list GitHub gave has no staging on it, as in a repo with more branches than one page.
+  await until((x) => /Name the reviewer on staging first/.test(x), 'staging, asked for by name');
+});
+
+await scenario('one-change-while-branches-are-read', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`), stagingFile: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`), stagingDelay: 2500 }, async ({ page, world, until, choose }) => {
+  await (async () => {
+    await page.goto(`${base}/setup/`, { waitUntil: 'networkidle2' });
+    await page.evaluate(() => sessionStorage.setItem('mergelight.setup.state', 's'));
+    await page.goto(`${base}/setup/?code=c&state=s`, { waitUntil: 'networkidle2' });
+  })();
+  await until((x) => x.includes('Which repo'), 'the list');
+  await page.evaluate(() => [...document.querySelectorAll('[role=option]')].find((e) => e.textContent.includes('api')).click());
+  await until((x) => /It's already on main/.test(x), 'the add step');
+  await wait(800);
+  await page.evaluate(() => [...document.querySelectorAll('button')].find((e) => e.textContent.includes('Continue')).click());
+  await until((x) => /Mergelight is on/.test(x), 'live');
+  await choose('Add ChatGPT');
+  // Two quick clicks while staging's workflow is read slowly.
+  await page.evaluate(() => {
+    const button = [...document.querySelectorAll('button')].find((e) => e.textContent.includes('Open PR'));
+    button.click();
+    button.click();
+  });
+  await until((x) => /Connect ChatGPT to check reviews/.test(x), 'the connect step', 20000);
+  await wait(1500);
+  expect(world.writes.filter((w) => w.m === 'POST' && w.p === '/pulls').length === 1, 'one PR, however many clicks');
 });
 
 await scenario('step-cant-be-found', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], file: `${TEMPLATE}  again:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: mergelightai/mergelight@v0\n` }, async ({ world, reachLive }) => {

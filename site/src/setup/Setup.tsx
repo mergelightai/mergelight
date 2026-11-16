@@ -9,7 +9,7 @@ import { OPENAI_PATH } from '../brandIcons';
 import Ambient from '../sections/Ambient';
 import { Check, GitHubIcon, SURFACE, WELL } from '../ui';
 import type { ConnectLink } from './github';
-import { compareVersions, cleanUrl, finishSignIn, GitHubError, INSTALL_URL, onlyAi, onRef, OpenPrError, ScanLimitError, readConnectLink, readInstalled, rememberConnect, rememberRepo, reviewAppUrl, takeRememberedConnect, takeRememberedRepo, isPinned, mockClient, pinned, realClient, REFRESH_FILE, signInUrl, wakeTokenServer, withReviewer, WorkflowEditError, type CheckStatus, type ConnectCode, type GitHubClient, type Release, type Repo, type RepoDetails, type SetupPr, type WorkflowFile } from './github';
+import { compareVersions, cleanUrl, finishSignIn, LONG_LIVED_BRANCHES, GitHubError, INSTALL_URL, onlyAi, onRef, OpenPrError, ScanLimitError, readConnectLink, readInstalled, rememberConnect, rememberRepo, reviewAppUrl, takeRememberedConnect, takeRememberedRepo, isPinned, mockClient, pinned, realClient, REFRESH_FILE, signInUrl, wakeTokenServer, withReviewer, WorkflowEditError, type CheckStatus, type ConnectCode, type GitHubClient, type Release, type Repo, type RepoDetails, type SetupPr, type WorkflowFile } from './github';
 import { aiName, connectsAfterMerge, isStandard, LOGIN_INPUTS, LOGIN_SECRET, loginInputs, loginsFrom, loginsIn, otherAi, passesLogin, readRoles, reviewerFixedBy, rolesFor, withInputs, withoutInputs, withRoles, type Ai, type Logins, type Roles } from './roles';
 
 const CHATGPT_SECURITY = 'https://chatgpt.com/settings/security';
@@ -272,6 +272,8 @@ export default function Setup() {
   const linkRead = useRef(0);
   const openPrLookup = useRef(0);
   const rolesRead = useRef(0);
+  /** A change of AI on its way, known at once rather than at the next render. */
+  const changingNow = useRef(false);
   /** The logins there were when a run that offers both AIs was first seen, so only a new one counts as connecting it. */
   const loginsBefore = useRef<Logins | null>(null);
   /** A retry of a linked PR's workflow is on its way, so the next poll doesn't start another. */
@@ -319,6 +321,7 @@ export default function Setup() {
   /** `waitingPr` is the pull request whose comment sent them here, which skips straight to connecting it. */
   const choose = (r: Repo, waitingPr?: number) => {
     picked.current++;
+    changingNow.current = false;
     loginsBefore.current = null;
     openPrLookup.current++;
     linkRead.current++;
@@ -472,7 +475,8 @@ export default function Setup() {
   useEffect(() => {
     if (view !== 'finish' || !client || !repo) return;
     return poll(async () => {
-      const found = await client.findSetupPr(repo);
+      // Only one that installs the review counts here: a PR with only the refresh job turns nothing on.
+      const found = await client.findSetupPr(repo, undefined, true);
       if (found) {
         setPr(found);
         setTimeout(afterAdding, 900);
@@ -531,6 +535,8 @@ export default function Setup() {
   setupNeedNow.current = setupNeed;
   const loginsNow = useRef(logins);
   loginsNow.current = logins;
+  const secretNamesNow = useRef(secretNames);
+  secretNamesNow.current = secretNames;
 
   // Following the first review and the merge once the pull request exists. A failed read just waits for the next one.
   useEffect(() => {
@@ -722,10 +728,12 @@ export default function Setup() {
 
   /**
    * The other long-lived branches whose workflow a login for `needs` would move to the other AI, as it doesn't name its
-   * reviewer. `only` looks at just these branches again. One whose workflow can't be read counts, as it can't be told.
+   * reviewer. Every long-lived name is asked for by itself, so a branch past the first page of a big repo's list is still
+   * found. Each branch goes by the logins its own workflow takes: one it passes no input to can't move its reviews.
+   * `only` looks at just these branches again. One whose workflow can't be read counts, as it can't be told.
    */
   const branchesToName = async (c: GitHubClient, r: Repo, needs: Ai[], only?: string[]): Promise<OtherBranch[]> => {
-    const list = only ?? [...new Set([...(details?.skip ?? []), r.defaultBranch])].filter((b) => b !== branch);
+    const list = only ?? [...new Set([...LONG_LIVED_BRANCHES, r.defaultBranch])].filter((b) => b !== branch);
     const found = await Promise.all(
       list.map(async (b): Promise<OtherBranch | null> => {
         let content: string | null;
@@ -735,9 +743,11 @@ export default function Setup() {
           return { branch: b, reviewer: null };
         }
         const set = content ? readRoles(content) : null;
-        if (!set || set.provider) return null;
-        const now = rolesFor(set, loginsNow.current).reviewer;
-        return needs.some((ai) => rolesFor(set, { ...loginsNow.current, [ai]: true }).reviewer !== now) ? { branch: b, reviewer: now } : null;
+        if (!content || !set || set.provider) return null;
+        const there = loginsIn(content, secretNamesNow.current);
+        const now = rolesFor(set, there).reviewer;
+        const moves = needs.some((ai) => passesLogin(content, ai) && rolesFor(set, { ...there, [ai]: true }).reviewer !== now);
+        return moves ? { branch: b, reviewer: now } : null;
       }),
     );
     return found.filter((o): o is OtherBranch => o !== null);
@@ -745,7 +755,8 @@ export default function Setup() {
 
   /** Opens a pull request that sets who reviews and who checks, the same way a setup or an update does. */
   const changeRoles = async (want: Roles) => {
-    if (!client || !repo || !liveFile || changingRoles || adding) return;
+    // The ref is set at once, so a second click in the same moment, before the page draws again, finds it busy too.
+    if (!client || !repo || !liveFile || changingRoles || changingNow.current || adding) return;
     // Another repo picked while this waits on GitHub makes its answer one for a repo no longer on screen.
     const forRepo = picked.current;
     const full = withRoles(liveFile, want);
@@ -753,65 +764,67 @@ export default function Setup() {
       setRolesFailed('no-step');
       return;
     }
-    // Every chosen AI without a login of the repo's own, the reviewer first, as a run connects it first.
-    let needs = [...new Set([want.reviewer, want.checker])].filter((ai) => !ownLogins[ai]);
-    const set = readRoles(liveFile);
-    // A login is the whole repo's, so it reaches the workflow on every branch. Other long-lived ones that don't name their
-    // reviewer would move to the other AI, and a PR here can't change them: they have to name it first.
-    const others = needs.length ? await branchesToName(client, repo, needs) : [];
-    if (forRepo !== picked.current) return;
-    // The branch doesn't name its reviewer, and a new login would move its reviews. The pull request then names only the
-    // reviewer, and takes out a checker the branch sets: with no checker set, its own run has none to ask for, so no
-    // login can be saved before it's merged. Once there is one, the Action's default makes the other AI check, the choice.
-    // The same goes while another branch still has to name its reviewer.
-    const hold = Boolean(set && needs.some((ai) => connectsAfterMerge(set, logins, want, ai)));
-    const leaveChecker = hold || others.length > 0;
-    const named = withInputs(liveFile, [['provider', want.reviewer]]);
-    const content = leaveChecker && named ? (withoutInputs(named, ['verify-with']) ?? full) : full;
-    // A ChatGPT login needs refreshing, also one saved before that nothing used: the same job a setup adds. With only an
-    // API key, the job has nothing to do and does nothing. A workflow that doesn't read the plan's login gets none. It's
-    // added also where the roles are set already, as a PR of its own.
-    const usesPlan = (want.reviewer === 'codex' || want.checker === 'codex') && readsChatgpt(liveFile);
-    const addsRefresh = !refreshLive && usesPlan;
-    const changes = content !== liveFile || addsRefresh;
-    // The organization's ChatGPT login can't be refreshed here, so ChatGPT gets the repo's own before any PR uses it.
-    const connectFirst = changes && needs.includes('codex') && sharedSecrets.includes(CHATGPT_SECRET) && readsChatgpt(liveFile);
-    if (connectFirst) needs = ['codex', ...needs.filter((ai) => ai !== 'codex')];
-    const begin = (opened: SetupPr | null, addsRefresh: boolean) => {
-      setStartOnClaude(false);
-      setAskedCheck(null);
-      setStatus(null);
-      setConnectCode(null);
-      setMerged(false);
-      setPrMerged(false);
-      setPr(opened);
-      setRolesChange({ roles: want, content, needs, connectFirst: connectFirst && !opened, addsRefresh, hold, implicit: leaveChecker, others });
-      setRolesFile('known');
-      setView(needs.length ? 'connect' : 'live');
-    };
-    // Set like this already, with an AI still to connect: nothing to change, only that to do.
-    if (!changes || connectFirst) {
-      if (needs.length) begin(null, false);
-      else {
-        setRolesChange(null);
-        setView('live');
-      }
-      return;
-    }
-    // Everything this page checked was in the file it read, so a branch that has changed since gets nothing.
-    const edit = (current: string) => {
-      if (current !== liveFile) throw new WorkflowEditError('changed');
-      return content;
-    };
-    // The review workflow is always checked, also when only the refresh job is added and it stays as it is.
-    const list: WorkflowFile[] = [{ name: 'mergelight.yml', content, edit }];
-    // On the same version as the review, a tag as much as a commit.
-    // Always there for the plan's login: a job that's there stays as it is, and one taken away since the page read the
-    // branch comes back.
-    if (usesPlan) list.push({ name: REFRESH_FILE, content: refreshLike(content), keep: true });
+    // Busy from the first read on, so a second click can't start a second change.
+    changingNow.current = true;
     setChangingRoles(true);
     setRolesFailed(null);
     try {
+      // Every chosen AI without a login of the repo's own, the reviewer first, as a run connects it first.
+      let needs = [...new Set([want.reviewer, want.checker])].filter((ai) => !ownLogins[ai]);
+      const set = readRoles(liveFile);
+      // A login is the whole repo's, so it reaches the workflow on every branch. Other long-lived ones that don't name
+      // their reviewer would move to the other AI, and a PR here can't change them: they have to name it first.
+      const others = needs.length ? await branchesToName(client, repo, needs) : [];
+      if (forRepo !== picked.current) return;
+      // The branch doesn't name its reviewer, and a new login would move its reviews. The pull request then names only
+      // the reviewer, and takes out a checker the branch sets: with no checker set, its own run has none to ask for, so
+      // no login can be saved before it's merged. Once there is one, the Action's default makes the other AI check, the
+      // choice. The same goes while another branch still has to name its reviewer. One AI for both is written out in
+      // full, as the default would make the other AI check.
+      const hold = Boolean(set && needs.some((ai) => connectsAfterMerge(set, logins, want, ai)));
+      const leaveChecker = (hold || others.length > 0) && want.checker !== want.reviewer;
+      const named = withInputs(liveFile, [['provider', want.reviewer]]);
+      const content = leaveChecker && named ? (withoutInputs(named, ['verify-with']) ?? full) : full;
+      // A ChatGPT login needs refreshing, also one saved before that nothing used: the same job a setup adds. With only
+      // an API key, the job has nothing to do and does nothing. A workflow that doesn't read the plan's login gets none.
+      // It's added also where the roles are set already, as a PR of its own.
+      const usesPlan = (want.reviewer === 'codex' || want.checker === 'codex') && readsChatgpt(liveFile);
+      const addsRefresh = !refreshLive && usesPlan;
+      const changes = content !== liveFile || addsRefresh;
+      // The organization's ChatGPT login can't be refreshed here, so ChatGPT gets the repo's own before any PR uses it.
+      const connectFirst = changes && needs.includes('codex') && sharedSecrets.includes(CHATGPT_SECRET) && readsChatgpt(liveFile);
+      if (connectFirst) needs = ['codex', ...needs.filter((ai) => ai !== 'codex')];
+      const begin = (opened: SetupPr | null, addsRefresh: boolean) => {
+        setStartOnClaude(false);
+        setAskedCheck(null);
+        setStatus(null);
+        setConnectCode(null);
+        setMerged(false);
+        setPrMerged(false);
+        setPr(opened);
+        setRolesChange({ roles: want, content, needs, connectFirst: connectFirst && !opened, addsRefresh, hold, implicit: leaveChecker, others });
+        setRolesFile('known');
+        setView(needs.length ? 'connect' : 'live');
+      };
+      // Set like this already, with an AI still to connect: nothing to change, only that to do.
+      if (!changes || connectFirst) {
+        if (needs.length) begin(null, false);
+        else {
+          setRolesChange(null);
+          setView('live');
+        }
+        return;
+      }
+      // Everything this page checked was in the file it read, so a branch that has changed since gets nothing.
+      const edit = (current: string) => {
+        if (current !== liveFile) throw new WorkflowEditError('changed');
+        return content;
+      };
+      // The review workflow is always checked, also when only the refresh job is added and it stays as it is.
+      const list: WorkflowFile[] = [{ name: 'mergelight.yml', content, edit }];
+      // On the same version as the review, a tag as much as a commit. Always there for the plan's login: a job that's
+      // there stays as it is, and one taken away since the page read the branch comes back.
+      if (usesPlan) list.push({ name: REFRESH_FILE, content: refreshLike(content), keep: true });
       const opened = await client.proposeWorkflows(repo, branch, list, content !== liveFile ? { kind: 'roles', roles: want } : { kind: 'refresh' });
       if (forRepo !== picked.current) return;
       // Null means the branch already has all of it, like a refresh job someone else added since. A login still missing
@@ -831,7 +844,10 @@ export default function Setup() {
       // A PR that opens by itself, after a login, shows why it didn't on the choice.
       setView('roles');
     } finally {
-      if (forRepo === picked.current) setChangingRoles(false);
+      if (forRepo === picked.current) {
+        changingNow.current = false;
+        setChangingRoles(false);
+      }
     }
   };
 
@@ -852,6 +868,7 @@ export default function Setup() {
 
   const anotherRepo = () => {
     picked.current++;
+    changingNow.current = false;
     setChangingRoles(false);
     setRepo(null);
     setDetails(null);

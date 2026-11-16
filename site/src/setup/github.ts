@@ -23,7 +23,8 @@ export const INSTALL_URL = 'https://github.com/apps/mergelight-setup/installatio
 export const reviewAppUrl = (repo: Repo) => `https://github.com/apps/mergelight-ai/installations/new/permissions?suggested_target_id=${repo.accountId}&repository_ids[]=${repo.id}`;
 
 /** Branches that hold releases or shared work. PRs from these are promotions, not new code. */
-const LONG_LIVED = /^(main|master|staging|stage|production|prod|development|develop|dev)$/;
+export const LONG_LIVED_BRANCHES = ['main', 'master', 'staging', 'stage', 'production', 'prod', 'development', 'develop', 'dev'];
+const LONG_LIVED = new RegExp(`^(${LONG_LIVED_BRANCHES.join('|')})$`);
 
 export interface Repo {
   id: number;
@@ -219,7 +220,7 @@ export interface GitHubClient {
    */
   proposeWorkflows(repo: Repo, branch: string, files: WorkflowFile[], change: Change): Promise<SetupPr | null>;
   /** The open pull request that changes the workflow, once someone has made it. With `base`, only one into that branch. */
-  findSetupPr(repo: Repo, base?: string): Promise<SetupPr | null>;
+  findSetupPr(repo: Repo, base?: string, reviewOnly?: boolean): Promise<SetupPr | null>;
   hasWorkflow(repo: Repo, branch: string): Promise<boolean>;
   /** A workflow at a branch or commit, the review's unless named. Null when it isn't there, and throws when it can't be read. */
   workflowAt(repo: Repo, ref: string, name?: string): Promise<string | null>;
@@ -489,7 +490,7 @@ export function realClient(token: string): GitHubClient {
    * so past PULLS_CHECKED of them the scan stops: a repo with that many open PRs is told so, rather than having its
    * hourly GitHub requests used up.
    */
-  const openSetupPull = async (repo: Repo, base?: string) => {
+  const openSetupPull = async (repo: Repo, base?: string, reviewOnly = false) => {
     const into = base ? `&base=${encodeURIComponent(base)}` : '';
     let checked = 0;
     for (let page = 1; ; page++) {
@@ -501,13 +502,14 @@ export function realClient(token: string): GitHubClient {
         if (++checked > PULLS_CHECKED) throw new ScanLimitError();
         const changed = await workflowsChanged(repo, pull.number);
         // One that changes only the refresh job is told apart by its files, whatever it's called.
-        if (changed.review || changed.refresh) return { ...pull, refreshOnly: changed.refresh && !changed.review };
+        // `reviewOnly` is for finding the PR that installs the review: one with only the refresh job doesn't.
+        if (changed.review || (!reviewOnly && changed.refresh)) return { ...pull, refreshOnly: changed.refresh && !changed.review };
       }
       if (pulls.length < 100) return null;
     }
   };
-  const findSetupPr = async (repo: Repo, base?: string): Promise<SetupPr | null> => {
-    const pull = await openSetupPull(repo, base);
+  const findSetupPr = async (repo: Repo, base?: string, reviewOnly = false): Promise<SetupPr | null> => {
+    const pull = await openSetupPull(repo, base, reviewOnly);
     return pull && { number: pull.number, url: pull.html_url, headSha: pull.head.sha };
   };
   /** Only our server can ask GitHub this, and it needs the person's token to show they can see the repo. */

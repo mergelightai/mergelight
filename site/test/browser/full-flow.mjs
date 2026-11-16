@@ -221,6 +221,19 @@ await run('setup-keeps-the-prs-refresh-job', { baseRefresh: customized('v0'), pr
   expect(job?.body.branch === 'mergelight-setup-old', 'updates the open PR');
   expect(content === ourRefresh(`${RELEASE.sha} # ${RELEASE.tag}`), "keeps that PR's own refresh job, and moves only its version");
 });
+await run('finish-ignores-a-refresh-pr', { prFile: customized('v0'), prFiles: ['.github/workflows/mergelight-refresh.yml'], refuse: '/contents/.github/workflows/mergelight.yml' }, async ({ page, text2 }) => {
+  // Adding the file fails, so they add it by hand. The open PR only has the refresh job, which installs no review.
+  // GitHub's editor opens in a tab of its own, and this one goes on to wait for the PR.
+  await page.evaluate(() => {
+    const link = [...document.querySelectorAll('a')].find((a) => a.textContent.includes('Add the file yourself'));
+    link.removeAttribute('target');
+    link.addEventListener('click', (e) => e.preventDefault());
+    link.click();
+  });
+  await new Promise((r) => setTimeout(r, 6000));
+  const t = await text2();
+  expect(/Waiting for your pull request/.test(t) && !/Found pull request #5/.test(t), "a PR with only the refresh job isn't taken for the one that adds the review");
+});
 await run('update-keeps-the-prs-refresh-job', { onBase: customized(`${OLD_SHA} # v0.1.0`), prFile: customized(`${OLD_SHA} # v0.1.0`), prRefresh: ourRefresh(`${OLD_SHA} # v0.1.0`), login: true, button: 'Update to v0.2.0' }, ({ puts }) => {
   const job = puts.find((w) => w.p.endsWith('/mergelight-refresh.yml'));
   const content = job && Buffer.from(job.body.content, 'base64').toString();
