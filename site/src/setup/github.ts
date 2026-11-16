@@ -23,6 +23,8 @@ export const INSTALL_URL = 'https://github.com/apps/mergelight-setup/installatio
 export const reviewAppUrl = (repo: Repo) => `https://github.com/apps/mergelight-ai/installations/new/permissions?suggested_target_id=${repo.accountId}&repository_ids[]=${repo.id}`;
 
 /** Branches that hold releases or shared work. PRs from these are promotions, not new code. */
+/** How many pages of the Action's tags are looked through for a commit's release, a hundred tags each. */
+const TAG_PAGES = 20;
 export const LONG_LIVED_BRANCHES = ['main', 'master', 'staging', 'stage', 'production', 'prod', 'development', 'develop', 'dev'];
 const LONG_LIVED = new RegExp(`^(${LONG_LIVED_BRANCHES.join('|')})$`);
 
@@ -457,20 +459,34 @@ export function realClient(token: string): GitHubClient {
     }
   };
   const hasWorkflow = (repo: Repo, branch: string) => workflowOn(repo, branch).then(Boolean, () => false);
-  /** The Action's tags, read once: they say which release a commit or a moving tag is. */
-  let tags: Promise<{ name: string; commit: { sha: string } }[]> | null = null;
-  const actionTags = () => (tags ??= get<{ name: string; commit: { sha: string } }[]>(`/repos/${ACTION_REPO}/tags?per_page=100`).catch(() => ((tags = null), [])));
+  /** The Action's tags, a page at a time, each read once: they say which release a commit or a moving tag is. */
+  const tagPages: Promise<{ name: string; commit: { sha: string } }[]>[] = [];
+  const tagPage = (n: number) =>
+    (tagPages[n] ??= get<{ name: string; commit: { sha: string } }[]>(`/repos/${ACTION_REPO}/tags?per_page=100&page=${n + 1}`).catch((err) => {
+      // A page that couldn't be read is asked for again next time.
+      delete tagPages[n];
+      throw err;
+    }));
+  /** The tags on a commit, a page further each time none is, until one is or there are no more. */
+  const tagsAt = async (sha: string) => {
+    for (let n = 0; n < TAG_PAGES; n++) {
+      const page = await tagPage(n).catch(() => []);
+      const names = page.filter((t) => t.commit.sha === sha).map((t) => t.name);
+      if (names.length || page.length < 100) return names;
+    }
+    return [];
+  };
   const RELEASE_TAG = /^v\d+\.\d+\.\d+$/;
   /** The newest release among these tags. */
   const newest = (names: string[]) => names.filter((n) => RELEASE_TAG.test(n)).sort(compareVersions).at(-1) ?? null;
   const actionVersion = async (ref: string, comment: string | null): Promise<string | null> => {
     if (RELEASE_TAG.test(ref)) return ref;
     // A pinned commit is the release whose tag points at it. Its comment can be left over from another pin.
-    if (/^[0-9a-f]{40}$/i.test(ref)) return newest((await actionTags()).filter((t) => t.commit.sha === ref).map((t) => t.name));
+    if (/^[0-9a-f]{40}$/i.test(ref)) return newest(await tagsAt(ref));
     // A moving tag is the release it points at now.
     if (/^v\d+$/.test(ref)) {
       const sha = await get<{ sha: string }>(`/repos/${ACTION_REPO}/commits/${encodeURIComponent(ref)}`).then((c) => c.sha, () => null);
-      return sha ? newest((await actionTags()).filter((t) => t.commit.sha === sha).map((t) => t.name)) : null;
+      return sha ? newest(await tagsAt(sha)) : null;
     }
     return null;
   };

@@ -77,6 +77,8 @@ async function scenario(name, start, body) {
       if (u.pathname === '/repos/mergelightai/mergelight/commits/v0.2.0') return json(req, { sha: 'a'.repeat(40) });
       // v0 points at a release with two AIs, unless a test moves it back. b is v0.1.19, the first with them, and c is older.
       if (u.pathname === '/repos/mergelightai/mergelight/commits/v0') return json(req, { sha: world.v0 ?? 'a'.repeat(40) });
+      // With many tags, a hundred others come first, and these are on the second page.
+      if (u.pathname === '/repos/mergelightai/mergelight/tags' && world.manyTags && u.searchParams.get('page') !== '2') return json(req, Array.from({ length: 100 }, (_, i) => ({ name: `v0.0.${i}`, commit: { sha: 'e'.repeat(40) } })));
       if (u.pathname === '/repos/mergelightai/mergelight/tags') return json(req, [{ name: 'v0.2.0', commit: { sha: 'a'.repeat(40) } }, { name: 'v0', commit: { sha: world.v0 ?? 'a'.repeat(40) } }, { name: 'v0.1.19', commit: { sha: 'b'.repeat(40) } }, { name: 'v0.1.18', commit: { sha: 'c'.repeat(40) } }]);
       const p = u.pathname.replace('/repos/acme/api', '');
       if (m !== 'GET') {
@@ -1582,6 +1584,18 @@ await scenario('stale-comment-is-not-trusted', { secrets: ['CODEX_AUTH_JSON', 'C
   // The comment says v0.2.0, but the commit is v0.1.18's.
   const t = await until((x) => /Choosing your AI here/.test(x), 'Your AI');
   expect(/needs Mergelight v0\.1\.19 or newer/.test(t), 'the commit decides the version, not the comment beside it');
+});
+
+await scenario('pinned-release-on-the-second-page-of-tags', { secrets: ['CODEX_AUTH_JSON', 'CLAUDE_CODE_OAUTH_TOKEN'], refresh: REFRESH, manyTags: true, file: BEHIND }, async ({ page, until, click, text }) => {
+  await page.goto(`${base}/setup/`, { waitUntil: 'networkidle2' });
+  await page.evaluate(() => sessionStorage.setItem('mergelight.setup.state', 's'));
+  await page.goto(`${base}/setup/?code=c&state=s`, { waitUntil: 'networkidle2' });
+  await until((x) => x.includes('Which repo'), 'the list');
+  await click('[role=option]', 'api');
+  await until((x) => /Your AI/.test(x) && /Update Mergelight on api/.test(x), 'Your AI');
+  await wait(3000);
+  // v0.1.19's tag is past the first hundred.
+  expect(!/needs Mergelight v0\.1\.19 or newer/.test(await text()), "finds the pinned commit's release on a later page");
 });
 
 await scenario('review-taken-out-before-merge', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], refresh: REFRESH, file: TEMPLATE.replace(LAST_INPUT, `${LAST_INPUT}          provider: claude\n`) }, async ({ world, until, click, reachLive, choose }) => {
