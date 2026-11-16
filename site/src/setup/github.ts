@@ -77,6 +77,11 @@ export interface RepoDetails {
   installed: Installed | null;
   /** The refresh workflow on the base branch, if it's there. */
   refresh: string | null;
+  /**
+   * Other long-lived branches, and the default branch, with a Mergelight review workflow of their own, or whose
+   * workflow couldn't be read. A login is the whole repo's, so this page leaves who reviews to each of them.
+   */
+  otherReviewBranches: string[];
   /** The latest release. Only a pinned repo needs it, so failing to read it doesn't stop a setup. */
   release: Release | null;
   /** If the app that posts reviews is on this repo. Null if that can't be told, which doesn't stop a setup. */
@@ -454,10 +459,8 @@ export function realClient(token: string): GitHubClient {
   const newest = (names: string[]) => names.filter((n) => RELEASE_TAG.test(n)).sort(compareVersions).at(-1) ?? null;
   const actionVersion = async (ref: string, comment: string | null): Promise<string | null> => {
     if (RELEASE_TAG.test(ref)) return ref;
-    if (/^[0-9a-f]{40}$/i.test(ref)) {
-      if (comment && RELEASE_TAG.test(comment)) return comment;
-      return newest((await actionTags()).filter((t) => t.commit.sha === ref).map((t) => t.name));
-    }
+    // A pinned commit is the release whose tag points at it. Its comment can be left over from another pin.
+    if (/^[0-9a-f]{40}$/i.test(ref)) return newest((await actionTags()).filter((t) => t.commit.sha === ref).map((t) => t.name));
     // A moving tag is the release it points at now.
     if (/^v\d+$/.test(ref)) {
       const sha = await get<{ sha: string }>(`/repos/${ACTION_REPO}/commits/${encodeURIComponent(ref)}`).then((c) => c.sha, () => null);
@@ -557,7 +560,13 @@ export function realClient(token: string): GitHubClient {
       ]);
       const names = branches.map((b) => b.name);
       const base = pickBase(pulls.map((p) => ({ base: p.base.ref, head: p.head.ref })), repo.defaultBranch);
-      const [onBase, refresh] = await Promise.all([workflowOn(repo, base), workflowOn(repo, base, REFRESH_FILE)]);
+      const others = [...new Set([...LONG_LIVED_BRANCHES, repo.defaultBranch])].filter((b) => b !== base);
+      const [onBase, refresh, onOthers] = await Promise.all([
+        workflowOn(repo, base),
+        workflowOn(repo, base, REFRESH_FILE),
+        // Each long-lived name is asked for by itself, so a big repo's branches past the first page count too.
+        Promise.all(others.map((b) => workflowOn(repo, b).then((file) => (file && readInstalled(file.content) ? b : null), () => b))),
+      ]);
       const secrets = seen.names;
       const installed = onBase && readInstalled(onBase.content);
       return {
@@ -571,6 +580,7 @@ export function realClient(token: string): GitHubClient {
         hasApiKey: secrets.some((n) => NO_REFRESH_SECRETS.includes(n)),
         installed,
         refresh: refresh?.content ?? null,
+        otherReviewBranches: onOthers.filter((b): b is string => b !== null),
         release,
         reviewApp,
       };
@@ -696,9 +706,9 @@ export function mockClient(): GitHubClient {
     details: (r) =>
       later<RepoDetails>({ reviewApp: r.fullName !== 'acme/docs', ...(
         r.fullName === 'acme/docs'
-          ? { branches: ['main'], base: 'main', skip: ['main'], hasLogin: false, secretNames: namesOf(r.fullName), sharedSecrets: [], allSecretsSeen: true, hasApiKey: false, installed: null, refresh: null, release }
+          ? { branches: ['main'], base: 'main', skip: ['main'], hasLogin: false, secretNames: namesOf(r.fullName), sharedSecrets: [], otherReviewBranches: [], allSecretsSeen: true, hasApiKey: false, installed: null, refresh: null, release }
           : r.fullName === 'acme/site'
-          ? { branches: ['main', 'feat/new-landing'], base: 'main', skip: ['main'], hasLogin: false, secretNames: namesOf(r.fullName), sharedSecrets: [], allSecretsSeen: true, hasApiKey: false, installed: null, refresh: null, release }
+          ? { branches: ['main', 'feat/new-landing'], base: 'main', skip: ['main'], hasLogin: false, secretNames: namesOf(r.fullName), sharedSecrets: [], otherReviewBranches: [], allSecretsSeen: true, hasApiKey: false, installed: null, refresh: null, release }
           : {
               branches: ['main', 'staging', 'development', 'feat/billing-export', 'fix/invoice-rounding'],
               base: 'staging',
@@ -707,6 +717,7 @@ export function mockClient(): GitHubClient {
               hasApiKey: loginsOf(r.fullName).claude,
               secretNames: namesOf(r.fullName),
               sharedSecrets: [],
+              otherReviewBranches: [],
               allSecretsSeen: true,
               installed: installedFor(r.fullName),
               refresh: null,

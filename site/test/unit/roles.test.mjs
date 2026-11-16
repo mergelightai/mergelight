@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { connectsAfterMerge, isStandard, stepInScalar, loginsFrom, loginsIn, passesLogin, readRoles, reviewerFixedBy, rolesFor, withInputs, withoutInputs, withRoles } from '../../src/setup/roles.ts';
+import { connectsAfterMerge, isStandard, runsOnBase, stepInScalar, loginsFrom, loginsIn, passesLogin, readRoles, reviewerFixedBy, rolesFor, withInputs, withoutInputs, withRoles } from '../../src/setup/roles.ts';
 
 const template = readFileSync(new URL('../../../examples/mergelight.yml', import.meta.url), 'utf8');
 const both = { claude: true, codex: true };
@@ -333,4 +333,12 @@ test('a login counts only through the input that reads it, also in a workflow se
   assert.deepEqual(loginsIn(custom, ['OPENAI_API_KEY', 'TEAM_CLAUDE']), claudeOnly, "an input's own secret counts, an unread key doesn't");
   assert.deepEqual(loginsIn(step(['codex-auth-json: ${{ secrets.A || secrets.B }}']), ['A', 'B']), none, "a fallback can't be told");
   assert.deepEqual(loginsIn('name: x\n', ['CODEX_AUTH_JSON']), none, 'no step reads nothing');
+});
+
+test('a workflow on pull_request_target runs the base branch workflow', () => {
+  assert.equal(runsOnBase(template), false, 'the template runs on pull_request');
+  assert.equal(runsOnBase(template.replace('on:\n  pull_request:\n', 'on:\n  pull_request_target:\n')), true);
+  assert.equal(runsOnBase('on: [pull_request_target]\njobs: {}\n'), true);
+  assert.equal(runsOnBase('on: [pull_request, pull_request_target]\n'), false, 'with both, a PR run reads its own');
+  assert.equal(runsOnBase(null), false);
 });

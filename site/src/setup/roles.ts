@@ -346,6 +346,21 @@ export function loginsIn(content: string | null, secretNames: string[], shared: 
   return { claude: LOGIN_INPUTS.claude.some(has), codex: !planShared && LOGIN_INPUTS.codex.some(has) };
 }
 
+/**
+ * Whether the workflow runs on pull_request_target and not on pull_request. Such a run reads the workflow on the base
+ * branch, not the one on the pull request.
+ */
+export function runsOnBase(content: string | null): boolean {
+  if (!content) return false;
+  const lines = content.split(/\r?\n/);
+  const at = lines.findIndex((l) => /^["']?on["']?[ \t]*:/.test(l));
+  if (at < 0) return false;
+  const block = [lines[at]!.replace(/^[^:]*:/, '')];
+  for (let i = at + 1; i < lines.length && (/^[ \t]/.test(lines[i]!) || !lines[i]!.trim()); i++) block.push(lines[i]!);
+  const on = block.join('\n').replace(/#.*$/gm, '');
+  return /\bpull_request_target\b/.test(on) && !/\bpull_request\b(?!_)/.test(on);
+}
+
 /** Whether the Mergelight step hands this AI a login at all: without one of its inputs, it can never review or check. */
 export const passesLogin = (content: string, ai: Ai): boolean => LOGIN_INPUTS[ai].some((input) => loginInputs(content).includes(input));
 
