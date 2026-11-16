@@ -81,6 +81,7 @@ const SCAN_NOTE = 'This repo has more open PRs than we look through for one that
  */
 const MIN_ACTION_VERSION = 'v0.1.19';
 
+/** No login at all: what counts while the workflow a connection is for is still being read. */
 const NO_LOGINS: Logins = { claude: false, codex: false };
 /** The secret that holds a ChatGPT plan's login. */
 const CHATGPT_SECRET = LOGIN_SECRET[LOGIN_INPUTS.codex[0]]!;
@@ -303,9 +304,10 @@ export default function Setup() {
   pendingReadNow.current = pendingRead;
   /**
    * Reads the workflow on a setup or update PR at this commit, which an open PR can have changed in other ways, like
-   * who reviews. Undefined when it couldn't be read, which is tried again rather than going by the live one.
+   * who reviews. Null when it isn't there. Undefined when it couldn't be read, which is tried again rather than going
+   * by the live one.
    */
-  const readPendingFile = (c: GitHubClient, r: Repo, sha: string, again = false): Promise<string | undefined> => {
+  const readPendingFile = (c: GitHubClient, r: Repo, sha: string, again = false): Promise<string | null | undefined> => {
     const read = ++pendingReads.current;
     const forRepo = picked.current;
     if (!again) setPendingRead('reading');
@@ -313,7 +315,6 @@ export default function Setup() {
     return c.workflowAt(r, sha).then(
       (content) => {
         if (!current()) return undefined;
-        if (!content) return void setPendingRead('unknown');
         setPendingFile(content);
         setPendingRead('known');
         return content;

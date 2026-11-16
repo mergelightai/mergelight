@@ -360,7 +360,8 @@ await scenario('claude-button-and-paste', { comments: [CLAUDE_COMMENT()], checks
   expect(world.removed?.[0] === `refs/${claudeCodeRef(CLAUDE)}` && world.removed.length === 1, 'removes its own code as soon as the run has connected, before anyone can leave the page');
 });
 
-await scenario('another-runs-login-keeps-this-code', { comments: [CLAUDE_COMMENT()], checks: { headsha: WAITING } }, async ({ page, world, click, until }) => {
+// The PR's workflow can be read: while it can't, a saved secret alone doesn't count as its login.
+await scenario('another-runs-login-keeps-this-code', { comments: [CLAUDE_COMMENT()], checks: { headsha: WAITING }, installed: true }, async ({ page, world, click, until }) => {
   await page.goto(claudeSetupLink('acme/api', 7), { waitUntil: 'networkidle2' });
   await until((x) => /Paste the code Claude shows you/.test(x), 'the Claude step');
   await wait(900);
