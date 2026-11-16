@@ -272,6 +272,8 @@ export default function Setup() {
   const linkRead = useRef(0);
   const openPrLookup = useRef(0);
   const rolesRead = useRef(0);
+  /** The logins there were when a run that offers both AIs was first seen, so only a new one counts as connecting it. */
+  const loginsBefore = useRef<Logins | null>(null);
   /** A retry of a linked PR's workflow is on its way, so the next poll doesn't start another. */
   const linkRetrying = useRef(false);
   const rolesRetrying = useRef(false);
@@ -317,6 +319,7 @@ export default function Setup() {
   /** `waitingPr` is the pull request whose comment sent them here, which skips straight to connecting it. */
   const choose = (r: Repo, waitingPr?: number) => {
     picked.current++;
+    loginsBefore.current = null;
     openPrLookup.current++;
     linkRead.current++;
     rolesRead.current++;
@@ -558,6 +561,7 @@ export default function Setup() {
         setConnectCode(null);
         // What the old run asked for, and the logins its workflow took, may not be the new one's.
         setAskedCheck(null);
+        loginsBefore.current = null;
         if (startOnClaude) readLinkFile(client, repo, pr.number);
         // A role PR's new commit can change the logins its workflow takes: its run reads the PR's merge commit.
         else if (rolesChange) void readRolesFile(client, repo, pr.number);
@@ -629,8 +633,14 @@ export default function Setup() {
       if (both && askedCheck) setAskedCheck(null);
       // A change of AI waits for the login of the AI it connects now. Its run can be reviewing with the other AI before it asks.
       const need = rolesChange?.needs.find((ai) => !connectLoginsNow.current[ai]) ?? asked ?? (both ? null : askedCheck) ?? setupNeedNow.current;
-      const connected = need ? Boolean(seen?.[need]) || /^connected/i.test(check?.title ?? '') : movedOn;
-      if (view === 'connect' && (need ? connected : (login && !code && !startOnClaude) || movedOn)) {
+      const title = /^connected/i.test(check?.title ?? '');
+      // A run that offers both AIs is done once either gets a login it didn't have when the page first looked, or the
+      // run goes on. One saved before doesn't count: a run that asks has no login it can use.
+      if (both && seen && !loginsBefore.current) loginsBefore.current = seen;
+      const before = loginsBefore.current;
+      const newLogin = Boolean(seen && before && ((seen.claude && !before.claude) || (seen.codex && !before.codex)));
+      const connected = need ? Boolean(seen?.[need]) || title : both ? newLogin || title || movedOn : movedOn;
+      if (view === 'connect' && (need || both ? connected : (login && !code && !startOnClaude) || movedOn)) {
         // Only once this run has moved on: it has read the code then, and the next screen can send them back to GitHub at
         // once. A login another run saved doesn't say this one has, so the code stays for its own timer to remove.
         if (connected && (/^connected/i.test(check?.title ?? '') || isReviewing(check))) void client.clearClaudeCode(repo).catch(() => undefined);
