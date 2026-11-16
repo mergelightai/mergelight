@@ -25,6 +25,8 @@ export interface ModelFinding {
   how_it_happens: string;
   likelihood: Likelihood;
   severity: Severity;
+  /** It exposes secrets or data, or lets someone act as another or do what they shouldn't. Older findings don't say. */
+  security?: boolean;
   what_breaks: string;
   fix: string;
   fix_cost: FixCost;
@@ -56,7 +58,19 @@ export interface Finding extends ModelFinding {
   tier: Tier;
   /** 1 to 3 when the verifier picked it as one of the few that matter most, else null. */
   rank: number | null;
+  /**
+   * Why the loop breaker left it alone when it would otherwise hold the merge: rare (rare or theoretical),
+   * or late (not likely, in a round from LATE_ROUND on).
+   */
+  left_alone?: "rare" | "late";
 }
+
+/**
+ * The round of a pull request's reviews from which only problems that are likely, or a major bug or a
+ * major security problem, hold the merge. By then the problems that matter have had their rounds, and
+ * each fix of an unlikely case brings new unlikely cases in its own code: the loop this ends.
+ */
+export const LATE_ROUND = 4;
 
 /** The merge light: green is safe, yellow needs a human, red is blocked. */
 export type Light = "green" | "yellow" | "red";

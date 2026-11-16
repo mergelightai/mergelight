@@ -24,7 +24,8 @@ import { claudeAvailable, runModel as runOneModel, TOOLING, type ModelOptions, t
 import { candidateSchema, checkSchema, reviewSchema, reviewSchemaWithDecisions } from "./schema.js";
 import { CHECK_TIMEOUT_MS, startTeamChecks, type ChecksRun } from "./checks.js";
 import { run } from "./run.js";
-import type { Finding, Light, ModelFinding, ModelReview, Review, TeamCheckResult, Tier } from "./types.js";
+import { LATE_ROUND, type Finding, type Light, type ModelFinding, type ModelReview, type Review, type TeamCheckResult, type Tier } from "./types.js";
+export { LATE_ROUND } from "./types.js";
 import { cacheDir, prepareWorkspace } from "./workspace.js";
 import type { WrittenSkill } from "./skills.js";
 
@@ -44,6 +45,8 @@ export interface ReviewOptions {
   verifyModel?: string;
   /** What earlier review rounds of this pull request found. The verifier checks each one again. */
   previous?: PriorFinding[];
+  /** This review's round on the pull request, counting from 1. From LATE_ROUND on, fewer findings hold the merge. */
+  round?: number;
   /** Findings the team declined in earlier pull requests. Only those in files this one changes reach the verifier. */
   memories?: TeamMemory[];
   /** The team's rules. Only those about files this pull request changes are used. */
@@ -124,15 +127,32 @@ export function assignIds(
  * Posting everything it would fix meant about 4.5 comments per PR, and all of
  * Codex's about 6.
  */
-export function tierOf(f: ModelFinding & { rank?: number | null }): Tier {
-  // Teams fixed few of these: 19% of minor risks and 10% of rare findings, against 45% of minor bugs. They stay
-  // readable in the collapsed section, and a major bug is never hidden, because it decides the red light.
+export function tierOf(f: ModelFinding & { rank?: number | null }, round = 1): Tier {
+  return placeFinding(f, round).tier;
+}
+
+/** A major bug, or a major problem that exposes secrets, data or actions: it holds the merge in every round. */
+export function mustHold(f: Pick<ModelFinding, "class" | "severity" | "security">): boolean {
+  return f.severity === "major" && (f.class === "bug" || f.security === true);
+}
+
+/**
+ * Where a finding goes in this round, and why the loop breaker left it alone when it would otherwise
+ * hold the merge. Teams fixed few rare findings (10%, against 45% of minor bugs), and only a problem
+ * known to break for real users is worth another round.
+ */
+export function placeFinding(f: ModelFinding & { rank?: number | null }, round = 1): { tier: Tier; left_alone?: "rare" | "late" } {
+  // Teams fixed few minor risks (19%). They stay readable in the collapsed section.
   const majorBug = f.class === "bug" && f.severity !== "minor";
-  if (!majorBug && ((f.class === "risk" && f.severity === "minor") || f.likelihood === "rare")) return "hardening";
-  if (f.rank) return "post";
-  if (f.recommendation === "fix") return "list";
-  if (f.recommendation === "decide") return "decision";
-  return "hardening";
+  const tier: Tier =
+    !majorBug && f.class === "risk" && f.severity === "minor" ? "hardening" : f.rank ? "post" : f.recommendation === "fix" ? "list" : f.recommendation === "decide" ? "decision" : "hardening";
+  // A major bug or a major security problem holds the merge even when the verifier said to leave it,
+  // as for a costly fix: a person decides.
+  if (mustHold(f)) return { tier: tier === "hardening" ? "decision" : tier };
+  if (tier === "hardening") return { tier };
+  if (f.likelihood === "rare" || f.likelihood === "theoretical") return { tier: "hardening", left_alone: "rare" };
+  if (round >= LATE_ROUND && f.likelihood !== "common") return { tier: "hardening", left_alone: "late" };
+  return { tier };
 }
 
 /** Red if a major bug must be fixed, yellow if anything else is posted or needs a decision, green otherwise. */
@@ -161,6 +181,8 @@ export const DEFAULT_EFFORT = "high";
 
 export interface VerifyOptions {
   provider: ProviderName;
+  /** This review's round on the pull request, counting from 1. From LATE_ROUND on, fewer findings hold the merge. */
+  round?: number;
   model?: string;
   effort: string;
   logFile?: string;
@@ -238,7 +260,8 @@ export async function verifyCandidates(dir: string, input: PromptInput, found: C
   const findings: Finding[] = assignIds(review.findings, input.previous ?? [], (f) => fingerprint(dir, f))
     .map((f, i) => {
       const rank = top.includes(i + 1) ? top.indexOf(i + 1) + 1 : null;
-      return { ...f, tier: tierOf({ ...f, rank }), rank };
+      const { tier, left_alone } = placeFinding({ ...f, rank }, opts.round);
+      return { ...f, tier, rank, ...(left_alone ? { left_alone } : {}) };
     })
     .sort((a, b) => ORDER[a.class] - ORDER[b.class] || a.file.localeCompare(b.file) || a.line - b.line);
   return { summary: review.summary, findings, rejected: review.rejected, model: result.model, cost_usd: result.cost_usd ?? null, usage: result.usage };
@@ -326,6 +349,7 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
       diff: ws.diff,
       diffTruncated: ws.diffTruncated,
       previous: opts.previous,
+      ...(opts.round ? { round: opts.round } : {}),
       memories: memoriesFor(opts.memories, ws.changedFiles.map((f) => f.path), pr.number),
       // Matched against every path the pull request touches, exactly as git has it.
       skills: teamSkills,
@@ -457,6 +481,7 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
     const verifyWithAi = (ai: ProviderName, model: string | undefined) =>
       verifyCandidates(ws.dir, input, found, {
         provider: ai,
+        round: opts.round,
         model,
         effort,
         logFile: log(ai === verifyWith ? "verify" : "verify-fallback"),

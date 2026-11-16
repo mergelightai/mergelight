@@ -7,7 +7,7 @@ import { declinesOf, fetchContext, MAX_REASON, reportReview } from "./cloud.js";
 import { GitHub } from "./publish/api.js";
 import { writeAccess } from "./publish/handled.js";
 import { publishTeamChecks } from "./publish/team-checks.js";
-import { answerRemembered, confirmReasons, approveCheck, checkHeldTitle, checkLimitTitle, checkLoginTitle, failCheck, failSummary, previousFindings, publishReview, startCheck, startSummary, syncApproval, UNREVIEWED, APPROVALS_OFF, updatePendingSummary } from "./publish/publish.js";
+import { answerRemembered, confirmReasons, approveCheck, checkHeldTitle, checkLimitTitle, checkLoginTitle, failCheck, failSummary, previousReview, publishReview, startCheck, startSummary, syncApproval, UNREVIEWED, APPROVALS_OFF, updatePendingSummary } from "./publish/publish.js";
 import { configuredModel, HeldLoginError, LimitError, LoginError, loginFailureMessage } from "./providers/codex.js";
 import { heldLoginNotice, limitNotice, loginNotice } from "./publish/markdown.js";
 import { renderRejected, renderTerminal } from "./render.js";
@@ -378,9 +378,12 @@ async function main(): Promise<number> {
     }
     // Before the threads are read: a reply written after this counts as newer than this review.
     const startedAt = new Date();
-    let previous = values.post ? await previousFindings(api, ref.number, headSha ?? undefined) : undefined;
+    const earlier = values.post ? await previousReview(api, ref.number, headSha ?? undefined) : undefined;
+    let previous = earlier?.findings;
     const review = await reviewPullRequest(ref, {
       previous,
+      // The round this review becomes: from LATE_ROUND on, the loop breaker lets fewer findings hold the merge.
+      ...(earlier ? { round: earlier.round + 1 } : {}),
       memories: cloud.memories,
       rules: cloud.rules,
       rulesUnread: cloud.failed === true,

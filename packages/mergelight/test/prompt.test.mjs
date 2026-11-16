@@ -461,3 +461,12 @@ test("the verifier is told how to weigh what someone wrote when they resolved a 
   assert.ok(prompt.includes("team: resolved the comment, by ada, saying: Moved it to the router."));
   assert.match(prompt, /Resolved by the team, saying something: .* If it says the problem was fixed, check the code/);
 });
+
+test("the verifier knows its round from round 4 on, so its summary judges only what still holds the merge", () => {
+  assert.doesNotMatch(buildVerifierPrompt({ ...input, round: 3 }, []), /review round/);
+  assert.match(buildVerifierPrompt({ ...input, round: 6 }, []), /This is review round 6 of this pull request\. From round 4 on, only likely problems, major bugs and major security problems hold the merge/);
+  // Every verifier sees what makes a case rare, and is asked whether it is a security problem.
+  const prompt = buildVerifierPrompt(input, []);
+  assert.match(prompt, /Rare includes: a hand-edited or uncommon configuration, such as YAML anchors/);
+  assert.match(prompt, /- security: true when it lets someone see secrets/);
+});
