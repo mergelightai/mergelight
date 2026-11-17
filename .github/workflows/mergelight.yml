@@ -5,6 +5,10 @@ name: Mergelight
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, edited]
+  # A comment that mentions @mergelight-ai on a pull request reviews it again, reading the comment as your
+  # team's answer to the findings: what's fixed, and what to leave and why. Only people who can push count.
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: read
@@ -15,23 +19,30 @@ permissions:
 jobs:
   review:
     # Forks and Dependabot get no secrets, and drafts aren't ready for review. An edit only counts when the
-    # target branch changed, so a new title doesn't start a review.
+    # target branch changed, so a new title doesn't start a review. A comment counts when it mentions
+    # Mergelight on a pull request, and isn't a bot's.
     if: >
+      (github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      contains(github.event.comment.body, '@mergelight-ai') &&
+      github.event.comment.user.type != 'Bot') ||
+      (github.event_name == 'pull_request' &&
       (github.event.action != 'edited' || github.event.changes.base) &&
       !github.event.pull_request.draft &&
       github.actor != 'dependabot[bot]' &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     # Room for the first login, which can wait up to 16 minutes, and then a long review.
     timeout-minutes: 45
-    # A new push cancels the older review of the same PR.
+    # A new push cancels the older review of the same PR. A comment's review has a group of its own, so
+    # neither cancels the other.
     concurrency:
-      group: mergelight-pr-${{ github.event.pull_request.number }}
+      group: mergelight-pr-${{ github.event.pull_request.number || github.event.issue.number }}${{ github.event_name == 'issue_comment' && format('-comment-{0}', github.event.comment.id) || '' }}
       cancel-in-progress: true
     steps:
       # Pinned to a release, so new code only runs here once you merge an update.
       # Mergelight says on your pull requests when a new version is out.
-      - uses: mergelightai/mergelight@07e7f653cdc9769d3bc704b87bd93cccf819e02b # v0.1.19
+      - uses: mergelightai/mergelight@6cd3d1b2a72ebe293ff7ec91770d1dd6bbd8b34d # v0.1.20
         with:
           # None set yet? The first pull request shows a link to connect ChatGPT. For Claude, see the setup page.
           codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}
