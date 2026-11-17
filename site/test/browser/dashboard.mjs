@@ -88,9 +88,8 @@ const OVERVIEWS = {
 /** What each org pays for, as the server's billing page says it, for the tests that sell plans. */
 const PADDLE = { env: 'sandbox', client_token: 'test_0123456789abcdef', prices: { light: `pri_01${'l'.repeat(24)}`, pro: `pri_01${'p'.repeat(24)}` } };
 const SIGNED = (org, login) => ({ org_id: String(org), org_login: login, expires: '1900000000', sig: 'a'.repeat(64) });
-const billingOf = (org, login, over = {}) => ({ org: { id: org, login }, can_manage: true, dashboard: false, ended: false, jobs: false, free: false, subscription: null, paddle: PADDLE, checkout: SIGNED(org, login), ...over });
-/** Paddle.js as the tests fake it: it keeps what the page asked for, and the payment goes through at once. */
-/** An org that turned on by paying: the server has its lists now, all empty. */
+const billingOf = (org, login, over = {}) => ({ org: { id: org, login }, can_manage: true, dashboard: false, covers: 'none', ended: false, jobs: false, free: false, subscription: null, paddle: PADDLE, checkout: SIGNED(org, login), ...over });
+/** An org that turned on, by paying or for free: the server has its lists now, all empty. */
 const turnOn = (id, login) => {
   const repos = [{ id: 950, name: `${login}/site` }];
   OVERVIEWS[id] ??= { org: { id: Number(id), login }, can_delete: true, repos: [], reviews: [] };
@@ -103,6 +102,7 @@ const turnOn = (id, login) => {
 const turnOff = (id) => {
   for (const lists of [OVERVIEWS, RULES, SKILLS, CHECKS, WRITTEN]) delete lists[id];
 };
+/** Paddle.js as the tests fake it: it keeps what the page asked for, and the payment goes through at once. */
 const FAKE_PADDLE = `window.__paddle = {};
 window.Paddle = {
   Environment: { set: (env) => { window.__paddle.env = env; } },
@@ -118,7 +118,7 @@ const expect = (ok, what) => { console.log(`  ${ok ? 'ok ' : 'FAIL'} ${what}`); 
 
 async function open(name, { signedOutAfter = Infinity, serverDown = false, forgetFails = false, signedOutOnAdd = false, signedOutOnWrite = false, noOrgs = false, skillsFail = false, keptOn = false, billing = null } = {}) {
   /** For the tests that sell plans: each org's billing page, the orgs that paid since, and the plan changes asked for. */
-  const plans = { billing: billing ?? {}, paid: new Set(), changes: [], portals: 0 };
+  const plans = { billing: billing ?? {}, paid: new Set(), free: new Set(), changes: [], portals: 0 };
   /** Orgs the page asked the server to delete everything of, with what was typed. A deleted one is off from then on. */
   const deletes = [];
   const deleted = new Set();
@@ -177,7 +177,7 @@ async function open(name, { signedOutAfter = Infinity, serverDown = false, forge
         deleted.add(whole);
         return req.respond({ status: 204, headers: cors });
       }
-      const bill = /^\/v1\/orgs\/(\d+)\/billing(?:\/(change|portal))?$/.exec(u.pathname);
+      const bill = /^\/v1\/orgs\/(\d+)\/billing(?:\/(change|portal|free))?$/.exec(u.pathname);
       if (bill) {
         const [, id, action] = bill;
         const page = plans.billing[id];
@@ -188,14 +188,22 @@ async function open(name, { signedOutAfter = Infinity, serverDown = false, forge
           page.subscription = { ...page.subscription, plan, seats };
           return json(req, { plan, seats });
         }
+        if (action === 'free') {
+          plans.free.add(id);
+          turnOn(id, page.org.login);
+          return json(req, { covers: 'public' });
+        }
         if (action === 'portal') {
           plans.portals++;
           return json(req, { url: 'https://sandbox-customer-portal.paddle.com/cpl_01?action=overview&token=pga_x' });
         }
+        if (plans.free.has(id)) {
+          return json(req, { ...page, dashboard: true, covers: 'public' });
+        }
         // Paid: Paddle told the server, so the dashboard is on, with nothing stored yet.
         if (plans.paid.has(id)) {
           turnOn(id, page.org.login);
-          return json(req, { ...page, dashboard: true, checkout: null, subscription: { plan: 'pro', seats: 3, status: 'active', working: true, current_period_end: hoursAgo(-24 * 30) } });
+          return json(req, { ...page, dashboard: true, covers: 'all', checkout: null, subscription: { plan: 'pro', seats: 3, status: 'active', working: true, current_period_end: hoursAgo(-24 * 30) } });
         }
         return json(req, page);
       }
@@ -907,6 +915,24 @@ const done = async (t) => {
 }
 
 {
+  const t = await open('free-for-public', { billing: { 4005: billingOf(4005, 'opensrc') } });
+  SESSION.orgs.push({ id: 4005, login: 'opensrc', connected: false, repos: 1 });
+  await t.signIn();
+  await t.menu('Switch org', 'opensrc');
+  await wait(500);
+  expect(/Only public repositories\? Light is free for them\./.test(await t.text()), 'an org with nothing stored is offered Light for free for its public repositories');
+  await t.click('main button', 'Turn on for free');
+  await t.page.waitForFunction(() => /The dashboard is on for opensrc\. Add one line/.test(document.querySelector('main')?.innerText ?? ''), { timeout: 10000 }).catch(() => null);
+  const page = await t.text();
+  expect(t.plans.free.has('4005') && /The dashboard is on for opensrc\. Add one line/.test(page), 'one click turns it on, and the page shows the dashboard');
+  expect(/Light is free for opensrc's public repositories\. Reviews of its private repositories don't use the dashboard\./.test(page), 'and says that private repositories need a plan');
+  await t.shot('free-for-public');
+  SESSION.orgs.pop();
+  turnOff('4005');
+  await done(t);
+}
+
+{
   const t = await open('buy-not-owner', { billing: { 3003: billingOf(3003, 'quiet', { can_manage: false, checkout: null }) } });
   await t.signIn();
   await t.menu('Switch org', 'quiet');
@@ -918,7 +944,7 @@ const done = async (t) => {
 
 {
   const pro = { plan: 'pro', seats: 3, status: 'active', working: true, current_period_end: '2026-12-11T08:00:00Z' };
-  const t = await open('billing-settings', { billing: { 1001: billingOf(1001, 'acme', { dashboard: true, jobs: true, subscription: pro, checkout: null }) } });
+  const t = await open('billing-settings', { billing: { 1001: billingOf(1001, 'acme', { dashboard: true, covers: 'all', jobs: true, subscription: pro, checkout: null }) } });
   await t.signIn();
   await t.view('Settings');
   let page = await t.text();

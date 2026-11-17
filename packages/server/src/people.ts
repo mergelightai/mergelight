@@ -368,10 +368,12 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
         org: { id: orgId, login: reach.login },
         can_manage: reach.admin,
         dashboard: plan.dashboard,
+        // Which repositories' reviews use the dashboard: all, only the public ones (free), or none.
+        covers: plan.covers,
         ended: plan.ended,
         jobs: plan.jobs,
-        // On without paying: whoever runs this server gave it.
-        free: plan.dashboard && plan.paid === null,
+        // On for every repository without paying: whoever runs this server gave it.
+        free: plan.covers === "all" && plan.paid === null,
         subscription: bill ? { plan: bill.plan, seats: bill.seats, status: bill.status, working: WORKING.has(bill.status), current_period_end: bill.current_period_end } : null,
         // What the page needs to open Paddle's checkout. The client token and the prices are public by Paddle's design.
         paddle: paddle ? { env: paddle.env, client_token: paddle.clientToken, prices: paddle.prices } : null,
@@ -379,6 +381,26 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
         checkout: paddle && reach.admin && plan.paid === null ? checkoutData(paddle, { id: orgId, login: reach.login }, now()) : null,
       },
     };
+  }
+
+  /**
+   * Turns on Light for the org's public repositories, for free. It takes an owner, as buying does, and a server
+   * that sells plans: one that sells nothing is the operator's to turn on.
+   */
+  async function freeForPublic(session: Session, orgId: number): Promise<{ status: number; body: unknown }> {
+    const reach = session.reach.get(orgId);
+    if (!reach) throw new HttpError(404, "not_found", "No such org.");
+    if (!reach.admin) throw new HttpError(403, "read_only", `Only an owner of ${reach.login} can turn the dashboard on.`);
+    if (!paddle) throw new HttpError(503, "billing_not_set_up", "This server doesn't sell plans. Ask whoever runs it to turn the dashboard on.");
+    const covers = await withOrg(pool, orgId, async (db) => {
+      const before = await planOf(db, orgId, grants, { lock: true });
+      if (before.covers !== "none") return before.covers;
+      // A new org, or one whose plan ended: its data stays, and now its public repositories use it again.
+      await db.query("insert into orgs (id, login, public_only) values ($1, $2, true) on conflict (id) do update set public_only = true", [orgId, reach.login]);
+      await record(db, orgId, session.person, "free_for_public_on", {});
+      return (await planOf(db, orgId, grants)).covers;
+    });
+    return { status: 200, body: { covers } };
   }
 
   /** The billing row of an org whose plan works, for an owner, or why not. */
@@ -824,8 +846,9 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
     const org = /^\/v1\/orgs\/(\d{1,18})\/(overview|memories|rules|skills|checks|written-skills)(?:\/(\d{1,18}))?$/.exec(pathname);
     // The org itself: deleting it deletes everything stored for it.
     const whole = /^\/v1\/orgs\/(\d{1,18})$/.exec(pathname);
-    // What the org pays for: GET it, POST change to change the plan or seats, POST portal for a link to Paddle's portal.
-    const billing = /^\/v1\/orgs\/(\d{1,18})\/billing(?:\/(change|portal))?$/.exec(pathname);
+    // What the org pays for: GET it, POST change to change the plan or seats, POST portal for a link to Paddle's portal,
+    // POST free to turn on Light for the org's public repositories.
+    const billing = /^\/v1\/orgs\/(\d{1,18})\/billing(?:\/(change|portal|free))?$/.exec(pathname);
     if (pathname !== "/v1/session" && !org && !whole && !billing) return null;
     // Only one decision or one rule at a time has an address of its own.
     if (org && org[3] && org[2] === "overview") return null;
@@ -848,7 +871,7 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
         if (request.method !== (billing[2] ? "POST" : "GET")) return json(405, { error: "method_not_allowed" }, cors);
         if (!isId(orgId)) throw new HttpError(404, "not_found", "No such org.");
         const { session } = sessionOf(request, at);
-        result = billing[2] === "change" ? await changePlan(session, orgId, request) : billing[2] === "portal" ? await portal(session, orgId) : await billingState(session, orgId);
+        result = billing[2] === "change" ? await changePlan(session, orgId, request) : billing[2] === "portal" ? await portal(session, orgId) : billing[2] === "free" ? await freeForPublic(session, orgId) : await billingState(session, orgId);
       } else if (whole) {
         const orgId = Number(whole[1]);
         if (request.method !== "DELETE") return json(405, { error: "method_not_allowed" }, cors);

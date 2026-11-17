@@ -108,7 +108,7 @@ beforeEach(async () => {
 test("migrations apply once, and a second run changes nothing", async () => {
   await migrate(pool);
   const { rows } = await pool.query("select name from schema_migrations");
-  assert.deepEqual(rows.map((r) => r.name).sort(), ["001_base.sql", "002_memories.sql", "003_rules.sql", "004_skills.sql", "005_checks.sql", "006_written_skills.sql", "007_billing.sql", "008_billing_events.sql", "009_data_deleted.sql"]);
+  assert.deepEqual(rows.map((r) => r.name).sort(), ["001_base.sql", "002_memories.sql", "003_rules.sql", "004_skills.sql", "005_checks.sql", "006_written_skills.sql", "007_billing.sql", "008_billing_events.sql", "009_data_deleted.sql", "010_public_free.sql"]);
 });
 
 test("the server's own role can't bypass the row rules, and a superuser is refused", async () => {
@@ -694,6 +694,28 @@ test("the operator's free grants hold whatever the org pays", async () => {
   api = createApi({ pool, publicUrl: PUBLIC_URL, fetchImpl, now: () => clock, keptOn: new Set([ACME.id]), jobsOrgs: new Set([ACME.id]) });
   assert.deepEqual(await contextOf(ACME), { connected: true, memories: [], rules: [], skills: [], checks: [], written_skills: [], jobs: true });
   assert.equal((await post(makeToken())).status, 201);
+});
+
+test("Light is free for public repositories: their reviews use the dashboard, and private ones' don't", async () => {
+  await withOrg(pool, ACME.id, (db) => db.query("insert into orgs (id, login, public_only) values ($1, 'acme', true)", [ACME.id]));
+  const pub = (claims = {}) => makeToken({ repository_visibility: "public", ...claims });
+  assert.equal((await (await get(pub())).json()).connected, true);
+  assert.equal((await post(pub())).status, 201);
+  // A private repository: nothing of the dashboard, nothing stored, and no claim that a plan ended.
+  assert.deepEqual(await (await get(makeToken({ repository_visibility: "private", repository_id: "502", repository: "acme/secret" }))).json(), { connected: false });
+  assert.equal((await post(makeToken({ repository_visibility: "private", repository_id: "502", repository: "acme/secret", run_id: "9050" }))).status, 404);
+  assert.equal((await (await get(makeToken({ repository_visibility: "internal", repository_id: "503", repository: "acme/inside" }))).json()).connected, false);
+  // A plan covers every repository.
+  await bill(ACME, "light", "active");
+  assert.equal((await (await get(makeToken({ repository_visibility: "private", repository_id: "502", repository: "acme/secret" }))).json()).connected, true);
+  // The plan ends: the free plan for public repositories stays.
+  await bill(ACME, "light", "canceled");
+  assert.equal((await (await get(pub())).json()).connected, true);
+  assert.deepEqual(await (await get(makeToken({ repository_visibility: "private", repository_id: "502", repository: "acme/secret" }))).json(), { connected: false });
+  // The operator turning the org on gives it every repository.
+  await withOrg(pool, ACME.id, (db) => db.query("delete from billing"));
+  await connectOrg(pool, ACME.id, ACME.login);
+  assert.equal((await (await get(makeToken({ repository_visibility: "private", repository_id: "502", repository: "acme/secret" }))).json()).connected, true);
 });
 
 test("deleting an org's data leaves what it pays for, and no org sees another's plan", async () => {

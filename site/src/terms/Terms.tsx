@@ -40,7 +40,7 @@ const SECTIONS: Section[] = [
         <List
           items={[
             'Free: reviews in your own GitHub Actions, the CLI, the Mergelight AI app, the MCP server and the agent skill. Free has no time limit.',
-            'Light and Pro: the prices per developer a month are on the pricing section of this website. Light is free for public repositories.',
+            'Light and Pro: the prices per developer a month are on the pricing section of this website. Light is free for public repositories: an owner turns it on with "Turn on for free" on the dashboard, and reviews of private repositories then need a paid plan to use the dashboard.',
             'You pick how many developers you pay for when you buy, and you can change the number at any time.',
             'A paid plan renews each month until you cancel it. When you cancel, the plan stays on until the end of the month you paid for.',
             'We tell paying customers at least 30 days before a price changes. The new price applies from the next month after that.',

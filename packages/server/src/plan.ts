@@ -10,6 +10,9 @@
 // rules, memory, skills or checks, and store nothing. The data stays until an owner deletes it, and the
 // dashboard still shows it (ended), so owners can see what is kept, remove it, and delete it.
 //
+// Light is free for public repositories: an owner turns that on (orgs.public_only), and then reviews of
+// the org's public repositories use the dashboard, whatever the org pays. Its private ones need a plan.
+//
 // Jobs: the org pays for Pro and the subscription works, or the operator gives it Jobs (JOBS_ORGS).
 
 import type { Db } from "./db.js";
@@ -29,6 +32,9 @@ export const NO_GRANTS: Grants = { dashboard: new Set(), jobs: new Set() };
 export interface OrgPlan {
   /** The org's data is stored here. */
   connected: boolean;
+  /** Which repositories' reviews use the dashboard: all of them, only the public ones (free), or none. */
+  covers: "all" | "public" | "none";
+  /** On for some repositories at least: the dashboard's pages work, and things can be added. */
   dashboard: boolean;
   /** The org's data is stored here and its plan ended or is paused. The dashboard shows the data, and nothing new can be added. */
   ended: boolean;
@@ -48,10 +54,18 @@ export const WORKING: ReadonlySet<string> = new Set(["active", "trialing", "past
  * transaction ends, so two people who add something at the same moment can't both slip past a limit.
  */
 export async function planOf(db: Db, orgId: number, grants: Grants, { lock = false } = {}): Promise<OrgPlan> {
-  const connected = ((await db.query(`select 1 from orgs where id = $1${lock ? " for update" : ""}`, [orgId])).rowCount ?? 0) > 0;
+  const org = (await db.query<{ public_only: boolean }>(`select public_only from orgs where id = $1${lock ? " for update" : ""}`, [orgId])).rows[0];
+  const connected = org !== undefined;
   const { rows } = await db.query<{ plan: PlanName; status: string }>("select plan, status from billing where org_id = $1", [orgId]);
   const bill = rows[0];
   const paid = bill && WORKING.has(bill.status) ? bill.plan : null;
-  const dashboard = connected && (grants.dashboard.has(orgId) || !bill || paid !== null);
-  return { connected, dashboard, ended: connected && !dashboard, jobs: grants.jobs.has(orgId) || paid === "pro", paid };
+  // The operator's orgs from before payments pay nothing and aren't marked public only: they stay on for every repository.
+  const all = connected && (grants.dashboard.has(orgId) || paid !== null || (!bill && !org.public_only));
+  const covers = all ? "all" : connected && org.public_only ? "public" : "none";
+  return { connected, covers, dashboard: covers !== "none", ended: connected && covers === "none", jobs: grants.jobs.has(orgId) || paid === "pro", paid };
+}
+
+/** Whether a review of a repository uses the dashboard: always with a plan, and for a public repository with the free one too. */
+export function coversRepo(plan: OrgPlan, isPublic: boolean): boolean {
+  return plan.covers === "all" || (plan.covers === "public" && isPublic);
 }

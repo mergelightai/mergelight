@@ -117,7 +117,8 @@ export async function purgeExpiredMemories(pool: Pool): Promise<number> {
 
 /** Turns the dashboard on for an org. Until then the server stores nothing about it. */
 export async function connectOrg(pool: Pool, orgId: number, login: string): Promise<void> {
-  await withOrg(pool, orgId, (db) => db.query("insert into orgs (id, login) values ($1, $2) on conflict (id) do update set login = excluded.login", [orgId, login]));
+  // On for every repository: an org that had only the free plan for public ones gets them all.
+  await withOrg(pool, orgId, (db) => db.query("insert into orgs (id, login) values ($1, $2) on conflict (id) do update set login = excluded.login, public_only = false", [orgId, login]));
 }
 
 /**

@@ -18,6 +18,8 @@ export interface Billing {
   /** An owner of the org, or the account's own person: they buy, change and cancel. */
   can_manage: boolean;
   dashboard: boolean;
+  /** Which repositories' reviews use the dashboard: all, only the public ones (Light is free for those), or none. */
+  covers: 'all' | 'public' | 'none';
   /** The org's data is stored and its plan ended or is paused. */
   ended: boolean;
   jobs: boolean;
@@ -51,6 +53,11 @@ async function changePlan(session: Session, orgId: number, plan: PlanName, seats
   if (!res.ok) throw new Error(await refusal(res));
 }
 
+async function freeForPublic(session: Session, orgId: number): Promise<void> {
+  const res = await call(session, `/v1/orgs/${orgId}/billing/free`, { method: 'POST' });
+  if (!res.ok) throw new Error(await refusal(res));
+}
+
 async function portalUrl(session: Session, orgId: number): Promise<string> {
   const res = await call(session, `/v1/orgs/${orgId}/billing/portal`, { method: 'POST' });
   if (!res.ok) throw new Error(await refusal(res));
@@ -72,6 +79,7 @@ type SignedIn = (change: () => Promise<void>) => Promise<void>;
 export function PlanPicker({ session, billing, signedIn, onOn }: { session: Session; billing: Billing; signedIn: SignedIn; onOn: () => void }) {
   // An org on for free has the dashboard already: what it can buy that it lacks is Pro's Jobs.
   const [plan, setPlan] = useState<PlanName>(billing.free ? 'pro' : 'light');
+  const [freeBusy, setFreeBusy] = useState(false);
   const [seats, setSeats] = useState('1');
   const [busy, setBusy] = useState(false);
   const [waiting, setWaiting] = useState(false);
@@ -194,6 +202,28 @@ export function PlanPicker({ session, billing, signedIn, onOn }: { session: Sess
         </Button>
         <span className="text-[13px] text-ink-3">{goodSeats(n) ? `${perMonth(plan, n)}, plus tax where it applies. Paddle takes the payment.` : `Pick 1 to ${MAX_SEATS} developers.`}</span>
       </div>
+      {billing.covers === 'none' && (
+        <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 border-t border-white/[0.06] pt-5">
+          <p className="max-w-md text-[13.5px] leading-relaxed text-ink-3">Only public repositories? Light is free for them. Reviews of private repositories then work as they do now, without the dashboard.</p>
+          <Button
+            variant="outline"
+            disabled={freeBusy}
+            onClick={() => {
+              setFreeBusy(true);
+              setError(null);
+              freeForPublic(session, billing.org.id)
+                .then(() => {
+                  toast.success(`Light is on for ${login}'s public repositories`);
+                  onOn();
+                })
+                .catch((err: unknown) => setError(err instanceof SignedOut ? 'Your session ran out. Reload the page to sign in again.' : err instanceof Error ? err.message : 'That did not work.'))
+                .finally(() => setFreeBusy(false));
+            }}
+          >
+            {freeBusy ? 'Turning it on' : 'Turn on for free'}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
@@ -290,6 +320,7 @@ export function BillingCard({ session, billing, signedIn, onChanged }: { session
   const { subscription: sub, org } = billing;
   let state: string;
   if (billing.free) state = `The dashboard is on for ${org.login} for free. There is nothing to pay.`;
+  else if (billing.covers === 'public' && !sub?.working) state = `Light is on for ${org.login}'s public repositories, for free. Reviews of its private repositories don't use the dashboard: pick a plan for them.`;
   else if (sub?.working) {
     // The end of the paid month. Paddle renews then, unless an owner canceled: the date is true either way.
     const next = sub.current_period_end ? ` Paid until ${day(sub.current_period_end)}, and it renews then unless an owner cancels.` : '';

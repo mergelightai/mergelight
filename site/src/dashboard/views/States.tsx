@@ -101,6 +101,20 @@ export function NotOn({ org, children }: { org: Org; children?: ReactNode }) {
   );
 }
 
+/** Above every view while only the org's public repositories use the dashboard, for free. */
+export function PublicOnly({ org, canPick, onPick }: { org: Org; canPick: boolean; onPick: () => void }) {
+  return (
+    <div role="status" className="mb-6 flex max-w-3xl flex-wrap items-center justify-between gap-x-6 gap-y-3 rounded-[12px] bg-strip px-4 py-3 text-[13.5px] leading-relaxed text-ink-3 hairline">
+      <p>Light is free for {org.login}'s public repositories. Reviews of its private repositories don't use the dashboard.</p>
+      {canPick && (
+        <Button size="sm" variant="outline" onClick={onPick}>
+          Pick a plan
+        </Button>
+      )}
+    </div>
+  );
+}
+
 /** Above every view while the org's plan has ended or is paused: what that means, and where to pick a plan again. */
 export function PlanEnded({ org, canPick, onPick }: { org: Org; canPick: boolean; onPick: () => void }) {
   return (

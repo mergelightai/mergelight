@@ -10,7 +10,7 @@ import { NO_FILTERS, ReviewsView, type ReviewFilters } from './views/ReviewsView
 import { RulesView } from './views/RulesView';
 import { SkillsView } from './views/SkillsView';
 import { SettingsView } from './views/SettingsView';
-import { Centered, LoadError, NoOrg, NothingYet, NotOn, PlanEnded, SignIn, Spinning } from './views/States';
+import { Centered, LoadError, NoOrg, NothingYet, NotOn, PlanEnded, PublicOnly, SignIn, Spinning } from './views/States';
 
 const ALL_VIEWS = VIEWS.flatMap((g) => g.items.map((i) => i.id));
 /**
@@ -245,6 +245,7 @@ export default function Dashboard() {
         </NotOn>
       )}
       {ready?.overview.plan_ended && tab !== 'settings' && <PlanEnded org={org} canPick={ready.billing?.can_manage === true && ready.billing.paddle !== null} onPick={() => pickTab('settings')} />}
+      {ready?.billing?.covers === 'public' && tab !== 'settings' && <PublicOnly org={org} canPick={ready.billing.can_manage && ready.billing.paddle !== null} onPick={() => pickTab('settings')} />}
       {view.kind === 'error' && <LoadError onRetry={reload} />}
       {ready && tab === 'reviews' && (ready.overview.reviews.length ? <ReviewsView overview={ready.overview} login={session.user.login} orgLogin={org.login} filters={filters} onFilters={setFilters} /> : ready.overview.plan_ended ? null : <NothingYet org={org} />)}
       {ready && tab === 'rules' && (ready.rules ? (
