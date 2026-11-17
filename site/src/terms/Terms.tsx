@@ -71,8 +71,8 @@ const SECTIONS: Section[] = [
     body: (
       <List
         items={[
-          'Reviews and jobs run in your own GitHub Actions runner, on your own Claude or ChatGPT plan. You need your own plan, and you must follow the terms of your AI provider and of GitHub.',
-          "Your AI plan's usage and cost are yours. Mergelight doesn't pay for them and doesn't control them.",
+          'Reviews and jobs run in your own GitHub Actions runner, or on your own computer when you use the CLI. They use your own Claude or ChatGPT plan, or your own API key. You need your own plan or key, and you must follow the terms of your AI provider and of GitHub.',
+          "The usage and cost of your AI plan or key are yours. Mergelight doesn't pay for them and doesn't control them.",
           <>Your code stays yours. The {link('/privacy/', 'privacy policy')} says what reaches us and what never does.</>,
         ]}
       />
@@ -88,7 +88,7 @@ const SECTIONS: Section[] = [
           items={[
             'break the law, or harm other people or their systems',
             'attack, overload or probe the Mergelight server, the token server or the Mergelight AI app',
-            "get around a plan's limits, or use paid features without a paid plan",
+            "get around a plan's limits, or use paid features without a paid plan, unless we give them to you at no cost",
             'sell or give access to the dashboard, the server or the Mergelight AI app to others without our written OK',
           ]}
         />
@@ -138,8 +138,9 @@ const SECTIONS: Section[] = [
     body: (
       <>
         <P>
-          You can stop at any time: cancel a paid plan, remove the Mergelight workflow and uninstall the Mergelight AI app. An organization owner
-          can delete all of the organization's data on the dashboard's Settings page.
+          You can stop at any time: cancel a paid plan, remove the Mergelight workflows (mergelight.yml, and mergelight-refresh.yml if you have
+          it) and uninstall the Mergelight AI app. To delete your organization's data, an owner can use the dashboard's Settings page before
+          uninstalling the app, or write to {mail}.
         </P>
         <P>
           We can stop an account that breaks these terms. We tell you why, unless the law doesn't let us. If we stop a paid account that didn't
