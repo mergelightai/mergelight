@@ -176,6 +176,9 @@ await run('new-repo', {}, ({ writes, file, refresh, pull, after }) => {
   expect(/Connect your AI/.test(after), 'moves on to connecting');
   // Which AI they connect comes after the pull request, from its run, so the file can't name one yet.
   expect(!/provider:/.test(file ?? ''), "with no login yet, it doesn't name a reviewer");
+  // A comment that mentions @mergelight-ai reviews the pull request again. Skipping branches is about pull requests only.
+  expect(/\n  issue_comment:\n    types: \[created\]\n/.test(file ?? ''), 'a comment that mentions Mergelight reviews the pull request again');
+  expect(/github\.repository &&\n      !contains\(fromJSON\('\["main"\]'\), github\.head_ref\)\)\n/.test(file ?? ''), "the branches it skips go into the pull request part of the condition, not the comment's");
 });
 const withLogin = await run('has-login', { login: true }, ({ after, file }) => {
   expect(file?.includes('          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}\n          provider: codex\n'), 'names ChatGPT as the reviewer, so a second login later changes nothing');
