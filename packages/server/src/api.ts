@@ -12,6 +12,7 @@
 // and after it has finished.
 
 import { HttpError, verifyOidcToken } from "../../token-server/dist/token.js";
+import { createPaddleWebhook, type PaddleConfig } from "./billing.js";
 import { isId, MEMORY_DAYS, withOrg, type Pool } from "./db.js";
 import { createPeopleApi } from "./people.js";
 import { planOf, type Grants } from "./plan.js";
@@ -129,6 +130,8 @@ export interface ApiOptions {
    * their data on the dashboard: the next start would turn them on again, and store their runs again.
    */
   keptOn?: ReadonlySet<number>;
+  /** Payments through Paddle, or null when this server sells nothing. */
+  paddle?: PaddleConfig | null;
   fetchImpl?: typeof fetch;
   now?: () => number;
 }
@@ -210,12 +213,14 @@ export function parseUsedMemories(value: unknown): number[] {
   });
 }
 
-export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"], signInApp, jobsOrgs = new Set(), keptOn = new Set(), fetchImpl = fetch, now = () => Date.now() }: ApiOptions): (request: Request) => Promise<Response> {
+export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"], signInApp, jobsOrgs = new Set(), keptOn = new Set(), paddle = null, fetchImpl = fetch, now = () => Date.now() }: ApiOptions): (request: Request) => Promise<Response> {
   const audience = audienceOf(publicUrl);
   /** The dashboard's side: signed-in people. Runs and people never share a route or a kind of token. */
   /** What the operator gives for free, next to what an org pays for (plan.ts). */
   const grants: Grants = { dashboard: keptOn, jobs: jobsOrgs };
   const people = createPeopleApi({ pool, origins, signInApp, grants, fetchImpl, now });
+  /** Paddle's messages about what orgs pay for. Signed by Paddle, so they need no sign-in. */
+  const billing = createPaddleWebhook({ pool, config: paddle, now });
   /** The path the server is mounted under, if any. A proxy may strip it or pass it on, so both forms are routed. */
   const mount = new URL(audience).pathname.replace(/\/+$/, "");
   /** Token ids already used, with when each expires. A token works once, so a copied one is worth nothing. */
@@ -407,6 +412,19 @@ export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"
     const full = new URL(request.url).pathname;
     const pathname = mount && (full === mount || full.startsWith(`${mount}/`)) ? full.slice(mount.length) || "/" : full;
     if (request.method === "GET" && pathname === "/") return respond(200, { service: "mergelight-server" });
+    if (pathname === "/v1/billing/paddle") {
+      if (request.method !== "POST") return respond(405, { error: "method_not_allowed" });
+      try {
+        const { status, body } = await billing(request);
+        return respond(status, body);
+      } catch (err) {
+        if (err instanceof HttpError) return respond(err.status, { error: err.code, message: err.message });
+        const e = err as { code?: unknown; name?: unknown } | null;
+        console.error("billing error", e?.code ?? e?.name);
+        // Paddle sends the message again later.
+        return respond(500, { error: "server_error", message: "The server hit an error." });
+      }
+    }
     const forPeople = await people(request, pathname);
     if (forPeople) return forPeople;
     const route = Object.hasOwn(routes, pathname) ? routes[pathname] : undefined;

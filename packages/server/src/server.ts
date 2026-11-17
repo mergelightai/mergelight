@@ -17,12 +17,17 @@
 //                  account. Other orgs get Jobs with a working Pro plan (plan.ts). A run of the team's
 //                  jobs asks first, and runs none without one of the two. Taking an org out takes its
 //                  free Jobs away at the next start.
+//   PADDLE_ENV, PADDLE_API_KEY, PADDLE_WEBHOOK_SECRET, PADDLE_CLIENT_TOKEN, PADDLE_PRICE_LIGHT, PADDLE_PRICE_PRO
+//                  Payments through Paddle (billing.ts): all six, or none for a server that sells
+//                  nothing. PADDLE_ENV is "sandbox" or "live". Paddle sends its messages to
+//                  <PUBLIC_URL>/v1/billing/paddle.
 //
 // This server holds no GitHub key. The app's private key stays on the token server.
 
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { fileURLToPath } from "node:url";
 import { createApi, MAX_BODY } from "./api.js";
+import { parsePaddleConfig } from "./billing.js";
 import { assertRowRulesHold, connectOrg, createPool, migrate, parseConnectOrgs, parseJobsOrgs, purgeExpiredMemories } from "./db.js";
 import { parseOrigins } from "./people.js";
 
@@ -42,9 +47,11 @@ export function createDataServer(api: (request: Request) => Promise<Response>): 
   const server = createServer(async (req, res) => {
     try {
       const headers: Record<string, string> = {};
-      for (const name of ["authorization", "content-type", "origin"] as const) {
+      // paddle-signature: Paddle signs each payment message, and the signature comes in this header.
+      for (const name of ["authorization", "content-type", "origin", "paddle-signature"] as const) {
         const value = req.headers[name];
-        if (value) headers[name] = value;
+        // Node gives a list only for set-cookie, which none of these is.
+        if (typeof value === "string" && value) headers[name] = value;
       }
       // A DELETE can carry a body too: deleting an org's data sends its name to confirm.
       const body = req.method === "POST" || req.method === "DELETE" ? await readBody(req) : undefined;
@@ -72,11 +79,13 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   let api: (request: Request) => Promise<Response>;
   try {
     const orgs = parseConnectOrgs(process.env.CONNECT_ORGS);
-    api = createApi({ pool, publicUrl: PUBLIC_URL, origins: parseOrigins(process.env.DASHBOARD_ORIGINS), signInApp: process.env.SIGN_IN_APP || undefined, jobsOrgs: parseJobsOrgs(process.env.JOBS_ORGS), keptOn: new Set(orgs.map((o) => o.id)) });
+    const paddle = parsePaddleConfig(process.env);
+    api = createApi({ pool, publicUrl: PUBLIC_URL, origins: parseOrigins(process.env.DASHBOARD_ORIGINS), signInApp: process.env.SIGN_IN_APP || undefined, jobsOrgs: parseJobsOrgs(process.env.JOBS_ORGS), keptOn: new Set(orgs.map((o) => o.id)), paddle });
     await assertRowRulesHold(pool);
     await migrate(pool);
     for (const org of orgs) await connectOrg(pool, org.id, org.login);
     if (orgs.length) console.log(`The dashboard is on for: ${orgs.map((o) => o.login).join(", ")}`);
+    console.log(paddle ? `Payments: Paddle ${paddle.env}` : "Payments: off");
   } catch (err) {
     console.error(`Can't start: ${(err as Error).message}`);
     process.exit(1);
