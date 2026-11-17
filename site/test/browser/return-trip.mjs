@@ -94,6 +94,8 @@ async function scenario(name, { repos = ['acme/api'], signInFails = false, listF
   const sawButton = () => page.evaluate(() => sessionStorage.getItem('sawButton'));
   const settle = async () => { await page.waitForNetworkIdle({ idleTime: 400, timeout: 8000 }).catch(() => {}); await wait(500); };
   const clickLink = async (label) => {
+    // A page that is still loading has no link yet, so give it a moment to show up.
+    await page.waitForFunction((t) => [...document.querySelectorAll('a')].some((e) => e.textContent.includes(t)), { timeout: 5000 }, label).catch(() => {});
     const at = await page.evaluate((t) => {
       const el = [...document.querySelectorAll('a')].find((e) => e.textContent.includes(t));
       if (!el) return null;
