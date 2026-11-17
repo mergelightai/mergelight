@@ -211,6 +211,17 @@ test("later messages about a known subscription need no fresh signature, and an 
   assert.equal(context.jobs, false);
 });
 
+test("a subscription on a price the settings no longer list keeps its plan, and its cancellation still counts", async () => {
+  const OLD = `pri_01${"o".repeat(24)}`;
+  // A new subscription on a price this server doesn't sell is skipped.
+  assert.deepEqual(await (await send(message({ price: OLD }))).json(), { skipped: "no Mergelight price" });
+  await send(message());
+  assert.equal((await (await send(message({ type: "subscription.updated", price: OLD, quantity: 4, occurred: clock + 1000 }))).json()).stored, true);
+  assert.deepEqual([(await billingOf(ACME)).plan, (await billingOf(ACME)).seats], ["pro", 4]);
+  assert.equal((await (await send(message({ type: "subscription.canceled", price: OLD, status: "canceled", occurred: clock + 2000 }))).json()).stored, true);
+  assert.deepEqual([(await billingOf(ACME)).plan, (await billingOf(ACME)).status], ["pro", "canceled"]);
+});
+
 test("a canceled subscription turns the dashboard off and keeps the data, and a new checkout turns it on again", async () => {
   await send(message());
   await send(message({ type: "subscription.canceled", status: "canceled", occurred: clock + 1000 }));

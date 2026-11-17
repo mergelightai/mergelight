@@ -108,7 +108,8 @@ interface Subscription {
   id: string;
   customerId: string | null;
   status: string;
-  plan: PlanName;
+  /** Null for a price the settings don't list (any more): the plan on file then stays. */
+  plan: PlanName | null;
   seats: number;
   periodEnd: string | null;
 }
@@ -119,9 +120,12 @@ function readSubscription(config: PaddleConfig, data: Record<string, unknown>): 
   if (typeof id !== "string" || !/^sub_[a-z0-9]{10,40}$/.test(id)) return "no subscription id";
   if (typeof status !== "string" || !STATUSES.has(status)) return "unknown status";
   const list = Array.isArray(items) ? (items as Record<string, unknown>[]) : [];
-  const item = list.find((i) => [config.prices.light, config.prices.pro].includes((i?.price as { id?: unknown } | undefined)?.id as string));
+  const priceOf = (i: Record<string, unknown> | undefined) => (i?.price as { id?: unknown } | undefined)?.id;
+  // A price the settings list, or else the one item a subscription has: a price changed in the settings since
+  // must not leave its subscribers' messages unread, cancellations included.
+  const item = list.find((i) => priceOf(i) === config.prices.light || priceOf(i) === config.prices.pro) ?? (list.length === 1 ? list[0] : undefined);
   if (!item) return "no Mergelight price";
-  const plan: PlanName = (item.price as { id: string }).id === config.prices.pro ? "pro" : "light";
+  const plan: PlanName | null = priceOf(item) === config.prices.pro ? "pro" : priceOf(item) === config.prices.light ? "light" : null;
   const seats = item.quantity;
   if (typeof seats !== "number" || !Number.isInteger(seats) || seats < 1 || seats > 10_000) return "bad quantity";
   const ends = (current_billing_period as { ends_at?: unknown } | null | undefined)?.ends_at;
@@ -176,12 +180,14 @@ export function createPaddleWebhook({ pool, config, now }: BillingWebhookOptions
     let outcome: string;
     try {
       outcome = await withOrg(pool, org.id, async (db) => {
-        const { rows } = await db.query<{ subscription_id: string | null; status: string; event_at: Date | null }>(
-          "select subscription_id, status, event_at from billing where org_id = $1 for update",
+        const { rows } = await db.query<{ subscription_id: string | null; status: string; event_at: Date | null; plan: PlanName }>(
+          "select subscription_id, status, event_at, plan from billing where org_id = $1 for update",
           [org.id],
         );
         const current = rows[0];
         if (current?.subscription_id !== sub.id) {
+          // A new subscription must be for one of the plans this server sells now.
+          if (!sub.plan) return "no Mergelight price";
           // A subscription the server doesn't know yet counts only from a checkout it signed for an owner of the org.
           if (!org.signed) return "not from a checkout the server signed";
           // A second subscription doesn't replace one that still works. The org would pay twice: a person sorts it out.
@@ -200,7 +206,8 @@ export function createPaddleWebhook({ pool, config, now }: BillingWebhookOptions
            on conflict (org_id) do update
              set provider = excluded.provider, customer_id = excluded.customer_id, subscription_id = excluded.subscription_id, plan = excluded.plan,
                  seats = excluded.seats, status = excluded.status, current_period_end = excluded.current_period_end, event_at = excluded.event_at, updated_at = now()`,
-          [org.id, sub.customerId, sub.id, sub.plan, sub.seats, sub.status, sub.periodEnd, new Date(occurred).toISOString()],
+          // A known subscription on a price the settings no longer list keeps the plan on file.
+          [org.id, sub.customerId, sub.id, sub.plan ?? current!.plan, sub.seats, sub.status, sub.periodEnd, new Date(occurred).toISOString()],
         );
         // A plan that works turns the dashboard on: from now on the org's runs are stored here.
         if (WORKING.has(sub.status)) await db.query("insert into orgs (id, login) values ($1, $2) on conflict (id) do nothing", [org.id, org.login]);
