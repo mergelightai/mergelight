@@ -486,6 +486,13 @@ export const UNREVIEWED = "Mergelight couldn't review the newest commit, so its 
 export const APPROVAL_MARKER = "<!-- mergelight:approval -->";
 /** Only these post Mergelight's reviews, so a person's review that quotes the marker is never touched. */
 const OWN_REVIEWERS = new Set(["mergelight-ai[bot]", "github-actions[bot]"]);
+/** The Mergelight AI app: every review it posts is Mergelight's, so its approval needs no marker, and shows none. */
+const APP_REVIEWER = "mergelight-ai[bot]";
+/** What an approval says when it needs the marker: posted as github-actions[bot], which other workflows use too. */
+const APPROVAL_TEXT = "🟢 Mergelight found nothing that needs fixing in this commit.";
+
+/** Mergelight's own approvals: any by its app, and those with the marker by the workflow's own bot. */
+const isOwnApproval = (r: PrReview) => r.user?.login === APP_REVIEWER || (OWN_REVIEWERS.has(r.user?.login ?? "") && (r.body ?? "").includes(APPROVAL_MARKER));
 
 interface PrReview {
   id: number;
@@ -514,15 +521,20 @@ export async function syncApproval(
   } = {},
 ): Promise<"approved" | "already" | "dismissed" | "none"> {
   try {
-    const ours = (await api.list<PrReview>(`pulls/${number}/reviews`)).filter((r) => OWN_REVIEWERS.has(r.user?.login ?? "") && (r.body ?? "").includes(APPROVAL_MARKER));
+    const ours = (await api.list<PrReview>(`pulls/${number}/reviews`)).filter(isOwnApproval);
     const standing = ours.filter((r) => r.state === "APPROVED");
     if (light === "green") {
       if (standing.some((r) => r.commit_id === headSha)) return "already";
-      await api.write("POST", `pulls/${number}/reviews`, {
-        commit_id: headSha,
-        event: "APPROVE",
-        body: `${APPROVAL_MARKER}\n🟢 Mergelight found nothing that needs fixing in this commit.`,
-      });
+      // A plain approval, like a person's: the summary says the rest.
+      const posted = await api.write<Partial<PrReview> | null>("POST", `pulls/${number}/reviews`, { commit_id: headSha, event: "APPROVE" });
+      // Posted by the workflow's own bot, which other workflows approve as too: the marker tells this one
+      // apart, so a later review can take it back. One that can't be told apart is taken back at once.
+      if (posted?.id && posted.user?.login !== APP_REVIEWER) {
+        await api.write("PUT", `pulls/${number}/reviews/${posted.id}`, { body: `${APPROVAL_MARKER}\n${APPROVAL_TEXT}` }).catch(async (err) => {
+          await api.write("PUT", `pulls/${number}/reviews/${posted.id}/dismissals`, { message: "Mergelight couldn't mark this approval as its own, so it takes it back. The next review approves again.", event: "DISMISS" });
+          throw err;
+        });
+      }
       return "approved";
     }
     const taken = dismissal.otherCommitsOnly ? standing.filter((r) => r.commit_id !== headSha) : standing;

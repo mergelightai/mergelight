@@ -90,7 +90,8 @@ if (x > -1) {
   const body = JSON.parse(readFileSync(0, "utf8"));
   log({ method, path, body: body.body, ...(body.message ? { message: body.message } : {}) });
   if (s.failReplies && path.endsWith("/replies")) fail("HTTP 404");
-  out({ id: 900, html_url: "https://github.com/o/r/pull/7#posted", ...body });
+  // Mergelight's app posts: what it posts names it, as GitHub's answer does.
+  out({ id: 900, html_url: "https://github.com/o/r/pull/7#posted", user: { login: "mergelight-ai[bot]", type: "Bot" }, ...body });
   process.exit(0);
 }
 if (args.includes("--paginate")) {
@@ -662,7 +663,8 @@ test("a green review approves the pull request, unless the team turned approvals
   // On, as by default: the new commit is approved.
   const on = useScenario({ issueComments: [summaryComment(stateOf([]))], prReviews, head: PUSHED });
   await withFakeGh(on.env, () => publishReview(review));
-  assert.deepEqual(approvals(on.writes), [["POST", "pulls/7/reviews", "🟢 Mergelight found nothing that needs fixing in this commit."]]);
+  // A plain approval, as the app: no message, and no marker.
+  assert.deepEqual(approvals(on.writes), [["POST", "pulls/7/reviews", ""]]);
 
   // Off: no approval, and the one Mergelight gave before is taken back, with the reason.
   const off = useScenario({ issueComments: [summaryComment(stateOf([]))], prReviews, head: PUSHED });

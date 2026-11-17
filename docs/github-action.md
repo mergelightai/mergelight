@@ -79,7 +79,7 @@ updates:
       - dependency-name: mergelightai/mergelight
 ```
 
-**Approvals.** A 🟢 review approves the PR, like a reviewer would, when every one of your team's own checks passed. A later review that isn't 🟢 takes the approval back. Where a branch rule asks for one approval, a 🟢 PR can then be merged with no person approving it. Set `auto-approve: false` if a person must always approve. Mergelight then takes back its approval on each PR's next review, so dismiss its approval on PRs that are already open by hand.
+**Approvals.** A 🟢 review approves the PR, like a reviewer would, when every one of your team's own checks passed: a plain approval, with no message, as the Mergelight AI app. A later review that isn't 🟢 takes the approval back. GitHub counts an approval toward a branch rule's required approvals only from someone who can push, and the Mergelight AI app can only read your code, so its approval shows with a grey check and doesn't count: where a branch rule asks for an approval, a person still gives it. Set `auto-approve: false` if you don't want Mergelight's approval at all. Mergelight then takes back its approval on each PR's next review, so dismiss its approval on PRs that are already open by hand.
 
 **Optional: let it hold merges.** Set `yellow-blocks: true` and require the **Mergelight** check in branch protection or a ruleset. 🔴 then fails until the code changes, and 🟡 waits for an approval. Without `yellow-blocks`, both end neutral, which GitHub counts as passing.
 

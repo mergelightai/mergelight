@@ -323,6 +323,8 @@ if (args.some((a) => a.endsWith("/check-runs"))) fail(process.env.FAKE_GH_CHECK_
 if (args.some((a) => a.endsWith("/pulls/1"))) fail("gh: Not Found (HTTP 404)");
 if (args.includes("--slurp")) answer(process.env.FAKE_GH_REVIEWS && args.some((a) => a.includes("/pulls/1/reviews?")) ? [JSON.parse(process.env.FAKE_GH_REVIEWS)] : [[]]);
 else if (args.includes("graphql")) answer({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } });
+// Mergelight's app posts: an approval names it.
+else if (args.some((a) => a.endsWith("/pulls/1/reviews"))) answer({ id: 1, user: { login: "mergelight-ai[bot]" } });
 else answer({ id: 1, html_url: "https://github.com/o/r/pull/1#issuecomment-1" });
 `;
 
@@ -478,6 +480,39 @@ test("green approves the commit, once", async () => {
   const again = reviewsApi([ours({ commit_id: "head" })]);
   assert.equal(await syncApproval(again, 3, "green", "head"), "already");
   assert.equal(again.writes.length, 0);
+  // Its app's approval, even one with no marker, is Mergelight's own: it isn't given twice, and it is taken back.
+  const plain = reviewsApi([ours({ commit_id: "head", body: "" })]);
+  assert.equal(await syncApproval(plain, 3, "green", "head"), "already");
+  assert.equal(await syncApproval(plain, 3, "yellow", "next"), "dismissed");
+});
+
+test("as its app, Mergelight approves with no message, like a person; as the workflow's own bot, it marks the approval as its own", async () => {
+  const as = (login, failPut = false) => {
+    const writes = [];
+    return {
+      writes,
+      list: async () => [],
+      write: async (method, path, body) => {
+        writes.push({ method, path, body });
+        if (failPut && method === "PUT" && !path.endsWith("/dismissals")) throw new Error("HTTP 502");
+        return method === "POST" ? { id: 41, user: { login } } : {};
+      },
+    };
+  };
+  const app = as("mergelight-ai[bot]");
+  assert.equal(await syncApproval(app, 3, "green", "head"), "approved");
+  assert.deepEqual(app.writes, [{ method: "POST", path: "pulls/3/reviews", body: { commit_id: "head", event: "APPROVE" } }]);
+  // github-actions[bot] approves for other workflows too: without the marker, a later review couldn't take this one back.
+  const shared = as("github-actions[bot]");
+  assert.equal(await syncApproval(shared, 3, "green", "head"), "approved");
+  assert.deepEqual(shared.writes[1], { method: "PUT", path: "pulls/3/reviews/41", body: { body: `${APPROVAL_MARKER}\n🟢 Mergelight found nothing that needs fixing in this commit.` } });
+  // One that can't be marked is taken back at once, never left where a later review can't find it.
+  const unmarked = as("github-actions[bot]", true);
+  assert.equal(await syncApproval(unmarked, 3, "green", "head"), "none");
+  assert.equal(unmarked.writes.at(-1).path, "pulls/3/reviews/41/dismissals");
+  // A person's approval that quotes the marker is never Mergelight's.
+  const person = reviewsApi([ours({ user: { login: "alice" } })]);
+  assert.equal(await syncApproval(person, 3, "yellow", "head"), "none");
 });
 
 test("Mergelight doesn't approve a pull request while one of the team's own checks hasn't passed", () => {
