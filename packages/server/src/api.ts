@@ -218,7 +218,7 @@ export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"
   /** The dashboard's side: signed-in people. Runs and people never share a route or a kind of token. */
   /** What the operator gives for free, next to what an org pays for (plan.ts). */
   const grants: Grants = { dashboard: keptOn, jobs: jobsOrgs };
-  const people = createPeopleApi({ pool, origins, signInApp, grants, fetchImpl, now });
+  const people = createPeopleApi({ pool, origins, signInApp, grants, paddle, fetchImpl, now });
   /** Paddle's messages about what orgs pay for. Signed by Paddle, so they need no sign-in. */
   const billing = createPaddleWebhook({ pool, config: paddle, now });
   /** The path the server is mounted under, if any. A proxy may strip it or pass it on, so both forms are routed. */

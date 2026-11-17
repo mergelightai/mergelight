@@ -104,7 +104,7 @@ function orgOf(config: PaddleConfig, custom: unknown, at: number): { id: number;
 
 const STATUSES = new Set(["active", "trialing", "past_due", "paused", "canceled"]);
 
-interface Subscription {
+export interface Subscription {
   id: string;
   customerId: string | null;
   status: string;
@@ -115,7 +115,7 @@ interface Subscription {
 }
 
 /** The parts of Paddle's subscription this server keeps, or why it can't keep it. */
-function readSubscription(config: PaddleConfig, data: Record<string, unknown>): Subscription | string {
+export function readSubscription(config: PaddleConfig, data: Record<string, unknown>): Subscription | string {
   const { id, customer_id, status, items, current_billing_period } = data;
   if (typeof id !== "string" || !/^sub_[a-z0-9]{10,40}$/.test(id)) return "no subscription id";
   if (typeof status !== "string" || !STATUSES.has(status)) return "unknown status";
@@ -222,4 +222,32 @@ export function createPaddleWebhook({ pool, config, now }: BillingWebhookOptions
     console.log("billing: stored", event_id, event_type, sub.status, sub.plan, sub.seats);
     return { status: 200, body: { stored: true } };
   };
+}
+
+const API = { sandbox: "https://sandbox-api.paddle.com", live: "https://api.paddle.com" } as const;
+
+/** Asks Paddle's API with the server's key. When Paddle says no, its own words come back, so the person sees why. */
+export async function paddleCall(config: PaddleConfig, fetchImpl: typeof fetch, method: "GET" | "POST" | "PATCH", path: string, body?: unknown): Promise<Record<string, unknown>> {
+  let res: Response;
+  try {
+    res = await fetchImpl(`${API[config.env]}${path}`, {
+      method,
+      headers: { authorization: `Bearer ${config.apiKey}`, "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch {
+    throw new HttpError(502, "paddle_unreachable", "Paddle didn't answer. Try again in a minute.");
+  }
+  type Answer = { data?: unknown; error?: { detail?: unknown } } | null;
+  // Not JSON reads as no answer: Paddle's status says the rest.
+  const answer = await res.text().then((text) => JSON.parse(text) as Answer).catch((): Answer => null);
+  if (!res.ok) {
+    // The log names the call and the status, never the key or the customer.
+    console.error("paddle api error", method, path.split("/")[1], res.status);
+    const detail = answer?.error?.detail;
+    throw new HttpError(502, "paddle_error", typeof detail === "string" && detail ? `Paddle said: ${detail.slice(0, 300)}` : `Paddle answered ${res.status}.`);
+  }
+  if (typeof answer?.data !== "object" || answer.data === null) throw new HttpError(502, "paddle_error", "Paddle's answer had no data.");
+  return answer.data as Record<string, unknown>;
 }

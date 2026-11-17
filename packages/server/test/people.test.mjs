@@ -5,6 +5,7 @@ import { resetJwksCache } from "../../token-server/dist/token.js";
 import { createApi } from "../dist/api.js";
 import { connectOrg, createPool, deleteOrg, migrate, withOrg } from "../dist/db.js";
 import { parseOrigins } from "../dist/people.js";
+import { parsePaddleConfig } from "../dist/billing.js";
 import { createDataServer } from "../dist/server.js";
 import { startPostgres } from "./postgres.mjs";
 
@@ -45,10 +46,18 @@ let brokenInstall;
 /** Set to make the fake GitHub refuse to say who owns an org, as it does for an app without that permission. */
 let membershipsHidden;
 
+/** Paddle's API as the fake answers it: each call is kept, and paddleAnswer says what comes back. */
+let paddleCalls;
+let paddleAnswer;
+
 /** A fake GitHub: its signing keys for runs, and what each person's token is allowed to see. */
 const fetchImpl = async (url, init = {}) => {
   const u = new URL(url);
   if (u.pathname.endsWith("/.well-known/jwks")) return json(200, { keys: [{ ...oidc.publicKey.export({ format: "jwk" }), kid: KID }] });
+  if (u.origin === "https://sandbox-api.paddle.com") {
+    paddleCalls.push({ method: init.method, path: u.pathname, auth: init.headers?.authorization, body: init.body ? JSON.parse(init.body) : null });
+    return paddleAnswer(u.pathname, init);
+  }
   assert.equal(u.origin, "https://api.github.com");
   githubCalls.push(u.pathname);
   if (githubAnswers) return new Response(JSON.stringify({ message: "slow down" }), typeof githubAnswers === "number" ? { status: githubAnswers } : githubAnswers);
@@ -110,6 +119,8 @@ after(async () => {
 beforeEach(async () => {
   resetJwksCache();
   githubCalls = [];
+  paddleCalls = [];
+  paddleAnswer = () => json(500, {});
   githubAnswers = null;
   brokenInstall = null;
   membershipsHidden = false;
@@ -1046,4 +1057,102 @@ test("a browser on the dashboard's site may send the delete", async () => {
   assert.equal(res.status, 204);
   assert.equal(res.headers.get("access-control-allow-methods"), "DELETE");
   assert.match(res.headers.get("access-control-allow-headers"), /content-type/);
+});
+
+const PADDLE = parsePaddleConfig({
+  PADDLE_ENV: "sandbox",
+  PADDLE_API_KEY: "pdl_sdbx_apikey_01test",
+  PADDLE_WEBHOOK_SECRET: "pdl_ntfset_01test",
+  PADDLE_CLIENT_TOKEN: "test_0123456789abcdef",
+  PADDLE_PRICE_LIGHT: `pri_01${"l".repeat(24)}`,
+  PADDLE_PRICE_PRO: `pri_01${"p".repeat(24)}`,
+});
+const SUB = "sub_01aaaaaaaaaaaaaaaaaaaaaaaa";
+const CUSTOMER = "ctm_01aaaaaaaaaaaaaaaaaaaaaaaa";
+const withPaddle = () => (api = createApi({ pool, publicUrl: PUBLIC_URL, origins: [SITE], paddle: PADDLE, fetchImpl, now: () => clock }));
+const pays = (plan, status, seats = 3) =>
+  withOrg(pool, ACME.id, (db) => db.query("insert into billing (org_id, provider, customer_id, subscription_id, plan, seats, status) values ($1, 'paddle', $2, $3, $4, $5, $6)", [ACME.id, CUSTOMER, SUB, plan, seats, status]));
+const billing = async (token, org = ACME.id) => (await call(`/v1/orgs/${org}/billing`, { token })).json();
+
+test("the billing page says what the org pays for, and offers only an owner a signed checkout", async () => {
+  withPaddle();
+  const ada = (await signIn(ADA)).token;
+  const own = await billing(ada);
+  assert.deepEqual({ ...own, checkout: undefined }, {
+    org: { id: ACME.id, login: "acme" }, can_manage: true, dashboard: true, ended: false, jobs: false, free: true, subscription: null,
+    paddle: { env: "sandbox", client_token: PADDLE.clientToken, prices: PADDLE.prices }, checkout: undefined,
+  });
+  assert.deepEqual(Object.keys(own.checkout), ["org_id", "org_login", "expires", "sig"]);
+  assert.equal(own.checkout.org_id, String(ACME.id));
+  // Someone who isn't an owner sees the plan, and gets nothing to buy with.
+  const eve = (await signIn(EVE)).token;
+  const seen = await billing(eve);
+  assert.equal(seen.can_manage, false);
+  assert.equal(seen.checkout, null);
+  // A plan that works: nothing to buy, and the plan shows.
+  await pays("pro", "active");
+  const paid = await billing(ada);
+  assert.deepEqual([paid.free, paid.jobs, paid.checkout, paid.subscription.plan, paid.subscription.working], [false, true, null, "pro", true]);
+  // A server that sells nothing says so.
+  api = createApi({ pool, publicUrl: PUBLIC_URL, origins: [SITE], fetchImpl, now: () => clock });
+  const none = await billing((await signIn(ADA)).token);
+  assert.deepEqual([none.paddle, none.checkout], [null, null]);
+});
+
+test("an owner changes the plan and the number of developers through Paddle, and the row follows Paddle's answer", async () => {
+  withPaddle();
+  await pays("pro", "active", 3);
+  paddleAnswer = (path, init) => {
+    const { items } = JSON.parse(init.body);
+    return json(200, { data: { id: SUB, status: "active", customer_id: CUSTOMER, items: [{ price: { id: items[0].price_id }, quantity: items[0].quantity }], current_billing_period: { ends_at: "2026-12-11T08:00:00Z" } } });
+  };
+  const ada = (await signIn(ADA)).token;
+  const change = (body, token = ada) => call(`/v1/orgs/${ACME.id}/billing/change`, { method: "POST", token, body: JSON.stringify(body) });
+  const res = await change({ plan: "light", seats: 5 });
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { plan: "light", seats: 5 });
+  assert.deepEqual(paddleCalls, [{ method: "PATCH", path: `/subscriptions/${SUB}`, auth: `Bearer ${PADDLE.apiKey}`, body: { items: [{ price_id: PADDLE.prices.light, quantity: 5 }], proration_billing_mode: "prorated_immediately" } }]);
+  assert.deepEqual(await withOrgRows(ACME.id, "select plan, seats, status from billing"), [{ plan: "light", seats: 5, status: "active" }]);
+  assert.equal((await withOrgRows(ACME.id, "select action from audit_log where action = 'plan_changed'")).length, 1);
+  // The same plan again asks Paddle nothing.
+  paddleCalls = [];
+  assert.equal((await change({ plan: "light", seats: 5 })).status, 200);
+  assert.deepEqual(paddleCalls, []);
+  // Wrong numbers, someone who isn't an owner, and Paddle saying no.
+  assert.equal((await change({ plan: "team", seats: 5 })).status, 400);
+  assert.equal((await change({ plan: "pro", seats: 0 })).status, 400);
+  assert.equal((await change({ plan: "pro", seats: 1001 })).status, 400);
+  assert.equal((await change({ plan: "pro", seats: 2 }, (await signIn(EVE)).token)).status, 403);
+  paddleAnswer = () => json(400, { error: { type: "request_error", code: "subscription_locked_pending_changes", detail: "Subscription is locked while a change is pending." } });
+  const no = await change({ plan: "pro", seats: 2 });
+  assert.equal(no.status, 502);
+  assert.equal((await no.json()).message, "Paddle said: Subscription is locked while a change is pending.");
+  assert.deepEqual(await withOrgRows(ACME.id, "select plan, seats from billing"), [{ plan: "light", seats: 5 }]);
+  // A plan that ended can't be changed: it is bought again.
+  await withOrg(pool, ACME.id, (db) => db.query("update billing set status = 'canceled'"));
+  assert.equal((await change({ plan: "pro", seats: 2 })).status, 409);
+});
+
+test("the link to Paddle's portal comes from Paddle, for an owner of an org that has paid", async () => {
+  withPaddle();
+  const ada = (await signIn(ADA)).token;
+  const portal = (token = ada) => call(`/v1/orgs/${ACME.id}/billing/portal`, { method: "POST", token });
+  assert.equal((await portal()).status, 409);
+  await pays("light", "canceled");
+  paddleAnswer = () => json(201, { data: { urls: { general: { overview: "https://sandbox-customer-portal.paddle.com/cpl_01?action=overview&token=pga_x" }, subscriptions: [] } } });
+  const res = await portal();
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { url: "https://sandbox-customer-portal.paddle.com/cpl_01?action=overview&token=pga_x" });
+  assert.deepEqual(paddleCalls.map((c) => [c.method, c.path, c.body]), [["POST", `/customers/${CUSTOMER}/portal-sessions`, { subscription_ids: [SUB] }]]);
+  assert.equal((await portal((await signIn(EVE)).token)).status, 403);
+  assert.equal((await call(`/v1/orgs/${ACME.id}/billing/portal`, { token: ada })).status, 405);
+});
+
+test("deleting a paying org's data keeps its dashboard on, empty", async () => {
+  await pays("pro", "active");
+  const ada = (await signIn(ADA)).token;
+  assert.equal((await call(`/v1/orgs/${ACME.id}`, { method: "DELETE", token: ada, body: JSON.stringify({ confirm: "acme" }) })).status, 204);
+  assert.deepEqual(await withOrgRows(ACME.id, "select login from orgs"), [{ login: "acme" }]);
+  assert.deepEqual(await withOrgRows(ACME.id, "select 1 from reviews"), []);
+  assert.equal((await (await call(`/v1/orgs/${ACME.id}/overview`, { token: ada })).json()).reviews.length, 0);
 });
