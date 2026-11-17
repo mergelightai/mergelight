@@ -20,8 +20,8 @@ function fake({ secrets = [], isPrivate = true, files = {}, openPrs = [] } = {})
       if (a === "secret" && b === "list") return JSON.stringify(secrets.map((name) => ({ name })));
       if (a === "secret" && b === "set") return "";
       const path = args.find((x) => x.startsWith("repos/")) ?? "";
-      if (path === "repos/mergelightai/mergelight/releases/latest") return `${PIN.tag}\n`;
-      if (path === `repos/mergelightai/mergelight/commits/${PIN.tag}`) return `${PIN.sha}\n`;
+      // @v0 points to PIN, and a newer release is still in its canary.
+      if (path === "repos/mergelightai/mergelight/tags?per_page=100") return JSON.stringify([{ name: "v9.9.9", commit: { sha: "f".repeat(40) } }, { name: "v0", commit: { sha: PIN.sha } }, { name: PIN.tag, commit: { sha: PIN.sha } }]);
       if (path === "repos/acme/widgets") return JSON.stringify({ private: isPrivate, default_branch: "main" });
       if (path.includes("/contents/") && !args.includes("PUT")) {
         const name = path.split("/").pop().split("?")[0];
@@ -166,7 +166,7 @@ test("setup pins what it adds by default, and with pin: false the latest release
   const content = (calls) => calls.filter((c) => c.args.includes("PUT")).map((c) => Buffer.from(c.args.find((a) => a.startsWith("content=")).slice(8), "base64").toString());
   const follows = fake({ secrets: ["CODEX_AUTH_JSON"] });
   await setup({ repo: "acme/widgets", yes: true, pin: false }, follows.deps);
-  assert.ok(!follows.calls.some((c) => c.args.some((a) => a.includes("releases/latest"))));
+  assert.ok(!follows.calls.some((c) => c.args.some((a) => a.includes("/tags?"))));
   for (const file of content(follows.calls)) assert.match(file, /mergelight@v0/);
   const pinned = fake({ secrets: ["CODEX_AUTH_JSON"] });
   await setup({ repo: "acme/widgets", yes: true }, pinned.deps);
