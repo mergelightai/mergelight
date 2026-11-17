@@ -87,7 +87,7 @@ updates:
 
 **1. Install the app.** [Install Mergelight AI](https://github.com/apps/mergelight-ai/installations/new) on the repository. Skip it and everything still posts, as `github-actions[bot]`, but you then need `secrets-token`: a [fine-grained token](https://github.com/settings/personal-access-tokens/new) with **Secrets: Read and write**, or the login has to be redone by hand after about 10 days.
 
-**2. Make a login just for CI.** Don't copy your own `~/.codex/auth.json`: one login used on two machines breaks when either one refreshes it.
+**2. Make a login just for CI, one for each repository.** Don't copy your own `~/.codex/auth.json`, and don't save one login in two repositories: one login used in two places breaks when either one refreshes it.
 
 ```bash
 mkdir -p ~/.codex-ci && printf 'cli_auth_credentials_store = "file"\n' > ~/.codex-ci/config.toml
