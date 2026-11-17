@@ -143,6 +143,11 @@ const SECTIONS: Section[] = [
           uninstalling the app. If that page refuses, or the app is already gone, write to {mail} and we delete it.
         </P>
         <P>
+          Deleting your organization's data doesn't cancel a paid plan: the plan keeps running, and the dashboard stays on, empty. An owner
+          cancels on the dashboard's Settings page, under Billing, with "Invoices, card and cancel", which opens Paddle's page for the plan.
+          When a plan ends, your organization's data stays until an owner deletes it, and a plan bought again finds it.
+        </P>
+        <P>
           We can stop an account that breaks these terms. We tell you why, unless the law doesn't let us. If we stop a paid account that didn't
           break these terms, you get back what you paid for the rest of that month.
         </P>
