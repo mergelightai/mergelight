@@ -284,7 +284,7 @@ export function summaryWith(summary: string, needsHuman: string[], rulesUnread: 
   // A team may have rules that would have changed this review. Running without them must never be silent.
   const unread = rulesUnread ? " Mergelight couldn't get your team's rules, skills, checks and earlier decisions from its server, so this review ran without them." : "";
   // Said, not held: a team that stopped paying still gets its reviews, and must know they ran without its rules.
-  const ended = planEnded && !rulesUnread ? " Your org's Mergelight plan ended or is paused, so this review ran without your team's rules, skills, checks and earlier decisions." : "";
+  const ended = planEnded && !rulesUnread ? " Your org's Mergelight plan ended or is paused, so this review ran without the rules, skills, checks and saved decisions on your Mergelight dashboard." : "";
   return `${summary}${guarded}${unread}${ended}`;
 }
 

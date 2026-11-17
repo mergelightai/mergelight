@@ -441,7 +441,7 @@ test("a guarded file keeps a pull request from going green, and never makes a li
 
 test("the summary says which guarded file was changed, and says when the team's rules couldn't be read", () => {
   assert.equal(summaryWith("Adds paging.", [], false), "Adds paging.");
-  assert.equal(summaryWith("Adds paging.", [], false, true), "Adds paging. Your org's Mergelight plan ended or is paused, so this review ran without your team's rules, skills, checks and earlier decisions.");
+  assert.equal(summaryWith("Adds paging.", [], false, true), "Adds paging. Your org's Mergelight plan ended or is paused, so this review ran without the rules, skills, checks and saved decisions on your Mergelight dashboard.");
   // A server that couldn't be asked says so once: not also that the plan ended.
   assert.doesNotMatch(summaryWith("Adds paging.", [], true, true), /plan ended/);
   assert.equal(summaryWith("Adds paging.", ["src/billing/tax.ts"], false), "Adds paging. It changes `src/billing/tax.ts`, which your team marked as always needing a human.");
