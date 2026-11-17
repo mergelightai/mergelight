@@ -424,6 +424,8 @@ await run('update-adds-the-comment-trigger', { onBase: beforeComments, login: tr
   expect(/Changes the Mergelight version lines in your file, and adds the trigger that lets a comment that mentions @mergelight-ai answer the findings/.test(before), 'says it adds the comment trigger');
   expect(/\n  issue_comment:\n    types: \[created\]\n/.test(file ?? '') && /format\('-comment-\{0\}'/.test(file ?? '') && file?.includes(`uses: ${pinnedUse}\n`), 'the update adds the trigger, its condition and group, and moves the version');
   expect(/Besides the Mergelight version lines, one thing changes\./.test(pull?.body.body) && /@mergelight-ai/.test(pull?.body.body), 'the PR says what else changes');
+  // The update goes into staging, and GitHub runs a comment's workflow from main, the default branch.
+  expect(/GitHub runs that trigger from main, so it works once the change is there too/.test(before) && /GitHub runs that trigger from main, so it works once this change is there too\./.test(pull?.body.body), 'says comments start reviews once the change is on main too');
 });
 await run('update-moves-the-approval-job', { onBase: customized(`${OLD_SHA} # v0.1.0`), baseApprove: `name: Mergelight approval\njobs:\n  approve:\n    steps:\n      - uses: mergelightai/mergelight@${OLD_SHA} # v0.1.0\n`, login: true, button: 'Update to v0.2.0' }, ({ before, approve, approvePut, pull }) => {
   expect(approvePut?.body.sha === 'baseapproveblob' && approve === `name: Mergelight approval\njobs:\n  approve:\n    steps:\n      - uses: ${pinnedUse}\n`, 'moves the approval job to the release too, and keeps the rest of it');

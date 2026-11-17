@@ -1625,7 +1625,9 @@ function AddStep(props: {
         <ul className="mt-3 divide-y divide-white/[0.06]">
           <Fact icon={<Check className="size-4" />}>Moves the pin to the exact commit of {update.tag}</Fact>
           <Fact icon={<Check className="size-4" />}>
-            {comments === 'adds' ? `Changes the Mergelight version lines ${where}, and adds the trigger that lets a comment that mentions @mergelight-ai answer the findings` : `Changes only the Mergelight version lines ${where}`}
+            {comments === 'adds'
+              ? `Changes the Mergelight version lines ${where}, and adds the trigger that lets a comment that mentions @mergelight-ai answer the findings${branch === repo.defaultBranch ? '' : `. GitHub runs that trigger from ${repo.defaultBranch}, so it works once the change is there too`}`
+              : `Changes only the Mergelight version lines ${where}`}
           </Fact>
           {!details.approve && <Fact icon={<Check className="size-4" />}>Adds the small job that turns a "needs a human" check green when someone approves</Fact>}
           {addsRefresh && <Fact icon={<Check className="size-4" />}>Adds the small job that keeps a ChatGPT login fresh</Fact>}
@@ -1859,6 +1861,7 @@ function YamlLine({ text }: { text: string }) {
 const FILE_PURPOSE: Record<string, string> = {
   'mergelight.yml': 'Runs the review on your pull requests.',
   [REFRESH_FILE]: "Keeps a ChatGPT login from expiring. Scheduled jobs only run from your default branch, so it starts once it's merged there.",
+  [APPROVE_FILE]: 'Turns a "needs a human" check green when someone who can push approves the pull request.',
 };
 
 /** The exact files the pull request will hold, and why they're there. */

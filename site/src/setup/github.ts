@@ -739,7 +739,8 @@ export function realClient(token: string): GitHubClient {
         const adds = (name: string) => planned.some(({ file, current }) => file.name === name && !current);
         const refresh = adds(REFRESH_FILE) ? refreshNote(repo, branch) : '';
         const review = planned.find(({ file }) => file.name === 'mergelight.yml');
-        const comments = review?.current && !hasCommentTrigger(review.current.content) && hasCommentTrigger(review.content) ? COMMENTS_NOTE : '';
+        // GitHub runs a comment's workflow from the default branch, so on another branch the trigger waits for that.
+        const comments = review?.current && !hasCommentTrigger(review.current.content) && hasCommentTrigger(review.content) ? `${COMMENTS_NOTE}${branch === repo.defaultBranch ? '' : ` GitHub runs that trigger from ${repo.defaultBranch}, so it works once this change is there too.`}` : '';
         const notes = { refresh, approve: adds(APPROVE_FILE) ? APPROVE_NOTE : '', comments };
         const body = update ? updateBody(update, notes) : change.kind === 'roles' ? rolesBody(refresh) : change.kind === 'refresh' ? refreshBody(repo, branch) : SETUP_BODY;
         const pull = await call<{ number: number; html_url: string; head: { sha: string } }>('POST', `${r}/pulls`, { title, head, base: branch, body });
