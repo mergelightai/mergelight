@@ -25,7 +25,7 @@ Open [mergelight.dev/setup](https://mergelight.dev/setup/) and choose **Continue
 
 1. **Pick a repo.** The first time, the page sends you to GitHub to choose which repositories Mergelight can see, which installs the **Mergelight Setup** app. To add one later, choose **Don't see your repo? Add it on GitHub**.
 2. **Install Mergelight AI,** if the page asks for "One more install". Your repository is already selected, so approve it on GitHub and come back.
-3. **Add Mergelight.** If the repository has more than one long-lived branch, such as `main` and `staging`, choose what it reviews: **New work** (pull requests into one branch) or **Every PR**. Then choose the **Add to** button with your repository's name. The page opens a pull request called "Add Mergelight code review", with your own sign-in. It adds small files to `.github/workflows/`: the review, a job that turns a 🟡 check green when someone approves, and, for a ChatGPT plan, a job that keeps the login fresh. **View file** shows them first. If GitHub refuses, the page offers GitHub's editor with the file filled in.
+3. **Add Mergelight.** If the repository has more than one long-lived branch, such as `main` and `staging`, choose what it reviews: **New work** (pull requests into one branch) or **Every PR**. Then choose the **Add to** button with your repository's name. The page opens a pull request called "Add Mergelight code review", with your own sign-in. It adds small files to `.github/workflows/`: the review, a job that turns a 🟡 check green when someone approves, and, unless the repository already has an API key or only a Claude login, a job that keeps a ChatGPT login fresh. **View file** shows them first. If GitHub refuses, the page offers GitHub's editor with the file filled in.
 4. **Connect your AI,** if the repository has no login yet. Choose **Your plan** or **API key**, then the AI:
    - **ChatGPT:** the page shows a code, which is also on the pull request. Choose **Open OpenAI** and enter it. The code lasts 15 minutes: if it runs out, push a new commit to the pull request to get a new one.
    - **Claude:** choose **Open Claude** and confirm there. Then paste the code Claude shows you into the page and choose **Connect**.
@@ -54,7 +54,7 @@ Mergelight uses two apps, so that a leak of the key on Mergelight's server can't
 - Each new pull request gets a review, and each new push reviews it again. With **New work**, that's pull requests into the branch you chose.
 - Draft pull requests wait until they're marked ready for review.
 - Pull requests from forks and from Dependabot aren't reviewed, because GitHub gives their runs no secrets.
-- The workflows are pinned to a release: the one `@v0` points to, which has passed a real test review. When a newer one is out, the review says so, and the setup page's **Update to** button opens a pull request that updates it.
+- The workflows are pinned to the commit of a release. When a newer one is out, the review says so, and the setup page's **Update to** button opens a pull request that updates it.
 - To add a second AI, open the setup page again and pick the repository. The **Your AI** box offers **Add Claude** or **Add ChatGPT**. Then one AI reviews and the other checks its findings.
 
 ## Set it up from a terminal

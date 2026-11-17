@@ -99,7 +99,7 @@ On the Rules view, pick one of two kinds:
 
 Then pick where it applies: every repository in the org, or one. Each kind takes up to 10 file patterns, split by commas, like `src/billing/**, *.sql`. A folder name covers everything inside it, a name with no folder matches in any folder, and a leading `/` means the repository's root. You can have 50 rules for the org and 50 for each repository.
 
-A 🟡 check turns green when someone who can push approves that commit, through the [`mergelight-approve.yml`](../examples/mergelight-approve.yml) workflow. The setup page and `mergelight setup` add it, and an update from the setup page, with its **Update to** button, adds it where it's missing. To make "needs a human" hold the merge, set `yellow-blocks: true` and require the **Mergelight** check in your branch protection or ruleset. Without that, it is a warning on the pull request.
+A 🟡 check turns green when someone who can push approves that commit, through the [`mergelight-approve.yml`](../examples/mergelight-approve.yml) workflow. The setup page and `mergelight setup` add it, and an update from the setup page, with its **Update to** button, adds it where it's missing. If it isn't in your repository and the setup page offers no update, add it by hand. To make "needs a human" hold the merge, set `yellow-blocks: true` and require the **Mergelight** check in your branch protection or ruleset. Without that, it is a warning on the pull request.
 
 ## Skills
 

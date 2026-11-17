@@ -77,7 +77,7 @@ The check shows "Reviewing" while it works, then ends with one of three lights. 
 A finding "holds the merge" when it keeps the check from going green. Neutral means GitHub counts the check as passing and shows no red cross, so by default Mergelight never blocks a merge.
 
 - **To let it hold merges,** set `yellow-blocks: true` and make the **Mergelight** check required in branch protection or a ruleset. Then 🔴 fails until the code changes, and 🟡 waits for an approval.
-- **A 🟡 check turns green** when someone who can push approves the newest commit. This needs the approval workflow, [`mergelight-approve.yml`](../examples/mergelight-approve.yml). The setup page and `mergelight setup` add it, and an update from the setup page, with its **Update to** button, adds it where it's missing. A workflow that follows `@v0` without a pin, or one you wrote by hand, needs it added by hand. An approval never clears 🔴: only a fix does.
+- **A 🟡 check turns green** when someone who can push approves the newest commit. This needs the approval workflow, [`mergelight-approve.yml`](../examples/mergelight-approve.yml). The setup page and `mergelight setup` add it, and an update from the setup page, with its **Update to** button, adds it where it's missing. If `.github/workflows/mergelight-approve.yml` isn't in your repository and the setup page offers no update, add it by hand from [`examples/`](../examples). An approval never clears 🔴: only a fix does.
 - **If the review itself can't run,** for example because the login expired, the check ends neutral and the workflow job fails, so you notice. The check says why.
 
 If your team wrote its own checks, each one shows as a separate check named "Mergelight: " and its name. They don't change the light. See [Teach it your team's rules](customize.md).
@@ -150,7 +150,7 @@ Write a comment on the pull request that mentions `@mergelight-ai`, in plain wor
 - Each comment is one review run on your plan.
 - Comments by people who can't push, by bots, or on a pull request from a fork start nothing.
 
-This needs Mergelight v0.1.20 or newer, and the `issue_comment` trigger in your workflow. A setup from the setup page has it. For an older setup, an update from the setup page, with its **Update to** button, adds it, when the workflow is still the shape the page or `mergelight setup` wrote. For any other workflow, the update card says so: copy the `issue_comment:` trigger and the `if:` condition from [`examples/mergelight.yml`](../examples/mergelight.yml). GitHub runs a comment's workflow from your default branch, so comment reviews start once that change is merged there.
+This needs Mergelight v0.1.20 or newer, and the `issue_comment` trigger in your workflow. A setup from the setup page has it. For an older setup, an update from the setup page, with its **Update to** button, adds it, when the workflow is still the shape the page or `mergelight setup` wrote. If your workflow file has no `issue_comment:` line and the setup page offers no update, or the update card says to add it by hand, copy the `issue_comment:` trigger and the `if:` condition from [`examples/mergelight.yml`](../examples/mergelight.yml). GitHub runs a comment's workflow from your default branch, so comment reviews start once that change is merged there.
 
 ## Approvals
 
