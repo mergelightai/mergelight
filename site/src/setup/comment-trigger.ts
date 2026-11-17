@@ -56,7 +56,14 @@ export function withCommentTrigger(content: string): string | null {
   if (on < 0 || pr < 0 || lines.slice(on + 1, pr).some((l) => l !== '' && !/^\s/.test(l))) return null;
   let afterPr = pr + 1;
   while (afterPr < lines.length && /^ {4,}\S/.test(lines[afterPr]!)) afterPr++;
-  // One review job, with its condition folded over lines of its own. A workflow that runs jobs too has two.
+  // One job, the review. A comment starts every job in the workflow, so another job, which may have no condition and
+  // has the workflow's secrets, would run on every comment, from anyone on a public repo.
+  const jobsAt = lines.indexOf('jobs:');
+  if (jobsAt < 0) return null;
+  const jobsEnd = lines.findIndex((l, i) => i > jobsAt && /^\S/.test(l));
+  const jobs = lines.slice(jobsAt + 1, jobsEnd < 0 ? undefined : jobsEnd).filter((l) => /^ {2}[^\s#]/.test(l));
+  if (jobs.length !== 1) return null;
+  // Its condition, folded over lines of its own.
   const ifs = lines.flatMap((l, i) => (l === '    if: >' ? [i] : []));
   if (ifs.length !== 1) return null;
   const from = ifs[0]! + 1;
