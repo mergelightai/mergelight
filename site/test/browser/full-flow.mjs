@@ -49,8 +49,11 @@ async function run(name, { login = false, apiKey = false, claude = false, orgSec
     }
     if (u.origin === 'https://api.github.com') {
       if (m === 'OPTIONS') return req.respond({ status: 204, headers: cors });
-      if (u.pathname === '/repos/mergelightai/mergelight/releases/latest') return release ? json(req, { tag_name: RELEASE.tag }) : json(req, {}, 503);
+      // GitHub's newest release is v0.3.0, whose canary hasn't passed, so @v0 is still on v0.2.0. The page goes by @v0.
+      if (u.pathname === '/repos/mergelightai/mergelight/releases/latest') return release ? json(req, { tag_name: 'v0.3.0' }) : json(req, {}, 503);
       if (u.pathname === `/repos/mergelightai/mergelight/commits/${RELEASE.tag}`) return json(req, { sha: RELEASE.sha });
+      if (u.pathname === '/repos/mergelightai/mergelight/commits/v0') return release ? json(req, { sha: RELEASE.sha }) : json(req, {}, 503);
+      if (u.pathname === '/repos/mergelightai/mergelight/tags') return json(req, [{ name: 'v0.3.0', commit: { sha: 'c'.repeat(40) } }, { name: RELEASE.tag, commit: { sha: RELEASE.sha } }, { name: 'v0', commit: { sha: RELEASE.sha } }, { name: 'v0.1.0', commit: { sha: OLD_SHA } }]);
       const p = u.pathname.replace('/repos/acme/api', '');
       if (m !== 'GET') {
         const body = req.postData() ? JSON.parse(req.postData()) : null;
@@ -168,7 +171,7 @@ async function run(name, { login = false, apiKey = false, claude = false, orgSec
 const pinnedUse = `mergelightai/mergelight@${RELEASE.sha} # ${RELEASE.tag}`;
 await run('new-repo', {}, ({ writes, file, refresh, pull, after }) => {
   expect(refresh?.includes(`uses: ${pinnedUse}\n`), 'the refresh job comes along, pinned too');
-  expect(file?.includes(`uses: ${pinnedUse}\n`), 'the file is pinned to the latest release');
+  expect(file?.includes(`uses: ${pinnedUse}\n`), 'the file is pinned to the release @v0 is on, not a newer one whose canary hasn\'t passed');
   expect(!/Not pinned/.test(file ?? '') && !/Not pinned/.test(refresh ?? ''), 'neither says it is not pinned');
   expect(/# Pinned to a release/.test(file ?? '') && /# Pinned to a release/.test(refresh ?? ''), 'both say why they are pinned');
   expect(writes.map((w) => w.m).join() === 'POST,PUT,PUT,POST', 'branch, two files, pull request');
@@ -387,6 +390,11 @@ await run('update-stops-when-the-prs-step-is-gone', { onBase: customized(`${OLD_
   // The open PR swapped the Mergelight step for another action, so it has no version to move.
   expect(!writes.some((w) => w.m === 'PUT'), 'writes nothing');
   expect(/The workflow on your open PR has no Mergelight step, so nothing was changed\./.test(after) && !/Your PR is open/.test(after), "says so, rather than that it's updated");
+});
+// Pinned to v0.3.0, which this page pinned to before it went by @v0. @v0 is on v0.2.0, which is older, so it's no update.
+await run('pinned-ahead-of-v0', { onBase: customized(`${'c'.repeat(40)} # v0.3.0`), login: true, button: null }, ({ before, writes }) => {
+  expect(!/Update Mergelight on api/.test(before) && !/Update to v0\.2\.0/.test(before), "a repo pinned ahead of @v0 isn't offered an older release");
+  expect(!writes.some((w) => w.m === 'PUT'), 'and nothing is written');
 });
 await run('old-refresh-job-too', { onBase: customized(`${OLD_SHA} # v0.1.0`), baseRefresh: customized(`${OLD_SHA} # v0.1.0`), login: true, button: 'Update to v0.2.0' }, ({ before, puts, refresh, pull }) => {
   expect(/Changes only the Mergelight version lines in both files/.test(before), 'says both files');

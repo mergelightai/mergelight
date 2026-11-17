@@ -68,6 +68,8 @@ async function scenario(name, start, body) {
       if (m === 'OPTIONS') return req.respond({ status: 204, headers: cors });
       if (u.pathname === '/repos/mergelightai/mergelight/releases/latest') return json(req, { tag_name: 'v0.2.0' });
       if (u.pathname === '/repos/mergelightai/mergelight/commits/v0.2.0') return json(req, { sha: 'a'.repeat(40) });
+      if (u.pathname === '/repos/mergelightai/mergelight/commits/v0') return json(req, { sha: 'a'.repeat(40) });
+      if (u.pathname === '/repos/mergelightai/mergelight/tags') return json(req, [{ name: 'v0.2.0', commit: { sha: 'a'.repeat(40) } }, { name: 'v0', commit: { sha: 'a'.repeat(40) } }]);
       const p = u.pathname.replace('/repos/acme/api', '');
       world.asked.push(p);
       if (m !== 'GET') {
