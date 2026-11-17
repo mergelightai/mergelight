@@ -175,7 +175,8 @@ section[id] { scroll-margin-top: 88px; }
 .doc-code pre {
   overflow-x: auto;
   border-radius: 14px;
-  padding: 1rem 1.15rem;
+  /* Room on the right for the Copy button, so it never covers the end of a line. */
+  padding: 1rem 4.5rem 1rem 1.15rem;
   font-family: var(--font-mono);
   font-size: 13px;
   line-height: 1.65;

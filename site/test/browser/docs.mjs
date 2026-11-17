@@ -71,6 +71,12 @@ try {
   await wait(500);
   check(!(await page.$eval('#docs-search', (d) => d.open)) && page.url().startsWith(`${base}/docs/github-action/`), 'Enter opens the result');
 
+  // Enter at once after typing opens a result for what was just typed, not for the query before it.
+  await page.keyboard.press('/');
+  await page.type('[data-search-input]', 'jobs', { delay: 0 });
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => location.pathname.startsWith('/docs/jobs/'), { timeout: 5000 }).then(() => check(true, 'Enter right after typing opens a result for what was typed'), () => check(false, `Enter right after typing opens a result for what was typed (${page.url()})`));
+
   await page.keyboard.press('/');
   await page.type('[data-search-input]', 'zzqxyw');
   await page.waitForFunction(() => document.querySelector('[data-search-results]')?.textContent?.includes('Nothing found'), { timeout: 5000 });

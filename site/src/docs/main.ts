@@ -60,6 +60,8 @@ const input = document.querySelector<HTMLInputElement>('[data-search-input]');
 const list = document.querySelector<HTMLDivElement>('[data-search-results]');
 let pagefind: Promise<Pagefind | null> | undefined;
 let asked = 0;
+// The query the list on screen answers, so Enter never opens a result for an older query.
+let shown = '';
 let timer: ReturnType<typeof setTimeout> | undefined;
 
 // A load that failed, for example on a dropped connection, is tried again at the next search.
@@ -103,14 +105,22 @@ async function search(query: string) {
   if (!list) return;
   if (!query.trim()) {
     list.replaceChildren();
+    shown = query;
     return;
   }
   if (!list.firstElementChild) skeleton();
   const pf = await load();
   if (ask !== asked) return;
+  shown = query;
   if (!pf) return note('Search couldn’t load. Check your connection and try again.');
-  const found = await pf.search(query);
-  const pages = await Promise.all(found.results.slice(0, 8).map((r) => r.data()));
+  let pages: Found[];
+  try {
+    const found = await pf.search(query);
+    pages = await Promise.all(found.results.slice(0, 8).map((r) => r.data()));
+  } catch {
+    if (ask === asked) note('Search couldn’t load. Check your connection and try again.');
+    return;
+  }
   if (ask !== asked) return;
   if (!pages.length) return note(`Nothing found for “${query.trim()}”.`);
   list.replaceChildren(
@@ -144,7 +154,15 @@ input?.addEventListener('input', () => {
   timer = setTimeout(() => void search(input.value), 120);
 });
 
-input?.addEventListener('keydown', (event) => {
+input?.addEventListener('keydown', async (event) => {
+  // Enter right after typing: search for what is typed now first, then open its best result.
+  if (event.key === 'Enter' && input.value !== shown) {
+    event.preventDefault();
+    clearTimeout(timer);
+    await search(input.value);
+    list?.querySelector<HTMLAnchorElement>('[role="option"][aria-selected="true"]')?.click();
+    return;
+  }
   const options = [...(list?.querySelectorAll<HTMLAnchorElement>('[role="option"]') ?? [])];
   const at = options.findIndex((o) => o.getAttribute('aria-selected') === 'true');
   if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
