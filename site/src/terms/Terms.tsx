@@ -126,7 +126,7 @@ const SECTIONS: Section[] = [
       <>
         <P>
           Mergelight is provided as it is. As far as the law allows, we are not liable for indirect loss, such as lost profit or lost data, and our
-          total liability is at most what you paid us in the 12 months before the claim.
+          total liability is at most what you paid for Mergelight in the 12 months before the claim.
         </P>
         <P>Nothing in these terms limits a liability that the law doesn't let us limit, or takes away your rights as a consumer.</P>
       </>
@@ -138,9 +138,9 @@ const SECTIONS: Section[] = [
     body: (
       <>
         <P>
-          You can stop at any time: cancel a paid plan, remove the Mergelight workflows (mergelight.yml, and mergelight-refresh.yml if you have
-          it) and uninstall the Mergelight AI app. To delete your organization's data, an owner can use the dashboard's Settings page before
-          uninstalling the app, or write to {mail}.
+          You can stop at any time: cancel a paid plan, remove every Mergelight workflow file (the mergelight*.yml files in .github/workflows)
+          and uninstall the Mergelight AI app. To delete your organization's data, an owner can use the dashboard's Settings page before
+          uninstalling the app. If that page refuses, or the app is already gone, write to {mail} and we delete it.
         </P>
         <P>
           We can stop an account that breaks these terms. We tell you why, unless the law doesn't let us. If we stop a paid account that didn't
