@@ -1020,8 +1020,10 @@ await scenario('claude-link-ended-after-merge', { secrets: ['CODEX_AUTH_JSON'] }
   world.merged = true;
   world.comments = [{ user: { login: BOT }, body: withState(pendingSummaryBody(), undefined) }];
   world.checks.rolesha = { status: 'in_progress', conclusion: null, output: { title: 'Reviewing' } };
-  const t = await until((x) => /This link has ended/.test(x), 'the ended link');
-  expect(/Open a new PR to get a new link/.test(t) && !/Push a new commit/.test(t), 'a merged PR starts no run, so it says to open a new one');
+  // The page reads that the link ended and that the PR is merged on timers of their own, so it can say the first a moment
+  // before it knows the second. What counts is what it says once it knows both.
+  const t = await until((x) => /This link has ended/.test(x) && /Open a new PR to get a new link/.test(x), 'the ended link, once the merge is read');
+  expect(!/Push a new commit/.test(t), 'a merged PR starts no run, so it says to open a new one');
 });
 
 await scenario('environment-is-customized', { secrets: ['CLAUDE_CODE_OAUTH_TOKEN'], file: TEMPLATE.replace('    runs-on: ubuntu-latest\n', '    runs-on: ubuntu-latest\n    environment: ai\n') }, async ({ page, reachLive }) => {
