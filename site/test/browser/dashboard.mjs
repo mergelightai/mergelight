@@ -99,6 +99,10 @@ const turnOn = (id, login) => {
   CHECKS[id] ??= { repos: repos.map((r) => ({ ...r, can_set_checks: true })), checks: [] };
   WRITTEN[id] ??= { repos: repos.map((r) => ({ ...r, can_write_skills: true })), skills: [] };
 };
+/** Takes an org that a test turned on off again, so the next test finds it as it was. */
+const turnOff = (id) => {
+  for (const lists of [OVERVIEWS, RULES, SKILLS, CHECKS, WRITTEN]) delete lists[id];
+};
 const FAKE_PADDLE = `window.__paddle = {};
 window.Paddle = {
   Environment: { set: (env) => { window.__paddle.env = env; } },
@@ -898,6 +902,7 @@ const done = async (t) => {
   t.plans.paid.add('3003');
   await t.page.waitForFunction(() => /The dashboard is on for quiet\. Add one line/.test(document.querySelector('main')?.innerText ?? ''), { timeout: 10000 }).catch(() => null);
   expect(/The dashboard is on for quiet\. Add one line/.test(await t.text()), 'once the server has heard from Paddle, the dashboard is on, with no reload by hand');
+  turnOff('3003');
   await done(t);
 }
 
