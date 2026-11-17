@@ -21,7 +21,8 @@ function fake({ secrets = [], isPrivate = true, files = {}, openPrs = [] } = {})
       if (a === "secret" && b === "set") return "";
       const path = args.find((x) => x.startsWith("repos/")) ?? "";
       // @v0 points to PIN, and a newer release is still in its canary.
-      if (path === "repos/mergelightai/mergelight/tags?per_page=100") return JSON.stringify([{ name: "v9.9.9", commit: { sha: "f".repeat(40) } }, { name: "v0", commit: { sha: PIN.sha } }, { name: PIN.tag, commit: { sha: PIN.sha } }]);
+      // Read in pages: @v0 is on the second, as GitHub lists it after all the version tags.
+      if (path === "repos/mergelightai/mergelight/tags?per_page=100") return JSON.stringify([[{ name: "v9.9.9", commit: { sha: "f".repeat(40) } }, { name: PIN.tag, commit: { sha: PIN.sha } }], [{ name: "v0", commit: { sha: PIN.sha } }]]);
       if (path === "repos/acme/widgets") return JSON.stringify({ private: isPrivate, default_branch: "main" });
       if (path.includes("/contents/") && !args.includes("PUT")) {
         const name = path.split("/").pop().split("?")[0];

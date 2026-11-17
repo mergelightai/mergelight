@@ -52,12 +52,13 @@ export function releaseNews(notes: string): string[] {
 }
 
 /** What a pinned run is missing, if there's a newer release. */
-export async function newerVersion(api: Pick<GitHub, "get">, current = CURRENT, ref = process.env.MERGELIGHT_ACTION_REF): Promise<UpdateNotice | null> {
+export async function newerVersion(api: Pick<GitHub, "get" | "list">, current = CURRENT, ref = process.env.MERGELIGHT_ACTION_REF): Promise<UpdateNotice | null> {
   if (!/^[0-9a-f]{40}$/i.test(ref ?? "")) return null;
   try {
     const releases = await api.get<{ tag_name: string; body?: string | null; draft: boolean; prerelease: boolean }[]>("/repos/mergelightai/mergelight/releases?per_page=30");
     // Never past the version @v0 points to: a release still in its canary isn't offered yet.
-    const top = rolledOut(await api.get<Tag[]>("/repos/mergelightai/mergelight/tags?per_page=100"));
+    // Every page: GitHub lists v0 after all the version tags, so it falls past the first page in time.
+    const top = rolledOut(await api.list<Tag>("/repos/mergelightai/mergelight/tags"));
     if (!top) return null;
     const newer = releases.filter((r) => !r.draft && !r.prerelease && isNewer(r.tag_name, current) && !isNewer(r.tag_name, top)).sort((a, b) => (isNewer(a.tag_name, b.tag_name) ? -1 : 1));
     if (!newer.length) return null;
