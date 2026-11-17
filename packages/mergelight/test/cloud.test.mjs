@@ -99,6 +99,8 @@ test("the team's earlier decisions come with the answer, and one that isn't shap
 
 test("an org that isn't on the dashboard gets no memories, whatever the answer holds", async () => {
   assert.deepEqual(await fetchContext(setup(json(200, { connected: false, memories: [MEMORY] })).deps), { connected: false, answered: true, memories: [], rules: [], skills: [], checks: [], writtenSkills: [] });
+  // An org whose plan ended: nothing of the dashboard, and the review is told why.
+  assert.deepEqual(await fetchContext(setup(json(200, { connected: false, plan_ended: true })).deps), { connected: false, answered: true, memories: [], rules: [], skills: [], checks: [], writtenSkills: [], planEnded: true });
   // A server that is set but can't be asked is not the same as "off": the review says so.
   assert.deepEqual(await fetchContext(setup(json(500, {})).deps), { connected: false, memories: [], rules: [], skills: [], checks: [], writtenSkills: [], failed: true });
   assert.deepEqual(await fetchContext(setup(() => { throw new Error("down"); }).deps), { connected: false, memories: [], rules: [], skills: [], checks: [], writtenSkills: [], failed: true });

@@ -194,7 +194,7 @@ test("a plan that ended still shows what is stored, lets it be removed and delet
   // Nothing new: an add says why.
   const add = await call(`/v1/orgs/${ACME.id}/rules`, { method: "POST", token, body: JSON.stringify({ kind: "rule", text: "Report every FIXME." }) });
   assert.equal(add.status, 403);
-  assert.deepEqual(await add.json(), { error: "plan_ended", message: "The Mergelight plan for this org ended, so nothing new can be added. What is stored stays until an owner deletes it, and can still be removed." });
+  assert.deepEqual(await add.json(), { error: "plan_ended", message: "The Mergelight plan for this org ended or is paused, so nothing new can be added. What is stored stays until an owner deletes it, and can still be removed." });
   for (const [what, body] of [["skills", { repo_id: 501, path: ".claude/skills/x" }], ["checks", { repo_id: 501, name: "Docs", text: "Docs change with the code.", paths: ["src/**"] }], ["written-skills", { repo_id: 501, name: "Pay", description: "Use for billing.", text: "Check refunds." }]]) {
     assert.equal((await call(`/v1/orgs/${ACME.id}/${what}`, { method: "POST", token, body: JSON.stringify(body) })).status, 403, what);
   }

@@ -55,6 +55,8 @@ export interface ReviewOptions {
   rules?: TeamRule[];
   /** True when the team's server couldn't be asked for its rules and decisions. The summary then says so. */
   rulesUnread?: boolean;
+  /** True when the server said the org's plan ended or is paused, so it sent none of the team's rules. The summary then says so. */
+  planEnded?: boolean;
   /** Skill folders in the repository that the team picked for reviews. They are read from the base branch. */
   skills?: string[];
   /** Skills the team wrote on its dashboard. Their text comes from the team's server, not from the repository. */
@@ -272,8 +274,8 @@ export async function verifyCandidates(dir: string, input: PromptInput, found: C
 /** Every rule a team can have for one repository: 50 for the org and 50 of its own on the dashboard, and those in its rule files. None is dropped. */
 const MAX_RULES = 100 + MAX_REPO_RULES;
 
-/** The summary, with what the reader must know about the team's rules: a guarded file was changed, or the rules couldn't be read. */
-export function summaryWith(summary: string, needsHuman: string[], rulesUnread: boolean): string {
+/** The summary, with what the reader must know about the team's rules: a guarded file was changed, the rules couldn't be read, or the org's plan ended. */
+export function summaryWith(summary: string, needsHuman: string[], rulesUnread: boolean, planEnded = false): string {
   // As code, so a name like __init__.py shows as it is and not as bold text.
   const code = (path: string) => `\`${path.replace(/`/g, "'").replace(/[\u0000-\u001f\u007f]/g, "?")}\``;
   const guarded = needsHuman.length
@@ -281,7 +283,9 @@ export function summaryWith(summary: string, needsHuman: string[], rulesUnread: 
     : "";
   // A team may have rules that would have changed this review. Running without them must never be silent.
   const unread = rulesUnread ? " Mergelight couldn't get your team's rules, skills, checks and earlier decisions from its server, so this review ran without them." : "";
-  return `${summary}${guarded}${unread}`;
+  // Said, not held: a team that stopped paying still gets its reviews, and must know they ran without its rules.
+  const ended = planEnded && !rulesUnread ? " Your org's Mergelight plan ended or is paused, so this review ran without your team's rules, skills, checks and earlier decisions." : "";
+  return `${summary}${guarded}${unread}${ended}`;
 }
 
 /**
@@ -530,7 +534,7 @@ export async function reviewPullRequest(ref: PrRef, opts: ReviewOptions = {}): P
       verifier: { name: checkedBy, model: verified.model, effort, cost_usd: verified.cost_usd },
       ...(checkerFailed ? { checker_missed: verifyWith, checker_missed_why: checkerFailed } : {}),
       light: lightWith(verified.findings, needsHuman),
-      summary: summaryWith(verified.summary, needsHuman, opts.rulesUnread === true),
+      summary: summaryWith(verified.summary, needsHuman, opts.rulesUnread === true, opts.planEnded === true),
       ...(needsHuman.length ? { needs_human: needsHuman } : {}),
       findings: verified.findings,
       ...(input.memories?.length ? { used_memories: usedMemories(input.memories, verified.rejected, found) } : {}),

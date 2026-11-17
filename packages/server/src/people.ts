@@ -52,7 +52,7 @@ function refuseHidden(fields: Record<string, unknown>): void {
 }
 /** What an add says when the org's plan ended or is paused. Removing and deleting still work. */
 const planEnded = () =>
-  new HttpError(403, "plan_ended", "The Mergelight plan for this org ended, so nothing new can be added. What is stored stays until an owner deletes it, and can still be removed.");
+  new HttpError(403, "plan_ended", "The Mergelight plan for this org ended or is paused, so nothing new can be added. What is stored stays until an owner deletes it, and can still be removed.");
 /** Skills written on the dashboard that one repository can have, and the largest request that can carry one. */
 const MAX_WRITTEN_SKILLS = 10;
 const MAX_SKILL_BODY = 48_000;
