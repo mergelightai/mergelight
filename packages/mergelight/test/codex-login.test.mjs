@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { test } from "node:test";
 import { claudeEnv, runClaude } from "../dist/providers/claude.js";
-import { codexEnv, HeldLoginError, LimitError, limitFrom, LoginError, loginFailureMessage, runCodex, SandboxError, sandboxArgs, scrubSecrets } from "../dist/providers/codex.js";
+import { codexEnv, HeldLoginError, LimitError, limitFrom, LoginError, loginFailureMessage, reviewHidden, runCodex, SandboxError, sandboxArgs, scrubSecrets } from "../dist/providers/codex.js";
 
 /** Puts a stand-in codex first on the PATH that fails with this message, on a run with this login. */
 async function failingCodex(stderr, { stdout = "", chatgpt = "1" } = {}) {
@@ -222,4 +222,24 @@ test("a review's commands can't read the runner's command files, where a step ca
   assert.deepEqual(dirs, ["/rt/_runner_file_commands"]);
   assert.equal(rules("/h/.codex", undefined, dirs)[3], 'permissions.mergelight_review.filesystem={":root"="read","/h/.codex"="none","/rt/_runner_file_commands"="none"}');
   assert.deepEqual(runnerCommandFiles({}), []);
+});
+
+test("a review's commands can't read where credentials live, but can read its own checkout", () => {
+  const env = { KUBECONFIG: "/etc/kube/a:/etc/kube/b", AWS_SHARED_CREDENTIALS_FILE: "/secrets/aws" };
+  const hidden = reviewHidden(env, "/opt/actions-runner", "/home/runner");
+  // The runner's own registration files, which would let someone act as the runner.
+  for (const f of [".credentials", ".credentials_rsaparams", ".runner", ".env", ".path"]) assert.ok(hidden.includes(`/opt/actions-runner/${f}`), f);
+  assert.ok(!hidden.includes("/opt/actions-runner"), "the rest of the runner's folder, such as its tools, stays readable");
+  // Files other tools are pointed at, mounted secrets, and the usual credential folders.
+  for (const p of ["/etc/kube/a", "/etc/kube/b", "/secrets/aws", "/run/secrets", "/var/run/secrets", "/root", "/home/runner/.ssh", "/home/runner/.config/gh", "/home/runner/.aws", "/home/runner/.docker", "/home/runner/.git-credentials"]) assert.ok(hidden.includes(p), p);
+  assert.ok(!hidden.includes("/home/runner"), "the home folder holds the review's own checkout");
+  // A runner running as root keeps the review's checkout under /root: then /root stays readable.
+  assert.ok(!reviewHidden({}, null, "/root").includes("/root"));
+  assert.ok(reviewHidden({}, null, "/root").includes("/root/.ssh"));
+  assert.ok(!reviewHidden({ MERGELIGHT_CACHE: "/run/secrets/cache" }, null, "/home/x").includes("/run/secrets"), "nor a folder that holds a cache set elsewhere");
+  // They reach Codex as places its commands can't read.
+  const args = sandboxArgs("/codex-home", undefined, hidden).join(" ");
+  assert.match(args, /"\/opt\/actions-runner\/\.credentials"="none"/);
+  assert.match(args, /"\/home\/runner\/\.ssh"="none"/);
+  assert.match(args, /":root"="read"/);
 });

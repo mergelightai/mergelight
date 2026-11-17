@@ -7,7 +7,7 @@ Lets a workflow post as the Mergelight AI GitHub App, without anyone but this se
 3. The server checks GitHub's signature, the issuer, the audience (`mergelight`), the expiry and the event.
 4. If the App is installed on that repository, the server returns an App token limited to that one repository, with `checks: write`, `pull_requests: write` and `contents: read`. The token can't push code, and GitHub expires it after an hour.
 
-A second kind of token, `POST /token?scope=login`, can only write Actions secrets. The Action asks for it only when Codex refreshed its login, to save the new one back. GitHub never lets it read a secret's value.
+A second kind of token, `POST /token?scope=login`, can only write Actions secrets. The Action asks for it only to save a login: one Codex refreshed, a ChatGPT login connected on a pull request, or a Claude login connected there. GitHub never lets it read a secret's value.
 
 `POST /sign-in` is for the setup page only. It swaps the code from "Sign in with GitHub" for the person's Mergelight Setup token, because that step needs that app's client secret (`GITHUB_SETUP_APP_CLIENT_SECRET`), which can't live in a web page. The token goes straight back to the browser. This server has no private key for Mergelight Setup, so it can't act as that app by itself.
 

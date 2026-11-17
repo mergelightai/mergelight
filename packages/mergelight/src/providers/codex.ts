@@ -273,6 +273,33 @@ export function runnerCommandFiles(env: NodeJS.ProcessEnv = process.env): string
   return [...new Set([...dirs, ...real])].filter((d) => d !== "/" && d !== ".");
 }
 
+/** Folders in a home folder where tools keep logins and keys. */
+const HOME_CREDENTIALS = [".ssh", ".aws", ".azure", ".kube", ".docker", ".gnupg", ".config/gh", ".config/gcloud", ".netrc", ".git-credentials", ".npmrc", ".pypirc"];
+
+/**
+ * Where credentials live that a review's commands never need: the runner's own registration files, which
+ * on a self-hosted runner would let someone act as the runner, credential files other tools are pointed
+ * at, mounted secrets, root's home, and the usual credential folders in the home folder. Code under
+ * review can try to steer the commands into reading one and writing it into a finding. The rest of the
+ * disk stays readable: the commands need the checkout, git and their tools. Never a folder that holds the
+ * review's own checkout, which is in Mergelight's cache: a runner running as root keeps it in /root.
+ */
+export function reviewHidden(env: NodeJS.ProcessEnv = process.env, install: string | null = runnerInstall(), home: string = homedir()): string[] {
+  const runnerFiles = install ? [".credentials", ".credentials_rsaparams", ".runner", ".env", ".path"].map((f) => join(install, f)) : [];
+  const named = [env.KUBECONFIG, env.GOOGLE_APPLICATION_CREDENTIALS, env.AWS_SHARED_CREDENTIALS_FILE, env.AWS_CONFIG_FILE, env.GH_CONFIG_DIR, env.DOCKER_CONFIG, env.AZURE_CONFIG_DIR].flatMap((v) => v?.split(":") ?? []);
+  const places = [...runnerFiles, ...named, "/root", "/run/secrets", "/var/run/secrets", ...HOME_CREDENTIALS.map((f) => join(home, f))].filter((p) => p !== "" && p !== "/");
+  const real = places.map((p) => {
+    try {
+      return realpathSync(p);
+    } catch {
+      return p;
+    }
+  });
+  const cache = env.MERGELIGHT_CACHE ?? join(home, ".cache", "mergelight");
+  const holdsCache = (p: string) => cache === p || cache.startsWith(`${p.replace(/\/+$/, "")}/`);
+  return [...new Set([...places, ...real])].filter((p) => !holdsCache(p));
+}
+
 /**
  * Folders a job's commands may not read: where secrets and other code live, such as other repositories'
  * checkouts in the temp folder. Each is hidden even when the job's folder sits inside it: the job's own
@@ -408,7 +435,7 @@ export async function runCodex(opts: CodexOptions): Promise<CodexResult> {
 
   const args = [
     "exec",
-    ...sandboxArgs(codexHome(), opts.edit ? opts.cwd : undefined, opts.edit ? jobHidden() : runnerCommandFiles(), opts.edit ? [...(opts.readDirs ?? []), ...codexInstall()] : []),
+    ...sandboxArgs(codexHome(), opts.edit ? opts.cwd : undefined, opts.edit ? jobHidden() : [...runnerCommandFiles(), ...reviewHidden()], opts.edit ? [...(opts.readDirs ?? []), ...codexInstall()] : []),
     // A job's commands get only the core variables (PATH, HOME and the like), never the runner's own,
     // such as a database password: what they print can end up in a file that gets pushed.
     ...(opts.edit ? ["-c", 'shell_environment_policy.inherit="core"'] : []),

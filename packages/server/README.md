@@ -122,7 +122,7 @@ The dashboard page at `mergelight.dev/dashboard` signs a person in with GitHub a
 
 The reviewing model takes no part in this. It has no network and no tool for it, and its process can't even ask GitHub for a token.
 
-A server that is down, slow or hostile can't stop or change a review. Each of the two questions gets 10 seconds in all, an answer larger than 64 KB is dropped unread, and a redirect is refused.
+A server that is down, slow or hostile can't stop or change a review. Each of the two questions gets 10 seconds in all, an answer larger than 512 KB is dropped unread, and a redirect is refused.
 
 ## Security
 
