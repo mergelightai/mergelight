@@ -108,7 +108,7 @@ beforeEach(async () => {
 test("migrations apply once, and a second run changes nothing", async () => {
   await migrate(pool);
   const { rows } = await pool.query("select name from schema_migrations");
-  assert.deepEqual(rows.map((r) => r.name).sort(), ["001_base.sql", "002_memories.sql", "003_rules.sql", "004_skills.sql", "005_checks.sql", "006_written_skills.sql", "007_billing.sql"]);
+  assert.deepEqual(rows.map((r) => r.name).sort(), ["001_base.sql", "002_memories.sql", "003_rules.sql", "004_skills.sql", "005_checks.sql", "006_written_skills.sql", "007_billing.sql", "008_billing_events.sql"]);
 });
 
 test("the server's own role can't bypass the row rules, and a superuser is refused", async () => {

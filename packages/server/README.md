@@ -116,6 +116,18 @@ One place in the server, `src/plan.ts`, says what an org may use.
 - Jobs: a working Pro plan.
 - The operator's free grants hold whatever an org pays: `CONNECT_ORGS` for the dashboard, `JOBS_ORGS` for Jobs.
 
+## Payments
+
+Paddle sells the plans: it runs the checkout, takes the money and files the taxes. It tells this server what each org pays for in messages to `POST /v1/billing/paddle` (`src/billing.ts`).
+
+- A message counts only with Paddle's signature in the `Paddle-Signature` header: an HMAC-SHA256 of its time and its exact bytes, made with the notification destination's secret. One more than 5 minutes old is refused, and one seen before is dropped by its id.
+- Which org a subscription is for comes from the checkout's custom data. The buyer's browser sends that, so the server signs it when an owner of the org asks to buy, and a new subscription counts only with a signature less than 7 days old. Paddle copies the custom data onto the subscription, and its later messages count without a fresh one.
+- A second subscription doesn't replace one that still works, and a subscription on file for one org never moves to another. Those messages are skipped and logged, for a person to sort out.
+- A subscription that works turns the dashboard on for the org. One that ended or is paused turns it off, as in Plans above.
+- The answer is 200 for a message the server chose to skip, so Paddle doesn't send it again. A server error answers 500, and Paddle tries again later.
+
+Settings, all six or none: `PADDLE_ENV` (`sandbox` or `live`), `PADDLE_API_KEY`, `PADDLE_WEBHOOK_SECRET`, `PADDLE_CLIENT_TOKEN`, `PADDLE_PRICE_LIGHT` and `PADDLE_PRICE_PRO`. A key or token for the other environment stops the start.
+
 ## The dashboard's side
 
 The dashboard page at `mergelight.dev/dashboard` signs a person in with GitHub and shows the server that GitHub token once (`POST /v1/session`). The server asks GitHub who the person is and which repositories they can see, keeps that answer for 15 minutes under a session token of its own, and drops the GitHub token. It is never stored and never logged.

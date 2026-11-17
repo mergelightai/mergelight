@@ -41,7 +41,7 @@ export interface OrgPlan {
  * The payment company's statuses in which a subscription keeps its plan. past_due: a payment failed
  * and the payment company tries again for some days. The team keeps working while it does.
  */
-const WORKING = new Set(["active", "trialing", "past_due"]);
+export const WORKING: ReadonlySet<string> = new Set(["active", "trialing", "past_due"]);
 
 /**
  * What the org may use, read inside its own transaction (withOrg). lock holds the org's row until the
