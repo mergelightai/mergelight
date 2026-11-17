@@ -54,7 +54,7 @@ Mergelight uses two apps, so that a leak of the key on Mergelight's server can't
 - Each new pull request gets a review, and each new push reviews it again. With **New work**, that's pull requests into the branch you chose.
 - Draft pull requests wait until they're marked ready for review.
 - Pull requests from forks and from Dependabot aren't reviewed, because GitHub gives their runs no secrets.
-- The workflows are pinned to a release: the one `@v0` points to, which has passed a real test review. When a newer one is out, the review says so, and **Update now** on the setup page opens a pull request that updates it.
+- The workflows are pinned to a release: the one `@v0` points to, which has passed a real test review. When a newer one is out, the review says so, and the setup page's **Update to** button opens a pull request that updates it.
 - To add a second AI, open the setup page again and pick the repository. The **Your AI** box offers **Add Claude** or **Add ChatGPT**. Then one AI reviews and the other checks its findings.
 
 ## Set it up from a terminal
