@@ -391,6 +391,11 @@ await run('update-stops-when-the-prs-step-is-gone', { onBase: customized(`${OLD_
   expect(!writes.some((w) => w.m === 'PUT'), 'writes nothing');
   expect(/The workflow on your open PR has no Mergelight step, so nothing was changed\./.test(after) && !/Your PR is open/.test(after), "says so, rather than that it's updated");
 });
+// Pinned to v0.3.0, which this page pinned to before it went by @v0. @v0 is on v0.2.0, which is older, so it's no update.
+await run('pinned-ahead-of-v0', { onBase: customized(`${'c'.repeat(40)} # v0.3.0`), login: true, button: null }, ({ before, writes }) => {
+  expect(!/Update Mergelight on api/.test(before) && !/Update to v0\.2\.0/.test(before), "a repo pinned ahead of @v0 isn't offered an older release");
+  expect(!writes.some((w) => w.m === 'PUT'), 'and nothing is written');
+});
 await run('old-refresh-job-too', { onBase: customized(`${OLD_SHA} # v0.1.0`), baseRefresh: customized(`${OLD_SHA} # v0.1.0`), login: true, button: 'Update to v0.2.0' }, ({ before, puts, refresh, pull }) => {
   expect(/Changes only the Mergelight version lines in both files/.test(before), 'says both files');
   expect(!/Adds the small job/.test(before), "doesn't claim to add the job");
