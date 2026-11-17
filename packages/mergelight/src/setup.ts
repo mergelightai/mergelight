@@ -1,3 +1,4 @@
+import { rolledOut, type Tag } from "./update.js";
 import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -75,9 +76,13 @@ export function workflowFiles(skipBranches: string[] = [], pin?: Pin, jobs = fal
 }
 
 /** The latest release, as a commit. */
+/** The version @v0 points to: the newest release whose canary passed, never one still being tried. */
 async function latestPin(deps: SetupDeps): Promise<Pin> {
-  const tag = (await deps.gh(["api", `repos/${ACTION}/releases/latest`, "--jq", ".tag_name"])).trim();
-  const sha = (await deps.gh(["api", `repos/${ACTION}/commits/${tag}`, "--jq", ".sha"])).trim();
+  // Every page: GitHub lists v0 after all the version tags, so it falls past the first page in time.
+  const tags = (JSON.parse(await deps.gh(["api", "--paginate", "--slurp", `repos/${ACTION}/tags?per_page=100`])) as Tag[][]).flat();
+  const tag = rolledOut(tags);
+  const sha = tags.find((t) => t.name === tag)?.commit.sha;
+  if (!tag || !sha) throw new Error("Couldn't tell which Mergelight release is current. Run setup again, or use --no-pin.");
   return { sha, tag };
 }
 
