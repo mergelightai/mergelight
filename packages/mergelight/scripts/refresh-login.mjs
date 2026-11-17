@@ -135,7 +135,7 @@ export function isDue(event, expiry, now) {
  * the output itself, which can hold tokens.
  */
 export function refreshFailure(text) {
-  if (/refresh_token_reused|already been used/i.test(text)) return "the refresh token was already used";
+  if (/refresh_token_reused|already (?:been )?used/i.test(text)) return "the refresh token was already used";
   if (/refresh_token_expired|refresh token (?:has )?expired/i.test(text)) return "the refresh token ran out";
   if (/refresh_token_invalidated|invalid_grant/i.test(text)) return "the refresh token was refused";
   const status = /\b(?:status(?: code)?|HTTP)[\s:=]*([45]\d\d)\b/i.exec(text)?.[1];

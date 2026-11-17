@@ -402,6 +402,7 @@ test("the job's GitHub environment is read from GitHub's signed pass for the run
 test("a refresh that fails says the known cause from Codex's error output, never the output itself", async () => {
   assert.equal(refreshFailure('ERROR codex_core::auth: {"error":{"code":"refresh_token_reused"}}'), "the refresh token was already used");
   assert.equal(refreshFailure("Your refresh token has already been used to generate a new access token."), "the refresh token was already used");
+  assert.equal(refreshFailure("Your access token could not be refreshed because your refresh token was already used."), "the refresh token was already used", "Codex's own wording");
   assert.equal(refreshFailure("refresh_token_expired"), "the refresh token ran out");
   assert.equal(refreshFailure('{"error":"invalid_grant"}'), "the refresh token was refused");
   assert.equal(refreshFailure("request failed with status 401 Unauthorized"), "HTTP 401");
