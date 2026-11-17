@@ -1,31 +1,9 @@
-import type { ReactNode } from 'react';
-import Footer from '../sections/Footer';
-import { EMAIL, GITHUB } from '../links';
+import { GITHUB } from '../links';
+import { LegalPage, List, P, linkClass, mail, type Section } from '../legal/Legal';
 
 // Every sentence here must stay true to the code. When a change touches what the token server,
 // the server, the Action or the pages send or keep, change this page in the same pull request.
 const UPDATED = 'November 16, 2026';
-
-type Section = { id: string; title: string; body: ReactNode };
-
-const mail = <a href={`mailto:${EMAIL}`} className="text-fg underline decoration-line underline-offset-4 hover:decoration-fg">{EMAIL}</a>;
-
-function List({ items }: { items: ReactNode[] }) {
-  return (
-    <ul className="mt-4 space-y-2.5">
-      {items.map((item, i) => (
-        <li key={i} className="flex gap-3">
-          <span aria-hidden="true" className="mt-[0.7em] size-1 shrink-0 rounded-full bg-faint" />
-          <span>{item}</span>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function P({ children }: { children: ReactNode }) {
-  return <p className="mt-4">{children}</p>;
-}
 
 const SECTIONS: Section[] = [
   {
@@ -61,7 +39,7 @@ const SECTIONS: Section[] = [
         items={[
           'Your source code and your diffs.',
           'Your Claude or ChatGPT login, and every other secret in your repository.',
-          <>The titles and text of your pull requests, and what the AI writes about your code. The one exception is a finding your team declines with a reason, when your organization uses the dashboard (see <a href="#dashboard" className="text-fg underline decoration-line underline-offset-4 hover:decoration-fg">The dashboard</a>).</>,
+          <>The titles and text of your pull requests, and what the AI writes about your code. The one exception is a finding your team declines with a reason, when your organization uses the dashboard (see <a href="#dashboard" className={linkClass}>The dashboard</a>).</>,
         ]}
       />
     ),
@@ -78,7 +56,7 @@ const SECTIONS: Section[] = [
             'The token server checks the pass, asks GitHub for a short-lived token for that one repository, and sends it back to the run. It keeps nothing: it has no database and writes no files, its logs hold only the names of errors, and it does not read IP addresses.',
             'To keep your AI login fresh, the run saves it to your own repository secrets. For that, it first asks our token server for a short-lived token that can write your repository\'s secrets, with the same signed pass. A scheduled job in your repository does the same every few days. The login itself goes from your runner to GitHub, never to us.',
             'After you connect a ChatGPT login, the Action posts part of the account\'s email address on the pull request, so your team can see whose plan pays for reviews. That comment lives on GitHub, not with us.',
-            <>When your organization uses the dashboard, the Action's <code className="font-mono text-[0.92em] text-fg">server</code> input is set. Then each run also sends a pass that GitHub signs to our dashboard server, with the review's numbers and the findings your team declined (see <a href="#dashboard" className="text-fg underline decoration-line underline-offset-4 hover:decoration-fg">The dashboard</a>).</>,
+            <>When your organization uses the dashboard, the Action's <code className="font-mono text-[0.92em] text-fg">server</code> input is set. Then each run also sends a pass that GitHub signs to our dashboard server, with the review's numbers and the findings your team declined (see <a href="#dashboard" className={linkClass}>The dashboard</a>).</>,
             <>You can leave us out: set the Action's <code className="font-mono text-[0.92em] text-fg">token-server</code> and <code className="font-mono text-[0.92em] text-fg">server</code> inputs to empty in every Mergelight workflow in your repository, including the ones that refresh the login and approve pull requests. Reviews then post as github-actions[bot], and nothing at all reaches us.</>,
           ]}
         />
@@ -199,7 +177,7 @@ const SECTIONS: Section[] = [
     body: (
       <P>
         We update this page when Mergelight changes what it sends or keeps. The date at the top shows the last change, and every earlier version is in{' '}
-        <a href={`${GITHUB}/commits/main/site/src/privacy/Privacy.tsx`} className="text-fg underline decoration-line underline-offset-4 hover:decoration-fg">
+        <a href={`${GITHUB}/commits/main/site/src/privacy/Privacy.tsx`} className={linkClass}>
           the history on GitHub
         </a>
         .
@@ -210,28 +188,11 @@ const SECTIONS: Section[] = [
 
 export default function Privacy() {
   return (
-    <div className="flex min-h-dvh flex-col bg-ink text-muted">
-      <header className="mx-auto flex h-16 w-full max-w-3xl items-center px-5 sm:px-8">
-        <a href="/" className="flex items-center gap-2.5 text-[15px] font-semibold tracking-tight text-fg">
-          <img src="/logo.png" alt="" width={24} height={24} className="size-6 rounded-md" />
-          Mergelight
-        </a>
-      </header>
-      <main className="mx-auto w-full max-w-3xl flex-1 px-5 pb-24 pt-10 text-[15px] leading-relaxed sm:px-8 sm:pt-16">
-        <h1 className="text-3xl font-semibold tracking-[-0.03em] text-fg sm:text-4xl">Privacy policy</h1>
-        <p className="mt-3 text-sm text-faint">Last updated {UPDATED}</p>
-        <p className="mt-8 text-lg text-muted">
-          Mergelight is AI code review that runs in your own GitHub Actions, on the Claude or ChatGPT plan you already pay for. This page says what data
-          reaches us, what we keep, for how long, and what we never see.
-        </p>
-        {SECTIONS.map((s) => (
-          <section key={s.id} id={s.id} className="mt-12 scroll-mt-8">
-            <h2 className="text-xl font-semibold tracking-tight text-fg">{s.title}</h2>
-            {s.body}
-          </section>
-        ))}
-      </main>
-      <Footer />
-    </div>
+    <LegalPage
+      title="Privacy policy"
+      updated={UPDATED}
+      intro="Mergelight is AI code review that runs in your own GitHub Actions, on the Claude or ChatGPT plan you already pay for. This page says what data reaches us, what we keep, for how long, and what we never see."
+      sections={SECTIONS}
+    />
   );
 }
