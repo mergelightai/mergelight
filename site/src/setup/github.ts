@@ -297,7 +297,7 @@ const APPROVE_NOTE = ' It also adds a small job that turns a "needs a human" che
 const COMMENTS_NOTE =
   ' The review workflow also gets the trigger that lets a pull request comment that mentions @mergelight-ai answer the findings, which reviews it again: one more event, its part of the condition, and a concurrency group per comment.';
 const updateBody = (release: Release, notes: { refresh: string; approve: string; comments: string }) =>
-  `Moves the workflow to [${release.tag}](https://github.com/mergelightai/mergelight/releases/tag/${release.tag}), pinned to its exact commit. ${notes.comments ? 'Besides the Mergelight version lines, one thing changes.' : 'Only the Mergelight version lines change.'}${notes.comments}${notes.refresh}${notes.approve} This pull request reviews itself with the new version.`;
+  `Moves the workflow to [${release.tag}](https://github.com/mergelightai/mergelight/releases/tag/${release.tag}), pinned to its exact commit. ${notes.comments ? 'Besides the Mergelight version lines, the review workflow changes in one way.' : 'Only the Mergelight version lines change.'}${notes.comments}${notes.refresh}${notes.approve} This pull request reviews itself with the new version.`;
 /** Says nothing about which AI, so it stays true when a second change lands on the same pull request. */
 const ROLES_TITLE = 'Set who reviews and who checks in Mergelight';
 const rolesBody = (refresh: string) =>
