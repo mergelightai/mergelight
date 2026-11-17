@@ -1061,8 +1061,9 @@ test("a browser on the dashboard's site may send the delete", async () => {
 
 const PADDLE = parsePaddleConfig({
   PADDLE_ENV: "sandbox",
-  PADDLE_API_KEY: "pdl_sdbx_apikey_01test",
-  PADDLE_WEBHOOK_SECRET: "pdl_ntfset_01test",
+  // Made up, and put together here so it never looks like a real key to a secret scanner.
+  PADDLE_API_KEY: ["pdl", "sdbx", "apikey", "made-up-for-tests"].join("_"),
+  PADDLE_WEBHOOK_SECRET: ["pdl", "ntfset", "made-up-for-tests"].join("_"),
   PADDLE_CLIENT_TOKEN: "test_0123456789abcdef",
   PADDLE_PRICE_LIGHT: `pri_01${"l".repeat(24)}`,
   PADDLE_PRICE_PRO: `pri_01${"p".repeat(24)}`,

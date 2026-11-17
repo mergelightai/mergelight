@@ -90,6 +90,15 @@ const PADDLE = { env: 'sandbox', client_token: 'test_0123456789abcdef', prices: 
 const SIGNED = (org, login) => ({ org_id: String(org), org_login: login, expires: '1900000000', sig: 'a'.repeat(64) });
 const billingOf = (org, login, over = {}) => ({ org: { id: org, login }, can_manage: true, dashboard: false, ended: false, jobs: false, free: false, subscription: null, paddle: PADDLE, checkout: SIGNED(org, login), ...over });
 /** Paddle.js as the tests fake it: it keeps what the page asked for, and the payment goes through at once. */
+/** An org that turned on by paying: the server has its lists now, all empty. */
+const turnOn = (id, login) => {
+  const repos = [{ id: 950, name: `${login}/site` }];
+  OVERVIEWS[id] ??= { org: { id: Number(id), login }, can_delete: true, repos: [], reviews: [] };
+  RULES[id] ??= { can_set_org_rules: true, repos: repos.map((r) => ({ ...r, can_set_rules: true })), rules: [] };
+  SKILLS[id] ??= { repos: repos.map((r) => ({ ...r, can_pick_skills: true })), skills: [] };
+  CHECKS[id] ??= { repos: repos.map((r) => ({ ...r, can_set_checks: true })), checks: [] };
+  WRITTEN[id] ??= { repos: repos.map((r) => ({ ...r, can_write_skills: true })), skills: [] };
+};
 const FAKE_PADDLE = `window.__paddle = {};
 window.Paddle = {
   Environment: { set: (env) => { window.__paddle.env = env; } },
@@ -181,7 +190,7 @@ async function open(name, { signedOutAfter = Infinity, serverDown = false, forge
         }
         // Paid: Paddle told the server, so the dashboard is on, with nothing stored yet.
         if (plans.paid.has(id)) {
-          OVERVIEWS[id] ??= { org: { id: Number(id), login: page.org.login }, can_delete: true, repos: [], reviews: [] };
+          turnOn(id, page.org.login);
           return json(req, { ...page, dashboard: true, checkout: null, subscription: { plan: 'pro', seats: 3, status: 'active', working: true, current_period_end: hoursAgo(-24 * 30) } });
         }
         return json(req, page);
@@ -887,8 +896,8 @@ const done = async (t) => {
   expect(/Payment done\. Turning the dashboard on for quiet\./.test(page), 'after the payment the page says it is turning the dashboard on');
   // Paddle tells the server a moment later.
   t.plans.paid.add('3003');
-  await t.page.waitForFunction(() => /The dashboard is on for quiet/.test(document.body.innerText), { timeout: 8000 }).catch(() => null);
-  expect(/The dashboard is on for quiet/.test(await t.text()), 'once the server has heard from Paddle, the dashboard is on, with no reload by hand');
+  await t.page.waitForFunction(() => /The dashboard is on for quiet\. Add one line/.test(document.querySelector('main')?.innerText ?? ''), { timeout: 10000 }).catch(() => null);
+  expect(/The dashboard is on for quiet\. Add one line/.test(await t.text()), 'once the server has heard from Paddle, the dashboard is on, with no reload by hand');
   await done(t);
 }
 

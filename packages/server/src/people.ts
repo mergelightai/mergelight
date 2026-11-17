@@ -408,7 +408,7 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
       proration_billing_mode: "prorated_immediately",
     });
     const sub = readSubscription(config, data);
-    if (typeof sub === "string") throw new HttpError(502, "paddle_error", "Paddle's answer didn't name a Mergelight plan.");
+    if (typeof sub === "string" || !sub.plan) throw new HttpError(502, "paddle_error", "Paddle's answer didn't name a Mergelight plan.");
     // Paddle's answer is the subscription as it is now. Its message about the change comes too, and changes nothing more.
     await withOrg(pool, orgId, async (db) => {
       await db.query(
