@@ -73,11 +73,11 @@ const billingOf = async (org) => (await withOrg(pool, org.id, async (db) => (awa
 const orgRow = async (org) => (await withOrg(pool, org.id, async (db) => (await db.query("select login from orgs")).rows))[0] ?? null;
 
 /** A review run's context, as the review program asks for it. */
-function runToken(org) {
+function runToken(org, claims = {}) {
   const b64 = (v) => Buffer.from(JSON.stringify(v)).toString("base64url");
   const s = Math.floor(clock / 1000);
   const head = b64({ alg: "RS256", kid: KID });
-  const body = b64({ iss: "https://token.actions.githubusercontent.com", aud: PUBLIC_URL, exp: s + 300, nbf: s - 10, jti: randomUUID(), repository: `${org.login}/widgets`, repository_id: "501", repository_owner: org.login, repository_owner_id: String(org.id), run_id: "9001", run_attempt: "1", event_name: "pull_request" });
+  const body = b64({ iss: "https://token.actions.githubusercontent.com", aud: PUBLIC_URL, exp: s + 300, nbf: s - 10, jti: randomUUID(), repository: `${org.login}/widgets`, repository_id: "501", repository_owner: org.login, repository_owner_id: String(org.id), run_id: "9001", run_attempt: "1", event_name: "pull_request", ...claims });
   const signer = createSign("RSA-SHA256");
   signer.update(`${head}.${body}`);
   return `${head}.${body}.${signer.sign(oidc.privateKey).toString("base64url")}`;
@@ -227,6 +227,9 @@ test("a canceled subscription turns the dashboard off and keeps the data, and a 
   await send(message({ type: "subscription.canceled", status: "canceled", occurred: clock + 1000 }));
   assert.equal((await billingOf(ACME)).status, "canceled");
   assert.deepEqual(await contextOf(ACME), { connected: false, plan_ended: true });
+  // Its public repositories stay on by themselves: Light is free for them.
+  const pub = await (await api(new Request(`${PUBLIC_URL}/v1/context`, { headers: { authorization: `Bearer ${runToken(ACME, { repository_visibility: "public" })}` } }))).json();
+  assert.equal(pub.connected, true);
   assert.deepEqual(await orgRow(ACME), { login: "acme" });
   clock += 86_400_000;
   assert.equal((await (await send(message({ sub: "sub_01bbbbbbbbbbbbbbbbbbbbbbbb", price: ENV.PADDLE_PRICE_LIGHT }))).json()).stored, true);

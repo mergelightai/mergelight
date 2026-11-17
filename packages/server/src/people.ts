@@ -349,7 +349,7 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
     // delete stays with it, so a decision written before it can't come back with the next review.
     if (paid) {
       await connectOrg(pool, orgId, reach.login);
-      await withOrg(pool, orgId, (db) => db.query("update orgs set data_deleted_at = now() where id = $1", [orgId]));
+      await withOrg(pool, orgId, (db) => db.query("update orgs set data_deleted_at = now(), public_only = true where id = $1", [orgId]));
     }
     return { status: 204, body: null };
   }
