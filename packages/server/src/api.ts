@@ -15,7 +15,7 @@ import { HttpError, verifyOidcToken } from "../../token-server/dist/token.js";
 import { createPaddleWebhook, type PaddleConfig } from "./billing.js";
 import { isId, MEMORY_DAYS, withOrg, type Pool } from "./db.js";
 import { createPeopleApi } from "./people.js";
-import { planOf, type Grants } from "./plan.js";
+import { coversRepo, planOf, type Grants } from "./plan.js";
 import { isLineOfText } from "./validate.js";
 
 /**
@@ -113,6 +113,8 @@ interface Caller {
   repo: string;
   /** The pull request the run is for, when GitHub's token names it. A run on pull_request_target has none. */
   pr: number | null;
+  /** The repository is public, as GitHub signed it. Light is free for those. */
+  isPublic: boolean;
 }
 
 export interface ApiOptions {
@@ -278,14 +280,15 @@ export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"
     useOnce(jti, claims.exp * 1000 + 60_000, at);
     // On a pull_request run GitHub signs "refs/pull/<number>/merge".
     const pull = typeof claims.ref === "string" ? /^refs\/pull\/(\d{1,10})\/merge$/.exec(claims.ref) : null;
-    return { orgId, repoId, runId, runAttempt, repo, pr: pull ? Number(pull[1]) : null };
+    return { orgId, repoId, runId, runAttempt, repo, pr: pull ? Number(pull[1]) : null, isPublic: claims.repository_visibility === "public" };
   }
 
   /** What a review needs before it starts: whether the org uses the dashboard, and what the team decided before in this repository. */
   async function context(who: Caller): Promise<Response> {
     const found = await withOrg(pool, who.orgId, async (db) => {
       const plan = await planOf(db, who.orgId, grants);
-      if (!plan.dashboard) return { jobs: plan.jobs, ended: plan.ended, data: null };
+      // A paid plan that lapsed is said for every review it no longer covers, also when the free plan still covers public repositories.
+      if (!coversRepo(plan, who.isPublic)) return { jobs: plan.jobs, ended: plan.ended || plan.lapsed, data: null };
       const { rows } = await db.query(
         `select id, title, file, line, end_line, reason, by_login, pr
            from memories
@@ -339,7 +342,7 @@ export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"
 
     const stored = await withOrg(pool, who.orgId, async (db) => {
       // Nothing is kept for an org whose dashboard is off.
-      if (!(await planOf(db, who.orgId, grants)).dashboard) return null;
+      if (!coversRepo(await planOf(db, who.orgId, grants), who.isPublic)) return null;
       await db.query(
         `insert into repos (org_id, id, name, last_review_at) values ($1, $2, $3, now())
          on conflict (org_id, id) do update set name = excluded.name, last_review_at = now()`,

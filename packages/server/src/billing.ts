@@ -210,7 +210,8 @@ export function createPaddleWebhook({ pool, config, now }: BillingWebhookOptions
           [org.id, sub.customerId, sub.id, sub.plan ?? current!.plan, sub.seats, sub.status, sub.periodEnd, new Date(occurred).toISOString()],
         );
         // A plan that works turns the dashboard on: from now on the org's runs are stored here.
-        if (WORKING.has(sub.status)) await db.query("insert into orgs (id, login) values ($1, $2) on conflict (id) do nothing", [org.id, org.login]);
+        // It is marked for the free plan on public repositories too, so those stay on by themselves when the paid plan ends.
+        if (WORKING.has(sub.status)) await db.query("insert into orgs (id, login, public_only) values ($1, $2, true) on conflict (id) do update set public_only = true", [org.id, org.login]);
         return "stored";
       });
     } catch (err) {

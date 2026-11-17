@@ -1080,7 +1080,7 @@ test("the billing page says what the org pays for, and offers only an owner a si
   const ada = (await signIn(ADA)).token;
   const own = await billing(ada);
   assert.deepEqual({ ...own, checkout: undefined }, {
-    org: { id: ACME.id, login: "acme" }, can_manage: true, dashboard: true, ended: false, jobs: false, free: true, subscription: null,
+    org: { id: ACME.id, login: "acme" }, can_manage: true, dashboard: true, covers: "all", ended: false, jobs: false, free: true, subscription: null,
     paddle: { env: "sandbox", client_token: PADDLE.clientToken, prices: PADDLE.prices }, checkout: undefined,
   });
   assert.deepEqual(Object.keys(own.checkout), ["org_id", "org_login", "expires", "sig"]);
@@ -1161,4 +1161,28 @@ test("deleting a paying org's data keeps its dashboard on, empty", async () => {
   const later = { ...decline(2, "Written after"), decided_at: new Date(Date.now() + 60_000).toISOString() };
   assert.equal((await report({ run_id: "9301" }, { declines: [decline(1, "Written before"), later] })).status, 201);
   assert.deepEqual((await withOrgRows(ACME.id, "select title from memories")).map((m) => m.title), ["Written after"]);
+});
+
+test("an owner turns on Light for the org's public repositories, for free", async () => {
+  withPaddle();
+  await deleteOrg(pool, ACME.id);
+  const ada = (await signIn(ADA)).token;
+  const free = (token = ada) => call(`/v1/orgs/${ACME.id}/billing/free`, { method: "POST", token });
+  assert.equal((await free((await signIn(EVE)).token)).status, 403);
+  const res = await free();
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { covers: "public" });
+  assert.deepEqual(await withOrgRows(ACME.id, "select login, public_only from orgs"), [{ login: "acme", public_only: true }]);
+  const page = await billing(ada);
+  assert.deepEqual([page.covers, page.free, page.dashboard, page.checkout?.org_id], ["public", false, true, String(ACME.id)]);
+  // Again changes nothing, and neither does it for an org that pays.
+  assert.deepEqual(await (await free()).json(), { covers: "public" });
+  // An ended plan: the free one for public repositories turns its data on again.
+  await withOrg(pool, ACME.id, (db) => db.query("update orgs set public_only = false"));
+  await pays("light", "canceled");
+  assert.equal((await billing(ada)).covers, "none");
+  assert.deepEqual(await (await free()).json(), { covers: "public" });
+  // A server that sells nothing leaves turning on to whoever runs it.
+  api = createApi({ pool, publicUrl: PUBLIC_URL, origins: [SITE], fetchImpl, now: () => clock });
+  assert.equal((await call(`/v1/orgs/${ACME.id}/billing/free`, { method: "POST", token: (await signIn(ADA)).token })).status, 503);
 });

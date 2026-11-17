@@ -113,6 +113,7 @@ One place in the server, `src/plan.ts`, says what an org may use.
 - The dashboard: the org's data is stored here, and it pays for Light or Pro with a subscription that works (`active`, `trialing`, or `past_due` while the payment company tries a failed payment again). An org the operator turned on that pays for nothing stays on too: those came before payments.
 - A subscription that ended or is paused turns the dashboard off for reviews: runs store nothing and get no memory, rules, skills or checks. The server tells the run that the plan ended (`plan_ended`), so the review can say why it ran without them.
 - The data stays until an owner deletes it, so a plan bought again finds it. The dashboard still shows it, and its rules, skills and checks can be removed and the whole org deleted. Adding something new answers `403 plan_ended`.
+- Light is free for public repositories: an owner turns it on with "Turn on for free" (`orgs.public_only`), and a paid plan turns it on too. Reviews of public repositories then use the dashboard whatever the org pays, and private and internal ones need a working plan. Which repository is public comes from GitHub's signed `repository_visibility` claim.
 - Jobs: a working Pro plan.
 - The operator's free grants hold whatever an org pays: `CONNECT_ORGS` for the dashboard, `JOBS_ORGS` for Jobs.
 
