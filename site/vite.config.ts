@@ -15,7 +15,7 @@ export default defineConfig(async () => {
     server: { fs: { allow: ['..'] } },
     build: {
       rollupOptions: {
-        input: { main: 'index.html', setup: 'setup/index.html', dashboard: 'dashboard/index.html', privacy: 'privacy/index.html', ...docs },
+        input: { main: 'index.html', setup: 'setup/index.html', dashboard: 'dashboard/index.html', privacy: 'privacy/index.html', terms: 'terms/index.html', refunds: 'refunds/index.html', ...docs },
       },
     },
   };

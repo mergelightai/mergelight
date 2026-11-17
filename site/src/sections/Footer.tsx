@@ -13,6 +13,8 @@ export default function Footer() {
           <a href={DOCS} className="transition-colors hover:text-fg">Docs</a>
           <a href={GITHUB} className="transition-colors hover:text-fg">GitHub</a>
           <a href="/privacy/" className="transition-colors hover:text-fg">Privacy</a>
+          <a href="/terms/" className="transition-colors hover:text-fg">Terms</a>
+          <a href="/refunds/" className="transition-colors hover:text-fg">Refunds</a>
           <a href={`mailto:${EMAIL}`} className="transition-colors hover:text-fg">{EMAIL}</a>
         </div>
       </Container>
