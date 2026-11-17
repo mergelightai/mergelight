@@ -165,7 +165,7 @@ ${outline(toc)}
 <footer class="border-t border-line/70 py-10 text-sm text-faint">
   <div class="mx-auto flex w-full max-w-7xl flex-col items-center justify-between gap-4 px-5 sm:flex-row sm:px-8">
     <div class="flex items-center gap-2.5"><img src="/logo.png" alt="" width="20" height="20" class="size-5 rounded-[5px]"><span>&copy; 2026 Mergelight</span></div>
-    <div class="flex items-center gap-6"><a href="/docs/" class="transition-colors hover:text-fg">Docs</a><a href="${REPO}" class="transition-colors hover:text-fg">GitHub</a><a href="/privacy/" class="transition-colors hover:text-fg">Privacy</a><a href="mailto:${EMAIL}" class="transition-colors hover:text-fg">${EMAIL}</a></div>
+    <div class="flex flex-wrap items-center justify-center gap-x-6 gap-y-2"><a href="/docs/" class="transition-colors hover:text-fg">Docs</a><a href="${REPO}" class="transition-colors hover:text-fg">GitHub</a><a href="/privacy/" class="transition-colors hover:text-fg">Privacy</a><a href="mailto:${EMAIL}" class="transition-colors hover:text-fg">${EMAIL}</a></div>
   </div>
 </footer>
 <dialog id="docs-search" aria-label="Search the docs" class="mx-auto mb-auto mt-[12vh] w-[calc(100%-2rem)] max-w-xl overflow-hidden rounded-2xl bg-panel-2 text-muted shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08),0_32px_64px_-24px_rgb(0_0_0/0.9)] backdrop:bg-black/60 backdrop:backdrop-blur-sm">

@@ -24,11 +24,14 @@ menuButton?.addEventListener('click', () => {
 document.addEventListener('click', async (event) => {
   const button = (event.target as Element).closest<HTMLButtonElement>('[data-copy]');
   if (!button) return;
-  const code = button.parentElement?.querySelector('pre')?.innerText ?? '';
+  const pre = button.parentElement?.querySelector('pre');
+  if (!pre) return;
   try {
-    await navigator.clipboard.writeText(code.replace(/\n$/, ''));
+    await navigator.clipboard.writeText(pre.innerText.replace(/\n$/, ''));
     button.textContent = 'Copied';
   } catch {
+    // No clipboard access here: select the code, so the copy keys work.
+    getSelection()?.selectAllChildren(pre);
     button.textContent = mac ? 'Press ⌘C' : 'Press Ctrl C';
   }
   setTimeout(() => (button.textContent = 'Copy'), 1600);
@@ -59,7 +62,15 @@ let pagefind: Promise<Pagefind | null> | undefined;
 let asked = 0;
 let timer: ReturnType<typeof setTimeout> | undefined;
 
-const load = () => (pagefind ??= import(/* @vite-ignore */ PAGEFIND).then((m: Pagefind) => m, () => null));
+// A load that failed, for example on a dropped connection, is tried again at the next search.
+const load = () =>
+  (pagefind ??= import(/* @vite-ignore */ PAGEFIND).then(
+    (m: Pagefind) => m,
+    () => {
+      pagefind = undefined;
+      return null;
+    },
+  ));
 
 function openSearch() {
   if (!dialog || dialog.open) return;
@@ -97,7 +108,7 @@ async function search(query: string) {
   if (!list.firstElementChild) skeleton();
   const pf = await load();
   if (ask !== asked) return;
-  if (!pf) return note('Search works on the built site.');
+  if (!pf) return note('Search couldn’t load. Check your connection and try again.');
   const found = await pf.search(query);
   const pages = await Promise.all(found.results.slice(0, 8).map((r) => r.data()));
   if (ask !== asked) return;

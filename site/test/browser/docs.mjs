@@ -38,15 +38,16 @@ page.on('request', (req) => {
 
 try {
   await page.setViewport({ width: 1440, height: 900 });
-  await page.goto(`${base}/`, { waitUntil: 'networkidle0' });
-  check(await page.$eval('header nav', (n) => [...n.querySelectorAll('a')].some((a) => a.getAttribute('href') === '/docs/')), 'the landing page links to the docs');
+  // The landing page keeps loading in the background, so wait for its link, not for the network to go quiet.
+  await page.goto(`${base}/`, { waitUntil: 'domcontentloaded' });
+  check(await page.waitForSelector('header nav a[href="/docs/"]', { timeout: 15000 }).then(() => true, () => false), 'the landing page links to the docs');
   // Only the docs pages' own errors count from here: the landing page has its own tests.
   errors.length = 0;
 
-  await page.goto(`${base}/docs/`, { waitUntil: 'networkidle0' });
+  await page.goto(`${base}/docs/`, { waitUntil: 'load' });
   check((await page.$$eval('main a[href^="/docs/"]', (as) => as.length)) >= 3, 'the overview links to every page');
 
-  await page.goto(`${base}/docs/github-action/`, { waitUntil: 'networkidle0' });
+  await page.goto(`${base}/docs/github-action/`, { waitUntil: 'load' });
   check((await page.$eval('article h1', (h) => h.textContent)) === 'Mergelight GitHub Action', 'a page is finished HTML with its title');
   check((await page.$eval('aside [aria-current="page"]', (a) => a.textContent)) === 'GitHub Action', 'the menu marks the open page');
   check((await page.$$('[data-toc]')).length > 3, 'the page has an outline');
@@ -77,9 +78,9 @@ try {
   await page.keyboard.press('Escape');
 
   // A phone: the menu opens from its button, and no page is wider than the screen.
-  await page.setViewport({ width: 390, height: 844 });
+  await page.setViewport({ width: 360, height: 780 });
   for (const slug of ['', 'github-action/', 'agents/', 'jobs/']) {
-    await page.goto(`${base}/docs/${slug}`, { waitUntil: 'networkidle0' });
+    await page.goto(`${base}/docs/${slug}`, { waitUntil: 'load' });
     check(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `/docs/${slug} fits a phone's width`);
   }
   check(await page.$eval('#docs-menu', (n) => n.hidden), 'the phone menu starts closed');
