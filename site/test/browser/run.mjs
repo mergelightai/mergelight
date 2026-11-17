@@ -6,7 +6,7 @@ import { availableParallelism } from 'node:os';
 const dir = new URL('.', import.meta.url).pathname;
 const parts = (file, n) => Array.from({ length: n }, (_, i) => ({ file, shard: `${i + 1}/${n}` }));
 // The longest first, so the last to start isn't the one everything waits for.
-const jobs = [...parts('two-ais.mjs', Number(process.env.TWO_AIS_PARTS ?? 4)), ...parts('connect-code.mjs', 2), { file: 'full-flow.mjs' }, { file: 'dashboard.mjs' }, { file: 'return-trip.mjs' }];
+const jobs = [...parts('two-ais.mjs', Number(process.env.TWO_AIS_PARTS ?? 4)), ...parts('connect-code.mjs', 2), { file: 'full-flow.mjs' }, { file: 'dashboard.mjs' }, { file: 'return-trip.mjs' }, { file: 'docs.mjs' }];
 // Two at a time: with four Chromes at once on a Mac, every part slowed down about sixfold (984 s against about
 // 160 s each), so more at once only made the whole run longer. BROWSER_JOBS sets another number.
 const limit = Number(process.env.BROWSER_JOBS ?? Math.min(2, Math.max(1, availableParallelism())));

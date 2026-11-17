@@ -1,3 +1,6 @@
 node_modules/
 dist/
 *.tsbuildinfo
+
+# The docs pages, made from ../docs/*.md by docgen/build.ts on each build.
+/docs/

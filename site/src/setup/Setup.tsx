@@ -14,7 +14,7 @@ import { aiName, connectsAfterMerge, isStandard, readsPlanLogin, runsOnBase, wai
 
 const CHATGPT_SECURITY = 'https://chatgpt.com/settings/security';
 /** Where the Action's docs say how provider and verify-with work, for a workflow set by hand. */
-const ROLES_DOCS = 'https://github.com/mergelightai/mergelight/blob/main/docs/github-action.md#two-ais-one-reviews-the-other-checks';
+const ROLES_DOCS = '/docs/github-action/#two-ais-one-reviews-the-other-checks';
 const TYPES_MARKER = 'types: [opened, synchronize, reopened, ready_for_review, edited]';
 const SKIP_MARKER = 'github.event.pull_request.head.repo.full_name == github.repository';
 const SPRING = { type: 'spring', bounce: 0, duration: 0.45 } as const;

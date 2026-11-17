@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { EARLY, GITHUB, SETUP } from '../links';
+import { DOCS, EARLY, GITHUB, SETUP } from '../links';
 import { GitHubIcon } from '../ui';
 
 export default function Nav() {
@@ -27,6 +27,7 @@ export default function Nav() {
           <a href="#how" className="transition-colors hover:text-fg">How it works</a>
           <a href="#pricing" className="transition-colors hover:text-fg">Pricing</a>
           <a href={SETUP} className="transition-colors hover:text-fg">Set up</a>
+          <a href={DOCS} className="transition-colors hover:text-fg">Docs</a>
           <a href={GITHUB} className="flex items-center gap-1.5 transition-colors hover:text-fg">
             <GitHubIcon /> GitHub
           </a>

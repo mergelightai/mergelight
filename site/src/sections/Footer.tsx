@@ -1,4 +1,4 @@
-import { EMAIL, GITHUB } from '../links';
+import { DOCS, EMAIL, GITHUB } from '../links';
 import { Container } from '../ui';
 
 export default function Footer() {
@@ -9,7 +9,8 @@ export default function Footer() {
           <img src="/logo.png" alt="" width={20} height={20} className="size-5 rounded-[5px]" />
           <span>&copy; 2026 Mergelight</span>
         </div>
-        <div className="flex items-center gap-6">
+        <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2">
+          <a href={DOCS} className="transition-colors hover:text-fg">Docs</a>
           <a href={GITHUB} className="transition-colors hover:text-fg">GitHub</a>
           <a href="/privacy/" className="transition-colors hover:text-fg">Privacy</a>
           <a href={`mailto:${EMAIL}`} className="transition-colors hover:text-fg">{EMAIL}</a>

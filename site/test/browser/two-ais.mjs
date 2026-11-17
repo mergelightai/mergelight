@@ -705,7 +705,7 @@ await scenario('public-repo-adds-chatgpt-checker', { isPrivate: false, secrets: 
   await until((x) => /Reviews with Claude, checked by ChatGPT/.test(x) && !/Resume/.test(x), 'ChatGPT checking, once its login is saved');
 });
 
-const DOCS = 'https://github.com/mergelightai/mergelight/blob/main/docs/github-action.md#two-ais-one-reviews-the-other-checks';
+const DOCS = 'https://mergelight.dev/docs/github-action/#two-ais-one-reviews-the-other-checks';
 /** The live step's text when the page leaves the choice to the workflow, and nothing to click that changes it. */
 const readOnly = async (page, live) => !/Add ChatGPT|Add Claude/.test(live) && !(await page.evaluate(() => [...document.querySelectorAll('section[aria-label="Your AI"] button')].length)) && (await page.evaluate(() => document.querySelector('section[aria-label="Your AI"] a')?.href)) === DOCS;
 
