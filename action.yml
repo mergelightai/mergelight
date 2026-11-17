@@ -54,11 +54,13 @@ inputs:
   auto-approve:
     description: >
       When a review is green and every one of your team's own checks passed, Mergelight approves the
-      pull request, like a reviewer would, and takes the approval back when a later review isn't
-      green. Set to "false" to turn that off: Mergelight then never approves, and takes back an
+      pull request as the Mergelight AI app, and takes the approval back when a later review isn't
+      green. The approval is a signal only: GitHub counts an approval toward a branch rule only from
+      an account that can push, and the app can only read code, so a person still gives that approval.
+      Set to "false" to turn Mergelight's approval off: it then never approves, and takes back an
       approval it gave before on each pull request's next review. For pull requests that are already
-      open, dismiss Mergelight's approval by hand or push to them. Where a branch rule asks for an
-      approval, a person then has to give it. Any other value than true or false, empty aside, counts as false.
+      open, dismiss it by hand or push to them. Any other value than true or false, empty aside,
+      counts as false.
     default: "true"
   codex-version:
     description: Version of the Codex CLI to install.
