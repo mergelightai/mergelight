@@ -105,7 +105,7 @@ export function NotOn({ org, children }: { org: Org; children?: ReactNode }) {
 export function PlanEnded({ org, canPick, onPick }: { org: Org; canPick: boolean; onPick: () => void }) {
   return (
     <div role="status" className="mb-6 flex max-w-3xl flex-wrap items-center justify-between gap-x-6 gap-y-3 rounded-[12px] bg-human/[0.12] px-4 py-3 text-[13.5px] leading-relaxed text-human-ink">
-      <p>The Mergelight plan for {org.login} ended or is paused. Reviews run without your team's rules, skills, checks and decisions, and nothing new can be added. What is stored stays until an owner deletes it.</p>
+      <p>The Mergelight plan for {org.login} ended or is paused. Reviews run without the rules, skills, checks and saved decisions on the dashboard, and nothing new can be added there. What is stored stays until an owner deletes it.</p>
       {canPick && (
         <Button size="sm" variant="outline" onClick={onPick}>
           Pick a plan

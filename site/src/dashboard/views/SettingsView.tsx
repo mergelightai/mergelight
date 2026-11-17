@@ -76,7 +76,7 @@ export function SettingsView({
               )}
               <div>
                 <Button type="submit" variant="destructive" disabled={!matches || busy}>
-                  {busy ? 'Deleting…' : 'Delete everything'}
+                  {busy ? 'Deleting…' : 'Delete the data'}
                 </Button>
               </div>
             </form>

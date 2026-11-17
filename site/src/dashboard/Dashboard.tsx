@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { addCheck, addRule, addSkill, deleteOrgData, finishSignIn, forgetDecision, loadChecks, loadDecisions, loadOverview, loadRules, loadSkills, mayRenew, NotConnected, rememberedSession, removeCheck, removeRule, removeSkill, SignedOut, signInUrl, signOut, tidyAddress, type Checks, type Decision, type Overview, type Rules, type Session, type Skills } from './api';
 import { AppShell, VIEWS, type ViewId } from './AppShell';
-import { loadBilling, PlanPicker, type Billing } from './Billing';
+import { loadBilling, PlanPicker, PortalButton, type Billing } from './Billing';
 import { claimTab, forgetTab, keepOrg, keptOrg, keepView, keptView, takeResume } from './kit';
 import { ChecksView } from './views/ChecksView';
 import { DecisionsView } from './views/DecisionsView';
@@ -229,8 +229,22 @@ export default function Dashboard() {
       }}
     >
       {view.kind === 'loading' && <Spinning>Loading reviews</Spinning>}
-      {view.kind === 'off' && <NotOn org={org}>{view.billing?.paddle && <PlanPicker session={session} billing={view.billing} onOn={reload} />}</NotOn>}
-      {ready?.overview.plan_ended && tab !== 'settings' && <PlanEnded org={org} canPick={ready.billing?.can_manage === true} onPick={() => pickTab('settings')} />}
+      {view.kind === 'off' && (
+        <NotOn org={org}>
+          {view.billing?.paddle && (
+            <div className="grid gap-5">
+              <PlanPicker session={session} billing={view.billing} signedIn={signedIn} onOn={reload} />
+              {/* An org whose data was deleted can still have a plan on file: its invoices, and cancel, stay one click away. */}
+              {view.billing.can_manage && view.billing.subscription && (
+                <div>
+                  <PortalButton session={session} orgId={org.id} signedIn={signedIn} />
+                </div>
+              )}
+            </div>
+          )}
+        </NotOn>
+      )}
+      {ready?.overview.plan_ended && tab !== 'settings' && <PlanEnded org={org} canPick={ready.billing?.can_manage === true && ready.billing.paddle !== null} onPick={() => pickTab('settings')} />}
       {view.kind === 'error' && <LoadError onRetry={reload} />}
       {ready && tab === 'reviews' && (ready.overview.reviews.length ? <ReviewsView overview={ready.overview} login={session.user.login} orgLogin={org.login} filters={filters} onFilters={setFilters} /> : <NothingYet org={org} />)}
       {ready && tab === 'rules' && (ready.rules ? (
@@ -312,10 +326,9 @@ export default function Dashboard() {
           onBillingChanged={reload}
           onDelete={async (confirm) => {
             await signedIn(() => deleteOrgData(session, org.id, confirm));
-            toast.success(`Everything stored for ${org.login} is deleted.`);
-            // An org that pays keeps its dashboard, empty. Any other is off now.
-            if (ready.billing?.subscription?.working) reload();
-            else setView({ kind: 'off', billing: ready.billing });
+            toast.success(`The data stored for ${org.login} is deleted.`);
+            // The server decided: an org that pays keeps its dashboard, empty, and any other is off now.
+            reload();
           }}
         />
       )}

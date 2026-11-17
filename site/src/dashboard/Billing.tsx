@@ -69,7 +69,7 @@ type SignedIn = (change: () => Promise<void>) => Promise<void>;
  * Light or Pro, and how many developers, for an owner. Buy opens Paddle's checkout. After the payment
  * Paddle tells the server within seconds, and the page asks until the dashboard is on.
  */
-export function PlanPicker({ session, billing, onOn }: { session: Session; billing: Billing; onOn: () => void }) {
+export function PlanPicker({ session, billing, signedIn, onOn }: { session: Session; billing: Billing; signedIn: SignedIn; onOn: () => void }) {
   const [plan, setPlan] = useState<PlanName>('light');
   const [seats, setSeats] = useState('1');
   const [busy, setBusy] = useState(false);
@@ -85,8 +85,17 @@ export function PlanPicker({ session, billing, onOn }: { session: Session; billi
     const ask = async () => {
       if (gone) return;
       tries++;
-      const fresh = await loadBilling(session, billing.org.id).catch(() => null);
+      const got: { billing: Billing | null } = { billing: null };
+      try {
+        // Through signedIn: a session that runs out while the person pays signs them in again, and the page then shows the plan.
+        await signedIn(async () => {
+          got.billing = await loadBilling(session, billing.org.id);
+        });
+      } catch (err) {
+        if (err instanceof SignedOut) return;
+      }
       if (gone) return;
+      const fresh = got.billing;
       if (fresh?.dashboard && !fresh.ended) {
         toast.success(`The dashboard is on for ${login}`);
         onOn();
@@ -150,8 +159,22 @@ export function PlanPicker({ session, billing, onOn }: { session: Session; billi
           onClick={() => {
             setBusy(true);
             setError(null);
-            openCheckout({ env: paddle.env, clientToken: paddle.client_token, priceId: paddle.prices[plan], seats: n, customData: checkout }, () => setWaiting(true))
-              .catch((err: unknown) => setError(err instanceof Error ? err.message : "Paddle's checkout didn't open."))
+            // Asked again on the click: a page open for days holds signed data that ran out, or a plan another owner bought since.
+            const got: { billing: Billing | null } = { billing: null };
+            signedIn(async () => {
+              got.billing = await loadBilling(session, billing.org.id);
+            })
+              .then(() => {
+                const fresh = got.billing!;
+                if (!fresh.paddle || !fresh.checkout) {
+                  setError(fresh.subscription?.working ? `${login} has a working plan already. Reload the page to see it.` : `Only an owner of ${login} can pick a plan.`);
+                  return;
+                }
+                return openCheckout({ env: fresh.paddle.env, clientToken: fresh.paddle.client_token, priceId: fresh.paddle.prices[plan], seats: n, customData: fresh.checkout }, () => setWaiting(true));
+              })
+              .catch((err: unknown) => {
+                if (!(err instanceof SignedOut)) setError(err instanceof Error ? err.message : "Paddle's checkout didn't open.");
+              })
               .finally(() => setBusy(false));
           }}
         >
@@ -188,7 +211,7 @@ function ChangePlan({ session, billing, signedIn, onChanged }: { session: Sessio
       trigger="Change plan"
       triggerIcon={<PencilIcon />}
       title="Change the plan"
-      description="Paddle charges or credits the difference for the rest of this month, on the card on file."
+      description="Paddle charges the difference for the rest of the paid month now, on the card on file. A smaller plan leaves a credit toward the next payment."
       submit="Change"
       busyLabel="Changing"
       ready={goodSeats(n) && changed}
@@ -218,7 +241,7 @@ function ChangePlan({ session, billing, signedIn, onChanged }: { session: Sessio
 }
 
 /** Opens Paddle's portal in a new tab: invoices, the card, the address, and cancel. The link works for a short while, so it is made on the click. */
-function PortalButton({ session, orgId, signedIn }: { session: Session; orgId: number; signedIn: SignedIn }) {
+export function PortalButton({ session, orgId, signedIn }: { session: Session; orgId: number; signedIn: SignedIn }) {
   const [busy, setBusy] = useState(false);
   return (
     <Button
@@ -256,17 +279,18 @@ export function BillingCard({ session, billing, signedIn, onChanged }: { session
   let state: string;
   if (billing.free) state = `The dashboard is on for ${org.login} for free. There is nothing to pay.`;
   else if (sub?.working) {
-    const next = sub.current_period_end ? ` The next payment is on ${day(sub.current_period_end)}.` : '';
+    // The end of the paid month. Paddle renews then, unless an owner canceled: the date is true either way.
+    const next = sub.current_period_end ? ` Paid until ${day(sub.current_period_end)}, and it renews then unless an owner cancels.` : '';
     const late = sub.status === 'past_due' ? ' The last payment failed, and Paddle tries again: check the card.' : '';
     state = `${PLANS[sub.plan].name} for ${developers(sub.seats)}, ${perMonth(sub.plan, sub.seats)} plus tax where it applies.${next}${late}`;
-  } else if (sub) state = `The ${PLANS[sub.plan].name} plan for ${org.login} ${sub.status === 'paused' ? 'is paused' : 'ended'}. Reviews run without your team's rules, skills, checks and decisions, and nothing new can be added. What is stored stays until an owner deletes it.`;
+  } else if (sub) state = `The ${PLANS[sub.plan].name} plan for ${org.login} ${sub.status === 'paused' ? 'is paused' : 'ended'}. Reviews run without the rules, skills, checks and saved decisions on the dashboard, and nothing new can be added there. What is stored stays until an owner deletes it.`;
   else state = `${org.login} has no plan.`;
   return (
     <GlassCard label="Billing" icon={<CreditCardIcon className="size-4" />}>
       <p className="text-[14px] leading-relaxed text-ink-3">{state}</p>
       {billing.can_manage && billing.paddle && !billing.free && (
         <div className="mt-5 grid gap-5">
-          {!sub?.working && billing.checkout && <PlanPicker session={session} billing={billing} onOn={onChanged} />}
+          {!sub?.working && billing.checkout && <PlanPicker session={session} billing={billing} signedIn={signedIn} onOn={onChanged} />}
           <div className="flex flex-wrap gap-2">
             {sub?.working && <ChangePlan session={session} billing={billing} signedIn={signedIn} onChanged={onChanged} />}
             {sub && <PortalButton session={session} orgId={org.id} signedIn={signedIn} />}

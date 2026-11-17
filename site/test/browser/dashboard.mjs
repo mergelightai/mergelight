@@ -820,18 +820,18 @@ const done = async (t) => {
   await t.view('Settings');
   let page = await t.text();
   expect(/Delete all data/.test(page) && /It happens at once, and it can't be undone\./.test(page), 'Settings says what deleting all data does');
-  const button = () => t.page.evaluate(() => [...document.querySelectorAll('main button')].find((b) => b.textContent.trim() === 'Delete everything')?.disabled);
+  const button = () => t.page.evaluate(() => [...document.querySelectorAll('main button')].find((b) => b.textContent.trim() === 'Delete the data')?.disabled);
   expect((await button()) === true, 'the delete button waits for the org name');
   await t.shot('settings');
   await t.page.type('#confirm-delete', 'acm');
   expect((await button()) === true, 'a name that is only close is not enough');
   await t.page.type('#confirm-delete', 'E');
   expect((await button()) === false, "the org's name, in any case, opens the button");
-  await t.click('main button', 'Delete everything');
+  await t.click('main button', 'Delete the data');
   await new Promise((r) => setTimeout(r, 900));
   page = await t.text();
   expect(t.deletes.length === 1 && t.deletes[0].org === 1001 && t.deletes[0].confirm === 'acmE', 'it asks the server once, with what was typed');
-  expect(/Everything stored for acme is deleted\./.test(page) && /The dashboard isn't on for acme/.test(page), 'it says the data is gone, and the dashboard is off for the org');
+  expect(/The data stored for acme is deleted\./.test(page) && /The dashboard isn't on for acme/.test(page), 'it says the data is gone, and the dashboard is off for the org');
   await t.view('Rules');
   expect(/The dashboard isn't on for acme/.test(await t.text()), 'and the other views say so too');
   await done(t);
@@ -842,10 +842,10 @@ const done = async (t) => {
   await t.signIn();
   await t.view('Settings');
   await t.page.type('#confirm-delete', 'acme');
-  await t.click('main button', 'Delete everything');
+  await t.click('main button', 'Delete the data');
   await new Promise((r) => setTimeout(r, 900));
   const page = await t.text();
-  expect(/Write to hello@mergelight\.dev, and we delete it\./.test(page) && /Delete everything/.test(page), "when the server says no, the page shows the server's words and keeps the form");
+  expect(/Write to hello@mergelight\.dev, and we delete it\./.test(page) && /Delete the data/.test(page), "when the server says no, the page shows the server's words and keeps the form");
   await done(t);
 }
 
@@ -855,7 +855,7 @@ const done = async (t) => {
   await t.menu('Switch org', 'fresh');
   await t.view('Settings');
   const page = await t.text();
-  expect(/Only an owner of fresh can delete its data\./.test(page) && !/Delete everything/.test(page), 'someone who is not an owner sees who can delete, and no button');
+  expect(/Only an owner of fresh can delete its data\./.test(page) && !/Delete the data/.test(page), 'someone who is not an owner sees who can delete, and no button');
   await done(t);
 }
 
@@ -922,7 +922,7 @@ const done = async (t) => {
   await t.signIn();
   await t.view('Settings');
   let page = await t.text();
-  expect(/Pro for 3 developers, \$42 a month plus tax where it applies\. The next payment is on/.test(page), `Settings shows the plan, the developers and the price (${page.slice(0, 200)})`);
+  expect(/Pro for 3 developers, \$42 a month plus tax where it applies\. Paid until December 11, 2026, and it renews then unless an owner cancels\./.test(page), `Settings shows the plan, the developers and the price (${page.slice(0, 200)})`);
   expect(/What acme pays for stays on file, so the plan keeps running/.test(page), 'and says that deleting the data keeps the plan running');
   await t.shot('billing-settings');
   await t.click('button', 'Change plan');
