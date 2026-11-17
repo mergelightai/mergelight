@@ -247,7 +247,7 @@ export default function Dashboard() {
       {ready?.overview.plan_ended && tab !== 'settings' && <PlanEnded org={org} canPick={ready.billing?.can_manage === true && ready.billing.paddle !== null} onPick={() => pickTab('settings')} />}
       {ready?.billing?.covers === 'public' && tab !== 'settings' && <PublicOnly org={org} canPick={ready.billing.can_manage && ready.billing.paddle !== null} onPick={() => pickTab('settings')} />}
       {view.kind === 'error' && <LoadError onRetry={reload} />}
-      {ready && tab === 'reviews' && (ready.overview.reviews.length ? <ReviewsView overview={ready.overview} login={session.user.login} orgLogin={org.login} filters={filters} onFilters={setFilters} /> : ready.overview.plan_ended ? null : <NothingYet org={org} />)}
+      {ready && tab === 'reviews' && (ready.overview.reviews.length ? <ReviewsView overview={ready.overview} login={session.user.login} orgLogin={org.login} filters={filters} onFilters={setFilters} /> : ready.overview.plan_ended ? null : <NothingYet org={org} publicOnly={ready.billing?.covers === 'public'} />)}
       {ready && tab === 'rules' && (ready.rules ? (
         <RulesView
           key={org.id}

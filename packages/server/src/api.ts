@@ -287,7 +287,8 @@ export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"
   async function context(who: Caller): Promise<Response> {
     const found = await withOrg(pool, who.orgId, async (db) => {
       const plan = await planOf(db, who.orgId, grants);
-      if (!coversRepo(plan, who.isPublic)) return { jobs: plan.jobs, ended: plan.ended, data: null };
+      // A paid plan that lapsed is said for every review it no longer covers, also when the free plan still covers public repositories.
+      if (!coversRepo(plan, who.isPublic)) return { jobs: plan.jobs, ended: plan.ended || plan.lapsed, data: null };
       const { rows } = await db.query(
         `select id, title, file, line, end_line, reason, by_login, pr
            from memories

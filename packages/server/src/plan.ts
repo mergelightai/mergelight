@@ -38,6 +38,8 @@ export interface OrgPlan {
   dashboard: boolean;
   /** The org's data is stored here and its plan ended or is paused. The dashboard shows the data, and nothing new can be added. */
   ended: boolean;
+  /** The org had a paid plan that ended or is paused, whatever else it has. A review the plan would have covered says so. */
+  lapsed: boolean;
   jobs: boolean;
   /** What the org pays for, while its subscription works. */
   paid: PlanName | null;
@@ -62,7 +64,8 @@ export async function planOf(db: Db, orgId: number, grants: Grants, { lock = fal
   // The operator's orgs from before payments pay nothing and aren't marked public only: they stay on for every repository.
   const all = connected && (grants.dashboard.has(orgId) || paid !== null || (!bill && !org.public_only));
   const covers = all ? "all" : connected && org.public_only ? "public" : "none";
-  return { connected, covers, dashboard: covers !== "none", ended: connected && covers === "none", jobs: grants.jobs.has(orgId) || paid === "pro", paid };
+  const lapsed = connected && bill !== undefined && paid === null && !grants.dashboard.has(orgId);
+  return { connected, covers, dashboard: covers !== "none", ended: connected && covers === "none", lapsed, jobs: grants.jobs.has(orgId) || paid === "pro", paid };
 }
 
 /** Whether a review of a repository uses the dashboard: always with a plan, and for a public repository with the free one too. */

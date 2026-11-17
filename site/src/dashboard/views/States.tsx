@@ -105,7 +105,7 @@ export function NotOn({ org, children }: { org: Org; children?: ReactNode }) {
 export function PublicOnly({ org, canPick, onPick }: { org: Org; canPick: boolean; onPick: () => void }) {
   return (
     <div role="status" className="mb-6 flex max-w-3xl flex-wrap items-center justify-between gap-x-6 gap-y-3 rounded-[12px] bg-strip px-4 py-3 text-[13.5px] leading-relaxed text-ink-3 hairline">
-      <p>Light is free for {org.login}'s public repositories. Reviews of its private repositories don't use the dashboard.</p>
+      <p>Light is free for {org.login}'s public repositories. Reviews of its private and internal repositories don't use the dashboard, and rules, skills and checks set for them aren't used.</p>
       {canPick && (
         <Button size="sm" variant="outline" onClick={onPick}>
           Pick a plan
@@ -142,10 +142,11 @@ export function LoadError({ onRetry, what }: { onRetry: () => void; what?: strin
 }
 
 /** How to send the first review's numbers. Shown when the dashboard is on and has nothing yet. */
-export function NothingYet({ org }: { org: Org }) {
+export function NothingYet({ org, publicOnly = false }: { org: Org; publicOnly?: boolean }) {
+  const which = publicOnly ? 'a public repository' : 'a repository';
   return (
     <>
-      <ViewHeader eyebrow="Overview" title="Reviews" lead={`The dashboard is on for ${org.login}. Add one line to the Mergelight step in a repository's workflow, and its next review shows up here.`} />
+      <ViewHeader eyebrow="Overview" title="Reviews" lead={`The dashboard is on for ${org.login}. Add one line to the Mergelight step in ${which}'s workflow, and its next review shows up here.`} />
       <div className="grid max-w-3xl gap-5">
         <GlassCard label="No reviews to show yet">
           <pre className="overflow-x-auto rounded-2xl bg-shell px-5 py-4 font-mono text-[13px] leading-6 text-muted-foreground">
@@ -155,7 +156,7 @@ export function NothingYet({ org }: { org: Org }) {
           <p className="mt-4 text-[13px] leading-relaxed text-muted-foreground">A review then sends its numbers: the light, how many findings, which AI ran it and how long it took. It also sends the findings your team declined, with who declined each one and why. It never sends code.</p>
         </GlassCard>
         <p className="text-sm leading-relaxed text-muted-foreground">
-          Already sending reviews? Then they are in repositories this sign-in can't see.{' '}
+          Already sending reviews?{publicOnly ? ' Only reviews of public repositories are kept. Otherwise' : ' Then'} they are in repositories this sign-in can't see.{' '}
           <a href={ADD_REPOS_URL} target="_blank" rel="noreferrer" className={LINK}>
             Add them on GitHub
           </a>

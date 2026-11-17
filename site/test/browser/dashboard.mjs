@@ -925,7 +925,7 @@ const done = async (t) => {
   await t.page.waitForFunction(() => /The dashboard is on for opensrc\. Add one line/.test(document.querySelector('main')?.innerText ?? ''), { timeout: 10000 }).catch(() => null);
   const page = await t.text();
   expect(t.plans.free.has('4005') && /The dashboard is on for opensrc\. Add one line/.test(page), 'one click turns it on, and the page shows the dashboard');
-  expect(/Light is free for opensrc's public repositories\. Reviews of its private repositories don't use the dashboard\./.test(page), 'and says that private repositories need a plan');
+  expect(/Light is free for opensrc's public repositories\. Reviews of its private and internal repositories don't use the dashboard/.test(page), 'and says that private repositories need a plan');
   await t.shot('free-for-public');
   SESSION.orgs.pop();
   turnOff('4005');

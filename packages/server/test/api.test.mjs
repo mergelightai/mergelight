@@ -708,10 +708,10 @@ test("Light is free for public repositories: their reviews use the dashboard, an
   // A plan covers every repository.
   await bill(ACME, "light", "active");
   assert.equal((await (await get(makeToken({ repository_visibility: "private", repository_id: "502", repository: "acme/secret" }))).json()).connected, true);
-  // The plan ends: the free plan for public repositories stays.
+  // The plan ends: the free plan for public repositories stays, and a private repository's review is told the plan ended.
   await bill(ACME, "light", "canceled");
   assert.equal((await (await get(pub())).json()).connected, true);
-  assert.deepEqual(await (await get(makeToken({ repository_visibility: "private", repository_id: "502", repository: "acme/secret" }))).json(), { connected: false });
+  assert.deepEqual(await (await get(makeToken({ repository_visibility: "private", repository_id: "502", repository: "acme/secret" }))).json(), { connected: false, plan_ended: true });
   // The operator turning the org on gives it every repository.
   await withOrg(pool, ACME.id, (db) => db.query("delete from billing"));
   await connectOrg(pool, ACME.id, ACME.login);

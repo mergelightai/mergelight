@@ -204,14 +204,14 @@ export function PlanPicker({ session, billing, signedIn, onOn }: { session: Sess
       </div>
       {billing.covers === 'none' && (
         <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 border-t border-white/[0.06] pt-5">
-          <p className="max-w-md text-[13.5px] leading-relaxed text-ink-3">Only public repositories? Light is free for them. Reviews of private repositories then work as they do now, without the dashboard.</p>
+          <p className="max-w-md text-[13.5px] leading-relaxed text-ink-3">Only public repositories? Light is free for them. Reviews of private and internal repositories then work as they do now, without the dashboard.</p>
           <Button
             variant="outline"
             disabled={freeBusy}
             onClick={() => {
               setFreeBusy(true);
               setError(null);
-              freeForPublic(session, billing.org.id)
+              signedIn(() => freeForPublic(session, billing.org.id))
                 .then(() => {
                   toast.success(`Light is on for ${login}'s public repositories`);
                   onOn();
@@ -320,7 +320,10 @@ export function BillingCard({ session, billing, signedIn, onChanged }: { session
   const { subscription: sub, org } = billing;
   let state: string;
   if (billing.free) state = `The dashboard is on for ${org.login} for free. There is nothing to pay.`;
-  else if (billing.covers === 'public' && !sub?.working) state = `Light is on for ${org.login}'s public repositories, for free. Reviews of its private repositories don't use the dashboard: pick a plan for them.`;
+  else if (billing.covers === 'public' && !sub?.working) {
+    const lapsed = sub ? ` Its ${PLANS[sub.plan].name} plan ${sub.status === 'paused' ? 'is paused' : 'ended'}.` : '';
+    state = `Light is on for ${org.login}'s public repositories, for free.${lapsed} Reviews of its private and internal repositories don't use the dashboard: pick a plan for them.`;
+  }
   else if (sub?.working) {
     // The end of the paid month. Paddle renews then, unless an owner canceled: the date is true either way.
     const next = sub.current_period_end ? ` Paid until ${day(sub.current_period_end)}, and it renews then unless an owner cancels.` : '';
