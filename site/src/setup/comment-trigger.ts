@@ -60,9 +60,14 @@ export function withCommentTrigger(content: string): string | null {
   // has the workflow's secrets, would run on every comment, from anyone on a public repo.
   const jobsAt = lines.indexOf('jobs:');
   if (jobsAt < 0) return null;
-  const jobsEnd = lines.findIndex((l, i) => i > jobsAt && /^\S/.test(l));
-  const jobs = lines.slice(jobsAt + 1, jobsEnd < 0 ? undefined : jobsEnd).filter((l) => /^ {2}[^\s#]/.test(l));
-  if (jobs.length !== 1) return null;
+  // A comment at the start of a line doesn't end `jobs:`, so a job below one still counts.
+  const jobsEnd = lines.findIndex((l, i) => i > jobsAt && /^[^\s#]/.test(l));
+  const jobLines = lines.slice(jobsAt + 1, jobsEnd < 0 ? undefined : jobsEnd);
+  if (jobLines.filter((l) => /^ {2}[^\s#]/.test(l)).length !== 1) return null;
+  // And one step, Mergelight's. Its first step checks that whoever wrote the comment can push. A step of the team's own
+  // before it would run on anyone's comment first.
+  const steps = jobLines.filter((l) => /^ {6}-\s/.test(l));
+  if (steps.length !== 1 || !/^ {6}-\s+uses:\s*["']?mergelightai\/mergelight@/.test(steps[0]!)) return null;
   // Its condition, folded over lines of its own.
   const ifs = lines.flatMap((l, i) => (l === '    if: >' ? [i] : []));
   if (ifs.length !== 1) return null;

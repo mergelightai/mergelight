@@ -61,4 +61,8 @@ test('a condition or group changed by hand is left for its owner', () => {
   assert.equal(withCommentTrigger(old.replace('on:\n  pull_request:', 'on:\n  pull_request_target:')), null);
   // Another job with no condition at all would run on every comment, with the workflow's secrets.
   assert.equal(withCommentTrigger(`${old.trimEnd()}\n  lint:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm run lint\n`), null);
+  // The same job below a comment at the start of a line.
+  assert.equal(withCommentTrigger(`${old.trimEnd()}\n# Lint too\n  lint:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm run lint\n`), null);
+  // A step of the team's own before Mergelight's would run on anyone's comment, before Mergelight checks who wrote it.
+  assert.equal(withCommentTrigger(old.replace('    steps:\n', '    steps:\n      - run: ./prepare.sh\n')), null);
 });
