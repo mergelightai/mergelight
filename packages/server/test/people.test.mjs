@@ -181,24 +181,38 @@ test("an org that hasn't turned the dashboard on says so, and shows nothing", as
   assert.equal((await res.json()).error, "not_connected");
 });
 
-test("a plan that ended turns the dashboard off: the org shows as off, and nothing can be read or added", async () => {
+test("a plan that ended still shows what is stored, lets it be removed and deleted, and refuses anything new", async () => {
+  await withOrg(pool, ACME.id, (db) => db.query("insert into rules (org_id, kind, text, paths, created_by, created_by_id) values ($1, 'rule', 'Report every TODO.', '{}', 'ada', 11)", [ACME.id]));
   await withOrg(pool, ACME.id, (db) => db.query("insert into billing (org_id, provider, plan, seats, status) values ($1, 'paddle', 'light', 2, 'canceled')", [ACME.id]));
   const { token, orgs } = await signIn(ADA);
-  assert.deepEqual(orgs.find((o) => o.id === ACME.id).connected, false);
-  for (const what of ["overview", "memories", "rules", "skills", "checks", "written-skills"]) {
-    const res = await call(`/v1/orgs/${ACME.id}/${what}`, { token });
-    assert.equal(res.status, 404, what);
-    assert.equal((await res.json()).error, "not_connected", what);
+  assert.deepEqual(orgs.find((o) => o.id === ACME.id), { id: ACME.id, login: "acme", connected: true, plan_ended: true, repos: 2 });
+  const overview = await (await call(`/v1/orgs/${ACME.id}/overview`, { token })).json();
+  assert.equal(overview.plan_ended, true);
+  assert.equal(overview.can_delete, true);
+  assert.equal(overview.reviews.length, 1);
+  for (const what of ["memories", "rules", "skills", "checks", "written-skills"]) assert.equal((await call(`/v1/orgs/${ACME.id}/${what}`, { token })).status, 200, what);
+  // Nothing new: an add says why.
+  const add = await call(`/v1/orgs/${ACME.id}/rules`, { method: "POST", token, body: JSON.stringify({ kind: "rule", text: "Report every FIXME." }) });
+  assert.equal(add.status, 403);
+  assert.deepEqual(await add.json(), { error: "plan_ended", message: "The Mergelight plan for this org ended, so nothing new can be added. What is stored stays until an owner deletes it, and can still be removed." });
+  for (const [what, body] of [["skills", { repo_id: 501, path: ".claude/skills/x" }], ["checks", { repo_id: 501, name: "Docs", text: "Docs change with the code.", paths: ["src/**"] }], ["written-skills", { repo_id: 501, name: "Pay", description: "Use for billing.", text: "Check refunds." }]]) {
+    assert.equal((await call(`/v1/orgs/${ACME.id}/${what}`, { method: "POST", token, body: JSON.stringify(body) })).status, 403, what);
   }
-  const add = await call(`/v1/orgs/${ACME.id}/rules`, { method: "POST", token, body: JSON.stringify({ kind: "rule", text: "Report every TODO." }) });
-  assert.equal(add.status, 404);
-  assert.deepEqual(await withOrgRows(ACME.id, "select 1 from rules"), []);
-  // A working plan turns it on again, with the data it had.
-  await withOrg(pool, ACME.id, (db) => db.query("update billing set status = 'active'"));
-  clock += 20_000;
-  const again = await signIn(ADA);
-  assert.equal(again.orgs.find((o) => o.id === ACME.id).connected, true);
-  assert.equal((await (await call(`/v1/orgs/${ACME.id}/overview`, { token: again.token })).json()).reviews.length, 1);
+  // Removing and deleting still work.
+  const [rule] = (await (await call(`/v1/orgs/${ACME.id}/rules`, { token })).json()).rules;
+  assert.equal((await call(`/v1/orgs/${ACME.id}/rules/${rule.id}`, { method: "DELETE", token })).status, 204);
+  assert.equal((await call(`/v1/orgs/${ACME.id}`, { method: "DELETE", token, body: JSON.stringify({ confirm: "acme" }) })).status, 204);
+  assert.deepEqual(await withOrgRows(ACME.id, "select 1 from reviews"), []);
+  // What the org paid for stays on file: it is Paddle's to end.
+  assert.equal((await withOrgRows(ACME.id, "select status from billing"))[0].status, "canceled");
+});
+
+test("a working plan again lets a team add, as before", async () => {
+  await withOrg(pool, ACME.id, (db) => db.query("insert into billing (org_id, provider, plan, seats, status) values ($1, 'paddle', 'light', 2, 'active')", [ACME.id]));
+  const { token, orgs } = await signIn(ADA);
+  assert.deepEqual(orgs.find((o) => o.id === ACME.id), { id: ACME.id, login: "acme", connected: true, repos: 2 });
+  assert.equal((await (await call(`/v1/orgs/${ACME.id}/overview`, { token })).json()).plan_ended, false);
+  assert.equal((await call(`/v1/orgs/${ACME.id}/rules`, { method: "POST", token, body: JSON.stringify({ kind: "rule", text: "Report every FIXME." }) })).status, 201);
 });
 
 test("without a session, with a made-up one, or with one that ran out, nothing is shown", async () => {

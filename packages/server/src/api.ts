@@ -280,7 +280,7 @@ export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"
   async function context(who: Caller): Promise<Response> {
     const found = await withOrg(pool, who.orgId, async (db) => {
       const plan = await planOf(db, who.orgId, grants);
-      if (!plan.dashboard) return { jobs: plan.jobs, data: null };
+      if (!plan.dashboard) return { jobs: plan.jobs, ended: plan.ended, data: null };
       const { rows } = await db.query(
         `select id, title, file, line, end_line, reason, by_login, pr
            from memories
@@ -294,10 +294,11 @@ export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"
       const skills = await db.query("select path from skills where repo_id = $1 order by id limit 10", [who.repoId]);
       const checks = await db.query("select id, name, text, paths from checks where repo_id = $1 order by id limit 5", [who.repoId]);
       const written = await db.query("select id, name, description, body from written_skills where repo_id = $1 order by id limit 10", [who.repoId]);
-      return { jobs: plan.jobs, data: { memories: rows, rules: rules.rows, skills: skills.rows.map((s) => s.path as string), checks: checks.rows, written: written.rows } };
+      return { jobs: plan.jobs, ended: false, data: { memories: rows, rules: rules.rows, skills: skills.rows.map((s) => s.path as string), checks: checks.rows, written: written.rows } };
     });
-    // An org with Jobs needs no dashboard data for them: the grant is said either way.
-    if (!found.data) return respond(200, { connected: false, ...(found.jobs ? { jobs: true } : {}) });
+    // An org with Jobs needs no dashboard data for them: the grant is said either way. plan_ended: the team's rules,
+    // skills and checks exist but its plan ended, so the review can say it ran without them, and why.
+    if (!found.data) return respond(200, { connected: false, ...(found.ended ? { plan_ended: true } : {}), ...(found.jobs ? { jobs: true } : {}) });
     const { data } = found;
     const rules = data.rules.map((r) => ({ id: `R${r.id}`, kind: r.kind, text: r.text, ...(r.paths.length ? { paths: r.paths } : {}), scope: r.repo_id === null ? "org" : "repo" }));
     // The most recently used ones that fit. A list too large for the client to read would cost it the whole answer.

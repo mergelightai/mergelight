@@ -50,6 +50,9 @@ function refuseHidden(fields: Record<string, unknown>): void {
     }
   }
 }
+/** What an add says when the org's plan ended or is paused. Removing and deleting still work. */
+const planEnded = () =>
+  new HttpError(403, "plan_ended", "The Mergelight plan for this org ended, so nothing new can be added. What is stored stays until an owner deletes it, and can still be removed.");
 /** Skills written on the dashboard that one repository can have, and the largest request that can carry one. */
 const MAX_WRITTEN_SKILLS = 10;
 const MAX_SKILL_BODY = 48_000;
@@ -182,8 +185,9 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
     // This comes before the session exists, so a failure here leaves nothing behind.
     const orgs = [];
     for (const r of reach) {
-      const connected = await withOrg(pool, r.id, async (db) => (await planOf(db, r.id, grants)).dashboard);
-      orgs.push({ id: r.id, login: r.login, connected, repos: r.repos.size });
+      const plan = await withOrg(pool, r.id, (db) => planOf(db, r.id, grants));
+      // An org whose plan ended still shows its data, so it counts as connected, and says that its plan ended.
+      orgs.push({ id: r.id, login: r.login, connected: plan.connected, ...(plan.ended ? { plan_ended: true } : {}), repos: r.repos.size });
     }
 
     // Nothing to show means nothing to hold a session for. This also keeps a token that another app
@@ -213,7 +217,8 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
     const repoIds = [...reach.repos.keys()];
 
     const found = await withOrg(pool, orgId, async (db) => {
-      if (!(await planOf(db, orgId, grants)).dashboard) return null;
+      const plan = await planOf(db, orgId, grants);
+      if (!plan.connected) return null;
       // The database limits the rows to this org. The list of repositories limits them to what GitHub shows this person.
       const repos = await db.query(
         `select r.id, r.name, r.last_review_at, count(v.id)::int as reviews
@@ -232,7 +237,7 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
           limit ${RECENT_REVIEWS}`,
         [repoIds],
       );
-      return { repos: repos.rows, reviews: reviews.rows };
+      return { repos: repos.rows, reviews: reviews.rows, ended: plan.ended };
     });
     if (!found) throw new HttpError(404, "not_connected", "This org hasn't turned the Mergelight dashboard on.");
     return {
@@ -241,6 +246,8 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
         org: { id: orgId, login: reach.login },
         // Deleting everything stored takes the person who runs the account: an owner of the org, or the account's own person.
         can_delete: reach.admin,
+        // The plan ended or is paused: reviews don't use or store anything, and nothing new can be added. What is kept still shows.
+        plan_ended: found.ended,
         repos: found.repos.map((r) => ({ id: Number(r.id), name: r.name, last_review_at: r.last_review_at, reviews: r.reviews })),
         reviews: found.reviews.map((v) => ({ ...v, repo_id: Number(v.repo_id) })),
       },
@@ -252,7 +259,7 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
     const reach = session.reach.get(orgId);
     if (!reach) throw new HttpError(404, "not_found", "No such org.");
     const rows = await withOrg(pool, orgId, async (db) => {
-      if (!(await planOf(db, orgId, grants)).dashboard) return null;
+      if (!(await planOf(db, orgId, grants)).connected) return null;
       const live = "m.repo_id = any($1::bigint[]) and m.forgotten_at is null and coalesce(m.last_used_at, m.updated_at) > now() - make_interval(days => $2)";
       const args = [[...reach.repos.keys()], MEMORY_DAYS];
       const found = await db.query(
@@ -344,7 +351,7 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
     const reach = session.reach.get(orgId);
     if (!reach) throw new HttpError(404, "not_found", "No such org.");
     const rows = await withOrg(pool, orgId, async (db) => {
-      if (!(await planOf(db, orgId, grants)).dashboard) return null;
+      if (!(await planOf(db, orgId, grants)).connected) return null;
       const found = await db.query(
         "select id, repo_id, kind, text, paths, created_by, created_at from rules where repo_id is null or repo_id = any($1::bigint[]) order by repo_id nulls first, id",
         [[...reach.repos.keys()]],
@@ -405,7 +412,9 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
 
     const created = await withOrg(pool, orgId, async (db) => {
       // The org's row is held until the rule is in, so two people adding at once can't both slip past the limit.
-      if (!(await planOf(db, orgId, grants, { lock: true })).dashboard) return null;
+      const plan = await planOf(db, orgId, grants, { lock: true });
+      if (!plan.connected) return null;
+      if (!plan.dashboard) return "ended";
       const scope = repo_id === null ? "repo_id is null" : "repo_id = $1";
       const count = await db.query(`select count(*)::int as n from rules where ${scope}`, repo_id === null ? [] : [repo_id]);
       if ((count.rows[0]?.n ?? 0) >= MAX_RULES) return "full";
@@ -420,6 +429,7 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
       return id;
     });
     if (created === null) throw new HttpError(404, "not_connected", "This org hasn't turned the Mergelight dashboard on.");
+    if (created === "ended") throw planEnded();
     if (created === "full") throw new HttpError(409, "too_many", `There can be ${MAX_RULES} rules here at most. Remove one first.`);
     return { status: 201, body: { id: created } };
   }
@@ -449,7 +459,7 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
     const reach = session.reach.get(orgId);
     if (!reach) throw new HttpError(404, "not_found", "No such org.");
     const rows = await withOrg(pool, orgId, async (db) => {
-      if (!(await planOf(db, orgId, grants)).dashboard) return null;
+      if (!(await planOf(db, orgId, grants)).connected) return null;
       return (await db.query("select id, repo_id, path, added_by, created_at from skills where repo_id = any($1::bigint[]) order by repo_id, id", [[...reach.repos.keys()]])).rows;
     });
     if (!rows) throw new HttpError(404, "not_connected", "This org hasn't turned the Mergelight dashboard on.");
@@ -489,7 +499,9 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
     if (!repo.admin) throw new HttpError(403, "read_only", "Only an admin of this repository can pick its skills.");
 
     const created = await withOrg(pool, orgId, async (db) => {
-      if (!(await planOf(db, orgId, grants, { lock: true })).dashboard) return null;
+      const plan = await planOf(db, orgId, grants, { lock: true });
+      if (!plan.connected) return null;
+      if (!plan.dashboard) return "ended";
       if (((await db.query("select count(*)::int as n from skills where repo_id = $1", [repo_id])).rows[0]?.n ?? 0) >= MAX_SKILLS) return "full";
       await db.query("insert into repos (org_id, id, name) values ($1, $2, $3) on conflict (org_id, id) do nothing", [orgId, repo_id, repo.name]);
       const { rows } = await db.query(
@@ -502,6 +514,7 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
       return id;
     });
     if (created === null) throw new HttpError(404, "not_connected", "This org hasn't turned the Mergelight dashboard on.");
+    if (created === "ended") throw planEnded();
     if (created === "full") throw new HttpError(409, "too_many", `A repository can have ${MAX_SKILLS} skills at most. Remove one first.`);
     if (created === "exists") throw new HttpError(409, "exists", "That skill is already picked.");
     return { status: 201, body: { id: created } };
@@ -529,7 +542,7 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
     const reach = session.reach.get(orgId);
     if (!reach) throw new HttpError(404, "not_found", "No such org.");
     const rows = await withOrg(pool, orgId, async (db) => {
-      if (!(await planOf(db, orgId, grants)).dashboard) return null;
+      if (!(await planOf(db, orgId, grants)).connected) return null;
       return (await db.query("select id, repo_id, name, description, body, added_by, created_at from written_skills where repo_id = any($1::bigint[]) order by repo_id, id", [[...reach.repos.keys()]])).rows;
     });
     if (!rows) throw new HttpError(404, "not_connected", "This org hasn't turned the Mergelight dashboard on.");
@@ -576,7 +589,9 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
     if (!repo.admin) throw new HttpError(403, "read_only", "Only an admin of this repository can write its skills.");
 
     const created = await withOrg(pool, orgId, async (db) => {
-      if (!(await planOf(db, orgId, grants, { lock: true })).dashboard) return null;
+      const plan = await planOf(db, orgId, grants, { lock: true });
+      if (!plan.connected) return null;
+      if (!plan.dashboard) return "ended";
       if (((await db.query("select count(*)::int as n from written_skills where repo_id = $1", [repo_id])).rows[0]?.n ?? 0) >= MAX_WRITTEN_SKILLS) return "full";
       await db.query("insert into repos (org_id, id, name) values ($1, $2, $3) on conflict (org_id, id) do nothing", [orgId, repo_id, repo.name]);
       const { rows } = await db.query(
@@ -590,6 +605,7 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
       return id;
     });
     if (created === null) throw new HttpError(404, "not_connected", "This org hasn't turned the Mergelight dashboard on.");
+    if (created === "ended") throw planEnded();
     if (created === "full") throw new HttpError(409, "too_many", `A repository can have ${MAX_WRITTEN_SKILLS} written skills at most. Remove one first.`);
     if (created === "exists") throw new HttpError(409, "exists", "This repository already has a skill of that name.");
     return { status: 201, body: { id: created } };
@@ -617,7 +633,7 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
     const reach = session.reach.get(orgId);
     if (!reach) throw new HttpError(404, "not_found", "No such org.");
     const rows = await withOrg(pool, orgId, async (db) => {
-      if (!(await planOf(db, orgId, grants)).dashboard) return null;
+      if (!(await planOf(db, orgId, grants)).connected) return null;
       return (await db.query("select id, repo_id, name, text, paths, added_by, created_at from checks where repo_id = any($1::bigint[]) order by repo_id, id", [[...reach.repos.keys()]])).rows;
     });
     if (!rows) throw new HttpError(404, "not_connected", "This org hasn't turned the Mergelight dashboard on.");
@@ -664,7 +680,9 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
     if (!repo.admin) throw new HttpError(403, "read_only", "Only an admin of this repository can set its checks.");
 
     const created = await withOrg(pool, orgId, async (db) => {
-      if (!(await planOf(db, orgId, grants, { lock: true })).dashboard) return null;
+      const plan = await planOf(db, orgId, grants, { lock: true });
+      if (!plan.connected) return null;
+      if (!plan.dashboard) return "ended";
       if (((await db.query("select count(*)::int as n from checks where repo_id = $1", [repo_id])).rows[0]?.n ?? 0) >= MAX_CHECKS) return "full";
       await db.query("insert into repos (org_id, id, name) values ($1, $2, $3) on conflict (org_id, id) do nothing", [orgId, repo_id, repo.name]);
       const { rows } = await db.query(
@@ -677,6 +695,7 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
       return id;
     });
     if (created === null) throw new HttpError(404, "not_connected", "This org hasn't turned the Mergelight dashboard on.");
+    if (created === "ended") throw planEnded();
     if (created === "full") throw new HttpError(409, "too_many", `A repository can have ${MAX_CHECKS} checks at most. Remove one first.`);
     if (created === "exists") throw new HttpError(409, "exists", "This repository already has a check of that name.");
     return { status: 201, body: { id: created } };

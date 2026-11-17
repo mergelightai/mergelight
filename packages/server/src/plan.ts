@@ -6,7 +6,9 @@
 //   orgs came before payments, and they stay on.
 // - It pays for Light or Pro, and the subscription works.
 // - The operator keeps it on (CONNECT_ORGS), whatever it pays.
-// So a subscription that ended or is paused turns the dashboard off. Its data stays until someone deletes it.
+// So a subscription that ended or is paused turns the dashboard off: runs get none of the team's
+// rules, memory, skills or checks, and store nothing. The data stays until an owner deletes it, and the
+// dashboard still shows it (ended), so owners can see what is kept, remove it, and delete it.
 //
 // Jobs: the org pays for Pro and the subscription works, or the operator gives it Jobs (JOBS_ORGS).
 
@@ -28,6 +30,8 @@ export interface OrgPlan {
   /** The org's data is stored here. */
   connected: boolean;
   dashboard: boolean;
+  /** The org's data is stored here and its plan ended or is paused. The dashboard shows the data, and nothing new can be added. */
+  ended: boolean;
   jobs: boolean;
   /** What the org pays for, while its subscription works. */
   paid: PlanName | null;
@@ -48,10 +52,6 @@ export async function planOf(db: Db, orgId: number, grants: Grants, { lock = fal
   const { rows } = await db.query<{ plan: PlanName; status: string }>("select plan, status from billing where org_id = $1", [orgId]);
   const bill = rows[0];
   const paid = bill && WORKING.has(bill.status) ? bill.plan : null;
-  return {
-    connected,
-    dashboard: connected && (grants.dashboard.has(orgId) || !bill || paid !== null),
-    jobs: grants.jobs.has(orgId) || paid === "pro",
-    paid,
-  };
+  const dashboard = connected && (grants.dashboard.has(orgId) || !bill || paid !== null);
+  return { connected, dashboard, ended: connected && !dashboard, jobs: grants.jobs.has(orgId) || paid === "pro", paid };
 }

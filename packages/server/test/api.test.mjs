@@ -669,7 +669,8 @@ test("a plan that ended or is paused turns the dashboard and Jobs off, and keeps
   assert.equal((await post(makeToken())).status, 201);
   for (const status of ["canceled", "paused"]) {
     await bill(ACME, "pro", status);
-    assert.deepEqual(await contextOf(ACME), { connected: false }, status);
+    // The review is told why, so it can say it ran without the team's rules.
+    assert.deepEqual(await contextOf(ACME), { connected: false, plan_ended: true }, status);
     const res = await post(makeToken({ run_id: status === "paused" ? "9101" : "9100" }));
     assert.equal(res.status, 404, status);
     assert.equal((await res.json()).error, "not_connected");

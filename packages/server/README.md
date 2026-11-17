@@ -111,7 +111,8 @@ An owner of the org deletes everything stored for it on the dashboard, under Set
 One place in the server, `src/plan.ts`, says what an org may use.
 
 - The dashboard: the org's data is stored here, and it pays for Light or Pro with a subscription that works (`active`, `trialing`, or `past_due` while the payment company tries a failed payment again). An org the operator turned on that pays for nothing stays on too: those came before payments.
-- A subscription that ended or is paused turns the dashboard off. Runs then store nothing and get no memory, rules, skills or checks. The data stays until someone deletes it, so a plan bought again finds it.
+- A subscription that ended or is paused turns the dashboard off for reviews: runs store nothing and get no memory, rules, skills or checks. The server tells the run that the plan ended (`plan_ended`), so the review can say why it ran without them.
+- The data stays until an owner deletes it, so a plan bought again finds it. The dashboard still shows it, and its rules, skills and checks can be removed and the whole org deleted. Adding something new answers `403 plan_ended`.
 - Jobs: a working Pro plan.
 - The operator's free grants hold whatever an org pays: `CONNECT_ORGS` for the dashboard, `JOBS_ORGS` for Jobs.
 
