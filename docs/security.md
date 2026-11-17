@@ -156,7 +156,7 @@ Before any job runs, the jobs step asks Mergelight's server whether Jobs is on f
 - **Your AI provider sees your code.** OpenAI or Anthropic get the code the AI reads, under your account and their terms.
 - **A pull request's workflow file runs as that pull request has it,** as GitHub does for every `pull_request` workflow. So a person who can push a branch can change how the review runs on their own pull request, or turn it off there.
 - **The dashboard server takes a run's word for its own repository.** Someone who can push a branch can send made-up review numbers or decisions for their own repository, and no other. The dashboard shows each decision with its pull request, so you can find a made-up one and forget it.
-- **On a self-hosted runner, keep other secrets off the machine that runs reviews.** The AI reads code on that machine, and a review is only as private as the machine it runs on.
+- **On a self-hosted runner, keep other secrets and other repositories' code off the machine that runs reviews.** The AI reads code on that machine, and a review is only as private as the machine it runs on.
 - **The code that connects a ChatGPT login shows on the pull request,** so anyone who can read the repository can enter it, and so choose whose plan pays for reviews. Mergelight posts part of that account's email on the pull request, so you can check it.
 
 ## Report a security problem
