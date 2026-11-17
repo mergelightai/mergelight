@@ -1821,7 +1821,8 @@ await scenario('pinned-release-on-the-second-page-of-tags', { secrets: ['CODEX_A
   expect(!/needs Mergelight v0\.1\.19 or newer/.test(await text()), "finds the pinned commit's release on a later page");
 });
 
-await scenario('version-lookup-tried-again', { secrets: ['CODEX_AUTH_JSON', 'CLAUDE_CODE_OAUTH_TOKEN'], refresh: REFRESH, tagsFails: 1, file: BEHIND }, async ({ page, until, click }) => {
+// Two looks at the Action's tags fail: the first finds the release @v0 is on, the second this workflow's version.
+await scenario('version-lookup-tried-again', { secrets: ['CODEX_AUTH_JSON', 'CLAUDE_CODE_OAUTH_TOKEN'], refresh: REFRESH, tagsFails: 2, file: BEHIND }, async ({ page, until, click }) => {
   await page.goto(`${base}/setup/`, { waitUntil: 'networkidle2' });
   await page.evaluate(() => sessionStorage.setItem('mergelight.setup.state', 's'));
   await page.goto(`${base}/setup/?code=c&state=s`, { waitUntil: 'networkidle2' });

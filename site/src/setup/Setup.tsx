@@ -487,10 +487,15 @@ export default function Setup() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [repos]);
 
-  /** A pinned repo only moves when someone asks, and anything else in its file stays theirs. */
-  const update = details?.installed && details.release && isPinned(details.installed) && details.installed.ref !== details.release.sha ? details.release : null;
   /**
-   * New repos are pinned to the latest release, so a bad release can't reach them by itself. If the release can't be
+   * A pinned repo only moves when someone asks, and anything else in its file stays theirs. Only forward: a repo pinned
+   * to a release newer than @v0's, as this page did before it went by @v0, isn't offered an older one as an update.
+   */
+  const pinnedVersion = details?.installed?.version ?? '';
+  const ahead = Boolean(details?.release && /^v\d+\.\d+\.\d+$/.test(pinnedVersion) && compareVersions(pinnedVersion, details.release.tag) >= 0);
+  const update = details?.installed && details.release && isPinned(details.installed) && details.installed.ref !== details.release.sha && !ahead ? details.release : null;
+  /**
+   * New repos are pinned to the release @v0 is on, the newest whose canary passed, so a bad release can't reach them by itself. If the release can't be
    * read, they follow the moving tag instead, which still works.
    */
   const pinTo = update ?? (details && !details.installed ? details.release : null);

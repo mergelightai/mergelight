@@ -95,7 +95,7 @@ export interface RepoDetails {
    * are looked through, may leave one out.
    */
   branchesKnown: boolean;
-  /** The latest release. Only a pinned repo needs it, so failing to read it doesn't stop a setup. */
+  /** The release @v0 is on, the newest whose canary passed. Only a pinned repo needs it, so failing to read it doesn't stop a setup. */
   release: Release | null;
   /** If the app that posts reviews is on this repo. Null if that can't be told, which doesn't stop a setup. */
   reviewApp: boolean | null;
@@ -510,9 +510,16 @@ export function realClient(token: string): GitHubClient {
     return null;
   };
   const releaseCommit = async (tag: string) => (await get<{ sha: string }>(`/repos/${ACTION_REPO}/commits/${encodeURIComponent(tag)}`)).sha;
-  const latestRelease = async (): Promise<Release> => {
-    const { tag_name: tag } = await get<{ tag_name: string }>(`/repos/${ACTION_REPO}/releases/latest`);
-    return { tag, sha: await releaseCommit(tag) };
+  /**
+   * The release @v0 is on. A new release first runs its canary, and roll-out.yml moves @v0 to it only once that passed,
+   * so this is the newest release cleared for everyone. A newer one is skipped: its canary is still running, or failed.
+   * New repos are pinned to this one, and an update moves a repo to it, the same as `mergelight setup` does.
+   */
+  const rolledOutRelease = async (): Promise<Release> => {
+    const { sha } = await get<{ sha: string }>(`/repos/${ACTION_REPO}/commits/v0`);
+    const tag = newest(await tagsAt(sha));
+    if (!tag) throw new Error("No release tag is on @v0's commit.");
+    return { tag, sha };
   };
   /** With `base`, only one into that branch: a change made on one into another branch would never reach this one. */
   /** Whether a pull request changes a Mergelight workflow, looking through all its files a page at a time. */
@@ -641,7 +648,7 @@ export function realClient(token: string): GitHubClient {
         get<{ base: { ref: string }; head: { ref: string } }[]>(`/repos/${repo.fullName}/pulls?state=all&per_page=50`).catch(() => null),
         openBases(repo).catch(() => null),
         secretNames(repo),
-        latestRelease().catch(() => null),
+        rolledOutRelease().catch(() => null),
         reviewAppInstalled(repo).catch(() => null),
       ]);
       const names = branches.map((b) => b.name);

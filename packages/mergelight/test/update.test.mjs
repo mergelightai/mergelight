@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { summaryBody } from "../dist/publish/markdown.js";
-import { isNewer, newerVersion, releaseNews } from "../dist/update.js";
+import { isNewer, newerVersion, releaseNews, rolledOut } from "../dist/update.js";
 
 test("compares versions as numbers", () => {
   assert.equal(isNewer("v0.2.0", "0.1.0"), true);
@@ -13,7 +13,9 @@ test("compares versions as numbers", () => {
 
 const notes = (...titles) => titles.map((title, i) => `* ${title} by @steelzeh in https://github.com/mergelightai/mergelight/pull/${i}`).join("\n");
 const release = (tag, body = "", over = {}) => ({ tag_name: tag, body, draft: false, prerelease: false, ...over });
-const latest = (tag, body) => ({ get: async () => [release(tag, body)] });
+// @v0 points to the given release, as once its canary passed.
+const tagsAt = (tag) => [{ name: "v0", commit: { sha: `c-${tag}` } }, { name: tag, commit: { sha: `c-${tag}` } }];
+const latest = (tag, body) => ({ get: async () => [release(tag, body)], list: async () => tagsAt(tag) });
 
 const PINNED = "a".repeat(40);
 
@@ -29,7 +31,7 @@ test("only speaks up when there's something newer", async () => {
 });
 
 test("a failed lookup never gets in the way of a review", async () => {
-  assert.equal(await newerVersion({ get: async () => { throw new Error("rate limited"); } }, "0.1.0", PINNED), null);
+  assert.equal(await newerVersion({ get: async () => { throw new Error("rate limited"); }, list: async () => [] }, "0.1.0", PINNED), null);
 });
 
 const review = {
@@ -44,7 +46,7 @@ const review = {
 const input = { review, state: { v: 1, round: 1, findings: [] }, urls: new Map() };
 
 test("collects the news from every release since this one, newest first, without version bumps or drafts", async () => {
-  const api = { get: async () => [
+  const api = { list: async () => tagsAt("v0.3.0"), get: async () => [
     release("v0.3.0", notes("Newest thing", "Release v0.3.0")),
     release("v0.4.0", "", { draft: true }),
     release("v0.5.0-rc", notes("Not out yet"), { prerelease: true }),
@@ -73,4 +75,17 @@ test("a long list is cut short, and no news still shows the banner", () => {
   const plain = summaryBody({ ...input, update: { tag: "v0.2.0", current: "v0.1.0", news: [] } }, false);
   assert.match(plain, /missing out/);
   assert.doesNotMatch(plain, /> - /);
+});
+
+test("a release still in its canary isn't offered: only up to the version @v0 points to", async () => {
+  const releases = [release("v0.3.0", notes("Still being tried")), release("v0.2.0", notes("Cleared"))];
+  const tags = [{ name: "v0.3.0", commit: { sha: "c3" } }, { name: "v0", commit: { sha: "c2" } }, { name: "v0.2.0", commit: { sha: "c2" } }];
+  const api = { get: async () => releases, list: async () => tags };
+  assert.deepEqual(await newerVersion(api, "0.1.0", PINNED), { tag: "v0.2.0", current: "v0.1.0", news: ["Cleared"] });
+  assert.equal(await newerVersion(api, "0.2.0", PINNED), null, "on the cleared one: nothing to offer yet");
+  // Without @v0, or with nothing at its commit, it can't be told: no hint.
+  assert.equal(rolledOut([{ name: "v0.2.0", commit: { sha: "c2" } }]), null);
+  assert.equal(rolledOut([{ name: "v0", commit: { sha: "c9" } }, { name: "v0.2.0", commit: { sha: "c2" } }]), null);
+  // Two versions at one commit: the newer one.
+  assert.equal(rolledOut([{ name: "v0", commit: { sha: "c" } }, { name: "v0.1.9", commit: { sha: "c" } }, { name: "v0.1.10", commit: { sha: "c" } }]), "v0.1.10");
 });
