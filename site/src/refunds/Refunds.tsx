@@ -24,7 +24,11 @@ const SECTIONS: Section[] = [
     body: (
       <>
         <P>Write to {mail} with the name of your GitHub organization and the date of the payment. You can also reply to the receipt from Paddle.</P>
-        <P>To cancel, an owner opens the dashboard's Settings page, then Billing, then "Invoices, card and cancel". That page is Paddle's, and it also has your invoices.</P>
+        <P>
+          To cancel, an owner opens the dashboard's Settings page, then Billing, then "Invoices, card and cancel". That page is Paddle's, and it also
+          has your invoices. Cancel before you uninstall the Mergelight AI app: the dashboard can't show your organization without it. If it is
+          gone already, use the link in Paddle's receipt, or write to {mail}.
+        </P>
         <P>
           Paddle.com, our reseller and the Merchant of Record for every order, sends the refund to the card or account you paid with. The{' '}
           <a href="/terms/#reseller" className={linkClass}>

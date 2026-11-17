@@ -145,7 +145,8 @@ const SECTIONS: Section[] = [
         </P>
         <P>
           Deleting your organization's data doesn't cancel a paid plan: the plan keeps running, and the dashboard stays on, empty. An owner
-          cancels on the dashboard's Settings page, under Billing, with "Invoices, card and cancel", which opens Paddle's page for the plan.
+          cancels on the dashboard's Settings page, under Billing, with "Invoices, card and cancel", which opens Paddle's page for the plan. Cancel
+          before you uninstall the Mergelight AI app; after that, use the link in Paddle's receipt, or write to {mail}.
           When a plan ends, your organization's data stays until an owner deletes it, and a plan bought again finds it.
         </P>
         <P>

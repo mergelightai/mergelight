@@ -70,7 +70,8 @@ type SignedIn = (change: () => Promise<void>) => Promise<void>;
  * Paddle tells the server within seconds, and the page asks until the dashboard is on.
  */
 export function PlanPicker({ session, billing, signedIn, onOn }: { session: Session; billing: Billing; signedIn: SignedIn; onOn: () => void }) {
-  const [plan, setPlan] = useState<PlanName>('light');
+  // An org on for free has the dashboard already: what it can buy that it lacks is Pro's Jobs.
+  const [plan, setPlan] = useState<PlanName>(billing.free ? 'pro' : 'light');
   const [seats, setSeats] = useState('1');
   const [busy, setBusy] = useState(false);
   const [waiting, setWaiting] = useState(false);
@@ -134,7 +135,17 @@ export function PlanPicker({ session, billing, signedIn, onOn }: { session: Sess
             type="button"
             role="radio"
             aria-checked={plan === p}
+            // As a radio group does: one stop for Tab, and the arrow keys move the choice.
+            tabIndex={plan === p ? 0 : -1}
             onClick={() => setPlan(p)}
+            onKeyDown={(e) => {
+              if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
+              e.preventDefault();
+              const other = p === 'light' ? 'pro' : 'light';
+              setPlan(other);
+              (e.currentTarget.parentElement?.querySelector(`[data-plan=${other}]`) as HTMLElement | null)?.focus();
+            }}
+            data-plan={p}
             className={cn('flex flex-col justify-start rounded-[10px] p-4 text-left transition-colors', plan === p ? 'bg-panel shadow-[inset_0_0_0_1px_rgb(255_255_255/0.22)]' : 'bg-shell hairline hover:bg-strip')}
           >
             <span className="flex items-baseline justify-between gap-3">
@@ -288,8 +299,9 @@ export function BillingCard({ session, billing, signedIn, onChanged }: { session
   return (
     <GlassCard label="Billing" icon={<CreditCardIcon className="size-4" />}>
       <p className="text-[14px] leading-relaxed text-ink-3">{state}</p>
-      {billing.can_manage && billing.paddle && !billing.free && (
+      {billing.can_manage && billing.paddle && (billing.checkout || sub) && (
         <div className="mt-5 grid gap-5">
+          {billing.free && !sub?.working && billing.checkout && <p className="text-[13.5px] text-ink-3">Pro adds Jobs. Buying a plan keeps the dashboard as it is.</p>}
           {!sub?.working && billing.checkout && <PlanPicker session={session} billing={billing} signedIn={signedIn} onOn={onChanged} />}
           <div className="flex flex-wrap gap-2">
             {sub?.working && <ChangePlan session={session} billing={billing} signedIn={signedIn} onChanged={onChanged} />}

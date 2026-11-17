@@ -118,7 +118,7 @@ const SECTIONS: Section[] = [
           'Forget on the dashboard deletes a decision\'s title and reason at once. A marker without text stays: the finding\'s id, its line and the pull request.',
           'A rule, check or skill you delete stops being used at once. The log of changes keeps the text of a deleted rule or check, and the name and description of a deleted skill, until your organization\'s data is deleted.',
           'Everything else stays until your organization deletes it.',
-          'An owner of the organization can delete all of its data on the dashboard, under Settings. It is deleted at once, the log of changes too, and the dashboard turns off.',
+          'An owner of the organization can delete all of its data on the dashboard, under Settings. It is deleted at once, the log of changes too, and the dashboard turns off. An organization that pays for a plan keeps the plan: the record of what it pays for stays (the plan, the number of developers and Paddle\'s ids, never a card), and the dashboard stays on, empty, until an owner cancels the plan.',
           <>Where the dashboard says to write to us instead, or if you prefer, write to {mail}. We check on GitHub that you own the organization, and delete everything within one month.</>,
         ]}
       />
