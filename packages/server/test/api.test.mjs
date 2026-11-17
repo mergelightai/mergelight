@@ -21,6 +21,7 @@ const attacker = generateKeyPairSync("rsa", { modulusLength: 2048 });
 
 const ACME = { id: 1001, login: "acme" };
 const OTHER = { id: 2002, login: "other" };
+const THIRD = { id: 3003, login: "third" };
 
 const b64 = (value) => Buffer.from(typeof value === "string" ? value : JSON.stringify(value)).toString("base64url");
 
@@ -97,13 +98,17 @@ beforeEach(async () => {
   resetJwksCache();
   clock = NOW;
   api = createApi({ pool, publicUrl: PUBLIC_URL, fetchImpl, now: () => clock });
-  for (const org of [ACME, OTHER]) await deleteOrg(pool, org.id);
+  for (const org of [ACME, OTHER, THIRD]) {
+    await deleteOrg(pool, org.id);
+    // What an org pays for outlives a delete of its data, so the tests clear it themselves.
+    await withOrg(pool, org.id, (db) => db.query("delete from billing"));
+  }
 });
 
 test("migrations apply once, and a second run changes nothing", async () => {
   await migrate(pool);
   const { rows } = await pool.query("select name from schema_migrations");
-  assert.deepEqual(rows.map((r) => r.name).sort(), ["001_base.sql", "002_memories.sql", "003_rules.sql", "004_skills.sql", "005_checks.sql", "006_written_skills.sql"]);
+  assert.deepEqual(rows.map((r) => r.name).sort(), ["001_base.sql", "002_memories.sql", "003_rules.sql", "004_skills.sql", "005_checks.sql", "006_written_skills.sql", "007_billing.sql"]);
 });
 
 test("the server's own role can't bypass the row rules, and a superuser is refused", async () => {
@@ -631,9 +636,78 @@ test("only an org in JOBS_ORGS is told its plan includes Jobs", async () => {
   assert.equal((await (await get(makeToken())).json()).jobs, true);
   assert.equal((await (await get(makeToken({ repository_owner_id: String(OTHER.id), repository_owner: OTHER.login }))).json()).jobs, false);
   // Given Jobs without turning the dashboard on: nothing of the dashboard, but the grant is said.
-  const THIRD = { id: 3003, login: "third" };
   api = createApi({ pool, publicUrl: PUBLIC_URL, fetchImpl, now: () => clock, jobsOrgs: new Set([THIRD.id]) });
   assert.deepEqual(await (await get(makeToken({ repository_owner_id: String(THIRD.id), repository_owner: THIRD.login }))).json(), { connected: false, jobs: true });
+});
+
+/** What an org pays for, written the way the payment company's messages will write it. */
+const bill = (org, plan, status) =>
+  withOrg(pool, org.id, (db) =>
+    db.query(
+      `insert into billing (org_id, provider, customer_id, subscription_id, plan, seats, status) values ($1, 'paddle', $2, $3, $4, 3, $5)
+       on conflict (org_id) do update set plan = excluded.plan, status = excluded.status`,
+      [org.id, `ctm_${org.id}`, `sub_${org.id}`, plan, status],
+    ),
+  );
+const contextOf = async (org) => (await get(makeToken({ repository_owner_id: String(org.id), repository_owner: org.login }))).json();
+
+test("a working Pro plan gives Jobs and Light doesn't, and both keep the dashboard on", async () => {
+  await connectOrg(pool, ACME.id, ACME.login);
+  await bill(ACME, "pro", "active");
+  assert.deepEqual(await contextOf(ACME), { connected: true, memories: [], rules: [], skills: [], checks: [], written_skills: [], jobs: true });
+  await bill(ACME, "light", "active");
+  assert.equal((await contextOf(ACME)).jobs, false);
+  assert.equal((await contextOf(ACME)).connected, true);
+  // A payment failed and the payment company tries again: the team keeps working meanwhile.
+  await bill(ACME, "pro", "past_due");
+  assert.equal((await contextOf(ACME)).jobs, true);
+  assert.equal((await post(makeToken())).status, 201);
+});
+
+test("a plan that ended or is paused turns the dashboard and Jobs off, and keeps no more reviews", async () => {
+  await connectOrg(pool, ACME.id, ACME.login);
+  assert.equal((await post(makeToken())).status, 201);
+  for (const status of ["canceled", "paused"]) {
+    await bill(ACME, "pro", status);
+    assert.deepEqual(await contextOf(ACME), { connected: false }, status);
+    const res = await post(makeToken({ run_id: status === "paused" ? "9101" : "9100" }));
+    assert.equal(res.status, 404, status);
+    assert.equal((await res.json()).error, "not_connected");
+  }
+  // The data stays until someone deletes it, so a plan bought again finds it.
+  assert.equal((await rowsOf(ACME.id, "select 1 from reviews")).length, 1);
+  await bill(ACME, "light", "active");
+  assert.equal((await contextOf(ACME)).connected, true);
+});
+
+test("Pro gives Jobs even before the org's data is stored here", async () => {
+  await bill(THIRD, "pro", "active");
+  assert.deepEqual(await contextOf(THIRD), { connected: false, jobs: true });
+  await bill(THIRD, "light", "active");
+  assert.deepEqual(await contextOf(THIRD), { connected: false });
+});
+
+test("the operator's free grants hold whatever the org pays", async () => {
+  await connectOrg(pool, ACME.id, ACME.login);
+  await bill(ACME, "light", "canceled");
+  api = createApi({ pool, publicUrl: PUBLIC_URL, fetchImpl, now: () => clock, keptOn: new Set([ACME.id]), jobsOrgs: new Set([ACME.id]) });
+  assert.deepEqual(await contextOf(ACME), { connected: true, memories: [], rules: [], skills: [], checks: [], written_skills: [], jobs: true });
+  assert.equal((await post(makeToken())).status, 201);
+});
+
+test("deleting an org's data leaves what it pays for, and no org sees another's plan", async () => {
+  await connectOrg(pool, ACME.id, ACME.login);
+  await bill(ACME, "pro", "active");
+  assert.equal(await deleteOrg(pool, ACME.id), true);
+  assert.deepEqual(await rowsOf(ACME.id, "select plan, status from billing"), [{ plan: "pro", status: "active" }]);
+  // The row rules hold for billing too: another org's transaction sees nothing, and can't write a row for someone else.
+  assert.deepEqual(await rowsOf(OTHER.id, "select * from billing"), []);
+  await assert.rejects(
+    withOrg(pool, OTHER.id, (db) => db.query("insert into billing (org_id, provider, plan, seats, status) values ($1, 'paddle', 'pro', 1, 'active')", [ACME.id])),
+    /row-level security/,
+  );
+  await withOrg(pool, OTHER.id, (db) => db.query("update billing set plan = 'light'"));
+  assert.deepEqual(await rowsOf(ACME.id, "select plan from billing"), [{ plan: "pro" }]);
 });
 
 test("JOBS_ORGS names orgs by GitHub's number, and a typo stops the start instead of meaning no orgs", () => {

@@ -115,7 +115,11 @@ beforeEach(async () => {
   membershipsHidden = false;
   clock = NOW;
   api = createApi({ pool, publicUrl: PUBLIC_URL, origins: [SITE], fetchImpl, now: () => clock });
-  for (const org of [ACME, OTHER, QUIET]) await deleteOrg(pool, org.id);
+  for (const org of [ACME, OTHER, QUIET]) {
+    await deleteOrg(pool, org.id);
+    // What an org pays for outlives a delete of its data, so the tests clear it themselves.
+    await withOrg(pool, org.id, (db) => db.query("delete from billing"));
+  }
   await connectOrg(pool, ACME.id, ACME.login);
   await connectOrg(pool, OTHER.id, OTHER.login);
   // Three repositories with reviews: two in acme (one of them Ada can't see), one in other.
@@ -175,6 +179,26 @@ test("an org that hasn't turned the dashboard on says so, and shows nothing", as
   const res = await call(`/v1/orgs/${QUIET.id}/overview`, { token });
   assert.equal(res.status, 404);
   assert.equal((await res.json()).error, "not_connected");
+});
+
+test("a plan that ended turns the dashboard off: the org shows as off, and nothing can be read or added", async () => {
+  await withOrg(pool, ACME.id, (db) => db.query("insert into billing (org_id, provider, plan, seats, status) values ($1, 'paddle', 'light', 2, 'canceled')", [ACME.id]));
+  const { token, orgs } = await signIn(ADA);
+  assert.deepEqual(orgs.find((o) => o.id === ACME.id).connected, false);
+  for (const what of ["overview", "memories", "rules", "skills", "checks", "written-skills"]) {
+    const res = await call(`/v1/orgs/${ACME.id}/${what}`, { token });
+    assert.equal(res.status, 404, what);
+    assert.equal((await res.json()).error, "not_connected", what);
+  }
+  const add = await call(`/v1/orgs/${ACME.id}/rules`, { method: "POST", token, body: JSON.stringify({ kind: "rule", text: "Report every TODO." }) });
+  assert.equal(add.status, 404);
+  assert.deepEqual(await withOrgRows(ACME.id, "select 1 from rules"), []);
+  // A working plan turns it on again, with the data it had.
+  await withOrg(pool, ACME.id, (db) => db.query("update billing set status = 'active'"));
+  clock += 20_000;
+  const again = await signIn(ADA);
+  assert.equal(again.orgs.find((o) => o.id === ACME.id).connected, true);
+  assert.equal((await (await call(`/v1/orgs/${ACME.id}/overview`, { token: again.token })).json()).reviews.length, 1);
 });
 
 test("without a session, with a made-up one, or with one that ran out, nothing is shown", async () => {

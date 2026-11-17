@@ -122,7 +122,7 @@ export async function connectOrg(pool: Pool, orgId: number, login: string): Prom
 
 /**
  * Orgs the operator turns the dashboard on for when the server starts: "id:login,id:login", with
- * GitHub's number for each account. It stands in until sign-in exists. A value that can't be read
+ * GitHub's number for each account. The dashboard stays on for them whatever they pay. A value that can't be read
  * stops the start, so a typo isn't taken for "no orgs".
  */
 export function parseConnectOrgs(value: string | undefined): { id: number; login: string }[] {
@@ -139,8 +139,8 @@ export function parseConnectOrgs(value: string | undefined): { id: number; login
 }
 
 /**
- * Orgs whose plan includes Jobs: "id,id", with GitHub's number for each account. It stands in until
- * payments exist. A value that can't be read stops the start, so a typo isn't taken for "no orgs".
+ * Orgs the operator gives Jobs for free: "id,id", with GitHub's number for each account. Other orgs
+ * get Jobs with Pro. A value that can't be read stops the start, so a typo isn't taken for "no orgs".
  */
 export function parseJobsOrgs(value: string | undefined): Set<number> {
   const ids = (value ?? "")

@@ -11,10 +11,12 @@
 //   SIGN_IN_APP    The GitHub Apps people sign in to the dashboard with, by the name in their address,
 //                  split by commas. Default: mergelight-ai,mergelight-setup
 //   CONNECT_ORGS   Orgs to turn the dashboard on for at start, as "id:login,id:login" with GitHub's
-//                  number for each account. It stands in until sign-in exists.
-//   JOBS_ORGS      Orgs whose plan includes Jobs, as "id,id" with GitHub's number for each account. A
-//                  run of the team's jobs asks first, and runs none for any other org. It stands in
-//                  until payments exist. Taking an org out turns its jobs off at the next start.
+//                  number for each account. A free grant from the operator: the dashboard stays on for
+//                  them whatever they pay (plan.ts).
+//   JOBS_ORGS      Orgs the operator gives Jobs for free, as "id,id" with GitHub's number for each
+//                  account. Other orgs get Jobs with a working Pro plan (plan.ts). A run of the team's
+//                  jobs asks first, and runs none without one of the two. Taking an org out takes its
+//                  free Jobs away at the next start.
 //
 // This server holds no GitHub key. The app's private key stays on the token server.
 
