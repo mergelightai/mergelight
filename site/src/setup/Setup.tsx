@@ -5,16 +5,20 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import { siClaude } from 'simple-icons';
 import workflowFile from '../../../examples/mergelight.yml?raw';
 import refreshFile from '../../../examples/mergelight-refresh.yml?raw';
+import approveFile from '../../../examples/mergelight-approve.yml?raw';
+import { hasCommentTrigger, withCommentTrigger } from './comment-trigger';
 import { OPENAI_PATH } from '../brandIcons';
 import Ambient from '../sections/Ambient';
 import { Check, GitHubIcon, SURFACE, WELL } from '../ui';
 import type { ConnectLink } from './github';
-import { compareVersions, cleanUrl, finishSignIn, GitHubError, INSTALL_URL, onlyAi, onRef, OpenPrError, ScanLimitError, readConnectLink, readInstalled, rememberConnect, rememberRepo, reviewAppUrl, takeRememberedConnect, takeRememberedRepo, isPinned, mockClient, pinned, realClient, REFRESH_FILE, signInUrl, wakeTokenServer, withReviewer, WorkflowEditError, type CheckStatus, type ConnectCode, type GitHubClient, type Release, type Repo, type RepoDetails, type SetupPr, type WorkflowFile } from './github';
+import { compareVersions, cleanUrl, finishSignIn, GitHubError, INSTALL_URL, onlyAi, onRef, OpenPrError, ScanLimitError, readConnectLink, readInstalled, rememberConnect, rememberRepo, reviewAppUrl, takeRememberedConnect, takeRememberedRepo, isPinned, mockClient, pinned, realClient, APPROVE_FILE, REFRESH_FILE, signInUrl, wakeTokenServer, withReviewer, WorkflowEditError, type CheckStatus, type ConnectCode, type GitHubClient, type Release, type Repo, type RepoDetails, type SetupPr, type WorkflowFile } from './github';
 import { aiName, connectsAfterMerge, isStandard, readsPlanLogin, runsOnBase, waitsForBase, LOGIN_INPUTS, LOGIN_SECRET, loginInputs, loginsFrom, loginsIn, otherAi, passesLogin, readRoles, reviewerFixedBy, rolesFor, withInputs, withoutInputs, withRoles, type Ai, type Logins, type Roles } from './roles';
 
 const CHATGPT_SECURITY = 'https://chatgpt.com/settings/security';
 /** Where the Action's docs say how provider and verify-with work, for a workflow set by hand. */
 const ROLES_DOCS = '/docs/github-action/#two-ais-one-reviews-the-other-checks';
+/** The review workflow as it is now, with the trigger for answering in a comment, for one that gets it by hand. */
+const EXAMPLE_WORKFLOW = 'https://github.com/mergelightai/mergelight/blob/main/examples/mergelight.yml';
 const TYPES_MARKER = 'types: [opened, synchronize, reopened, ready_for_review, edited]';
 const SKIP_MARKER = 'github.event.pull_request.head.repo.full_name == github.repository';
 const SPRING = { type: 'spring', bounce: 0, duration: 0.45 } as const;
@@ -34,6 +38,9 @@ function workflowFor(scope: Scope, branch: string, longLived: string[]): string 
   if (!skip.length) return scoped;
   return scoped.replace(SKIP_MARKER, () => `${SKIP_MARKER} &&\n      !contains(fromJSON('${JSON.stringify(skip)}'), github.head_ref)`);
 }
+
+/** A small count in words, as the page's sentences say it. */
+const countWord = (n: number) => ['no', 'one', 'two', 'three', 'four'][n] ?? String(n);
 
 /** The commit a review's release tag is on couldn't be read, so no refresh job can be pinned to it. */
 class TagError extends Error {}
@@ -489,7 +496,8 @@ export default function Setup() {
   const pinTo = update ?? (details && !details.installed ? details.release : null);
   const workflow = useMemo(() => {
     if (!details) return workflowFile;
-    if (update && details.installed) return pinned(details.installed.content, update);
+    // An update also adds the trigger for answering the findings in a comment, where the workflow's shape is known.
+    if (update && details.installed) return pinned(withCommentTrigger(details.installed.content) ?? details.installed.content, update);
     // A repo with a login already gets its reviewer written down, so a second login added later doesn't change it. Only
     // when every secret a run gets was seen: one its organization shares may be a login the Action would review with.
     const scoped = workflowFor(scope, branch, details.skip);
@@ -507,10 +515,14 @@ export default function Setup() {
   const { files, prFiles } = useMemo<{ files: WorkflowFile[]; prFiles: WorkflowFile[] }>(() => {
     // An update moves the version lines of what the pull request's branch holds, so a change of AI waiting there stays.
     // One whose Mergelight step is gone has no version to move, so it stops the update rather than claiming it worked.
-    const moves = update ? { edit: (current: string) => (readInstalled(current) ? pinned(current, update) : null) } : {};
+    const moves = update ? { edit: (current: string) => (readInstalled(current) ? pinned(withCommentTrigger(current) ?? current, update) : null) } : {};
     const list: WorkflowFile[] = [{ name: 'mergelight.yml', content: workflow, ...moves }];
     if (!details || !repo) return { files: list, prFiles: list };
     const version = (content: string) => (pinTo ? pinned(content, pinTo) : content);
+    // The job that turns a "needs a human" check green when someone approves. A setup adds it where it's missing and leaves
+    // one that's there as it is. An update moves its version lines too, and adds it where it's missing, so a repo this
+    // page set up before it added the job gets it.
+    list.push(update ? { name: APPROVE_FILE, content: version(approveFile), edit: version, orAdd: true } : { name: APPROVE_FILE, content: version(approveFile), keep: true });
     // A refresh job an open PR has already, edited or not, only gets its version lines moved. Where the branch has one,
     // a PR that took it out stops the change rather than getting it back. Where it has none, it goes in only where the
     // PR has none either.
@@ -1119,7 +1131,7 @@ export default function Setup() {
               {view === 'repo' && <RepoStep repos={repos} onChoose={choose} failed={signInFailed} missing={missing} />}
               {view === 'review-app' && repo && <ReviewAppStep repo={repo} onCheck={() => choose(repo)} onBack={back['review-app']!} />}
               {view === 'add' && repo && (
-                <AddStep repo={repo} details={details} ai={yourAi} fileCount={files.length} branch={branch} setBranch={setBranch} scope={scope} setScope={setScope} fileOpen={fileOpen} onToggleFile={() => setFileOpen((v) => !v)} adding={adding} failed={addFailed} blockedBy={addBlockedBy} detailsFailed={detailsFailed} onRetry={() => choose(repo)} update={update} onAdd={() => void addToRepo()} fileUrl={fileUrl} onBack={adding ? () => undefined : back.add!} onByHand={() => { setFileOpen(false); setView('finish'); }} onContinue={() => afterAdding()} />
+                <AddStep repo={repo} details={details} ai={yourAi} fileCount={files.length} addsRefresh={Boolean(details && !details.refresh && files.some((f) => f.name === REFRESH_FILE))} branch={branch} setBranch={setBranch} scope={scope} setScope={setScope} fileOpen={fileOpen} onToggleFile={() => setFileOpen((v) => !v)} adding={adding} failed={addFailed} blockedBy={addBlockedBy} detailsFailed={detailsFailed} onRetry={() => choose(repo)} update={update} onAdd={() => void addToRepo()} fileUrl={fileUrl} onBack={adding ? () => undefined : back.add!} onByHand={() => { setFileOpen(false); setView('finish'); }} onContinue={() => afterAdding()} />
               )}
               {view === 'finish' && repo && <FinishStep repo={repo} branch={branch} fileUrl={fileUrl} pr={pr} capped={scanCapped} onBack={back.finish!} />}
               {/* A new AI to connect, like the reviewer of a workflow read just now, a new PR or a new run starts the step over: what it learned from the last one doesn't hold. */}
@@ -1300,6 +1312,16 @@ function LockIcon({ className = 'size-3.5' }: { className?: string }) {
     <svg viewBox="0 0 16 16" fill="none" aria-hidden="true" className={className}>
       <rect x="3.5" y="7" width="9" height="6.5" rx="1.75" stroke="currentColor" strokeWidth="1.4" />
       <path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" stroke="currentColor" strokeWidth="1.4" />
+    </svg>
+  );
+}
+
+function InfoIcon({ className = 'size-3.5' }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true" className={className}>
+      <circle cx="8" cy="8" r="5.75" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M8 7.25v3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <circle cx="8" cy="5.1" r="0.85" fill="currentColor" />
     </svg>
   );
 }
@@ -1553,6 +1575,8 @@ function AddStep(props: {
   /** Who reviews and who checks, on a repo that's on already. */
   ai: ReactNode;
   fileCount: number;
+  /** Whether this adds the job that keeps a ChatGPT login fresh. */
+  addsRefresh: boolean;
   branch: string;
   setBranch: (b: string) => void;
   scope: Scope;
@@ -1572,7 +1596,7 @@ function AddStep(props: {
   onByHand: () => void;
   onContinue: () => void;
 }) {
-  const { repo, details, ai, fileCount, branch, setBranch, scope, setScope, fileOpen, onToggleFile, adding, failed, blockedBy, detailsFailed, onRetry, update, onAdd, fileUrl, onBack, onByHand, onContinue } = props;
+  const { repo, details, ai, fileCount, addsRefresh, branch, setBranch, scope, setScope, fileOpen, onToggleFile, adding, failed, blockedBy, detailsFailed, onRetry, update, onAdd, fileUrl, onBack, onByHand, onContinue } = props;
   const name = repo.fullName.split('/')[1]!;
 
   if (detailsFailed) {
@@ -1588,14 +1612,33 @@ function AddStep(props: {
   }
 
   if (details && update) {
+    // What changes besides the version lines. The comment trigger goes in where the workflow's shape is known; one
+    // changed by hand gets a pointer to the lines instead.
+    const live = details.installed?.content ?? '';
+    const comments = !live || hasCommentTrigger(live) ? 'has' : withCommentTrigger(live) ? 'adds' : 'by-hand';
+    const existing = 1 + (details.refresh ? 1 : 0) + (details.approve ? 1 : 0);
+    const where = existing === 1 ? 'in your file' : existing === 2 ? 'in both files' : 'in all three files';
     return (
       <div>
         <BackButton onClick={onBack} />
         <Heading title={`Update Mergelight on ${name}`} sub={`It's pinned to ${details.installed?.version ?? 'an older version'}, and ${update.tag} is out.`} />
         <ul className="mt-3 divide-y divide-white/[0.06]">
           <Fact icon={<Check className="size-4" />}>Moves the pin to the exact commit of {update.tag}</Fact>
-          <Fact icon={<Check className="size-4" />}>{details.refresh ? 'Changes only the Mergelight version lines in both files' : 'Changes only the Mergelight version lines in your file'}</Fact>
-          {!details.refresh && fileCount > 1 && <Fact icon={<Check className="size-4" />}>Adds the small job that keeps a ChatGPT login fresh</Fact>}
+          <Fact icon={<Check className="size-4" />}>
+            {comments === 'adds' ? `Changes the Mergelight version lines ${where}, and adds the trigger that lets a comment that mentions @mergelight-ai answer the findings` : `Changes only the Mergelight version lines ${where}`}
+          </Fact>
+          {!details.approve && <Fact icon={<Check className="size-4" />}>Adds the small job that turns a "needs a human" check green when someone approves</Fact>}
+          {addsRefresh && <Fact icon={<Check className="size-4" />}>Adds the small job that keeps a ChatGPT login fresh</Fact>}
+          {comments === 'by-hand' && (
+            <Fact icon={<InfoIcon className="size-4" />}>
+              <span className="[text-wrap:pretty]">
+                Your workflow was changed by hand, so answering the findings in a comment needs its trigger added by hand too.{' '}
+                <a href={EXAMPLE_WORKFLOW} target="_blank" rel="noreferrer" className="text-lilac underline-offset-4 hover:underline">
+                  See the lines
+                </a>
+              </span>
+            </Fact>
+          )}
           <Fact center icon={<LockIcon className="size-4" />}>
             <span className="flex items-center justify-between gap-3">
               <span className="[text-wrap:pretty]">Opens a PR, and you decide whether to merge.</span>
@@ -1698,7 +1741,7 @@ function AddStep(props: {
                   {pickFileBranch ? (
                     <span className="flex flex-wrap items-center gap-x-2 gap-y-1">Opens a PR into {picker}</span>
                   ) : (
-                    <span className="[text-wrap:pretty]">{fileCount > 1 ? 'Needs two small files to run. We open a PR with them, and you decide whether to merge.' : 'Needs one small file to run. We open a PR with it, and you decide whether to merge.'}</span>
+                    <span className="[text-wrap:pretty]">{fileCount > 1 ? `Needs ${countWord(fileCount)} small files to run. We open a PR with them, and you decide whether to merge.` : 'Needs one small file to run. We open a PR with it, and you decide whether to merge.'}</span>
                   )}
                   <button
                     type="button"
@@ -1711,7 +1754,7 @@ function AddStep(props: {
                 </span>
                 {pickFileBranch && (
                   <span className="mt-1 block [text-wrap:pretty]">
-                    {fileCount > 1 ? 'It adds two small files needed to run' : 'It adds one small file needed to run'}, and you decide whether to merge.{canChoose && ` Merge ${fileCount > 1 ? 'them' : 'it'} into other branches to review PRs there.`}
+                    {fileCount > 1 ? `It adds ${countWord(fileCount)} small files needed to run` : 'It adds one small file needed to run'}, and you decide whether to merge.{canChoose && ` Merge ${fileCount > 1 ? 'them' : 'it'} into other branches to review PRs there.`}
                   </span>
                 )}
               </Fact>
