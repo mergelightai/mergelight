@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
-import { accessTokenExpiry, forceRefresh, isDue, refreshLogin } from "../scripts/refresh-login.mjs";
+import { accessTokenExpiry, forceRefresh, isDue, refreshFailure, refreshLogin } from "../scripts/refresh-login.mjs";
 import { maskLogin } from "../scripts/mask-login.mjs";
 
 const NOW = 1_800_000_000_000;
@@ -397,4 +397,27 @@ test("the job's GitHub environment is read from GitHub's signed pass for the run
   assert.equal(await jobEnvironment({ env: {}, fetchImpl: gives({}) }), null, "no id-token: write");
   assert.equal(await jobEnvironment({ env, fetchImpl: gives({}, 500) }), undefined, "GitHub didn't give one this time");
   assert.equal(await jobEnvironment({ env, fetchImpl: async () => { throw new Error("offline"); } }), undefined);
+});
+
+test("a refresh that fails says the known cause from Codex's error output, never the output itself", async () => {
+  assert.equal(refreshFailure('ERROR codex_core::auth: {"error":{"code":"refresh_token_reused"}}'), "the refresh token was already used");
+  assert.equal(refreshFailure("Your refresh token has already been used to generate a new access token."), "the refresh token was already used");
+  assert.equal(refreshFailure("refresh_token_expired"), "the refresh token ran out");
+  assert.equal(refreshFailure('{"error":"invalid_grant"}'), "the refresh token was refused");
+  assert.equal(refreshFailure("request failed with status 401 Unauthorized"), "HTTP 401");
+  assert.equal(refreshFailure("token eyJhbGciOiJSUzI1NiJ9.secretpart.sig went somewhere"), null, "no known cause: nothing of the output is shown");
+  assert.equal(refreshFailure(""), null);
+  // A failed refresh that still answers normally: Codex's error output names the cause.
+  const { child } = fakeServer((m, c) => {
+    if (m.id === 2) c.stderr.write("WARN refresh failed: refresh_token_reused\n");
+    if (m.id) setImmediate(() => c.stdout.write(`${JSON.stringify({ id: m.id, result: {} })}\n`));
+  });
+  child.stderr = new PassThrough();
+  assert.equal(await forceRefresh({ spawnImpl: () => child }), "the refresh token was already used");
+  // One that worked says nothing.
+  const quiet = fakeServer((m, c) => {
+    if (m.id) c.stdout.write(`${JSON.stringify({ id: m.id, result: {} })}\n`);
+  });
+  quiet.child.stderr = new PassThrough();
+  assert.equal(await forceRefresh({ spawnImpl: () => quiet.child }), null);
 });

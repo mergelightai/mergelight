@@ -130,9 +130,27 @@ export function isDue(event, expiry, now) {
  * Returns the reason if it can tell that something went wrong. Its logs stay out of ours, since they
  * deal with the login.
  */
+/**
+ * A known cause of a failed refresh in what Codex wrote to its error output, or null. Only the cause, never
+ * the output itself, which can hold tokens.
+ */
+export function refreshFailure(text) {
+  if (/refresh_token_reused|already been used/i.test(text)) return "the refresh token was already used";
+  if (/refresh_token_expired|refresh token (?:has )?expired/i.test(text)) return "the refresh token ran out";
+  if (/refresh_token_invalidated|invalid_grant/i.test(text)) return "the refresh token was refused";
+  const status = /\b(?:status(?: code)?|HTTP)[\s:=]*([45]\d\d)\b/i.exec(text)?.[1];
+  return status ? `HTTP ${status}` : null;
+}
+
 export function forceRefresh({ env = process.env, spawnImpl = spawn, timeoutMs = 90_000 } = {}) {
   return new Promise((resolve) => {
-    const child = spawnImpl("codex", ["app-server"], { stdio: ["pipe", "pipe", "ignore"], env });
+    const child = spawnImpl("codex", ["app-server"], { stdio: ["pipe", "pipe", "pipe"], env });
+    // Read, so Codex never waits on a full pipe, and kept only to find a known cause in.
+    let errors = "";
+    child.stderr?.setEncoding?.("utf8");
+    child.stderr?.on("data", (chunk) => {
+      if (errors.length < 64 * 1024) errors += chunk;
+    });
     const send = (message) => child.stdin.write(`${JSON.stringify(message)}\n`);
     let done = false;
     const finish = (reason = null) => {
@@ -140,7 +158,8 @@ export function forceRefresh({ env = process.env, spawnImpl = spawn, timeoutMs =
       done = true;
       clearTimeout(timer);
       child.kill();
-      resolve(reason);
+      // A failed refresh can still answer normally: then Codex's error output may name the cause.
+      resolve(reason ?? refreshFailure(errors));
     };
     const timer = setTimeout(() => finish("Codex didn't answer in time"), timeoutMs);
     child.on("error", (err) => finish(err.message));
