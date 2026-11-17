@@ -153,14 +153,14 @@ export default function Bills() {
                 ['Per-file fees', '$0'],
                 ['Per-review fees', '$0'],
                 ['AI credits', '$0'],
-                [`${DEVELOPERS} developers at ${usd(MERGELIGHT_PER_DEV)}`, usd(MERGELIGHT_BILL, true)],
+                [`${DEVELOPERS} developers on Light at ${usd(MERGELIGHT_PER_DEV)}`, usd(MERGELIGHT_BILL, true)],
               ]}
               totalLabel="Per month"
               total={MERGELIGHT_BILL}
               delay={0.6}
             />
             <p className="mt-4 px-2 text-[12.5px] leading-relaxed text-muted">
-              Planned price. Also uses your own AI plan's allowance, and about {usd(ACTIONS_ESTIMATE)} of GitHub Actions minutes at this volume (our estimate).
+              Planned Light price. Also uses your own AI plan's allowance, and about {usd(ACTIONS_ESTIMATE)} of GitHub Actions minutes at this volume (our estimate).
             </p>
           </div>
         </div>

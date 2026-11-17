@@ -12,6 +12,9 @@ export const COPILOT_PRS = 346;
 
 export const REVIEW_BILLS = CODERABBIT_BILL + COPILOT_BILL;
 
-export const MERGELIGHT_PER_DEV = 9; // planned price
+// Planned prices per developer a month. The comparisons use Light: it has the memory and rules the others sell.
+export const LIGHT_PER_DEV = 7;
+export const PRO_PER_DEV = 14;
+export const MERGELIGHT_PER_DEV = LIGHT_PER_DEV;
 export const MERGELIGHT_BILL = MERGELIGHT_PER_DEV * DEVELOPERS;
 export const ACTIONS_ESTIMATE = 42; // about 7,000 runner minutes at $0.006, not measured on a full month

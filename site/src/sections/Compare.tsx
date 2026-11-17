@@ -76,7 +76,7 @@ export default function Compare() {
                     </span>
                     <span className="text-muted">/mo</span>
                   </p>
-                  <p className="mt-3 text-[15px] text-fg/90">Every review included</p>
+                  <p className="mt-3 text-[15px] text-fg/90">Light plan, every review included</p>
                   <span className="mt-5 rounded-full bg-mint/15 px-3 py-1 text-[12px] font-medium text-mint ring-1 ring-mint/30">Best value</span>
                 </div>
               </BorderGlow>
