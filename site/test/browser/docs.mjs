@@ -58,6 +58,14 @@ try {
   const marked = await page.waitForFunction(() => document.querySelector('[data-toc][href="#inputs"]')?.hasAttribute('data-active'), { timeout: 5000 }).then(() => true, () => false);
   check(marked, 'the outline marks the section being read');
 
+  // Enter on a result opens another page. Its keys only work once it has loaded, so this waits for that, presses /, and
+  // waits for the search to be open before anything is typed.
+  const openSearch = async () => {
+    await page.waitForFunction(() => document.readyState === 'complete', { timeout: 10000 });
+    await page.keyboard.press('/');
+    await page.waitForFunction(() => document.querySelector('#docs-search')?.open, { timeout: 5000 });
+  };
+
   // Search, from the keyboard.
   await page.keyboard.down('Control');
   await page.keyboard.press('k');
@@ -72,12 +80,12 @@ try {
   check(!(await page.$eval('#docs-search', (d) => d.open)) && page.url().startsWith(`${base}/docs/github-action/`), 'Enter opens the result');
 
   // Enter at once after typing opens a result for what was just typed, not for the query before it.
-  await page.keyboard.press('/');
+  await openSearch();
   await page.type('[data-search-input]', 'jobs', { delay: 0 });
   await page.keyboard.press('Enter');
   await page.waitForFunction(() => location.pathname.startsWith('/docs/jobs/'), { timeout: 5000 }).then(() => check(true, 'Enter right after typing opens a result for what was typed'), () => check(false, `Enter right after typing opens a result for what was typed (${page.url()})`));
 
-  await page.keyboard.press('/');
+  await openSearch();
   await page.type('[data-search-input]', 'zzqxyw');
   await page.waitForFunction(() => document.querySelector('[data-search-results]')?.textContent?.includes('Nothing found'), { timeout: 5000 });
   check(true, 'a search with no match says so');
