@@ -4,27 +4,73 @@
 export const SITE = 'https://mergelight.dev';
 export const REPO = 'https://github.com/mergelightai/mergelight';
 
+/** The menu's groups, in order. A doc that isn't in ORDER goes in More, which only shows when it has one. */
+export const GROUPS = ['Get started', 'Use it', 'Reference', 'Security', 'More'] as const;
+export type Group = (typeof GROUPS)[number];
+
 /**
- * The docs in the menu's order, with a short name for the menu and a one-line description for search engines, the
- * overview and llms.txt. A file in docs/ that isn't listed comes after these, described by its first paragraph.
+ * The docs in the menu's order, each in a group, with a short name for the menu and a one-line description for
+ * search engines, the overview and llms.txt. A file in docs/ that isn't listed comes last, described by its first paragraph.
  */
-export const ORDER: { file: string; label: string; description: string }[] = [
+export const ORDER: { file: string; group: Group; label: string; description?: string }[] = [
   {
-    file: 'github-action.md',
-    label: 'GitHub Action',
-    description: 'What each review posts, which AI login to use, how to set it up, and every option of the Action.',
+    file: 'introduction.md',
+    group: 'Get started',
+    label: 'What is Mergelight',
+    description: 'An AI code reviewer for GitHub pull requests that runs in your own GitHub Actions, on the Claude or ChatGPT plan you already pay for.',
+  },
+  {
+    file: 'quickstart.md',
+    group: 'Get started',
+    label: 'Get started',
+    description: 'Turn on Mergelight for one repository and see its first review, on the setup page or from a terminal.',
+  },
+  {
+    file: 'how-it-works.md',
+    group: 'Get started',
+    label: 'How a review works',
+    description: 'What happens in a review, what the summary, the comments and the check mean, and how to answer a finding.',
+  },
+  {
+    file: 'customize.md',
+    group: 'Use it',
+    label: "Your team's rules",
+    description: 'Teach reviews what your team cares about with rule files, dashboard rules, skills, custom checks and team memory.',
   },
   {
     file: 'agents.md',
+    group: 'Use it',
     label: 'Your coding agent',
     description: 'Let Claude Code, Codex or Cursor read the findings on a pull request and fix them with your own tests and rules.',
   },
   {
     file: 'jobs.md',
+    group: 'Use it',
     label: 'Jobs',
     description: 'Tasks your team writes once in its repository. On each pull request that needs one, the AI does it and Mergelight pushes one commit.',
   },
+  {
+    file: 'github-action.md',
+    group: 'Reference',
+    label: 'GitHub Action',
+    description: 'What each review posts, which AI login to use, how to set it up, and every option of the Action.',
+  },
+  {
+    file: 'security.md',
+    group: 'Security',
+    label: 'Security and data',
+    description: 'Where your code goes, what the AI can and can\'t do during a review, what reaches Mergelight, and the limits.',
+  },
 ];
+
+/** Links in the menu that aren't docs pages, by group. */
+export const EXTRA: Partial<Record<Group, { href: string; label: string }[]>> = {
+  Security: [{ href: '/privacy/', label: 'Privacy policy' }],
+};
+
+export function groupFor(file: string): Group {
+  return ORDER.find((o) => o.file === file)?.group ?? GROUPS[GROUPS.length - 1];
+}
 
 export function slugFor(file: string): string {
   return file.replace(/\.md$/, '');
