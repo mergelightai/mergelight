@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { renderDocs, llmsTxt } from '../../docgen/build.ts';
-import { headingId, ordered, pageHref, rawHref, rawMarkdown, shorten } from '../../docgen/pages.ts';
+import { groupFor, headingId, ordered, pageHref, rawHref, rawMarkdown, shorten } from '../../docgen/pages.ts';
 
 const DOCS_DIR = new URL('../../../docs/', import.meta.url).pathname;
 const files = ['github-action.md', 'agents.md', 'jobs.md'];
@@ -41,7 +41,9 @@ test('the Markdown copy for AI tools has only full addresses, and leaves code bl
 });
 
 test('the menu keeps its order, and a new doc comes after the listed ones', () => {
-  assert.deepEqual(ordered(['zeta.md', 'jobs.md', 'alpha.md', 'github-action.md', 'agents.md']), ['github-action.md', 'agents.md', 'jobs.md', 'alpha.md', 'zeta.md']);
+  assert.deepEqual(ordered(['zeta.md', 'jobs.md', 'alpha.md', 'github-action.md', 'agents.md', 'introduction.md']), ['introduction.md', 'agents.md', 'jobs.md', 'github-action.md', 'alpha.md', 'zeta.md']);
+  assert.equal(groupFor('introduction.md'), 'Get started');
+  assert.equal(groupFor('alpha.md'), 'More');
 });
 
 test('a long first paragraph is cut at a word', () => {

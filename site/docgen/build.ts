@@ -8,10 +8,11 @@ import markdownIt from 'markdown-it';
 import type { MarkdownIt, Token } from 'markdown-it';
 import { createHighlighter } from 'shiki';
 import type { Plugin } from 'vite';
-import { REPO, SITE, descriptionFor, headingId, labelFor, ordered, pageHref, rawMarkdown, shorten, slugFor } from './pages.ts';
+import { EXTRA, GROUPS, REPO, SITE, descriptionFor, groupFor, headingId, labelFor, ordered, pageHref, rawMarkdown, shorten, slugFor } from './pages.ts';
+import type { Group } from './pages.ts';
 
 type Heading = { level: 2 | 3; id: string; text: string };
-export type Doc = { file: string; slug: string; title: string; label: string; description: string; html: string; toc: Heading[]; raw: string };
+export type Doc = { file: string; slug: string; group: Group; title: string; label: string; description: string; html: string; toc: Heading[]; raw: string };
 
 const THEME = 'github-dark-default';
 const LANGS = ['bash', 'json', 'markdown', 'yaml', 'typescript', 'javascript'];
@@ -77,6 +78,7 @@ export async function renderDocs(dir: string): Promise<Doc[]> {
     return {
       file,
       slug: slugFor(file),
+      group: groupFor(file),
       title,
       label: labelFor(file, title),
       description: descriptionFor(file, description),
@@ -92,15 +94,20 @@ const SEARCH_ICON =
 const GITHUB_ICON =
   '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" class="size-4"><path d="M8 0C3.58 0 0 3.58 0 8a8 8 0 0 0 5.47 7.59c.4.07.55-.17.55-.38v-1.33c-2.23.48-2.7-1.07-2.7-1.07-.36-.92-.89-1.17-.89-1.17-.73-.5.06-.49.06-.49.8.06 1.23.83 1.23.83.72 1.23 1.88.87 2.34.67.07-.52.28-.87.5-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.83-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48v2.19c0 .21.15.46.55.38A8 8 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>';
 
-/** The menu of every docs page, with the open one marked. */
+/** The menu of every docs page, in its groups, with the open one marked. */
 function menu(docs: Doc[], current: string): string {
   const item = (href: string, label: string, here: boolean) =>
     `<li><a href="${href}"${here ? ' aria-current="page"' : ''} class="${
       here ? 'block rounded-lg bg-white/[0.06] px-3 py-1.5 text-fg' : 'block rounded-lg px-3 py-1.5 text-muted transition-colors hover:text-fg'
     }">${esc(label)}</a></li>`;
-  return `<ul class="space-y-0.5 text-sm">${item('/docs/', 'Overview', current === '')}${docs
-    .map((d) => item(`/docs/${d.slug}/`, d.label, current === d.slug))
-    .join('')}</ul>`;
+  const groups = GROUPS.map((group) => {
+    const items = [
+      ...docs.filter((d) => d.group === group).map((d) => item(`/docs/${d.slug}/`, d.label, current === d.slug)),
+      ...(EXTRA[group] ?? []).map((l) => item(l.href, l.label, false)),
+    ];
+    return items.length ? `<p class="mb-1.5 mt-6 px-3 text-xs font-medium text-faint">${esc(group)}</p><ul class="space-y-0.5">${items.join('')}</ul>` : '';
+  });
+  return `<div class="text-sm"><ul class="space-y-0.5">${item('/docs/', 'Overview', current === '')}</ul>${groups.join('')}</div>`;
 }
 
 function outline(toc: Heading[]): string {
@@ -205,22 +212,28 @@ ${doc.html}    </article>
   });
 }
 
-const INTRO = 'How to set up Mergelight, what each review does, and how your team shapes what it reports.';
+const INTRO = 'What Mergelight is, how to set it up, what each review does, how your team shapes what it reports, and how your code and data stay safe.';
 
 function overviewPage(docs: Doc[]): string {
-  const cards = docs
-    .map(
-      (d) =>
-        `<a href="/docs/${d.slug}/" class="group rounded-2xl bg-white/[0.03] p-5 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.06)] transition-colors hover:bg-white/[0.05]"><span class="block font-medium text-fg">${esc(d.label)}</span><span class="mt-2 block text-sm leading-relaxed text-muted">${esc(d.description)}</span></a>`,
-    )
-    .join('\n      ');
+  const card = (d: Doc) =>
+    `<a href="/docs/${d.slug}/" class="rounded-2xl bg-white/[0.03] p-5 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.06)] transition-colors hover:bg-white/[0.05]"><span class="block font-medium text-fg">${esc(d.label)}</span><span class="mt-2 block text-sm leading-relaxed text-muted">${esc(d.description)}</span></a>`;
+  const sections = GROUPS.map((group) => {
+    const inGroup = docs.filter((d) => d.group === group);
+    if (!inGroup.length) return '';
+    return `      <h2 class="mt-12 text-sm font-medium text-faint">${esc(group)}</h2>
+      <div class="mt-3 grid gap-3 sm:grid-cols-2">${inGroup.map(card).join('')}</div>`;
+  }).join('\n');
+  const start = docs.find((d) => d.slug === 'quickstart');
   const body = `    <div class="mx-auto max-w-3xl">
       <h1 class="text-3xl font-semibold tracking-[-0.03em] text-fg sm:text-4xl">Mergelight docs</h1>
-      <p class="mt-5 text-lg leading-relaxed">${INTRO} New here? Start with the <a href="/setup/" class="text-fg underline decoration-line underline-offset-4 hover:decoration-fg">setup page</a>: it adds Mergelight to a repository in a few minutes.</p>
-      <div class="mt-10 grid gap-3 sm:grid-cols-2">
-      ${cards}
-      </div>
-      <p class="mt-10 text-sm text-faint">Every page is also plain Markdown for your AI tools: add .md to its address, or start from <a href="/llms.txt" class="text-muted underline decoration-line underline-offset-4 hover:decoration-fg">llms.txt</a>.</p>
+      <p class="mt-5 text-lg leading-relaxed">${INTRO}</p>
+      ${
+        start
+          ? `<a href="/docs/${start.slug}/" class="mt-8 inline-flex items-center rounded-full bg-fg px-5 py-2.5 text-[15px] font-medium text-ink transition-colors hover:bg-white">Get started</a>`
+          : `<a href="/setup/" class="mt-8 inline-flex items-center rounded-full bg-fg px-5 py-2.5 text-[15px] font-medium text-ink transition-colors hover:bg-white">Set up Mergelight</a>`
+      }
+${sections}
+      <p class="mt-12 text-sm text-faint">Every page is also plain Markdown for your AI tools: add .md to its address, or start from <a href="/llms.txt" class="text-muted underline decoration-line underline-offset-4 hover:decoration-fg">llms.txt</a>.</p>
     </div>`;
   return page({ title: 'Docs · Mergelight', description: INTRO, path: '/docs/', docs, current: '', body });
 }

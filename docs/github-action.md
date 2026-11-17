@@ -59,7 +59,7 @@ There's no key or token to manage. The workflow's `id-token: write` permission p
 | `--no-pin` | Follow `@v0` and get each release by itself, instead of pinning to the latest |
 | `--yes` | Don't stop to ask whether the app is installed |
 
-**There are two apps, so that a leak on our server can't reach your code or workflows.**
+**There are two apps, so that a leak on our server can't change your code or workflows.**
 
 - **Mergelight AI** posts comments and checks, reads code, and overwrites this repository's Actions secrets to save the refreshed Codex login. It can't read a secret's value, and it can't commit. Our server holds its private key.
 - **Mergelight Setup** can commit code and workflows, read secret names and read checks. The setup page uses it with your own sign-in to open the pull request that adds or updates the file. No private key for it exists, so it can't act unless you're signed in. You don't need it if you add the files by hand.
