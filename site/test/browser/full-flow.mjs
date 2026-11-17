@@ -49,8 +49,11 @@ async function run(name, { login = false, apiKey = false, claude = false, orgSec
     }
     if (u.origin === 'https://api.github.com') {
       if (m === 'OPTIONS') return req.respond({ status: 204, headers: cors });
-      if (u.pathname === '/repos/mergelightai/mergelight/releases/latest') return release ? json(req, { tag_name: RELEASE.tag }) : json(req, {}, 503);
+      // GitHub's newest release is v0.3.0, whose canary hasn't passed, so @v0 is still on v0.2.0. The page goes by @v0.
+      if (u.pathname === '/repos/mergelightai/mergelight/releases/latest') return release ? json(req, { tag_name: 'v0.3.0' }) : json(req, {}, 503);
       if (u.pathname === `/repos/mergelightai/mergelight/commits/${RELEASE.tag}`) return json(req, { sha: RELEASE.sha });
+      if (u.pathname === '/repos/mergelightai/mergelight/commits/v0') return release ? json(req, { sha: RELEASE.sha }) : json(req, {}, 503);
+      if (u.pathname === '/repos/mergelightai/mergelight/tags') return json(req, [{ name: 'v0.3.0', commit: { sha: 'c'.repeat(40) } }, { name: RELEASE.tag, commit: { sha: RELEASE.sha } }, { name: 'v0', commit: { sha: RELEASE.sha } }, { name: 'v0.1.0', commit: { sha: OLD_SHA } }]);
       const p = u.pathname.replace('/repos/acme/api', '');
       if (m !== 'GET') {
         const body = req.postData() ? JSON.parse(req.postData()) : null;
@@ -168,7 +171,7 @@ async function run(name, { login = false, apiKey = false, claude = false, orgSec
 const pinnedUse = `mergelightai/mergelight@${RELEASE.sha} # ${RELEASE.tag}`;
 await run('new-repo', {}, ({ writes, file, refresh, pull, after }) => {
   expect(refresh?.includes(`uses: ${pinnedUse}\n`), 'the refresh job comes along, pinned too');
-  expect(file?.includes(`uses: ${pinnedUse}\n`), 'the file is pinned to the latest release');
+  expect(file?.includes(`uses: ${pinnedUse}\n`), 'the file is pinned to the release @v0 is on, not a newer one whose canary hasn\'t passed');
   expect(!/Not pinned/.test(file ?? '') && !/Not pinned/.test(refresh ?? ''), 'neither says it is not pinned');
   expect(/# Pinned to a release/.test(file ?? '') && /# Pinned to a release/.test(refresh ?? ''), 'both say why they are pinned');
   expect(writes.map((w) => w.m).join() === 'POST,PUT,PUT,POST', 'branch, two files, pull request');

@@ -483,7 +483,7 @@ export default function Setup() {
   /** A pinned repo only moves when someone asks, and anything else in its file stays theirs. */
   const update = details?.installed && details.release && isPinned(details.installed) && details.installed.ref !== details.release.sha ? details.release : null;
   /**
-   * New repos are pinned to the latest release, so a bad release can't reach them by itself. If the release can't be
+   * New repos are pinned to the release @v0 is on, the newest whose canary passed, so a bad release can't reach them by itself. If the release can't be
    * read, they follow the moving tag instead, which still works.
    */
   const pinTo = update ?? (details && !details.installed ? details.release : null);
