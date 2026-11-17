@@ -66,8 +66,18 @@ export function withCommentTrigger(content: string): string | null {
   if (jobLines.filter((l) => /^ {2}[^\s#]/.test(l)).length !== 1) return null;
   // And one step, Mergelight's. Its first step checks that whoever wrote the comment can push. A step of the team's own
   // before it would run on anyone's comment first.
-  const steps = jobLines.filter((l) => /^ {6}-\s/.test(l));
-  if (steps.length !== 1 || !/^ {6}-\s+uses:\s*["']?mergelightai\/mergelight@/.test(steps[0]!)) return null;
+  // Every line under `steps:` belongs to that step, whatever YAML style another step would be written in: the step's own
+  // line, its inputs indented below it, comments and blank lines. The job's next key ends the list.
+  const stepsAt = jobLines.indexOf('    steps:');
+  if (stepsAt < 0 || jobLines.lastIndexOf('    steps:') !== stepsAt) return null;
+  let mergelightSteps = 0;
+  for (const line of jobLines.slice(stepsAt + 1)) {
+    if (/^\s*(#.*)?$/.test(line)) continue;
+    if (/^ {0,4}\S/.test(line)) break;
+    if (/^ {6}-[ \t]+uses:[ \t]*["']?mergelightai\/mergelight@/.test(line)) mergelightSteps++;
+    else if (!/^ {8,}\S/.test(line)) return null;
+  }
+  if (mergelightSteps !== 1) return null;
   // Its condition, folded over lines of its own.
   const ifs = lines.flatMap((l, i) => (l === '    if: >' ? [i] : []));
   if (ifs.length !== 1) return null;

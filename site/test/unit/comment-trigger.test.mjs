@@ -65,4 +65,9 @@ test('a condition or group changed by hand is left for its owner', () => {
   assert.equal(withCommentTrigger(`${old.trimEnd()}\n# Lint too\n  lint:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm run lint\n`), null);
   // A step of the team's own before Mergelight's would run on anyone's comment, before Mergelight checks who wrote it.
   assert.equal(withCommentTrigger(old.replace('    steps:\n', '    steps:\n      - run: ./prepare.sh\n')), null);
+  // The same step written as a dash on a line of its own, its keys below it.
+  assert.equal(withCommentTrigger(old.replace('    steps:\n', '    steps:\n      -\n        run: ./prepare.sh\n')), null);
+  // Or after Mergelight's, or in another list style.
+  assert.equal(withCommentTrigger(old.replace('    steps:\n', '    steps:\n    - run: ./prepare.sh\n')), null);
+  assert.equal(withCommentTrigger(`${old.trimEnd()}\n      - run: ./after.sh\n`), null);
 });
