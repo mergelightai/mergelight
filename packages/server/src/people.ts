@@ -345,8 +345,12 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
     }
     const paid = await withOrg(pool, orgId, async (db) => (await planOf(db, orgId, grants)).paid);
     if (!(await deleteOrg(pool, orgId))) throw new HttpError(404, "not_connected", "This org hasn't turned the Mergelight dashboard on.");
-    // An org that pays keeps its dashboard, empty: its plan runs until an owner cancels it at Paddle.
-    if (paid) await connectOrg(pool, orgId, reach.login);
+    // An org that pays keeps its dashboard, empty: its plan runs until an owner cancels it at Paddle. The time of the
+    // delete stays with it, so a decision written before it can't come back with the next review.
+    if (paid) {
+      await connectOrg(pool, orgId, reach.login);
+      await withOrg(pool, orgId, (db) => db.query("update orgs set data_deleted_at = now() where id = $1", [orgId]));
+    }
     return { status: 204, body: null };
   }
 

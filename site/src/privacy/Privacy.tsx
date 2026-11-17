@@ -91,7 +91,8 @@ const SECTIONS: Section[] = [
             'Numbers for each review: the run, the pull request number, the commit, the result (green, yellow or red), the number of findings, which AI and model reviewed, how long it took and how many lines changed. No names and no text.',
             'Decisions: when someone declines a finding with a reason, we keep the finding\'s title, file and lines, the reason, the pull request, the time, and the GitHub username of the person who declined it. Later reviews use this so they do not raise the same thing again.',
             'Rules, checks and skills that your team writes on the dashboard: their name and text, the files they cover, and the GitHub username and account id of who added them. For a skill folder picked from a repository, we keep its path instead of any text.',
-            'A log of changes: who added or deleted a rule, check or skill, or forgot a decision, with their GitHub username and account id, when, and what changed. For a rule or check, this includes its text. For a skill, its name and description, or its path.',
+            'A log of changes: who added or deleted a rule, check or skill, forgot a decision or changed the plan, with their GitHub username and account id, when, and what changed. For a rule or check, this includes its text. For a skill, its name and description, or its path.',
+            'For an organization that has ever had a paid plan: the plan, the number of developers, the state of the subscription, when the paid month ends, and Paddle\'s ids for the customer and the subscription. Never a card or an address: Paddle holds those.',
           ]}
         />
         <P>
@@ -118,7 +119,7 @@ const SECTIONS: Section[] = [
           'Forget on the dashboard deletes a decision\'s title and reason at once. A marker without text stays: the finding\'s id, its line and the pull request.',
           'A rule, check or skill you delete stops being used at once. The log of changes keeps the text of a deleted rule or check, and the name and description of a deleted skill, until your organization\'s data is deleted.',
           'Everything else stays until your organization deletes it.',
-          'An owner of the organization can delete all of its data on the dashboard, under Settings. It is deleted at once, the log of changes too, and the dashboard turns off. An organization that pays for a plan keeps the plan: the record of what it pays for stays (the plan, the number of developers and Paddle\'s ids, never a card), and the dashboard stays on, empty, until an owner cancels the plan.',
+          'An owner of the organization can delete all of its data on the dashboard, under Settings. It is deleted at once, the log of changes too, and the dashboard turns off. The record of a paid plan stays, as it is about what the organization pays for. An organization that pays keeps its plan, and its dashboard stays on, empty, until an owner cancels the plan.',
           <>Where the dashboard says to write to us instead, or if you prefer, write to {mail}. We check on GitHub that you own the organization, and delete everything within one month.</>,
         ]}
       />
@@ -134,6 +135,7 @@ const SECTIONS: Section[] = [
             'Render runs our token server, the dashboard server and its database, in the United States.',
             'GitHub hosts this website (GitHub Pages), the sign-in and the Mergelight apps, in the United States. GitHub can log visits to this website, under GitHub\'s own privacy statement.',
             'Like any host, Render can log the requests that reach our servers, under its own terms. We do not use those logs to track anyone.',
+            'Paddle sells the paid plans, as our reseller. When an owner buys, the checkout sends Paddle the organization\'s GitHub name and id with the order, and Paddle collects the payment details itself, under its own privacy policy.',
             'We use no other services for your data: no analytics, no error tracking and no ad networks. Fonts are served from this website.',
           ]}
         />

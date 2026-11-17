@@ -97,8 +97,9 @@ export function PlanPicker({ session, billing, signedIn, onOn }: { session: Sess
       }
       if (gone) return;
       const fresh = got.billing;
-      if (fresh?.dashboard && !fresh.ended) {
-        toast.success(`The dashboard is on for ${login}`);
+      // A plan that works, not only a dashboard that is on: an org on for free has that already, before Paddle's message.
+      if (fresh?.subscription?.working) {
+        toast.success(`${PLANS[plan].name} is on for ${login}`);
         onOn();
         return;
       }
@@ -299,7 +300,8 @@ export function BillingCard({ session, billing, signedIn, onChanged }: { session
   return (
     <GlassCard label="Billing" icon={<CreditCardIcon className="size-4" />}>
       <p className="text-[14px] leading-relaxed text-ink-3">{state}</p>
-      {billing.can_manage && billing.paddle && (billing.checkout || sub) && (
+      {/* An org the operator gives everything already has nothing to buy. */}
+      {billing.can_manage && billing.paddle && (sub || (billing.checkout && !(billing.free && billing.jobs))) && (
         <div className="mt-5 grid gap-5">
           {billing.free && !sub?.working && billing.checkout && <p className="text-[13.5px] text-ink-3">Pro adds Jobs. Buying a plan keeps the dashboard as it is.</p>}
           {!sub?.working && billing.checkout && <PlanPicker session={session} billing={billing} signedIn={signedIn} onOn={onChanged} />}

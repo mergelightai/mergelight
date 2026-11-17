@@ -90,7 +90,7 @@ export function NotOn({ org, children }: { org: Org; children?: ReactNode }) {
         <h2 className="text-[16px] font-medium text-ink">The dashboard isn't on for {org.login}</h2>
         {children ? (
           <>
-            <p className="mt-2 text-[14px] leading-relaxed text-ink-3">Nothing is stored for {org.login}, and reviews work as always. Pick a plan to turn the dashboard on: every review in {org.login} then remembers what your team declined, and follows your rules, skills and checks.</p>
+            <p className="mt-2 text-[14px] leading-relaxed text-ink-3">Nothing is stored for {org.login}, and reviews work as always. Pick a plan to turn the dashboard on: reviews that send to it then remember what your team declined, and follow your rules, skills and checks. A repository's workflow sends to it with one line, shown once the dashboard is on.</p>
             <div className="mt-6">{children}</div>
           </>
         ) : (

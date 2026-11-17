@@ -1156,4 +1156,9 @@ test("deleting a paying org's data keeps its dashboard on, empty", async () => {
   assert.deepEqual(await withOrgRows(ACME.id, "select login from orgs"), [{ login: "acme" }]);
   assert.deepEqual(await withOrgRows(ACME.id, "select 1 from reviews"), []);
   assert.equal((await (await call(`/v1/orgs/${ACME.id}/overview`, { token: ada })).json()).reviews.length, 0);
+  // The next review of an open pull request sends its threads' decisions again. One written before the delete stays deleted,
+  // and one written after it is kept.
+  const later = { ...decline(2, "Written after"), decided_at: new Date(Date.now() + 60_000).toISOString() };
+  assert.equal((await report({ run_id: "9301" }, { declines: [decline(1, "Written before"), later] })).status, 201);
+  assert.deepEqual((await withOrgRows(ACME.id, "select title from memories")).map((m) => m.title), ["Written after"]);
 });

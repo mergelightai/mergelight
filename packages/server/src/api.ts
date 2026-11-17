@@ -354,6 +354,8 @@ export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"
          r.provider, r.model, r.verifier, r.duration_ms, r.files_changed, r.additions, r.deletions],
       );
       const fresh = (inserted.rowCount ?? 0) > 0;
+      // An owner deleted the org's data at this time: decisions written before it stay deleted.
+      const deletedAt = (await db.query<{ data_deleted_at: Date | null }>("select data_deleted_at from orgs where id = $1", [who.orgId])).rows[0]?.data_deleted_at ?? null;
 
       // A second try of a report that is already in changes nothing more.
       if (!fresh) return { stored: false, remembered: [] as string[] };
@@ -368,6 +370,7 @@ export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"
       for (const d of declines) {
         // One written over 90 days ago would have run out by now. An old pull request that is reviewed again doesn't bring it back.
         if (Date.parse(d.decided_at) <= now() - MEMORY_DAYS * 24 * 60 * 60_000) continue;
+        if (deletedAt && Date.parse(d.decided_at) <= deletedAt.getTime()) continue;
         const put = await db.query(
           `insert into memories (org_id, repo_id, finding_id, title, file, line, end_line, reason, by_login, pr, decided_at)
            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
