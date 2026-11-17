@@ -71,7 +71,7 @@ const SECTIONS: Section[] = [
     body: (
       <List
         items={[
-          'Reviews and jobs run in your own GitHub Actions runner, or on your own computer when you use the CLI. They use your own Claude or ChatGPT plan, or your own API key. You need your own plan or key, and you must follow the terms of your AI provider and of GitHub.',
+          'Reviews run in your own GitHub Actions runner, or on your own computer when you use the CLI. Jobs run in your GitHub Actions runner. They use your own Claude or ChatGPT plan, or your own API key. You need your own plan or key, and you must follow the terms of your AI provider and of GitHub.',
           "The usage and cost of your AI plan or key are yours. Mergelight doesn't pay for them and doesn't control them.",
           <>Your code stays yours. The {link('/privacy/', 'privacy policy')} says what reaches us and what never does.</>,
         ]}
@@ -139,8 +139,9 @@ const SECTIONS: Section[] = [
       <>
         <P>
           You can stop at any time: cancel a paid plan, remove every Mergelight workflow file (the mergelight*.yml files in .github/workflows)
-          and uninstall the Mergelight AI app. To delete your organization's data, an owner can use the dashboard's Settings page before
-          uninstalling the app. If that page refuses, or the app is already gone, write to {mail} and we delete it.
+          and uninstall the Mergelight AI app, and the Mergelight Setup app if you installed it (setup through the setup page installs both,
+          and Setup can still change code and workflows). To delete your organization's data, an owner can use the dashboard's Settings page before
+          uninstalling the Mergelight AI app, which the dashboard signs in with. If that page refuses, or the app is already gone, write to {mail} and we delete it.
         </P>
         <P>
           Deleting your organization's data doesn't cancel a paid plan: the plan keeps running, and the dashboard stays on, empty. An owner
