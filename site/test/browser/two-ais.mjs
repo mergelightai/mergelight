@@ -824,7 +824,7 @@ await scenario('update-pr-then-change', { secrets: ['CODEX_AUTH_JSON', 'CLAUDE_C
   await wait(800);
   await click('section[aria-label="Your AI"] button', 'Change');
   await until((x) => /Merge or close PR #9 first/.test(x), 'the step that waits for the update PR');
-  expect(world.writes.filter((w) => w.m === 'PUT').length === 2, 'and the update PR gets no change of AI');
+  expect(world.writes.filter((w) => w.m === 'PUT' && !w.p.endsWith('/mergelight-approve.yml')).length === 2, 'and the update PR gets no change of AI');
 });
 
 await scenario('update-merged-without-its-refresh-job', { secrets: ['CODEX_AUTH_JSON', 'CLAUDE_CODE_OAUTH_TOKEN'], file: BEHIND }, async ({ page, world, until, click }) => {
@@ -837,7 +837,7 @@ await scenario('update-merged-without-its-refresh-job', { secrets: ['CODEX_AUTH_
   await wait(800);
   await click('button', 'Update to v0.2.0');
   await until((x) => /Your PR is open/.test(x), 'the update PR');
-  expect(world.writes.filter((w) => w.m === 'PUT').length === 2, 'the PR adds the refresh job');
+  expect(world.writes.filter((w) => w.m === 'PUT' && !w.p.endsWith('/mergelight-approve.yml')).length === 2, 'the PR adds the refresh job');
   // Someone takes the job out of the PR, then merges it.
   world.branchRefresh = null;
   world.file = world.branchFile;

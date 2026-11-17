@@ -24,7 +24,7 @@ const expect = (ok, what) => { console.log(`  ${ok ? 'ok ' : 'FAIL'} ${what}`); 
 // ONLY=name,name runs just those, to try one while changing it.
 const only = process.env.ONLY?.split(',');
 
-async function run(name, { login = false, apiKey = false, claude = false, orgSecrets = [], refuse = null, onBase = null, prFile = null, prTitle = 'Add Mergelight code review', prFiles = ['.github/workflows/mergelight.yml'], prRefresh = null, baseRefresh = null, noRelease = false, reviewDone = false, manyOpen = 0, headFails = 0, checkTitle = null, scope = 'new', button = 'Add to api' } = {}, check = () => {}) {
+async function run(name, { login = false, apiKey = false, claude = false, orgSecrets = [], refuse = null, onBase = null, prFile = null, prTitle = 'Add Mergelight code review', prFiles = ['.github/workflows/mergelight.yml'], prRefresh = null, baseRefresh = null, noRelease = false, reviewDone = false, manyOpen = 0, headFails = 0, checkTitle = null, scope = 'new', button = 'Add to api', baseApprove = null } = {}, check = () => {}) {
   if (only && !only.includes(name)) return {};
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 860, deviceScaleFactor: 2 });
@@ -95,6 +95,8 @@ async function run(name, { login = false, apiKey = false, claude = false, orgSec
         // The base branch's commit is staging's, which a new branch starts from.
         const ref = (raw.startsWith('mergelight-setup-') && raw !== 'mergelight-setup-old') || raw === 'basesha' ? 'staging' : raw;
         const isRefresh = p.endsWith('mergelight-refresh.yml');
+        // The approval job is only there where a test puts it, on the base branch.
+        if (p.endsWith('mergelight-approve.yml')) return baseApprove && ref === 'staging' ? json(req, { sha: 'baseapproveblob', content: b64(baseApprove) }) : json(req, {}, 404);
         if (pushed && raw === pushed.sha) return isRefresh ? json(req, {}, 404) : json(req, { sha: 'pushedblob', content: b64(pushed.file) });
         // The PR's workflow can't be read at its new commit, the first few times.
         if (raw === 'newsha' && !isRefresh && headFails > 0) {
@@ -126,6 +128,8 @@ async function run(name, { login = false, apiKey = false, claude = false, orgSec
     const at = await page.evaluate((s, t) => {
       const el = [...document.querySelectorAll(s)].find((e) => e.textContent.includes(t));
       if (!el) return null;
+      // A real mouse can only click what is on screen, so it scrolls there first, as a person would.
+      el.scrollIntoView({ block: 'center', behavior: 'instant' });
       const b = el.getBoundingClientRect();
       return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
     }, selector, text);
@@ -155,26 +159,32 @@ async function run(name, { login = false, apiKey = false, claude = false, orgSec
   }
   const after = await text2();
   await page.screenshot({ path: `${out}flow-${name}-2-after.png` }).catch(() => {});
-  const puts = writes.filter((w) => w.m === 'PUT');
+  // The job that turns an approval green goes into every setup and update, so the checks below count the other files.
+  const approvePut = writes.find((w) => w.m === 'PUT' && w.p.endsWith('/mergelight-approve.yml'));
+  const approve = approvePut ? Buffer.from(approvePut.body.content, 'base64').toString() : null;
+  const puts = writes.filter((w) => w.m === 'PUT' && w !== approvePut);
+  const others = writes.filter((w) => w !== approvePut);
   const put = puts[0];
   const file = put ? Buffer.from(put.body.content, 'base64').toString() : null;
   const refreshPut = puts.find((w) => w.p.endsWith('mergelight-refresh.yml'));
   const refresh = refreshPut ? Buffer.from(refreshPut.body.content, 'base64').toString() : null;
   if (file) writeFileSync(`${out}flow-${name}.yml`, file);
   if (refresh) writeFileSync(`${out}flow-${name}-refresh.yml`, refresh);
-  await check({ before, after, writes, puts, refresh, put, file, pull: writes.find((w) => w.m === 'POST' && w.p === '/pulls'), page, click, text2, scans: () => scans, fileReads: () => fileReads, push: (sha, file) => { pushed = { sha, file }; }, setOnBase: (v) => { onBase = v; }, setRelease: (v) => { release = v; } });
+  await check({ before, after, writes: others, approve, approvePut, puts, refresh, put, file, pull: writes.find((w) => w.m === 'POST' && w.p === '/pulls'), page, click, text2, scans: () => scans, fileReads: () => fileReads, push: (sha, file) => { pushed = { sha, file }; }, setOnBase: (v) => { onBase = v; }, setRelease: (v) => { release = v; } });
   if (errors.length) { console.log('  page errors', errors.slice(0, 3)); failures++; }
   await page.close();
   return { file, refresh };
 }
 
 const pinnedUse = `mergelightai/mergelight@${RELEASE.sha} # ${RELEASE.tag}`;
-await run('new-repo', {}, ({ writes, file, refresh, pull, after }) => {
+await run('new-repo', {}, ({ writes, file, refresh, pull, after, approve }) => {
   expect(refresh?.includes(`uses: ${pinnedUse}\n`), 'the refresh job comes along, pinned too');
   expect(file?.includes(`uses: ${pinnedUse}\n`), 'the file is pinned to the release @v0 is on, not a newer one whose canary hasn\'t passed');
   expect(!/Not pinned/.test(file ?? '') && !/Not pinned/.test(refresh ?? ''), 'neither says it is not pinned');
   expect(/# Pinned to a release/.test(file ?? '') && /# Pinned to a release/.test(refresh ?? ''), 'both say why they are pinned');
   expect(writes.map((w) => w.m).join() === 'POST,PUT,PUT,POST', 'branch, two files, pull request');
+  expect(approve?.includes(`uses: ${pinnedUse}\n`) && /# Pinned to a release/.test(approve) && !/Not pinned/.test(approve), 'and the approval job, pinned the same way');
+  expect(/turns a "needs a human" check green/.test(pull?.body.body), 'the PR says what the approval job does');
   expect(pull?.body.title === 'Add Mergelight code review', 'titled as an add');
   expect(/Connect your AI/.test(after), 'moves on to connecting');
   // Which AI they connect comes after the pull request, from its run, so the file can't name one yet.
@@ -354,7 +364,7 @@ await run('installed-on-moving-tag', { onBase: customized('v0'), login: true, bu
   expect(writes.length === 0, 'writes nothing');
   expect(/Mergelight is on/.test(after), 'and it really is on');
 });
-await run('pinned-behind', { onBase: customized(`${OLD_SHA} # v0.1.0`), login: true, button: 'Update to v0.2.0' }, ({ before, file, pull, put, after }) => {
+await run('pinned-behind', { onBase: customized(`${OLD_SHA} # v0.1.0`), login: true, button: 'Update to v0.2.0' }, ({ before, file, pull, put, after, approve }) => {
   expect(/Update Mergelight on api/.test(before) && /It's pinned to v0\.1\.0, and v0\.2\.0 is out/.test(before), 'offers an update and says why');
   expect(file === customized(`${RELEASE.sha} # ${RELEASE.tag}`), 'changes that one line and keeps everything else');
   expect(put?.body.sha === 'baseblob', 'updates the existing file');
@@ -363,7 +373,12 @@ await run('pinned-behind', { onBase: customized(`${OLD_SHA} # v0.1.0`), login: t
   expect(/Review running/.test(after) && /reviewing this PR with v0\.2\.0/.test(after), 'says it is reviewing with the new version');
   expect(!/First review/.test(after) && !/see what a review looks like/.test(after), "doesn't call it the first review");
   expect(/Changes only the Mergelight version lines in your file/.test(before) && /Adds the small job/.test(before), 'one existing file, and says it adds the job');
-  expect(/Only the Mergelight version lines change/.test(pull?.body.body) && /also adds a small job/.test(pull?.body.body), 'the PR says the same');
+  expect(/Only the Mergelight version lines change/.test(pull?.body.body) && /also adds a small job that keeps/.test(pull?.body.body), 'the PR says the same');
+  // A workflow changed by hand doesn't get the comment trigger, and the card says how to add it.
+  expect(/Your workflow was changed by hand, so answering the findings in a comment needs its trigger added by hand too\./.test(before) && !/issue_comment/.test(file ?? ''), 'a workflow changed by hand is pointed to the trigger, not changed');
+  // The approval job goes in where it's missing, on the same release.
+  expect(/Adds the small job that turns a "needs a human" check green when someone approves/.test(before) && approve?.includes(`uses: ${pinnedUse}\n`), 'adds the approval job, pinned to the release');
+  expect(/turns a "needs a human" check green/.test(pull?.body.body), 'and the PR says so');
 });
 const withJobs = (use) => `${customized(use)}  push:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: mergelightai/mergelight/push-jobs@${use}\n`;
 await run('pinned-jobs-workflow', { onBase: withJobs(`${OLD_SHA} # v0.1.0`), login: true, button: 'Update to v0.2.0' }, ({ file }) => {
@@ -380,7 +395,7 @@ await run('pinned-with-refresh-missing', { onBase: customized(`${OLD_SHA} # v0.1
 await run('update-leaves-another-login-alone', { onBase: customized(`${OLD_SHA} # v0.1.0`).replace('secrets.CODEX_AUTH_JSON', 'secrets.TEAM_CODEX'), login: true, button: 'Update to v0.2.0' }, ({ before, puts }) => {
   // The review reads TEAM_CODEX, so CODEX_AUTH_JSON is some other tool's, which the refresh job would sign out.
   expect(puts.length === 1 && puts[0].p.endsWith('/mergelight.yml'), 'adds no refresh job');
-  expect(!/Adds the small job/.test(before), "and doesn't say it would");
+  expect(!/Adds the small job that keeps a ChatGPT login fresh/.test(before), "and doesn't say it would");
 });
 await run('update-goes-by-the-prs-login-for-the-refresh-job', { onBase: customized(`${OLD_SHA} # v0.1.0`), prFile: customized(`${OLD_SHA} # v0.1.0`).replace('secrets.CODEX_AUTH_JSON }}\n', 'secrets.TEAM_CODEX }}\n          auth-secret-name: TEAM_CODEX\n'), login: true, button: 'Update to v0.2.0' }, ({ puts }) => {
   // main's review reads CODEX_AUTH_JSON, but the open PR moves it to TEAM_CODEX, so CODEX_AUTH_JSON may be another tool's.
@@ -391,6 +406,34 @@ await run('update-stops-when-the-prs-step-is-gone', { onBase: customized(`${OLD_
   expect(!writes.some((w) => w.m === 'PUT'), 'writes nothing');
   expect(/The workflow on your open PR has no Mergelight step, so nothing was changed\./.test(after) && !/Your PR is open/.test(after), "says so, rather than that it's updated");
 });
+/** The review workflow this page wrote before the comment trigger (until Nov 17 2026), pinned to an old release. */
+const beforeComments = (() => {
+  const now = readFileSync(new URL('../../../examples/mergelight.yml', import.meta.url), 'utf8');
+  const swaps = [
+    ["  # A comment that mentions @mergelight-ai on a pull request reviews it again, reading the comment as your\n  # team's answer to the findings: what's fixed, and what to leave and why. Only people who can push count.\n  issue_comment:\n    types: [created]\n", ''],
+    ["    # target branch changed, so a new title doesn't start a review. A comment counts when it mentions\n    # Mergelight on a pull request, and isn't a bot's.\n", "    # target branch changed, so a new title doesn't start a review.\n"],
+    ["      (github.event_name == 'issue_comment' &&\n      github.event.issue.pull_request &&\n      contains(github.event.comment.body, '@mergelight-ai') &&\n      github.event.comment.user.type != 'Bot') ||\n      (github.event_name == 'pull_request' &&\n", ''],
+    ['github.event.pull_request.head.repo.full_name == github.repository)\n', 'github.event.pull_request.head.repo.full_name == github.repository\n'],
+    ["    # A new push cancels the older review of the same PR. A comment's review has a group of its own, so\n    # neither cancels the other.\n", '    # A new push cancels the older review of the same PR.\n'],
+    ["group: mergelight-pr-${{ github.event.pull_request.number || github.event.issue.number }}${{ github.event_name == 'issue_comment' && format('-comment-{0}', github.event.comment.id) || '' }}", 'group: mergelight-pr-${{ github.event.pull_request.number }}'],
+    ['mergelightai/mergelight@v0', `mergelightai/mergelight@${OLD_SHA} # v0.1.0`],
+  ];
+  return swaps.reduce((text, [from, to]) => {
+    if (!text.includes(from)) throw new Error(`examples/mergelight.yml changed: ${from.slice(0, 60)}`);
+    return text.replace(from, to);
+  }, now);
+})();
+await run('update-adds-the-comment-trigger', { onBase: beforeComments, login: true, button: 'Update to v0.2.0' }, ({ before, file, pull }) => {
+  expect(/Changes the Mergelight version lines in your file, and adds the trigger that lets a comment that mentions @mergelight-ai answer the findings/.test(before), 'says it adds the comment trigger');
+  expect(/\n  issue_comment:\n    types: \[created\]\n/.test(file ?? '') && /format\('-comment-\{0\}'/.test(file ?? '') && file?.includes(`uses: ${pinnedUse}\n`), 'the update adds the trigger, its condition and group, and moves the version');
+  expect(/Besides the Mergelight version lines, the review workflow changes in one way\./.test(pull?.body.body) && /@mergelight-ai/.test(pull?.body.body), 'the PR says what else changes');
+  // The update goes into staging, and GitHub runs a comment's workflow from main, the default branch.
+  expect(/GitHub runs that trigger from main, so it works once the change is there too/.test(before) && /GitHub runs that trigger from main, so it works once this change is there too\./.test(pull?.body.body), 'says comments start reviews once the change is on main too');
+});
+await run('update-moves-the-approval-job', { onBase: customized(`${OLD_SHA} # v0.1.0`), baseApprove: `name: Mergelight approval\njobs:\n  approve:\n    steps:\n      - uses: mergelightai/mergelight@${OLD_SHA} # v0.1.0\n`, login: true, button: 'Update to v0.2.0' }, ({ before, approve, approvePut, pull }) => {
+  expect(approvePut?.body.sha === 'baseapproveblob' && approve === `name: Mergelight approval\njobs:\n  approve:\n    steps:\n      - uses: ${pinnedUse}\n`, 'moves the approval job to the release too, and keeps the rest of it');
+  expect(!/turns a "needs a human" check green/.test(before) && !/turns a "needs a human" check green/.test(pull?.body.body), "doesn't say it adds a job that's there");
+});
 // Pinned to v0.3.0, which this page pinned to before it went by @v0. @v0 is on v0.2.0, which is older, so it's no update.
 await run('pinned-ahead-of-v0', { onBase: customized(`${'c'.repeat(40)} # v0.3.0`), login: true, button: null }, ({ before, writes }) => {
   expect(!/Update Mergelight on api/.test(before) && !/Update to v0\.2\.0/.test(before), "a repo pinned ahead of @v0 isn't offered an older release");
@@ -398,8 +441,8 @@ await run('pinned-ahead-of-v0', { onBase: customized(`${'c'.repeat(40)} # v0.3.0
 });
 await run('old-refresh-job-too', { onBase: customized(`${OLD_SHA} # v0.1.0`), baseRefresh: customized(`${OLD_SHA} # v0.1.0`), login: true, button: 'Update to v0.2.0' }, ({ before, puts, refresh, pull }) => {
   expect(/Changes only the Mergelight version lines in both files/.test(before), 'says both files');
-  expect(!/Adds the small job/.test(before), "doesn't claim to add the job");
-  expect(/Only the Mergelight version lines change/.test(pull?.body.body) && !/also adds/.test(pull?.body.body), 'the PR says the same');
+  expect(!/Adds the small job that keeps a ChatGPT login fresh/.test(before), "doesn't claim to add the job");
+  expect(/Only the Mergelight version lines change/.test(pull?.body.body) && !/also adds a small job that keeps/.test(pull?.body.body), 'the PR says the same');
   expect(puts.length === 2 && puts[1].body.sha === 'baserefreshblob', 'updates the refresh job that was there');
   expect(refresh === customized(`${RELEASE.sha} # ${RELEASE.tag}`), 'and keeps the rest of that file too');
 });

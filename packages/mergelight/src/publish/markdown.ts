@@ -272,7 +272,7 @@ function updateBanner({ tag, current, news }: UpdateNotice): string[] {
     `> **You're missing out: Mergelight ${tag} is out, and this repo is on ${current}.**`,
     ...(news.length ? [">", ...news.slice(0, NEWS_SHOWN).map((n) => `> - ${clean(n)}`), ...(more > 0 ? [`> - and ${more} more`] : [])] : []),
     ">",
-    "> **[Update now](https://mergelight.dev/setup/)**. It's one click, and only the version lines change.",
+    "> **[Update now](https://mergelight.dev/setup/)**. It's one click, and you see every change in a pull request before you merge.",
     "",
   ];
 }

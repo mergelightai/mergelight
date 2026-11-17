@@ -1,6 +1,7 @@
 /** What the setup page reads from GitHub, in the browser, with the person's own token. */
 import { aiName, defaultReviewer, reviewsPullRequests, withInputs, type Logins, type Roles } from './roles';
 import { readConnectCode, type ConnectCode } from './connect';
+import { hasCommentTrigger } from './comment-trigger';
 
 const API = 'https://api.github.com';
 /** Mergelight Setup. It has no private key anywhere, so it only ever acts for the person signed in here. */
@@ -81,6 +82,8 @@ export interface RepoDetails {
   installed: Installed | null;
   /** The refresh workflow on the base branch, if it's there. */
   refresh: string | null;
+  /** The workflow that turns a "needs a human" check green on an approval, on the base branch, if it's there. */
+  approve: string | null;
   /**
    * The other Mergelight reviews a new login would reach, which this page leaves to set by hand: any workflow file with
    * a review step on another branch PRs go into (long-lived ones, the default branch and the bases of open and recent
@@ -272,13 +275,14 @@ export interface GitHubClient {
 const WORKFLOWS = '.github/workflows';
 const WORKFLOW_PATH = `${WORKFLOWS}/mergelight.yml`;
 export const REFRESH_FILE = 'mergelight-refresh.yml';
+export const APPROVE_FILE = 'mergelight-approve.yml';
 const REFRESH_PATH = `${WORKFLOWS}/${REFRESH_FILE}`;
 /** The secrets that can run a review. Only a ChatGPT login has to be refreshed. */
 const NO_REFRESH_SECRETS = ['OPENAI_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'];
 const LOGIN_SECRETS = ['CODEX_AUTH_JSON', ...NO_REFRESH_SECRETS];
 const SETUP_TITLE = 'Add Mergelight code review';
 const SETUP_BODY = [
-  'Adds what [Mergelight](https://mergelight.dev) needs to review your pull requests: the review itself, and a small job that keeps a ChatGPT login fresh.',
+  'Adds what [Mergelight](https://mergelight.dev) needs to review your pull requests: the review itself, a small job that keeps a ChatGPT login fresh, and one that turns a "needs a human" check green when someone approves the pull request.',
   '',
   "It runs in your own GitHub Actions, on your AI plan. This pull request reviews itself, so you can see what you'll get. Merge it to keep reviews on.",
 ].join('\n');
@@ -287,8 +291,13 @@ const SETUP_CHANGED = 'Update the Mergelight workflow';
 const updateTitle = (release: Release) => `Update Mergelight to ${release.tag}`;
 /** Scheduled jobs only run from the default branch, so a job added to another branch says so. */
 const refreshNote = (repo: Repo, branch: string) => ` It also adds a small job that keeps a ChatGPT login fresh.${branch === repo.defaultBranch ? '' : ` That job only runs on a schedule from ${repo.defaultBranch}, so merge it there too.`}`;
-const updateBody = (release: Release, refresh: string) =>
-  `Moves the workflow to [${release.tag}](https://github.com/mergelightai/mergelight/releases/tag/${release.tag}), pinned to its exact commit. Only the Mergelight version lines change.${refresh} This pull request reviews itself with the new version.`;
+/** A job an update adds where it was missing. */
+const APPROVE_NOTE = ' It also adds a small job that turns a "needs a human" check green when someone approves the pull request.';
+/** What an update changes in the review workflow besides its version lines. */
+const COMMENTS_NOTE =
+  ' The review workflow also gets the trigger that lets a pull request comment that mentions @mergelight-ai answer the findings, which reviews it again: one more event, its part of the condition, and a concurrency group per comment.';
+const updateBody = (release: Release, notes: { refresh: string; approve: string; comments: string }) =>
+  `Moves the workflow to [${release.tag}](https://github.com/mergelightai/mergelight/releases/tag/${release.tag}), pinned to its exact commit. ${notes.comments ? 'Besides the Mergelight version lines, the review workflow changes in one way.' : 'Only the Mergelight version lines change.'}${notes.comments}${notes.refresh}${notes.approve} This pull request reviews itself with the new version.`;
 /** Says nothing about which AI, so it stays true when a second change lands on the same pull request. */
 const ROLES_TITLE = 'Set who reviews and who checks in Mergelight';
 const rolesBody = (refresh: string) =>
@@ -648,9 +657,10 @@ export function realClient(token: string): GitHubClient {
       // Branches PRs go into: the long-lived ones, and the base of each open or recent PR, like a release branch or a
       // stacked PR's. A feature branch that only holds a copy of the workflow has no PRs into it, so it never counts.
       const others = [...new Set([...LONG_LIVED_BRANCHES, repo.defaultBranch, ...pulls.map((p) => p.base.ref), ...(open ?? [])])].filter((b) => b !== base);
-      const [onBase, refresh, elsewhere] = await Promise.all([
+      const [onBase, refresh, approve, elsewhere] = await Promise.all([
         workflowOn(repo, base),
         workflowOn(repo, base, REFRESH_FILE),
+        workflowOn(repo, base, APPROVE_FILE),
         // Each branch is asked for by itself, so a big repo's branches past the first page count too. Workflows that
         // couldn't be read may have a review.
         Promise.all(
@@ -675,6 +685,7 @@ export function realClient(token: string): GitHubClient {
         hasApiKey: secrets.some((n) => NO_REFRESH_SECRETS.includes(n)),
         installed,
         refresh: refresh?.content ?? null,
+        approve: approve?.content ?? null,
         otherReviews: elsewhere.flat(),
         branchesKnown: recent !== null && open !== null,
         release,
@@ -732,8 +743,13 @@ export function realClient(token: string): GitHubClient {
       try {
         await write(head, change.kind === 'roles' || change.kind === 'refresh' ? commitFor(change) : title, planned);
         // A file the branch doesn't have yet is one this pull request adds.
-        const refresh = planned.some(({ current }) => !current) ? refreshNote(repo, branch) : '';
-        const body = update ? updateBody(update, refresh) : change.kind === 'roles' ? rolesBody(refresh) : change.kind === 'refresh' ? refreshBody(repo, branch) : SETUP_BODY;
+        const adds = (name: string) => planned.some(({ file, current }) => file.name === name && !current);
+        const refresh = adds(REFRESH_FILE) ? refreshNote(repo, branch) : '';
+        const review = planned.find(({ file }) => file.name === 'mergelight.yml');
+        // GitHub runs a comment's workflow from the default branch, so on another branch the trigger waits for that.
+        const comments = review?.current && !hasCommentTrigger(review.current.content) && hasCommentTrigger(review.content) ? `${COMMENTS_NOTE}${branch === repo.defaultBranch ? '' : ` GitHub runs that trigger from ${repo.defaultBranch}, so it works once this change is there too.`}` : '';
+        const notes = { refresh, approve: adds(APPROVE_FILE) ? APPROVE_NOTE : '', comments };
+        const body = update ? updateBody(update, notes) : change.kind === 'roles' ? rolesBody(refresh) : change.kind === 'refresh' ? refreshBody(repo, branch) : SETUP_BODY;
         const pull = await call<{ number: number; html_url: string; head: { sha: string } }>('POST', `${r}/pulls`, { title, head, base: branch, body });
         return { number: pull.number, url: pull.html_url, headSha: pull.head.sha };
       } catch (err) {
@@ -807,9 +823,9 @@ export function mockClient(): GitHubClient {
     details: (r) =>
       later<RepoDetails>({ reviewApp: r.fullName !== 'acme/docs', ...(
         r.fullName === 'acme/docs'
-          ? { branches: ['main'], base: 'main', skip: ['main'], hasLogin: false, secretNames: namesOf(r.fullName), sharedSecrets: [], otherReviews: [], branchesKnown: true, allSecretsSeen: true, hasApiKey: false, installed: null, refresh: null, release }
+          ? { branches: ['main'], base: 'main', skip: ['main'], hasLogin: false, secretNames: namesOf(r.fullName), sharedSecrets: [], otherReviews: [], branchesKnown: true, allSecretsSeen: true, hasApiKey: false, installed: null, refresh: null, approve: null, release }
           : r.fullName === 'acme/site'
-          ? { branches: ['main', 'feat/new-landing'], base: 'main', skip: ['main'], hasLogin: false, secretNames: namesOf(r.fullName), sharedSecrets: [], otherReviews: [], branchesKnown: true, allSecretsSeen: true, hasApiKey: false, installed: null, refresh: null, release }
+          ? { branches: ['main', 'feat/new-landing'], base: 'main', skip: ['main'], hasLogin: false, secretNames: namesOf(r.fullName), sharedSecrets: [], otherReviews: [], branchesKnown: true, allSecretsSeen: true, hasApiKey: false, installed: null, refresh: null, approve: null, release }
           : {
               branches: ['main', 'staging', 'development', 'feat/billing-export', 'fix/invoice-rounding'],
               base: 'staging',
@@ -823,6 +839,7 @@ export function mockClient(): GitHubClient {
               allSecretsSeen: true,
               installed: installedFor(r.fullName),
               refresh: null,
+              approve: null,
               release,
             }) }),
     // acme/site plays an install that hasn't approved the access, to show the way around it.
