@@ -121,10 +121,13 @@ export function FormDialog({
   onSubmit,
   children,
   icon,
+  triggerIcon = <PlusIcon />,
   wide = false,
   quiet = false,
 }: {
   icon?: ReactNode;
+  /** The trigger's icon. A plus, for a form that adds something. */
+  triggerIcon?: ReactNode;
   wide?: boolean;
   /** A quieter button, for a second form on the same view. */
   quiet?: boolean;
@@ -144,7 +147,7 @@ export function FormDialog({
   return (
     <>
       <Button onClick={() => onOpenChange(true)} variant={quiet ? 'outline' : 'default'} className="gap-1.5 pl-3">
-        <PlusIcon />
+        {triggerIcon}
         {trigger}
       </Button>
       <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>

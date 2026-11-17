@@ -81,15 +81,37 @@ export function NoOrg({ onSignOut }: { onSignOut: () => void }) {
   );
 }
 
-export function NotOn({ org }: { org: Org }) {
+/** An org with nothing stored. children: the plan picker, when this server sells plans. */
+export function NotOn({ org, children }: { org: Org; children?: ReactNode }) {
   return (
     <>
       <ViewHeader title={org.login} />
       <GlassCard className="max-w-2xl">
         <h2 className="text-[16px] font-medium text-ink">The dashboard isn't on for {org.login}</h2>
-        <p className="mt-2 text-[14px] leading-relaxed text-ink-3">Nothing is stored for {org.login}, so there is nothing to show. Reviews work as always. The dashboard is being built, and turning it on for an org isn't open to everyone yet.</p>
+        {children ? (
+          <>
+            <p className="mt-2 text-[14px] leading-relaxed text-ink-3">Nothing is stored for {org.login}, and reviews work as always. Pick a plan to turn the dashboard on: reviews that send to it then remember what your team declined, and follow your rules, skills and checks. A repository's workflow sends to it with one line, shown once the dashboard is on.</p>
+            <div className="mt-6">{children}</div>
+          </>
+        ) : (
+          <p className="mt-2 text-[14px] leading-relaxed text-ink-3">Nothing is stored for {org.login}, so there is nothing to show. Reviews work as always. The dashboard is being built, and turning it on for an org isn't open to everyone yet.</p>
+        )}
       </GlassCard>
     </>
+  );
+}
+
+/** Above every view while the org's plan has ended or is paused: what that means, and where to pick a plan again. */
+export function PlanEnded({ org, canPick, onPick }: { org: Org; canPick: boolean; onPick: () => void }) {
+  return (
+    <div role="status" className="mb-6 flex max-w-3xl flex-wrap items-center justify-between gap-x-6 gap-y-3 rounded-[12px] bg-human/[0.12] px-4 py-3 text-[13.5px] leading-relaxed text-human-ink">
+      <p>The Mergelight plan for {org.login} ended or is paused. Reviews run without the rules, skills, checks and saved decisions on the dashboard, and nothing new can be added there. What is stored stays until an owner deletes it.</p>
+      {canPick && (
+        <Button size="sm" variant="outline" onClick={onPick}>
+          Pick a plan
+        </Button>
+      )}
+    </div>
   );
 }
 

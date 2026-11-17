@@ -1,16 +1,35 @@
-// The org's settings. For now one thing: deleting everything Mergelight stores for it.
+// The org's settings: its plan, and deleting everything Mergelight stores for it.
 import { useState } from 'react';
 import { TrashIcon } from '@/lib/icons';
 import { Button } from '@/components/ui/button';
-import type { Org } from '../api';
+import type { Org, Session } from '../api';
 import { ViewHeader } from '../AppShell';
+import { BillingCard, type Billing } from '../Billing';
 import { Code, GlassCard, ReadOnly, TextInput } from '../kit';
 
 /**
  * Deleting takes the org's name typed again, as on GitHub: it can't be undone, so one stray click must not do it.
  * Only an owner of the org gets the form. Everyone else sees who can.
  */
-export function SettingsView({ org, canDelete, onDelete }: { org: Org; canDelete: boolean; onDelete: (confirm: string) => Promise<void> }) {
+export function SettingsView({
+  org,
+  canDelete,
+  onDelete,
+  session,
+  billing,
+  signedIn,
+  onBillingChanged,
+}: {
+  org: Org;
+  canDelete: boolean;
+  onDelete: (confirm: string) => Promise<void>;
+  session: Session;
+  /** Null when the server couldn't say, or sells nothing and the org pays nothing. */
+  billing: Billing | null;
+  signedIn: (change: () => Promise<void>) => Promise<void>;
+  onBillingChanged: () => void;
+}) {
+  const pays = billing?.subscription?.working === true;
   const [typed, setTyped] = useState('');
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
@@ -20,11 +39,19 @@ export function SettingsView({ org, canDelete, onDelete }: { org: Org; canDelete
     <>
       <ViewHeader title="Settings" />
       <div className="grid max-w-2xl gap-6">
+        {billing && (billing.paddle || billing.subscription) && <BillingCard session={session} billing={billing} signedIn={signedIn} onChanged={onBillingChanged} />}
         <GlassCard label="Delete all data" icon={<TrashIcon className="size-4" />}>
           <p className="text-[14px] leading-relaxed text-ink-3">
-            This deletes everything Mergelight stores for {org.login}: the numbers about each review, the rules, skills and checks, the decisions, and the log of changes. It happens at once, and it can't be undone.
+            This deletes what Mergelight stores about {org.login}'s reviews and team: the numbers about each review, the rules, skills and checks, the decisions, and the log of changes. It happens at once, and it can't be undone.
           </p>
-          <p className="mt-3 text-[14px] leading-relaxed text-ink-3">The dashboard then turns off for {org.login}. Reviews keep working as before, and nothing more is stored.</p>
+          {pays ? (
+            <p className="mt-3 text-[14px] leading-relaxed text-ink-3">What {org.login} pays for stays on file, so the plan keeps running: the dashboard stays on, empty, and the next reviews are stored again. To stop paying, cancel the plan under Billing.</p>
+          ) : (
+            <p className="mt-3 text-[14px] leading-relaxed text-ink-3">
+              The dashboard then turns off for {org.login}. Reviews keep working as before, and nothing more is stored.
+              {billing?.subscription ? ' The record of the old plan stays on file: the plan, the number of developers and the payment company\'s ids, never a card.' : ''}
+            </p>
+          )}
           {canDelete ? (
             <form
               className="mt-5 grid gap-3"
@@ -49,7 +76,7 @@ export function SettingsView({ org, canDelete, onDelete }: { org: Org; canDelete
               )}
               <div>
                 <Button type="submit" variant="destructive" disabled={!matches || busy}>
-                  {busy ? 'Deleting…' : 'Delete everything'}
+                  {busy ? 'Deleting…' : 'Delete the data'}
                 </Button>
               </div>
             </form>

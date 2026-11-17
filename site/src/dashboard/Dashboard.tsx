@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { addCheck, addRule, addSkill, deleteOrgData, finishSignIn, forgetDecision, loadChecks, loadDecisions, loadOverview, loadRules, loadSkills, mayRenew, NotConnected, rememberedSession, removeCheck, removeRule, removeSkill, SignedOut, signInUrl, signOut, tidyAddress, type Checks, type Decision, type Overview, type Rules, type Session, type Skills } from './api';
 import { AppShell, VIEWS, type ViewId } from './AppShell';
+import { loadBilling, PlanPicker, PortalButton, type Billing } from './Billing';
 import { claimTab, forgetTab, keepOrg, keptOrg, keepView, keptView, takeResume } from './kit';
 import { ChecksView } from './views/ChecksView';
 import { DecisionsView } from './views/DecisionsView';
@@ -9,7 +10,7 @@ import { NO_FILTERS, ReviewsView, type ReviewFilters } from './views/ReviewsView
 import { RulesView } from './views/RulesView';
 import { SkillsView } from './views/SkillsView';
 import { SettingsView } from './views/SettingsView';
-import { Centered, LoadError, NoOrg, NothingYet, NotOn, SignIn, Spinning } from './views/States';
+import { Centered, LoadError, NoOrg, NothingYet, NotOn, PlanEnded, SignIn, Spinning } from './views/States';
 
 const ALL_VIEWS = VIEWS.flatMap((g) => g.items.map((i) => i.id));
 /**
@@ -23,7 +24,7 @@ function fromHash(): ViewId {
   return kept && ALL_VIEWS.includes(kept) ? kept : 'reviews';
 }
 
-type View = { kind: 'loading' } | { kind: 'ready'; at: number; overview: Overview; decisions: Decision[]; total: number; rules: Rules | null; skills: Skills | null; checks: Checks | null } | { kind: 'off' } | { kind: 'error' };
+type View = { kind: 'loading' } | { kind: 'ready'; at: number; overview: Overview; decisions: Decision[]; total: number; rules: Rules | null; skills: Skills | null; checks: Checks | null; billing: Billing | null } | { kind: 'off'; billing: Billing | null } | { kind: 'error' };
 
 export default function Dashboard() {
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
@@ -102,15 +103,18 @@ export default function Dashboard() {
       if (err instanceof SignedOut || err instanceof NotConnected) throw err;
       return null;
     });
-    Promise.all([loadOverview(session, org.id), decisions, rules, skills, checks])
-      .then(([overview, { decisions, total }, rules, skills, checks]) => !gone && setView({ kind: 'ready', at: Date.now(), overview, decisions, total, rules, skills, checks }))
+    // What the org pays for. Without it the page still shows everything else, with no plan to pick.
+    const billing = loadBilling(session, org.id).catch(() => null);
+    Promise.all([loadOverview(session, org.id), decisions, rules, skills, checks, billing])
+      .then(([overview, { decisions, total }, rules, skills, checks, billing]) => !gone && setView({ kind: 'ready', at: Date.now(), overview, decisions, total, rules, skills, checks, billing }))
       .catch((err) => {
         if (gone) return;
         if (err instanceof SignedOut) {
           // The session ran out. GitHub sends a signed-in person straight back, so the page renews it by itself.
           if (mayRenew()) window.location.assign(signInUrl());
           else setSession(null);
-        } else setView(err instanceof NotConnected ? { kind: 'off' } : { kind: 'error' });
+        } else if (err instanceof NotConnected) void billing.then((b) => !gone && setView({ kind: 'off', billing: b }));
+        else setView({ kind: 'error' });
       });
     return () => {
       gone = true;
@@ -225,9 +229,24 @@ export default function Dashboard() {
       }}
     >
       {view.kind === 'loading' && <Spinning>Loading reviews</Spinning>}
-      {view.kind === 'off' && <NotOn org={org} />}
+      {view.kind === 'off' && (
+        <NotOn org={org}>
+          {view.billing?.paddle && (
+            <div className="grid gap-5">
+              <PlanPicker session={session} billing={view.billing} signedIn={signedIn} onOn={reload} />
+              {/* An org whose data was deleted can still have a plan on file: its invoices, and cancel, stay one click away. */}
+              {view.billing.can_manage && view.billing.subscription && (
+                <div>
+                  <PortalButton session={session} orgId={org.id} signedIn={signedIn} />
+                </div>
+              )}
+            </div>
+          )}
+        </NotOn>
+      )}
+      {ready?.overview.plan_ended && tab !== 'settings' && <PlanEnded org={org} canPick={ready.billing?.can_manage === true && ready.billing.paddle !== null} onPick={() => pickTab('settings')} />}
       {view.kind === 'error' && <LoadError onRetry={reload} />}
-      {ready && tab === 'reviews' && (ready.overview.reviews.length ? <ReviewsView overview={ready.overview} login={session.user.login} orgLogin={org.login} filters={filters} onFilters={setFilters} /> : <NothingYet org={org} />)}
+      {ready && tab === 'reviews' && (ready.overview.reviews.length ? <ReviewsView overview={ready.overview} login={session.user.login} orgLogin={org.login} filters={filters} onFilters={setFilters} /> : ready.overview.plan_ended ? null : <NothingYet org={org} />)}
       {ready && tab === 'rules' && (ready.rules ? (
         <RulesView
           key={org.id}
@@ -301,10 +320,15 @@ export default function Dashboard() {
           key={org.id}
           org={org}
           canDelete={ready.overview.can_delete === true}
+          session={session}
+          billing={ready.billing}
+          signedIn={signedIn}
+          onBillingChanged={reload}
           onDelete={async (confirm) => {
             await signedIn(() => deleteOrgData(session, org.id, confirm));
-            toast.success(`Everything stored for ${org.login} is deleted.`);
-            setView({ kind: 'off' });
+            toast.success(`The data stored for ${org.login} is deleted.`);
+            // The server decided: an org that pays keeps its dashboard, empty, and any other is off now.
+            reload();
           }}
         />
       )}

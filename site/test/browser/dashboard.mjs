@@ -85,10 +85,40 @@ const OVERVIEWS = {
   4004: { org: { id: 4004, login: 'fresh' }, can_delete: false, repos: [], reviews: [] },
 };
 
+/** What each org pays for, as the server's billing page says it, for the tests that sell plans. */
+const PADDLE = { env: 'sandbox', client_token: 'test_0123456789abcdef', prices: { light: `pri_01${'l'.repeat(24)}`, pro: `pri_01${'p'.repeat(24)}` } };
+const SIGNED = (org, login) => ({ org_id: String(org), org_login: login, expires: '1900000000', sig: 'a'.repeat(64) });
+const billingOf = (org, login, over = {}) => ({ org: { id: org, login }, can_manage: true, dashboard: false, ended: false, jobs: false, free: false, subscription: null, paddle: PADDLE, checkout: SIGNED(org, login), ...over });
+/** Paddle.js as the tests fake it: it keeps what the page asked for, and the payment goes through at once. */
+/** An org that turned on by paying: the server has its lists now, all empty. */
+const turnOn = (id, login) => {
+  const repos = [{ id: 950, name: `${login}/site` }];
+  OVERVIEWS[id] ??= { org: { id: Number(id), login }, can_delete: true, repos: [], reviews: [] };
+  RULES[id] ??= { can_set_org_rules: true, repos: repos.map((r) => ({ ...r, can_set_rules: true })), rules: [] };
+  SKILLS[id] ??= { repos: repos.map((r) => ({ ...r, can_pick_skills: true })), skills: [] };
+  CHECKS[id] ??= { repos: repos.map((r) => ({ ...r, can_set_checks: true })), checks: [] };
+  WRITTEN[id] ??= { repos: repos.map((r) => ({ ...r, can_write_skills: true })), skills: [] };
+};
+/** Takes an org that a test turned on off again, so the next test finds it as it was. */
+const turnOff = (id) => {
+  for (const lists of [OVERVIEWS, RULES, SKILLS, CHECKS, WRITTEN]) delete lists[id];
+};
+const FAKE_PADDLE = `window.__paddle = {};
+window.Paddle = {
+  Environment: { set: (env) => { window.__paddle.env = env; } },
+  Initialize: (o) => { window.__paddle.token = o.token; window.__paddle.events = o.eventCallback; },
+  Checkout: { open: (o) => { window.__paddle.opened = o; setTimeout(() => window.__paddle.events({ name: 'checkout.completed' }), 300); } },
+};`;
+
+const PADDLE_TOKEN = PADDLE.client_token;
+const PRO_PRICE = PADDLE.prices.pro;
+
 let failures = 0;
 const expect = (ok, what) => { console.log(`  ${ok ? 'ok ' : 'FAIL'} ${what}`); if (!ok) failures++; };
 
-async function open(name, { signedOutAfter = Infinity, serverDown = false, forgetFails = false, signedOutOnAdd = false, signedOutOnWrite = false, noOrgs = false, skillsFail = false, keptOn = false } = {}) {
+async function open(name, { signedOutAfter = Infinity, serverDown = false, forgetFails = false, signedOutOnAdd = false, signedOutOnWrite = false, noOrgs = false, skillsFail = false, keptOn = false, billing = null } = {}) {
+  /** For the tests that sell plans: each org's billing page, the orgs that paid since, and the plan changes asked for. */
+  const plans = { billing: billing ?? {}, paid: new Set(), changes: [], portals: 0 };
   /** Orgs the page asked the server to delete everything of, with what was typed. A deleted one is off from then on. */
   const deletes = [];
   const deleted = new Set();
@@ -146,6 +176,28 @@ async function open(name, { signedOutAfter = Infinity, serverDown = false, forge
         if (confirm?.toLowerCase() !== OVERVIEWS[whole]?.org.login) return json(req, { error: 'bad_request', message: 'Type acme to confirm.' }, 400);
         deleted.add(whole);
         return req.respond({ status: 204, headers: cors });
+      }
+      const bill = /^\/v1\/orgs\/(\d+)\/billing(?:\/(change|portal))?$/.exec(u.pathname);
+      if (bill) {
+        const [, id, action] = bill;
+        const page = plans.billing[id];
+        if (!page) return json(req, { error: 'not_found' }, 404);
+        if (action === 'change') {
+          const { plan, seats } = JSON.parse(req.postData() ?? '{}');
+          plans.changes.push({ org: Number(id), plan, seats });
+          page.subscription = { ...page.subscription, plan, seats };
+          return json(req, { plan, seats });
+        }
+        if (action === 'portal') {
+          plans.portals++;
+          return json(req, { url: 'https://sandbox-customer-portal.paddle.com/cpl_01?action=overview&token=pga_x' });
+        }
+        // Paid: Paddle told the server, so the dashboard is on, with nothing stored yet.
+        if (plans.paid.has(id)) {
+          turnOn(id, page.org.login);
+          return json(req, { ...page, dashboard: true, checkout: null, subscription: { plan: 'pro', seats: 3, status: 'active', working: true, current_period_end: hoursAgo(-24 * 30) } });
+        }
+        return json(req, page);
       }
       if (/^\/v1\/orgs\/(\d+)\//.test(u.pathname) && deleted.has(/^\/v1\/orgs\/(\d+)\//.exec(u.pathname)[1])) return json(req, { error: 'not_connected' }, 404);
       const rules = /^\/v1\/orgs\/(\d+)\/rules(?:\/(\d+))?$/.exec(u.pathname);
@@ -246,6 +298,7 @@ async function open(name, { signedOutAfter = Infinity, serverDown = false, forge
       renewals.push(u.searchParams.get('state'));
       return req.respond({ status: 302, headers: { location: `${base}/setup/?code=again&state=${encodeURIComponent(u.searchParams.get('state'))}` } });
     }
+    if (u.href === 'https://cdn.paddle.com/paddle/v2/paddle.js') return req.respond({ status: 200, contentType: 'text/javascript', body: FAKE_PADDLE });
     if (u.hostname === 'github.com' || u.hostname === 'avatars.githubusercontent.com') return req.respond({ status: 404, headers: cors, body: '' });
     if (u.origin === base) {
       const file = join(dist, u.pathname.endsWith('/') ? `${u.pathname}index.html` : u.pathname);
@@ -327,7 +380,7 @@ async function open(name, { signedOutAfter = Infinity, serverDown = false, forge
     return { href, state };
   };
   console.log(`\n== ${name}`);
-  return { page, calls, deletes, exchanges, renewals, forgotten, added, removed, skillsAdded, skillsRemoved, written, writtenRemoved, checksAdded, checksRemoved, errors, text, click, toggleMenu, menu, view, options, choose, dialog, signIn, comeBackFromGitHub, shot: (file) => page.screenshot({ path: `${out}${file}.png`, fullPage: true }).catch(() => {}) };
+  return { page, plans, calls, deletes, exchanges, renewals, forgotten, added, removed, skillsAdded, skillsRemoved, written, writtenRemoved, checksAdded, checksRemoved, errors, text, click, toggleMenu, menu, view, options, choose, dialog, signIn, comeBackFromGitHub, shot: (file) => page.screenshot({ path: `${out}${file}.png`, fullPage: true }).catch(() => {}) };
 }
 const done = async (t) => {
   if (t.errors.length) { console.log('  page errors', t.errors.slice(0, 3)); failures++; }
@@ -767,18 +820,18 @@ const done = async (t) => {
   await t.view('Settings');
   let page = await t.text();
   expect(/Delete all data/.test(page) && /It happens at once, and it can't be undone\./.test(page), 'Settings says what deleting all data does');
-  const button = () => t.page.evaluate(() => [...document.querySelectorAll('main button')].find((b) => b.textContent.trim() === 'Delete everything')?.disabled);
+  const button = () => t.page.evaluate(() => [...document.querySelectorAll('main button')].find((b) => b.textContent.trim() === 'Delete the data')?.disabled);
   expect((await button()) === true, 'the delete button waits for the org name');
   await t.shot('settings');
   await t.page.type('#confirm-delete', 'acm');
   expect((await button()) === true, 'a name that is only close is not enough');
   await t.page.type('#confirm-delete', 'E');
   expect((await button()) === false, "the org's name, in any case, opens the button");
-  await t.click('main button', 'Delete everything');
+  await t.click('main button', 'Delete the data');
   await new Promise((r) => setTimeout(r, 900));
   page = await t.text();
   expect(t.deletes.length === 1 && t.deletes[0].org === 1001 && t.deletes[0].confirm === 'acmE', 'it asks the server once, with what was typed');
-  expect(/Everything stored for acme is deleted\./.test(page) && /The dashboard isn't on for acme/.test(page), 'it says the data is gone, and the dashboard is off for the org');
+  expect(/The data stored for acme is deleted\./.test(page) && /The dashboard isn't on for acme/.test(page), 'it says the data is gone, and the dashboard is off for the org');
   await t.view('Rules');
   expect(/The dashboard isn't on for acme/.test(await t.text()), 'and the other views say so too');
   await done(t);
@@ -789,10 +842,10 @@ const done = async (t) => {
   await t.signIn();
   await t.view('Settings');
   await t.page.type('#confirm-delete', 'acme');
-  await t.click('main button', 'Delete everything');
+  await t.click('main button', 'Delete the data');
   await new Promise((r) => setTimeout(r, 900));
   const page = await t.text();
-  expect(/Write to hello@mergelight\.dev, and we delete it\./.test(page) && /Delete everything/.test(page), "when the server says no, the page shows the server's words and keeps the form");
+  expect(/Write to hello@mergelight\.dev, and we delete it\./.test(page) && /Delete the data/.test(page), "when the server says no, the page shows the server's words and keeps the form");
   await done(t);
 }
 
@@ -802,7 +855,7 @@ const done = async (t) => {
   await t.menu('Switch org', 'fresh');
   await t.view('Settings');
   const page = await t.text();
-  expect(/Only an owner of fresh can delete its data\./.test(page) && !/Delete everything/.test(page), 'someone who is not an owner sees who can delete, and no button');
+  expect(/Only an owner of fresh can delete its data\./.test(page) && !/Delete the data/.test(page), 'someone who is not an owner sees who can delete, and no button');
   await done(t);
 }
 
@@ -816,6 +869,104 @@ const done = async (t) => {
   expect(/Payments Use when a pull request changes src\/billing\./.test(page), 'and the skills written here still show');
   await t.view('Rules');
   expect(/Ignore style and naming\. set by/.test(await t.text()), 'and the other views work');
+  await done(t);
+}
+
+{
+  const t = await open('buy-a-plan', { billing: { 3003: billingOf(3003, 'quiet') } });
+  await t.signIn();
+  await t.menu('Switch org', 'quiet');
+  await wait(500);
+  let page = await t.text();
+  expect(/The dashboard isn't on for quiet/.test(page) && /Pick a plan to turn the dashboard on/.test(page) && /Buy Light/.test(page), `an org with nothing stored offers its owner a plan (${page.slice(0, 160)})`);
+  expect(/\$7 a month, plus tax where it applies/.test(page), 'one developer on Light is $7 a month');
+  await t.shot('plan-picker');
+  await t.page.evaluate(() => [...document.querySelectorAll('[role=radio]')].find((b) => b.textContent.startsWith('Pro'))?.click());
+  await t.page.evaluate(() => {
+    const input = document.querySelector('main input[inputmode=numeric]');
+    input.focus();
+    input.select();
+  });
+  await t.page.keyboard.type('3');
+  await wait(200);
+  expect(/\$42 a month/.test(await t.text()) && /Buy Pro/.test(await t.text()), 'Pro for 3 developers is $42 a month');
+  await t.click('main button', 'Buy Pro');
+  await t.page.waitForFunction(() => window.__paddle?.opened, { timeout: 5000 }).catch(() => null);
+  const opened = await t.page.evaluate(() => window.__paddle);
+  expect(opened?.env === 'sandbox' && opened.token === PADDLE_TOKEN && JSON.stringify(opened.opened?.items) === JSON.stringify([{ priceId: PRO_PRICE, quantity: 3 }]), `Paddle's checkout opens in the sandbox, for Pro and 3 developers (${JSON.stringify(opened)})`);
+  expect(opened?.opened?.customData?.org_id === '3003' && opened.opened.customData.sig === 'a'.repeat(64), "with the custom data the server signed, as it is");
+  await wait(700);
+  page = await t.text();
+  expect(/Payment done\. Turning the dashboard on for quiet\./.test(page), 'after the payment the page says it is turning the dashboard on');
+  // Paddle tells the server a moment later.
+  t.plans.paid.add('3003');
+  await t.page.waitForFunction(() => /The dashboard is on for quiet\. Add one line/.test(document.querySelector('main')?.innerText ?? ''), { timeout: 10000 }).catch(() => null);
+  expect(/The dashboard is on for quiet\. Add one line/.test(await t.text()), 'once the server has heard from Paddle, the dashboard is on, with no reload by hand');
+  turnOff('3003');
+  await done(t);
+}
+
+{
+  const t = await open('buy-not-owner', { billing: { 3003: billingOf(3003, 'quiet', { can_manage: false, checkout: null }) } });
+  await t.signIn();
+  await t.menu('Switch org', 'quiet');
+  await wait(500);
+  const page = await t.text();
+  expect(/Only an owner of quiet can pick a plan\./.test(page) && !/Buy Light/.test(page), 'someone who is not an owner is told who can pick a plan, and gets no button');
+  await done(t);
+}
+
+{
+  const pro = { plan: 'pro', seats: 3, status: 'active', working: true, current_period_end: '2026-12-11T08:00:00Z' };
+  const t = await open('billing-settings', { billing: { 1001: billingOf(1001, 'acme', { dashboard: true, jobs: true, subscription: pro, checkout: null }) } });
+  await t.signIn();
+  await t.view('Settings');
+  let page = await t.text();
+  expect(/Pro for 3 developers, \$42 a month plus tax where it applies\. Paid until December 11, 2026, and it renews then unless an owner cancels\./.test(page), `Settings shows the plan, the developers and the price (${page.slice(0, 200)})`);
+  expect(/What acme pays for stays on file, so the plan keeps running/.test(page), 'and says that deleting the data keeps the plan running');
+  await t.shot('billing-settings');
+  await t.click('button', 'Change plan');
+  await wait(400);
+  // Each choice shows what the plan holds under its name, so it is picked by how it starts.
+  await t.page.click('[aria-label="Plan"]');
+  await wait(350);
+  await t.page.evaluate(() => [...document.querySelectorAll('[data-slot=select-content][data-open] [role=option]')].find((o) => o.textContent.startsWith('Light, $7 per developer a month'))?.click());
+  await wait(300);
+  await t.page.evaluate(() => {
+    const input = document.querySelector('[role=dialog] input[inputmode=numeric]');
+    input.focus();
+    input.select();
+  });
+  await t.page.keyboard.type('5');
+  await wait(200);
+  expect(/\$35 a month/.test(await t.dialog()), 'the form says what the new plan costs');
+  await t.click('[role=dialog] button', 'Change');
+  await wait(900);
+  expect(JSON.stringify(t.plans.changes) === JSON.stringify([{ org: 1001, plan: 'light', seats: 5 }]), `the change goes to the server once (${JSON.stringify(t.plans.changes)})`);
+  expect(/Light, 5 developers/.test(await t.text()), 'and the page says it is done');
+  // Paddle's portal opens in a new tab: the test keeps the address instead of leaving the page.
+  await t.page.evaluate(() => {
+    window.open = () => ({ location: { set href(url) { window.__portal = url; } }, close() {} });
+  });
+  await t.click('main button', 'Invoices, card and cancel');
+  await wait(700);
+  expect(t.plans.portals === 1 && (await t.page.evaluate(() => window.__portal)) === 'https://sandbox-customer-portal.paddle.com/cpl_01?action=overview&token=pga_x', "Invoices, card and cancel opens Paddle's portal with a fresh link");
+  await done(t);
+}
+
+{
+  const ended = { plan: 'light', seats: 2, status: 'canceled', working: false, current_period_end: null };
+  OVERVIEWS[1001].plan_ended = true;
+  const t = await open('plan-ended', { billing: { 1001: billingOf(1001, 'acme', { dashboard: false, ended: true, subscription: ended }) } });
+  await t.signIn();
+  await wait(400);
+  let page = await t.text();
+  expect(/The Mergelight plan for acme ended or is paused\./.test(page) && /acme\/widgets/.test(page), 'a plan that ended says so above the reviews, which still show');
+  await t.click('main button', 'Pick a plan');
+  await wait(500);
+  page = await t.text();
+  expect(/The Light plan for acme ended\./.test(page) && /Buy Light/.test(page), 'Pick a plan goes to Settings, where an owner can buy again');
+  delete OVERVIEWS[1001].plan_ended;
   await done(t);
 }
 

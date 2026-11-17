@@ -22,6 +22,8 @@ export interface Org {
   login: string;
   /** Whether this org has turned the dashboard on. */
   connected: boolean;
+  /** Its plan ended or is paused: what is stored still shows, and nothing new can be added. */
+  plan_ended?: boolean;
   /** How many of its repositories you can see. */
   repos: number;
 }
@@ -56,6 +58,8 @@ export interface Overview {
   org: { id: number; login: string };
   /** Whether this person may delete everything stored for the org: an owner of it, or the account's own person. */
   can_delete?: boolean;
+  /** The org's plan ended or is paused: reviews don't use or store anything, and nothing new can be added. */
+  plan_ended?: boolean;
   repos: { id: number; name: string; last_review_at: string | null; reviews: number }[];
   reviews: Review[];
 }

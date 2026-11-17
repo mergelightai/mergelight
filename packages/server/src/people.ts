@@ -10,9 +10,10 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import { HttpError } from "../../token-server/dist/token.js";
-import { deleteOrg, isId, MEMORY_DAYS, withOrg, type Db, type Pool } from "./db.js";
+import { checkoutData, paddleCall, readSubscription, type PaddleConfig } from "./billing.js";
+import { connectOrg, deleteOrg, isId, MEMORY_DAYS, withOrg, type Db, type Pool } from "./db.js";
 import { DEFAULT_SIGN_IN_APP, lookUp, looksLikePersonToken, type Person, type Reach } from "./github.js";
-import { NO_GRANTS, planOf, type Grants } from "./plan.js";
+import { NO_GRANTS, planOf, WORKING, type Grants, type PlanName } from "./plan.js";
 import { hiddenCharacter, isCheckName, isLineOfText, isPathPattern, isSkillPath, isSkillText, plainEmoji, SKILL_TEXT_MAX } from "./validate.js";
 
 /**
@@ -56,6 +57,8 @@ const planEnded = () =>
 /** Skills written on the dashboard that one repository can have, and the largest request that can carry one. */
 const MAX_WRITTEN_SKILLS = 10;
 const MAX_SKILL_BODY = 48_000;
+/** The most developers one plan is for. Paddle's prices take this as their largest quantity. */
+const MAX_SEATS = 1000;
 /** Checks one repository can have. Each one that applies is one more AI run in every review, on the team's own plan. */
 const MAX_CHECKS = 5;
 
@@ -83,6 +86,8 @@ export interface PeopleOptions {
    * deleting their data here would only last until the next start.
    */
   grants?: Grants;
+  /** Payments through Paddle, or null when this server sells nothing. */
+  paddle?: PaddleConfig | null;
   fetchImpl?: typeof fetch;
   now?: () => number;
 }
@@ -109,7 +114,7 @@ const bearer = (request: Request): string => {
 /** Sessions are kept under a hash, so the list in memory holds nothing that could be used as a token. */
 const keyOf = (token: string) => createHash("sha256").update(token).digest("hex");
 
-export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP, grants = NO_GRANTS, fetchImpl = fetch, now = () => Date.now() }: PeopleOptions) {
+export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP, grants = NO_GRANTS, paddle = null, fetchImpl = fetch, now = () => Date.now() }: PeopleOptions) {
   const sessions = new Map<string, Session>();
   const persons = new Map<number, PersonState>();
   /** GitHub tokens that signed in a moment ago, by hash, with when each may sign in again. */
@@ -338,8 +343,101 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
     if (grants.dashboard.has(orgId)) {
       throw new HttpError(409, "kept_on", `This server turns the dashboard on for ${reach.login} each time it starts, so its data would come back. Write to hello@mergelight.dev, and we delete it.`);
     }
+    const paid = await withOrg(pool, orgId, async (db) => (await planOf(db, orgId, grants)).paid);
     if (!(await deleteOrg(pool, orgId))) throw new HttpError(404, "not_connected", "This org hasn't turned the Mergelight dashboard on.");
+    // An org that pays keeps its dashboard, empty: its plan runs until an owner cancels it at Paddle. The time of the
+    // delete stays with it, so a decision written before it can't come back with the next review.
+    if (paid) {
+      await connectOrg(pool, orgId, reach.login);
+      await withOrg(pool, orgId, (db) => db.query("update orgs set data_deleted_at = now() where id = $1", [orgId]));
+    }
     return { status: 204, body: null };
+  }
+
+  /** What the org pays for, and what this person may do about it. Everyone who can see the org sees its plan. Only an owner changes it. */
+  async function billingState(session: Session, orgId: number): Promise<{ status: number; body: unknown }> {
+    const reach = session.reach.get(orgId);
+    if (!reach) throw new HttpError(404, "not_found", "No such org.");
+    const { plan, bill } = await withOrg(pool, orgId, async (db) => ({
+      plan: await planOf(db, orgId, grants),
+      bill: (await db.query("select plan, seats, status, current_period_end from billing where org_id = $1", [orgId])).rows[0] ?? null,
+    }));
+    return {
+      status: 200,
+      body: {
+        org: { id: orgId, login: reach.login },
+        can_manage: reach.admin,
+        dashboard: plan.dashboard,
+        ended: plan.ended,
+        jobs: plan.jobs,
+        // On without paying: whoever runs this server gave it.
+        free: plan.dashboard && plan.paid === null,
+        subscription: bill ? { plan: bill.plan, seats: bill.seats, status: bill.status, working: WORKING.has(bill.status), current_period_end: bill.current_period_end } : null,
+        // What the page needs to open Paddle's checkout. The client token and the prices are public by Paddle's design.
+        paddle: paddle ? { env: paddle.env, client_token: paddle.clientToken, prices: paddle.prices } : null,
+        // Signed custom data for a checkout, for an owner of an org with no working plan. Paddle copies it onto the subscription.
+        checkout: paddle && reach.admin && plan.paid === null ? checkoutData(paddle, { id: orgId, login: reach.login }, now()) : null,
+      },
+    };
+  }
+
+  /** The billing row of an org whose plan works, for an owner, or why not. */
+  async function workingBill(session: Session, orgId: number): Promise<{ reach: Reach; config: PaddleConfig; bill: { subscription_id: string; customer_id: string | null; plan: PlanName; seats: number } }> {
+    const reach = session.reach.get(orgId);
+    if (!reach) throw new HttpError(404, "not_found", "No such org.");
+    if (!reach.admin) throw new HttpError(403, "read_only", `Only an owner of ${reach.login} can change its plan.`);
+    if (!paddle) throw new HttpError(503, "billing_not_set_up", "Payments aren't set up on this server.");
+    const bill = await withOrg(pool, orgId, async (db) => (await db.query("select subscription_id, customer_id, plan, seats, status from billing where org_id = $1", [orgId])).rows[0]);
+    if (!bill?.subscription_id || !WORKING.has(bill.status)) throw new HttpError(409, "no_plan", `${reach.login} has no plan that works right now.`);
+    return { reach, config: paddle, bill };
+  }
+
+  /** Changes the plan or the number of developers. Paddle charges or credits the difference for the rest of the month. */
+  async function changePlan(session: Session, orgId: number, request: Request): Promise<{ status: number; body: unknown }> {
+    const raw = await request.text();
+    if (Buffer.byteLength(raw) > 1024) throw new HttpError(413, "too_large", "The request is too large.");
+    let body: unknown;
+    try {
+      body = JSON.parse(raw);
+    } catch {
+      throw new HttpError(400, "bad_request", "The request isn't JSON.");
+    }
+    const { plan: wanted, seats } = (typeof body === "object" && body !== null ? body : {}) as Record<string, unknown>;
+    if (wanted !== "light" && wanted !== "pro") throw new HttpError(400, "bad_request", "Pick Light or Pro.");
+    if (typeof seats !== "number" || !Number.isInteger(seats) || seats < 1 || seats > MAX_SEATS) throw new HttpError(400, "bad_request", `Pick 1 to ${MAX_SEATS} developers.`);
+    const { reach, config, bill } = await workingBill(session, orgId);
+    if (bill.plan === wanted && bill.seats === seats) return { status: 200, body: { plan: wanted, seats } };
+    const data = await paddleCall(config, fetchImpl, "PATCH", `/subscriptions/${bill.subscription_id}`, {
+      items: [{ price_id: config.prices[wanted], quantity: seats }],
+      proration_billing_mode: "prorated_immediately",
+    });
+    const sub = readSubscription(config, data);
+    if (typeof sub === "string" || !sub.plan) throw new HttpError(502, "paddle_error", "Paddle's answer didn't name a Mergelight plan.");
+    // Paddle's answer is the subscription as it is now. Its message about the change comes too, and changes nothing more.
+    await withOrg(pool, orgId, async (db) => {
+      await db.query(
+        "update billing set plan = $2, seats = $3, status = $4, current_period_end = $5, event_at = now(), updated_at = now() where org_id = $1 and subscription_id = $6",
+        [orgId, sub.plan, sub.seats, sub.status, sub.periodEnd, sub.id],
+      );
+      if ((await planOf(db, orgId, grants)).connected) await record(db, orgId, session.person, "plan_changed", { from: { plan: bill.plan, seats: bill.seats }, to: { plan: sub.plan, seats: sub.seats } });
+    });
+    console.log("billing: plan changed", reach.id, sub.plan, sub.seats);
+    return { status: 200, body: { plan: sub.plan, seats: sub.seats } };
+  }
+
+  /** A link to Paddle's customer portal for the org's subscription: invoices, card, address and cancel. It works for a short while. */
+  async function portal(session: Session, orgId: number): Promise<{ status: number; body: unknown }> {
+    const reach = session.reach.get(orgId);
+    if (!reach) throw new HttpError(404, "not_found", "No such org.");
+    if (!reach.admin) throw new HttpError(403, "read_only", `Only an owner of ${reach.login} can see its billing.`);
+    if (!paddle) throw new HttpError(503, "billing_not_set_up", "Payments aren't set up on this server.");
+    // Any subscription on file, working or not: the portal shows old invoices too.
+    const bill = await withOrg(pool, orgId, async (db) => (await db.query("select subscription_id, customer_id from billing where org_id = $1", [orgId])).rows[0]);
+    if (!bill?.customer_id) throw new HttpError(409, "no_plan", `${reach.login} has never paid for a plan.`);
+    const data = await paddleCall(paddle, fetchImpl, "POST", `/customers/${bill.customer_id}/portal-sessions`, bill.subscription_id ? { subscription_ids: [bill.subscription_id] } : {});
+    const url = (data.urls as { general?: { overview?: unknown } } | undefined)?.general?.overview;
+    if (typeof url !== "string" || !url.startsWith("https://")) throw new HttpError(502, "paddle_error", "Paddle's answer had no link.");
+    return { status: 200, body: { url } };
   }
 
   /** Writes down who changed what. It runs in the same transaction as the change, so there is no change without its line. */
@@ -726,7 +824,9 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
     const org = /^\/v1\/orgs\/(\d{1,18})\/(overview|memories|rules|skills|checks|written-skills)(?:\/(\d{1,18}))?$/.exec(pathname);
     // The org itself: deleting it deletes everything stored for it.
     const whole = /^\/v1\/orgs\/(\d{1,18})$/.exec(pathname);
-    if (pathname !== "/v1/session" && !org && !whole) return null;
+    // What the org pays for: GET it, POST change to change the plan or seats, POST portal for a link to Paddle's portal.
+    const billing = /^\/v1\/orgs\/(\d{1,18})\/billing(?:\/(change|portal))?$/.exec(pathname);
+    if (pathname !== "/v1/session" && !org && !whole && !billing) return null;
     // Only one decision or one rule at a time has an address of its own.
     if (org && org[3] && org[2] === "overview") return null;
 
@@ -735,7 +835,7 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
     if (origin && !origins.includes(origin)) return json(403, { error: "origin_not_allowed" }, {});
     const cors: Record<string, string> = origin ? { "access-control-allow-origin": origin, vary: "Origin" } : {};
     const writable = org ? ["rules", "skills", "checks", "written-skills"].includes(org[2]!) : false;
-    const methods = whole ? "DELETE" : !org ? "POST, DELETE" : org[3] ? "DELETE" : writable ? "GET, POST" : "GET";
+    const methods = billing ? (billing[2] ? "POST" : "GET") : whole ? "DELETE" : !org ? "POST, DELETE" : org[3] ? "DELETE" : writable ? "GET, POST" : "GET";
     if (request.method === "OPTIONS") {
       return json(204, null, { ...cors, "access-control-allow-methods": methods, "access-control-allow-headers": "authorization, content-type", "access-control-max-age": "600" });
     }
@@ -743,7 +843,13 @@ export function createPeopleApi({ pool, origins, signInApp = DEFAULT_SIGN_IN_APP
     try {
       const at = now();
       let result: { status: number; body: unknown };
-      if (whole) {
+      if (billing) {
+        const orgId = Number(billing[1]);
+        if (request.method !== (billing[2] ? "POST" : "GET")) return json(405, { error: "method_not_allowed" }, cors);
+        if (!isId(orgId)) throw new HttpError(404, "not_found", "No such org.");
+        const { session } = sessionOf(request, at);
+        result = billing[2] === "change" ? await changePlan(session, orgId, request) : billing[2] === "portal" ? await portal(session, orgId) : await billingState(session, orgId);
+      } else if (whole) {
         const orgId = Number(whole[1]);
         if (request.method !== "DELETE") return json(405, { error: "method_not_allowed" }, cors);
         if (!isId(orgId)) throw new HttpError(404, "not_found", "No such org.");

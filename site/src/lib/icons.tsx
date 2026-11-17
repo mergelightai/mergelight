@@ -18,6 +18,7 @@ import {
   CancelCircleIcon,
   CheckListIcon,
   CheckmarkCircle02Icon,
+  CreditCardIcon as CreditCard,
   CustomerSupportIcon,
   GitPullRequestIcon as GitPullRequest,
   InformationCircleIcon,
@@ -58,6 +59,7 @@ export const XIcon = make(Cancel01Icon);
 export const CircleXIcon = make(CancelCircleIcon);
 export const ListChecksIcon = make(CheckListIcon);
 export const CircleCheckIcon = make(CheckmarkCircle02Icon);
+export const CreditCardIcon = make(CreditCard);
 export const LifeBuoyIcon = make(CustomerSupportIcon);
 export const GitPullRequestIcon = make(GitPullRequest);
 export const InfoIcon = make(InformationCircleIcon);
