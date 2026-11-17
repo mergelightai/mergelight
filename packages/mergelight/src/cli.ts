@@ -427,6 +427,7 @@ async function main(): Promise<number> {
       memories: cloud.memories,
       rules: cloud.rules,
       rulesUnread: cloud.failed === true,
+      planEnded: cloud.planEnded === true,
       skills: cloud.skills,
       writtenSkills: cloud.writtenSkills,
       checks: cloud.checks,

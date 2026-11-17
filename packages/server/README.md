@@ -20,6 +20,8 @@ Stored, per check a team wrote: its name, its text, its file patterns, and the G
 
 Stored, per change on the dashboard: who made it, when, and what it was.
 
+Stored, per org that pays: the plan (Light or Pro), the number of developers, the state of the subscription, when the paid month ends, and the payment company's ids for the customer and the subscription. Never a card or an address: the payment company holds those. This row is kept apart from the rest, so deleting an org's data on the dashboard doesn't lose a running subscription.
+
 Stored, per finding a team declined: its title, the file and lines it was in, the reason the person gave, the GitHub login of who declined it, when, and in which pull request. This is the one place the server holds text about your code. It is what lets a later review leave that finding out.
 
 Never stored, because it is never sent: code, diffs, findings nobody declined, pull request titles, AI logins.
@@ -104,6 +106,16 @@ An owner of the org deletes everything stored for it on the dashboard, under Set
 
 `node dist/admin.js delete <github-account-id>` does the same from the server's host. Take the org out of `CONNECT_ORGS` first: the server turns on every org listed there at each start, so a deleted org that is still listed comes back at the next deploy. The command refuses an org listed in `CONNECT_ORGS` in its own environment.
 
+## Plans
+
+One place in the server, `src/plan.ts`, says what an org may use.
+
+- The dashboard: the org's data is stored here, and it pays for Light or Pro with a subscription that works (`active`, `trialing`, or `past_due` while the payment company tries a failed payment again). An org the operator turned on that pays for nothing stays on too: those came before payments.
+- A subscription that ended or is paused turns the dashboard off for reviews: runs store nothing and get no memory, rules, skills or checks. The server tells the run that the plan ended (`plan_ended`), so the review can say why it ran without them.
+- The data stays until an owner deletes it, so a plan bought again finds it. The dashboard still shows it, and its rules, skills and checks can be removed and the whole org deleted. Adding something new answers `403 plan_ended`.
+- Jobs: a working Pro plan.
+- The operator's free grants hold whatever an org pays: `CONNECT_ORGS` for the dashboard, `JOBS_ORGS` for Jobs.
+
 ## The dashboard's side
 
 The dashboard page at `mergelight.dev/dashboard` signs a person in with GitHub and shows the server that GitHub token once (`POST /v1/session`). The server asks GitHub who the person is and which repositories they can see, keeps that answer for 15 minutes under a session token of its own, and drops the GitHub token. It is never stored and never logged.
@@ -147,14 +159,14 @@ DATABASE_URL=postgres://... PUBLIC_URL=https://your-server.example npm start
 
 `npm start` runs the built files, so run `npm run build` first (`npm test` builds too). The database role must not be a superuser. Tables are created on start. `PUBLIC_URL` is the address workflows reach the server at, and it must match the Action's `server` input.
 
-Until sign-in exists, the operator turns the dashboard on for an org. Either set `CONNECT_ORGS` on the server, as `<github-account-id>:<login>` with commas between orgs, and it is done at each start. Taking an org out of the list doesn't turn it off again: `node dist/admin.js delete` does, and it removes what was stored. Or run the admin command on the server's host:
+The operator can turn the dashboard on for an org for free. Either set `CONNECT_ORGS` on the server, as `<github-account-id>:<login>` with commas between orgs, and it is done at each start. Taking an org out of the list doesn't turn it off again: `node dist/admin.js delete` does, and it removes what was stored. Or run the admin command on the server's host:
 
 ```bash
 gh api users/<login> --jq .id
 DATABASE_URL=postgres://... node dist/admin.js connect <github-account-id> <login>
 ```
 
-Jobs (see [docs/jobs.md](../../docs/jobs.md)) is part of a paid plan. Until payments exist, `JOBS_ORGS` on the server lists the orgs whose plan includes it, as GitHub account ids with commas between them. A jobs run asks the server before it runs any job, and runs none for an org that isn't listed. Taking an org out of the list turns its jobs off at the next start. An entry that isn't an id stops the start.
+Jobs (see [docs/jobs.md](../../docs/jobs.md)) is part of the Pro plan. `JOBS_ORGS` on the server gives it to orgs for free, as GitHub account ids with commas between them. A jobs run asks the server before it runs any job, and runs none for an org that has neither Pro nor a place in the list. Taking an org out of the list takes its free Jobs away at the next start. An entry that isn't an id stops the start.
 
 Then set the Action's input in the workflow:
 

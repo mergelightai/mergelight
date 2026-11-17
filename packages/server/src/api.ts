@@ -14,6 +14,7 @@
 import { HttpError, verifyOidcToken } from "../../token-server/dist/token.js";
 import { isId, MEMORY_DAYS, withOrg, type Pool } from "./db.js";
 import { createPeopleApi } from "./people.js";
+import { planOf, type Grants } from "./plan.js";
 import { isLineOfText } from "./validate.js";
 
 /**
@@ -121,11 +122,11 @@ export interface ApiOptions {
   origins?: string[];
   /** The GitHub App people sign in to the dashboard with. */
   signInApp?: string;
-  /** Orgs whose plan includes Jobs, by GitHub's number for the account. It stands in until payments exist. */
+  /** Orgs the operator gives Jobs for free (JOBS_ORGS), by GitHub's number for the account. Others get Jobs with Pro. */
   jobsOrgs?: ReadonlySet<number>;
   /**
-   * Orgs the server turns the dashboard on for at each start (CONNECT_ORGS). Their owners can't delete their data on the
-   * dashboard: the next start would turn them on again, and store their runs again.
+   * Orgs the server turns the dashboard on for at each start (CONNECT_ORGS), whatever they pay. Their owners can't delete
+   * their data on the dashboard: the next start would turn them on again, and store their runs again.
    */
   keptOn?: ReadonlySet<number>;
   fetchImpl?: typeof fetch;
@@ -212,7 +213,9 @@ export function parseUsedMemories(value: unknown): number[] {
 export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"], signInApp, jobsOrgs = new Set(), keptOn = new Set(), fetchImpl = fetch, now = () => Date.now() }: ApiOptions): (request: Request) => Promise<Response> {
   const audience = audienceOf(publicUrl);
   /** The dashboard's side: signed-in people. Runs and people never share a route or a kind of token. */
-  const people = createPeopleApi({ pool, origins, signInApp, keptOn, fetchImpl, now });
+  /** What the operator gives for free, next to what an org pays for (plan.ts). */
+  const grants: Grants = { dashboard: keptOn, jobs: jobsOrgs };
+  const people = createPeopleApi({ pool, origins, signInApp, grants, fetchImpl, now });
   /** The path the server is mounted under, if any. A proxy may strip it or pass it on, so both forms are routed. */
   const mount = new URL(audience).pathname.replace(/\/+$/, "");
   /** Token ids already used, with when each expires. A token works once, so a copied one is worth nothing. */
@@ -276,7 +279,8 @@ export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"
   /** What a review needs before it starts: whether the org uses the dashboard, and what the team decided before in this repository. */
   async function context(who: Caller): Promise<Response> {
     const found = await withOrg(pool, who.orgId, async (db) => {
-      if ((await db.query("select 1 from orgs where id = $1", [who.orgId])).rowCount === 0) return null;
+      const plan = await planOf(db, who.orgId, grants);
+      if (!plan.dashboard) return { jobs: plan.jobs, ended: plan.ended, data: null };
       const { rows } = await db.query(
         `select id, title, file, line, end_line, reason, by_login, pr
            from memories
@@ -290,25 +294,27 @@ export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"
       const skills = await db.query("select path from skills where repo_id = $1 order by id limit 10", [who.repoId]);
       const checks = await db.query("select id, name, text, paths from checks where repo_id = $1 order by id limit 5", [who.repoId]);
       const written = await db.query("select id, name, description, body from written_skills where repo_id = $1 order by id limit 10", [who.repoId]);
-      return { memories: rows, rules: rules.rows, skills: skills.rows.map((s) => s.path as string), checks: checks.rows, written: written.rows };
+      return { jobs: plan.jobs, ended: false, data: { memories: rows, rules: rules.rows, skills: skills.rows.map((s) => s.path as string), checks: checks.rows, written: written.rows } };
     });
-    // An org given Jobs needs no dashboard data for them: the grant is said either way.
-    if (!found) return respond(200, { connected: false, ...(jobsOrgs.has(who.orgId) ? { jobs: true } : {}) });
-    const rules = found.rules.map((r) => ({ id: `R${r.id}`, kind: r.kind, text: r.text, ...(r.paths.length ? { paths: r.paths } : {}), scope: r.repo_id === null ? "org" : "repo" }));
+    // An org with Jobs needs no dashboard data for them: the grant is said either way. plan_ended: the team's rules,
+    // skills and checks exist but its plan ended, so the review can say it ran without them, and why.
+    if (!found.data) return respond(200, { connected: false, ...(found.ended ? { plan_ended: true } : {}), ...(found.jobs ? { jobs: true } : {}) });
+    const { data } = found;
+    const rules = data.rules.map((r) => ({ id: `R${r.id}`, kind: r.kind, text: r.text, ...(r.paths.length ? { paths: r.paths } : {}), scope: r.repo_id === null ? "org" : "repo" }));
     // The most recently used ones that fit. A list too large for the client to read would cost it the whole answer.
     const memories = [];
     let bytes = 0;
-    for (const m of found.memories) {
+    for (const m of data.memories) {
       const memory = { id: `M${m.id}`, title: m.title, file: m.file, line: m.line, ...(m.end_line ? { end_line: m.end_line } : {}), reason: m.reason, by: m.by_login, pr: m.pr };
       bytes += Buffer.byteLength(JSON.stringify(memory)) + 1;
       if (bytes > MEMORY_BYTES_PER_REVIEW) break;
       memories.push(memory);
     }
-    const checks = found.checks.map((c) => ({ id: `K${c.id}`, name: c.name, text: c.text, paths: c.paths }));
+    const checks = data.checks.map((c) => ({ id: `K${c.id}`, name: c.name, text: c.text, paths: c.paths }));
     // Skills the team wrote on the dashboard. "skills" stays the list of folders: an older review program reads only that.
-    const written_skills = found.written.map((s) => ({ id: `S${s.id}`, name: s.name, description: s.description, text: s.body }));
+    const written_skills = data.written.map((s) => ({ id: `S${s.id}`, name: s.name, description: s.description, text: s.body }));
     // Whether the org's plan includes Jobs. A run asks before it runs any: the answer is the gate.
-    return respond(200, { connected: true, memories, rules, skills: found.skills, checks, written_skills, jobs: jobsOrgs.has(who.orgId) });
+    return respond(200, { connected: true, memories, rules, skills: data.skills, checks, written_skills, jobs: found.jobs });
   }
 
   async function saveReview(who: Caller, request: Request): Promise<Response> {
@@ -327,8 +333,8 @@ export function createApi({ pool, publicUrl, origins = ["https://mergelight.dev"
     if (who.pr !== null && r.pr !== who.pr) throw new HttpError(400, "bad_request", "The review's pull request number isn't the one this run is for.");
 
     const stored = await withOrg(pool, who.orgId, async (db) => {
-      // Nothing is kept for an org that hasn't turned the dashboard on.
-      if ((await db.query("select 1 from orgs where id = $1", [who.orgId])).rowCount === 0) return null;
+      // Nothing is kept for an org whose dashboard is off.
+      if (!(await planOf(db, who.orgId, grants)).dashboard) return null;
       await db.query(
         `insert into repos (org_id, id, name, last_review_at) values ($1, $2, $3, now())
          on conflict (org_id, id) do update set name = excluded.name, last_review_at = now()`,

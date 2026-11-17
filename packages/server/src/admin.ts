@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Turns the dashboard on or off for an org, from a terminal on the server's host.
-// It stands in until sign-in exists. It needs DATABASE_URL, so only someone who runs the server can use it.
+// An org turned on here pays for nothing and stays on (plan.ts) until its data is deleted. It needs DATABASE_URL, so only someone who runs the server can use it.
 //
 //   node dist/admin.js connect <github-account-id> <login>
 //   node dist/admin.js delete <github-account-id>      Removes everything stored for that org.
